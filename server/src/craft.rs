@@ -45,7 +45,7 @@ use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
     InventoryChangeTracker, Item, ItemPropertiesAll, ItemSingleProperty,
 };
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
+use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
@@ -53,8 +53,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, json_db::JsonDbWrapper, models::CharacterDbEntryEconomy,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
 use blades_lib::game_data::GameDataItem;
 
@@ -243,65 +242,52 @@ struct GetCraftsResponse {
     crafts: Vec<Value>,
 }
 
-/// Building ids in this character's own town, if it has one.
+/// Does every item a craft's `results` would put on a station resolve in the client?
 ///
-/// `get_crafts` needs this to answer one question: does this job's `buildingId`
-/// point at a building the client will actually find when it builds the town?
-fn town_building_ids(town: &Value) -> std::collections::HashSet<Uuid> {
-    let mut out = std::collections::HashSet::new();
-    let Some(districts) = town.get("districts").and_then(|d| d.as_array()) else {
-        return out;
-    };
-    for d in districts {
-        let Some(segments) = d.get("segments").and_then(|s| s.as_object()) else {
-            continue;
+/// This is the whole of the "town-build hang" (docs/craft-town-hang.md). Read from the
+/// client binary, not inferred:
+///
+/// * `FindCraftingStationParser.Parse` (0x24E10E0) writes each `/crafts` entry into the
+///   town's persistent tree under its `buildingId`'s crafting station.
+/// * While the town builds, that building's `CraftingStation.RetrievePersistent`
+///   (0x1E53F3C) wraps every element of `results` in `new StackedItem(node)`, whose
+///   `Item.RetrievePersistent` (0x1F2C02C) calls
+///   `ItemTemplateManager.GetTemplateByID` (0x1F2BA78) — a bare `Dictionary` indexer.
+///   An id that is not an item template throws `KeyNotFoundException` and the
+///   town-build never finishes. (`RecipeManager.GetRecipeByID`, by contrast, checks
+///   `ContainsKey` first and returns null, so an unknown `recipeId` is harmless.)
+/// * A job whose `buildingId` names no building is parsed nowhere and retrieved by no
+///   station — which is why moving `buildingId` off a real building "fixed" it.
+///
+/// The jobs that stalled carried `stackableItems: { <recipe id>: 1 }`, the fake result
+/// the unknown-recipe path minted between 2026-07-04 and 2026-09-17 (132e20ba). So the
+/// check is on the result templates, not on the building: anything retail could have
+/// sent resolves, and only a result naming a non-template is held back.
+///
+/// Empty or missing `results` puts nothing on the station and is fine.
+fn results_resolve_in_client(results: &Value, items: &HashMap<Uuid, GameDataItem>) -> bool {
+    let known = |s: &str| Uuid::parse_str(s).is_ok_and(|id| items.contains_key(&id));
+    if let Some(list) = results.get("items") {
+        let Some(list) = list.as_array() else {
+            return false;
         };
-        for seg in segments.values() {
-            let Some(buildings) = seg.get("buildings").and_then(|b| b.as_object()) else {
-                continue;
-            };
-            for key in buildings.keys() {
-                if let Ok(id) = Uuid::parse_str(key) {
-                    out.insert(id);
-                }
-            }
+        if !list.iter().all(|it| {
+            it.get("itemTemplateId")
+                .and_then(Value::as_str)
+                .is_some_and(known)
+        }) {
+            return false;
         }
     }
-    out
-}
-
-/// Is this job FINISHED and pinned to a building the client will never show it on?
-///
-/// Both halves matter and neither alone is sufficient:
-///
-/// * **on a real building** — the job is about to be detached (see `get_crafts`),
-///   and a detached job has no building for the client to draw a Collect button on.
-/// * **finished** — only then can it be paid out. An unfinished job still has to be
-///   detached and left alone, because collecting it early would hand over an item
-///   the player has not waited for.
-///
-/// A finished job on a building the player does NOT own is already harmless: it is
-/// never detached, so the client can still collect it normally.
-fn is_stuck_finished(
-    job: &CraftJob,
-    owned_buildings: &std::collections::HashSet<Uuid>,
-    now_ms: i64,
-) -> bool {
-    !is_enchant_job(job)
-        && owned_buildings.contains(&job.building_id)
-        && job.completed_at_ms <= now_ms
-}
-
-fn is_enchant_job(job: &CraftJob) -> bool {
-    job.crafting_type_id == item_mod_crafting_type(0)
-}
-
-fn should_detach_from_owned_building(
-    crafting_type_id: Uuid,
-    building_id: Uuid,
-    owned_buildings: &std::collections::HashSet<Uuid>,
-) -> bool {
-    crafting_type_id != item_mod_crafting_type(0) && owned_buildings.contains(&building_id)
+    if let Some(stacks) = results.get("stackableItems") {
+        let Some(stacks) = stacks.as_object() else {
+            return false;
+        };
+        if !stacks.keys().all(|k| known(k)) {
+            return false;
+        }
+    }
+    true
 }
 
 /// A stable stand-in id that cannot name a real building.
@@ -311,6 +297,45 @@ fn should_detach_from_owned_building(
 /// stable job) yet cannot collide with anything in the town.
 fn detached_building_id(real: Uuid) -> Uuid {
     Uuid::from_u128(real.as_u128() ^ (0xC << 124))
+}
+
+/// The `GET /crafts` list exactly as the client should receive it.
+///
+/// Every job is served on its REAL building, finished or not, the way retail did: the
+/// same job appears on its building in every captured retail `GET /crafts` for weeks
+/// (a finished Prime Elixir sat on its Alchemist from March to June, 27 reads), and the
+/// client collects it itself with `POST /crafts/{id}/finish`. Nothing is paid out here.
+///
+/// The one exception is a job whose results still name something that is not an item
+/// template after repair (see [`results_resolve_in_client`]). Serving that on a real
+/// building is the town-build hang, so it is detached instead — its row, results and
+/// timer stay untouched in the database.
+fn crafts_for_client(
+    character_id: Uuid,
+    user_id: Uuid,
+    jobs: &[CraftJob],
+    static_data: &blades_lib::static_data::StaticData,
+    repair_data: &RepairData,
+    items: &HashMap<Uuid, GameDataItem>,
+) -> Vec<Value> {
+    let mut wires = craft_wires(jobs, user_id, character_id, static_data, repair_data);
+    let mut detached = 0usize;
+    for w in wires.iter_mut() {
+        if !results_resolve_in_client(&w.results, items) {
+            w.building_id = detached_building_id(w.building_id);
+            detached += 1;
+        }
+    }
+    if detached > 0 {
+        log::warn!(
+            "character {character_id}: detached {detached} craft job(s) whose results name \
+             no item template (the client cannot load them onto a station)"
+        );
+    }
+    wires
+        .into_iter()
+        .map(|w| serde_json::to_value(w).unwrap_or(Value::Null))
+        .collect()
 }
 
 /// `GET /crafts` — returns the character's active craft jobs.
@@ -327,149 +352,16 @@ pub async fn get_crafts(
     let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    conn.transaction(move |mut conn| {
-        async move {
-            let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-
-            // COLLECT a finished job that would otherwise be detached forever.
-            //
-            // Detaching (below) keeps the player out of the town-build hang, but a
-            // job served under an id that names no building is a job the client can
-            // never offer a Collect button for. A FINISHED one is then stuck twice
-            // over: the item is never handed out, and the bench it occupies is never
-            // freed, so that station can never craft again.
-            //
-            // Reported as "I can't craft any weapon in town smithy — there seems to
-            // be an issue with buildingid" (#165): a Dragonbone Longsword completed
-            // 2026-07-10, sitting on a Forge, uncollectable.
-            //
-            // For a finished job there is a strictly better move than detaching: pay
-            // it out and remove it, exactly as `POST /crafts/{id}/finish` would. The
-            // player gets the item — which is what the detach comment says it is
-            // protecting — and nothing is left pointing at a real building.
-            //
-            // This does NOT loosen the containment. An UNFINISHED job on a real
-            // building is still detached, because it cannot be paid out early. The
-            // measured rule that any resolvable buildingId stalls the client is
-            // untouched.
-            let owned_buildings: std::collections::HashSet<Uuid> = {
-                use crate::schema::characters::dsl as ch;
-                let town: Option<Option<JsonDbWrapper<Value>>> = ch::characters
-                    .filter(ch::id.eq(character_id))
-                    .select(ch::town)
-                    .first(&mut conn)
-                    .await
-                    .optional()?;
-                town.flatten()
-                    .map(|JsonDbWrapper(v)| town_building_ids(&v))
-                    .unwrap_or_default()
-            };
-
-            let now = now_ms();
-            let collectable: Vec<CraftJob> = if owned_buildings.is_empty() {
-                Vec::new()
-            } else {
-                let mut taken = Vec::new();
-                entry.server_state.0.craft_jobs.retain(|j| {
-                    if is_stuck_finished(j, &owned_buildings, now) {
-                        taken.push(j.clone());
-                        return false;
-                    }
-                    true
-                });
-                taken
-            };
-            if !collectable.is_empty() {
-                let mut tracker = InventoryChangeTracker::default();
-                for job in &collectable {
-                    let (_, repaired) =
-                        repaired_craft_fields(job, &globals.static_data, &globals.repair_data);
-                    let reward = reward_from_results(&repaired);
-                    apply_reward(
-                        &reward,
-                        &mut entry.wallet.0,
-                        &mut entry.inventory.0,
-                        &mut entry.character.0,
-                        &mut tracker,
-                    );
-                    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
-                        entry.inventory.0.backpack_version += 1;
-                    }
-                }
-                log::warn!(
-                    "character {character_id}: collected {} finished craft job(s) that were \
-                     stuck on a real town building and could never be claimed (#165)",
-                    collectable.len(),
-                );
-                write_back(&mut conn, entry).await?;
-                entry = load_owned(&mut conn, character_id, user_id).await?;
-            }
-
-            let mut wires = craft_wires(
-                &entry.server_state.0.craft_jobs,
-                user_id,
-                character_id,
-                &globals.static_data,
-                &globals.repair_data,
-            );
-
-            // A craft job whose `buildingId` RESOLVES to a building in the
-            // player's own town hangs the client on the very next load. Not the
-            // craft screen — the town-build coroutine never finishes, so the
-            // player never leaves the loading screen again.
-            //
-            // Measured, not guessed. On a clean rig, the identical job:
-            //   buildingId -> a real building in the town : STALLS
-            //   buildingId -> anything unresolvable       : LOADS
-            // Completion state is irrelevant (an in-progress craft stalls too),
-            // as are the recipe, the crafting type (Alchemy, valid for that
-            // AlchemistShop) and the building's `state`. Three players were
-            // bricked this way; one of them crafted once on 2026-08-26 and never
-            // got back in.
-            //
-            // Enchanting is the exception. Retail `GET /crafts` shows the in-flight
-            // enchant on its real Enchanter building after the start response removed
-            // the input item. If a connection drops between those two calls, hiding or
-            // auto-collecting that job leaves the client with neither the backpack item
-            // nor a station job to finish.
-            //
-            // So until the client-side mechanism is understood, DETACH rather
-            // than drop: the job, its results and its timer stay in the database
-            // untouched, and the player keeps whatever they crafted. What they
-            // lose is the craft showing on that building — which is strictly
-            // better than losing the account.
-            //
-            // This is a containment, NOT the fix, and it should be deleted the
-            // moment the real cause is found. See docs/craft-town-hang.md.
-            if !owned_buildings.is_empty() {
-                let mut detached = 0usize;
-                for w in wires.iter_mut() {
-                    if should_detach_from_owned_building(
-                        w.crafting_type_id,
-                        w.building_id,
-                        &owned_buildings,
-                    ) {
-                        w.building_id = detached_building_id(w.building_id);
-                        detached += 1;
-                    }
-                }
-                if detached > 0 {
-                    log::warn!(
-                        "character {character_id}: detached {detached} craft job(s) from real \
-                         town buildings to avoid the town-build hang"
-                    );
-                }
-            }
-
-            let crafts = wires
-                .into_iter()
-                .map(|w| serde_json::to_value(w).unwrap_or(Value::Null))
-                .collect();
-            Ok::<_, BladeApiError>(Json(GetCraftsResponse { crafts }))
-        }
-        .scope_boxed()
-    })
-    .await
+    let entry = load_owned(&mut conn, character_id, user_id).await?;
+    let crafts = crafts_for_client(
+        character_id,
+        user_id,
+        &entry.server_state.0.craft_jobs,
+        &globals.static_data,
+        &globals.repair_data,
+        &globals.game_data.items_template,
+    );
+    Ok(Json(GetCraftsResponse { crafts }))
 }
 
 // ── POST /crafts ──────────────────────────────────────────────────────────────
@@ -1153,7 +1045,20 @@ fn repaired_craft_fields<'a>(
         Value::Null => true,
         _ => false,
     };
-    if !crafting_type_is_unmappable && !crafting_type_is_mislabelled && !results_are_empty {
+    // Our own fake result (a recipe id in an item-template slot) is broken on its own,
+    // whatever the bench says: served on a real station it is the town-build hang (see
+    // `results_resolve_in_client`). When the APK knows what the recipe really makes,
+    // it is rebuilt below even if the bench name is already right.
+    let fake_result_is_rebuildable = results_are_our_own_approximation(job)
+        && static_data
+            .recipe_crafting_types
+            .output_template_of(&job.recipe_id)
+            .is_some();
+    if !crafting_type_is_unmappable
+        && !crafting_type_is_mislabelled
+        && !results_are_empty
+        && !fake_result_is_rebuildable
+    {
         return (job.crafting_type_id, Cow::Borrowed(&job.results));
     }
 
@@ -1184,12 +1089,14 @@ fn repaired_craft_fields<'a>(
     let output_template = static_data
         .recipe_crafting_types
         .output_template_of(&job.recipe_id);
+    // Either shape: `mint_recipe_output` emits the one the candidate bench restores, so
+    // an Alchemy job keyed by its own recipe id becomes `{<real potion template>: 1}`.
     let rebuildable = results_are_our_own_approximation(job)
         && output_template.is_some()
         && static_data
             .recipe_crafting_types
             .result_shape_of_type(&candidate_crafting_type)
-            == Some(CraftResultShape::Instanced);
+            .is_some();
 
     let results = if !results_are_empty && !rebuildable {
         Cow::Borrowed(&job.results)
@@ -5581,172 +5488,264 @@ mod tests {
             assert!(after.server_state.0.craft_jobs.is_empty());
         }
     }
-}
 
-#[cfg(test)]
-mod town_hang_containment_tests {
-    use super::*;
-    use serde_json::json;
-
-    fn town_with(building: &str) -> Value {
-        json!({"districts":[{"id":"d","segments":{
-            "seg-1":{"id":"seg-1","buildings":{ building: {"id":building,"level":9}}}
-        }}]})
-    }
-
-    #[test]
-    fn town_building_ids_finds_buildings_across_segments() {
-        let b1 = Uuid::new_v4();
-        let t = town_with(&b1.to_string());
-        let ids = town_building_ids(&t);
-        assert!(
-            ids.contains(&b1),
-            "must find a building the client will find"
-        );
-        assert_eq!(ids.len(), 1);
-    }
-
-    #[test]
-    fn town_building_ids_tolerates_every_shape_of_missing() {
-        // A character with no town, an empty town, a district with no segments
-        // and a segment with no buildings must all yield nothing rather than
-        // panic — this runs on every /crafts read for every player.
-        for t in [
-            json!({}),
-            json!({"districts":[]}),
-            json!({"districts":[{"id":"d"}]}),
-            json!({"districts":[{"id":"d","segments":{"s":{"id":"s"}}}]}),
-            json!({"districts":"not-an-array"}),
-        ] {
-            assert!(town_building_ids(&t).is_empty(), "unexpected ids from {t}");
-        }
-    }
-
-    #[test]
-    fn town_building_ids_skips_keys_that_are_not_uuids() {
-        let t = json!({"districts":[{"id":"d","segments":{
-            "s":{"id":"s","buildings":{"not-a-uuid":{"level":1}}}}}]});
-        assert!(town_building_ids(&t).is_empty());
-    }
-
-    /// The stand-in must be stable (the client would otherwise see the job jump
-    /// between reads) and must never name the building it replaces.
-    #[test]
-    fn detached_building_id_is_stable_and_never_the_original() {
-        let real = Uuid::new_v4();
-        let a = detached_building_id(real);
-        assert_eq!(a, detached_building_id(real), "must be deterministic");
-        assert_ne!(a, real, "must not name the building it is hiding");
-    }
-
-    /// Different buildings must not collapse onto one stand-in, or two jobs
-    /// would appear to share a station.
-    #[test]
-    fn detached_building_ids_stay_distinct() {
-        let a = Uuid::new_v4();
-        let b = Uuid::new_v4();
-        assert_ne!(detached_building_id(a), detached_building_id(b));
-    }
-}
-
-#[cfg(test)]
-mod stuck_craft_tests {
-    use super::*;
-
-    fn job(building: Uuid, completed_at_ms: i64) -> CraftJob {
-        CraftJob {
-            id: Uuid::from_u128(1),
-            recipe_id: Uuid::from_u128(2),
-            building_id: building,
-            crafting_type_id: Uuid::from_u128(3),
-            completed_at_ms,
-            results: serde_json::json!({}),
-        }
-    }
-
-    fn enchant_job(building: Uuid, completed_at_ms: i64) -> CraftJob {
-        CraftJob {
-            crafting_type_id: item_mod_crafting_type(0),
-            ..job(building, completed_at_ms)
-        }
-    }
-
-    const NOW: i64 = 1_000_000;
-
-    /// A FINISHED job on one of the player's own buildings is collectable.
+    /// Tracker #361 / #369: a craft started at one of the player's own buildings must
+    /// still be on that building after the game reloads, exactly as retail served it.
     ///
-    /// It is about to be detached to avoid the measured town-build hang, and a
-    /// detached job has no building for the client to draw a Collect button on — so
-    /// the item is never handed out and the bench is never freed. Report #165: a
-    /// Dragonbone Longsword finished 2026-07-10, sitting on a Forge, unclaimable,
-    /// blocking every later smithing craft.
-    #[test]
-    fn a_finished_job_on_an_owned_building_is_collected() {
-        let b = Uuid::from_u128(0xB1);
-        let owned = std::collections::HashSet::from([b]);
-        assert!(is_stuck_finished(&job(b, NOW - 1), &owned, NOW));
-        assert!(
-            is_stuck_finished(&job(b, NOW), &owned, NOW),
-            "exactly due counts as finished"
-        );
-    }
+    /// The fixtures are verbatim retail `GET /crafts` bodies (local capture snapshot
+    /// 2026-06-07, `blades.bgs.services`), so "the same as retail" is checked field for
+    /// field rather than described.
+    mod crafts_stay_on_their_building {
+        use super::*;
+        use serde_json::json;
 
-    /// Retail restart recovery for enchants: `POST /crafts` removes the input item, and
-    /// `GET /crafts` shows the enchant job on the real Enchanter building. A reconnect
-    /// must therefore leave even a finished enchant visible for the client to collect.
-    #[test]
-    fn an_enchant_job_on_an_owned_building_stays_visible() {
-        let b = Uuid::from_u128(0xB1);
-        let owned = std::collections::HashSet::from([b]);
-        let job = enchant_job(b, NOW - 1);
-        assert!(
-            !is_stuck_finished(&job, &owned, NOW),
-            "GET /crafts must not auto-collect an enchant behind the client's back"
-        );
-        assert!(
-            !should_detach_from_owned_building(job.crafting_type_id, job.building_id, &owned),
-            "GET /crafts must keep the real Enchanter building id for restart recovery"
-        );
-    }
+        /// Retail capture 26484 (2026-05-20T00:12:44Z): a temper running for another
+        /// nine hours, served on the player's real Blacksmith building.
+        const RETAIL_IN_PROGRESS_TEMPER: &str = r#"{"id":"944f3a8d-775c-426d-8fb5-dfcb983646f2","userId":"0ac367f4-8d57-4bef-be51-9158893975ab","characterId":"128f1c2a-f599-4d43-8448-8701646f7cb2","buildingId":"5e8ac649-62ba-426f-9799-93b9d3ba8c2d","recipeId":"35abb59d-d2cd-4992-a8ab-edaf0542252c","craftingTypeId":"06c8087b-ede4-4ce7-8103-6c2067d18498","completedAt":1779269697269,"batchSize":1,"results":{"items":[{"id":"e47d3864-e952-40ec-b928-488d434c1321","itemTemplateId":"9094f0d1-20c8-4013-ab38-77177a009a78","temperingLevel":10,"durability":431.25}]},"version":1}"#;
 
-    /// THE CONTROL, and the one that matters: this must NOT loosen the containment.
-    ///
-    /// The detach exists because a job whose `buildingId` resolves to a real
-    /// building stalls the client's town-build coroutine — measured on a clean rig,
-    /// and it bricked three players. An UNFINISHED job on a real building must still
-    /// be left for the detach path, because it cannot be paid out early.
-    #[test]
-    fn an_unfinished_job_is_left_to_the_detach_path() {
-        let b = Uuid::from_u128(0xB1);
-        let owned = std::collections::HashSet::from([b]);
-        assert!(
-            !is_stuck_finished(&job(b, NOW + 1), &owned, NOW),
-            "a job that has not finished must not be collected early"
-        );
-        assert!(
-            should_detach_from_owned_building(job(b, NOW + 1).crafting_type_id, b, &owned),
-            "negative control: non-enchant jobs still use the town-hang detach containment"
-        );
-    }
+        /// Retail capture 46849 (2026-06-01T00:49:25Z): an enchant 26 minutes from done
+        /// plus two Prime Elixirs that had finished on 2026-03-17 and were STILL on
+        /// their Alchemist buildings — retail never collected on the player's behalf.
+        const RETAIL_MIXED: &str = r#"[{"id":"98159df2-0be7-435a-bbfe-722356c54ec6","userId":"3b728e14-1efe-42e7-b666-e6320107af93","characterId":"e667e127-14c4-44e2-a923-abe7716b6b6c","buildingId":"edb07824-cabe-4637-ada5-a32e2ada3113","recipeId":"e0d48d1a-8d8e-4c76-bfeb-970d80f9b838","craftingTypeId":"aaef180b-8ee7-474a-a7eb-0156aa5529ba","completedAt":1780276558386,"batchSize":1,"results":{"items":[{"id":"90ffa055-aedd-471b-8f1d-b85e7f0405dd","itemTemplateId":"dad106ff-62e9-4d23-b7a7-e897b554bd5d","temperingLevel":0,"durability":325.0,"properties":{"ENCHANTING":[{"id":"5a145cf8-3a20-4b8a-bf6d-8ee1607d3417","tier":10},{"id":"1674a05b-355a-4c01-9994-7a28e2654d4c","tier":10},{"id":"bf107d7d-8777-4411-b07a-56819a58a709","tier":10}]},"arcaneTier":2}]},"version":1},{"id":"cfc5fbcf-fe9c-4781-8f9b-575dc7f7520b","userId":"3b728e14-1efe-42e7-b666-e6320107af93","characterId":"e667e127-14c4-44e2-a923-abe7716b6b6c","buildingId":"540a103a-a235-412b-8b61-66f6bb89cbeb","recipeId":"2cd0b4a3-59e9-45ba-ad45-2f280c381c90","craftingTypeId":"c9d3b3aa-6f27-4869-9523-c10861f3e292","completedAt":1773708258151,"batchSize":5,"results":{"stackableItems":{"c4e0de4f-813c-45b9-9ed7-943b4ac2e729":5}},"version":1},{"id":"e5e11e5f-ffd5-40f5-b720-556896a27475","userId":"3b728e14-1efe-42e7-b666-e6320107af93","characterId":"e667e127-14c4-44e2-a923-abe7716b6b6c","buildingId":"67c8491d-4623-44ad-bec4-be5cf18a789c","recipeId":"2cd0b4a3-59e9-45ba-ad45-2f280c381c90","craftingTypeId":"c9d3b3aa-6f27-4869-9523-c10861f3e292","completedAt":1773708272427,"batchSize":5,"results":{"stackableItems":{"c4e0de4f-813c-45b9-9ed7-943b4ac2e729":5}},"version":1}]"#;
 
-    /// THE SECOND CONTROL: a finished job on a building the player does not own is
-    /// already fine — it is never detached, so the client can collect it normally
-    /// and the server must not take it away from them.
-    #[test]
-    fn a_finished_job_on_an_unowned_building_is_untouched() {
-        let owned = std::collections::HashSet::from([Uuid::from_u128(0xB1)]);
-        assert!(!is_stuck_finished(
-            &job(Uuid::from_u128(0xB2), NOW - 1),
-            &owned,
-            NOW
-        ));
-        // …and with no town at all, nothing is ever collected.
-        let empty = std::collections::HashSet::new();
-        assert!(!is_stuck_finished(
-            &job(Uuid::from_u128(0xB1), NOW - 1),
-            &empty,
-            NOW
-        ));
+        /// The stored row a retail wire record corresponds to.
+        fn stored_from_wire(w: &Value) -> CraftJob {
+            let id = |k: &str| Uuid::parse_str(w[k].as_str().unwrap()).unwrap();
+            CraftJob {
+                id: id("id"),
+                recipe_id: id("recipeId"),
+                building_id: id("buildingId"),
+                crafting_type_id: id("craftingTypeId"),
+                completed_at_ms: w["completedAt"].as_i64().unwrap(),
+                results: w["results"].clone(),
+            }
+        }
+
+        fn serve(retail: &[Value]) -> Vec<Value> {
+            let jobs: Vec<CraftJob> = retail.iter().map(stored_from_wire).collect();
+            let id = |k: &str| Uuid::parse_str(retail[0][k].as_str().unwrap()).unwrap();
+            crafts_for_client(
+                id("characterId"),
+                id("userId"),
+                &jobs,
+                &static_data_from_deploy(),
+                repair_data_from_deploy(),
+                deploy_items(),
+            )
+        }
+
+        /// THE regression for #369: an in-progress craft is served on its real
+        /// building, byte-for-byte what retail sent, including every key.
+        #[test]
+        fn an_in_progress_craft_is_served_exactly_as_retail_served_it() {
+            let retail: Value = serde_json::from_str(RETAIL_IN_PROGRESS_TEMPER).unwrap();
+            let served = serve(std::slice::from_ref(&retail));
+            assert_eq!(served, vec![retail]);
+        }
+
+        /// Finished jobs stay listed on their building too: retail served the same
+        /// finished elixir for 27 reads over nine days and let the client collect it.
+        #[test]
+        fn finished_and_running_jobs_together_match_retail_and_nothing_is_collected() {
+            let retail: Vec<Value> = serde_json::from_str(RETAIL_MIXED).unwrap();
+            assert_eq!(serve(&retail), retail);
+        }
+
+        /// The shape our own create path writes today (HauDrauf's Dragonbone Dagger,
+        /// #369): a Smithing job on the player's Forge with empty GRADING/ENCHANTING
+        /// lists. Every template resolves, so it stays on the Forge.
+        #[test]
+        fn a_smithing_job_minted_by_our_create_path_stays_on_its_forge() {
+            let forge = uuid("b4725702-d301-49bb-a75d-2c638f6c5abd");
+            let job = CraftJob {
+                id: uuid("f70499fb-c36d-4df9-bba6-bdf7222267b6"),
+                recipe_id: uuid("c419c89a-3dbe-4475-a2cb-409f45c36272"),
+                building_id: forge,
+                crafting_type_id: uuid("a47707e6-59e9-43b0-a29f-6d703acd8171"),
+                completed_at_ms: i64::MAX / 2,
+                results: json!({"items": [{
+                    "id": "f70499fb-c36d-8df9-bba6-bdf7222267b6",
+                    "itemTemplateId": "03b1e366-3d2a-48b8-99f2-f06be005e207",
+                    "temperingLevel": 0, "durability": 162.5,
+                    "properties": {"GRADING": [], "ENCHANTING": []}
+                }]}),
+            };
+            let served = crafts_for_client(
+                Uuid::from_u128(1),
+                Uuid::from_u128(2),
+                std::slice::from_ref(&job),
+                &static_data_from_deploy(),
+                repair_data_from_deploy(),
+                deploy_items(),
+            );
+            assert_eq!(served[0]["buildingId"], json!(forge.to_string()));
+            assert_eq!(served[0]["results"], job.results);
+        }
+
+        /// A legacy job carrying our old fake result (`{ <recipe id>: 1 }`) whose
+        /// recipe the APK knows is REBUILT into the real item and served on its
+        /// building — not detached. Shape from production (character "Adventurer").
+        #[test]
+        fn a_legacy_fake_result_with_a_known_recipe_is_rebuilt_and_stays_on_its_building() {
+            let forge = uuid("e057777c-fcb4-4a85-9fbf-80332e08d2d8");
+            let recipe = "f678c878-ca9e-41b0-83b2-5dc9cab7d1be"; // Ebony Faerite Ring
+            let job = CraftJob {
+                id: uuid("a8d880ad-d45b-44d2-92a6-9e7ac0ac53a4"),
+                recipe_id: uuid(recipe),
+                building_id: forge,
+                crafting_type_id: uuid("a47707e6-59e9-43b0-a29f-6d703acd8171"),
+                completed_at_ms: 1_789_072_220_478,
+                results: json!({"stackableItems": {recipe: 1}}),
+            };
+            let served = crafts_for_client(
+                Uuid::from_u128(1),
+                Uuid::from_u128(2),
+                std::slice::from_ref(&job),
+                &static_data_from_deploy(),
+                repair_data_from_deploy(),
+                deploy_items(),
+            );
+            assert_eq!(served[0]["buildingId"], json!(forge.to_string()));
+            assert_eq!(
+                served[0]["results"]["items"][0]["itemTemplateId"],
+                json!("240eb001-fe3e-4899-b0cc-dd87cb8a72b6"),
+                "the ring the recipe really makes: {}",
+                served[0]
+            );
+            assert!(results_resolve_in_client(
+                &served[0]["results"],
+                deploy_items()
+            ));
+        }
+
+        /// Production's worst pile (character "Imported", Forge `105c24bf`): one
+        /// Smithing row and three forge rows stored as Alchemy, all four carrying the
+        /// old fake result. Exactly one job may hold the Forge's Smithing station, and
+        /// every job the client CAN retrieve from a station must resolve; the three
+        /// that fall back to their stored Alchemy fake are held off the building.
+        #[test]
+        fn the_legacy_forge_pile_puts_one_real_item_on_the_station_and_holds_the_rest() {
+            let forge = uuid("105c24bf-9e16-4cbb-bddd-514ad0b23e0e");
+            let smithing = uuid("a47707e6-59e9-43b0-a29f-6d703acd8171");
+            let alchemy = uuid("c9d3b3aa-6f27-4869-9523-c10861f3e292");
+            let row = |id: u128, recipe: &str, ty: Uuid| CraftJob {
+                id: Uuid::from_u128(id),
+                recipe_id: uuid(recipe),
+                building_id: forge,
+                crafting_type_id: ty,
+                completed_at_ms: 1_786_000_000_000 + id as i64,
+                results: json!({"stackableItems": {recipe: 1}}),
+            };
+            let jobs = [
+                row(1, "b949b05f-2e46-4a0c-80e4-171c4aecb9e5", alchemy),
+                row(2, "38671302-f4f1-4357-aef9-5f57972c423d", alchemy),
+                row(3, "5fe0e868-957e-47c2-a094-9c1daad097d5", alchemy),
+                row(4, "6bd1fb89-7004-4737-86d5-a6bae969697e", smithing),
+            ];
+            let served = crafts_for_client(
+                Uuid::from_u128(0xC),
+                Uuid::from_u128(0xD),
+                &jobs,
+                &static_data_from_deploy(),
+                repair_data_from_deploy(),
+                deploy_items(),
+            );
+            let on_forge: Vec<&Value> = served
+                .iter()
+                .filter(|w| w["buildingId"] == json!(forge.to_string()))
+                .collect();
+            assert_eq!(on_forge.len(), 1, "{served:#?}");
+            assert_eq!(on_forge[0]["craftingTypeId"], json!(smithing.to_string()));
+            assert_eq!(
+                on_forge[0]["results"]["items"][0]["itemTemplateId"],
+                json!("3d1a4db9-6a16-4c56-af55-7a612ceb2dc3"),
+                "Iron Gauntlets, the recipe's real output"
+            );
+            for w in &served {
+                let detached = w["buildingId"] != json!(forge.to_string());
+                assert_eq!(
+                    detached,
+                    !results_resolve_in_client(&w["results"], deploy_items()),
+                    "detached exactly when unresolvable: {w}"
+                );
+            }
+        }
+
+        /// THE CONTROL: the hang's actual trigger is still held off a real building.
+        /// A fake result naming a recipe the APK has no output for (the 2026-08-26
+        /// bricking shape: Alchemy, `{ <recipe id>: 1 }`) cannot be repaired, so it is
+        /// detached — stably, and with its row untouched.
+        #[test]
+        fn an_unresolvable_result_is_still_detached() {
+            let shop = uuid("540a103a-a235-412b-8b61-66f6bb89cbeb");
+            let unknown_recipe = Uuid::from_u128(0xDEAD_BEEF);
+            assert!(!deploy_items().contains_key(&unknown_recipe));
+            let job = CraftJob {
+                id: Uuid::from_u128(7),
+                recipe_id: unknown_recipe,
+                building_id: shop,
+                crafting_type_id: uuid("c9d3b3aa-6f27-4869-9523-c10861f3e292"),
+                completed_at_ms: i64::MAX / 2,
+                results: json!({"stackableItems": {unknown_recipe.to_string(): 1}}),
+            };
+            let serve_once = || {
+                crafts_for_client(
+                    Uuid::from_u128(1),
+                    Uuid::from_u128(2),
+                    std::slice::from_ref(&job),
+                    &static_data_from_deploy(),
+                    repair_data_from_deploy(),
+                    deploy_items(),
+                )
+            };
+            let a = serve_once();
+            assert_eq!(
+                a[0]["buildingId"],
+                json!(detached_building_id(shop).to_string())
+            );
+            assert_eq!(a, serve_once(), "stable across reads");
+            assert_eq!(
+                a[0]["id"],
+                json!(job.id.to_string()),
+                "the job itself is kept"
+            );
+        }
+
+        #[test]
+        fn results_resolve_only_when_every_template_is_a_real_item() {
+            let items = deploy_items();
+            let real = "c4e0de4f-813c-45b9-9ed7-943b4ac2e729";
+            let fake = "2cd0b4a3-59e9-45ba-ad45-2f280c381c90"; // a recipe id, not an item
+            for (results, want) in [
+                (json!({"stackableItems": {real: 5}}), true),
+                (json!({"items": [{"itemTemplateId": real}]}), true),
+                (json!({}), true),
+                (Value::Null, true),
+                (json!({"stackableItems": {fake: 1}}), false),
+                (json!({"stackableItems": {real: 1, fake: 1}}), false),
+                (json!({"items": [{"itemTemplateId": fake}]}), false),
+                (json!({"items": [{"id": real}]}), false),
+                (json!({"items": {"itemTemplateId": real}}), false),
+                (json!({"stackableItems": [real]}), false),
+                (json!({"stackableItems": {"not-a-uuid": 1}}), false),
+            ] {
+                assert_eq!(
+                    results_resolve_in_client(&results, items),
+                    want,
+                    "{results}"
+                );
+            }
+        }
+
+        /// The stand-in must be stable (the client would otherwise see the job jump
+        /// between reads), never name the building it replaces, and stay distinct.
+        #[test]
+        fn detached_building_ids_are_stable_distinct_and_never_the_original() {
+            let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(detached_building_id(a), detached_building_id(a));
+            assert_ne!(detached_building_id(a), a);
+            assert_ne!(detached_building_id(a), detached_building_id(b));
+        }
     }
 }
 

@@ -1,8 +1,9 @@
 # The craft/town loading hang
 
-**Status: contained, not fixed.** `get_crafts` detaches craft jobs from real
-buildings so nobody can be bricked. The underlying client behaviour is still
-not understood, and the containment should be deleted the day it is.
+**Status: root cause found in the client binary (2026-10-10); the blanket
+containment is gone.** Crafts are served on their real building again, as retail
+did. Only a job whose results name something that is not an item template is
+still held off its building, because that is the actual trigger.
 
 ## Symptom
 
@@ -15,74 +16,66 @@ core, so it does not look hung from outside.
 Players report it as "can't connect", which is what makes it expensive: it
 reads as a VPN or account problem and gets triaged as one.
 
-## What actually triggers it
+## Root cause
 
-A craft job whose `buildingId` **resolves to a building in that character's own
-town**.
+A craft result whose item template the client does not have.
 
-Measured on a clean rig (emulator running the byte-identical distributed APK,
-full asset cache, a copy of a real character so nothing live was touched):
+Read from `libil2cpp.so` (base APK, sha256 `9fc19d29…`; RVAs from
+`reference/il2cpp/dump.cs` in blades-capture, decompiled with Ghidra):
 
-| the one thing changed | result |
+1. `FindCraftingStationParser.Parse` (0x24E10E0) writes each `/crafts` entry
+   into the town's persistent tree, under the building its `buildingId` names
+   and the station its `craftingTypeId` names. If no building has that id,
+   nothing is written.
+2. While the town builds, each building's `CraftingStation.RetrievePersistent`
+   (0x1E53F3C) restores its craft: recipe, stack size, then **every element of
+   `results`** as `new StackedItem(node)`, then the timer.
+3. `StackedItem.RetrievePersistent` (0x1C7844C) builds an `Item` and calls
+   `Item.RetrievePersistent` (0x1F2C02C), whose first act is
+   `ItemTemplateManager.GetTemplateByID(templateId)` (0x1F2BA78) — a bare
+   `Dictionary<,>` indexer. An unknown id throws `KeyNotFoundException`, and
+   the town-build never finishes.
+
+For contrast, `RecipeManager.GetRecipeByID` (0x1DDFE88) checks `ContainsKey`
+first and returns null, so an unknown `recipeId` is harmless.
+
+The jobs that stalled carried `results: {"stackableItems": {"<recipe id>": 1}}`
+— the fake result the unknown-recipe path minted from 2026-07-04 until
+132e20ba (2026-09-17). A recipe id is never an item template (0 of 2,978 APK
+recipes collide with the 1,113 templates in `parsed.json`).
+
+That explains every earlier measurement:
+
+| observation | why |
 |---|---|
-| `buildingId` → a real building in the town | **stalls** |
-| `buildingId` → any unresolvable uuid | **loads** |
+| `buildingId` → real building: **stalls**; → unresolvable uuid: **loads** | step 1: no building, no station, nothing retrieves the bad template |
+| an in-progress craft stalls as well as a finished one | step 2 runs for any job with results |
+| recipe, crafting type and building `state` did not matter | they were varied while the results were held constant — and the results were the bad part |
+| the 2026-08-19 relabel hang (Alchemy → Smithing on a Forge) | an Alchemy row on a Forge has no station to land on; relabelled to Smithing it lands on the Forge's station, which then retrieves the recipe-keyed stackable |
+| tickets #175–#180 ("the issue was a stackableitem") | same fake result |
 
-Everything else was held constant: same job id, same recipe, same crafting
-type, same results, same completion time, same town, same character.
+## What the server does now
 
-## What it is NOT
+`crafts_for_client` in `server/src/craft.rs`:
 
-Each of these was tested and ruled out, so nobody re-treads them:
+* Serves every job on its real building, finished or not, and pays nothing out
+  on read. Retail did exactly this: the same finished Prime Elixir sat on its
+  Alchemist in 27 captured reads over nine days, and the client collected it
+  with `POST /crafts/{id}/finish`.
+* Rebuilds a legacy fake result into the real item when the APK knows what the
+  recipe makes (`repaired_craft_fields`), whatever bench the job names.
+* Detaches (stable stand-in `buildingId`, row untouched) only a job whose
+  results still name a non-template after that repair
+  (`results_resolve_in_client`).
 
-* **Not completion.** An in-progress craft (completing in 24h) stalls too.
-* **Not the crafting type.** `c9d3b3aa` is `Alchemy`, and
-  `building_upgrades.json` lists it in that AlchemistShop's
-  `allowedCraftingTypes`. Another character loads fine carrying a job with the
-  *same* crafting type — his simply points at a building he does not have.
-* **Not the recipe.** 13 of 14 craft jobs on prod have a `recipeId` that is not
-  in `recipes.json` (they live in `recipe_crafting_types.json`), including on
-  characters that load perfectly.
-* **Not `stored_crafting_type_is_unserveable`.** The existing repair path from
-  report #34 does not fire here: `craftingTypeId != recipeId` and it is not nil.
-* **Not the building's `state`.** Setting it to something else changes nothing
-  (and only `NORMAL`, `UPGRADING`, `BUILDING` occur in captures anyway).
-* **Not the town.** The same town loads fine once the craft job is detached.
-* **Not assets, the character, the inventory, the wallet or server_state.** All
-  bisected out on a copy, column by column.
+Retail fixtures for all of this are in the `crafts_stay_on_their_building`
+tests.
 
-## Blast radius
+## Verifying on the client
 
-Every player with a town who crafts. It does not bite immediately — the craft
-succeeds and the session continues — it bites on the **next load**. Three
-characters were bricked this way; one crafted once on 2026-08-26 and never got
-back in. The repair logic that was supposed to prevent this shipped 2026-08-19,
-six days earlier, so its absence is not the explanation.
-
-## The containment
-
-`get_crafts` reads the character's town, and for any job whose `buildingId` is
-one of that town's buildings, emits a **stand-in id** instead
-(`detached_building_id`: the real id with high bits flipped, so it is stable
-across reads and cannot collide with a real building).
-
-Deliberately a detach and not a delete: the job, its results and its timer stay
-in the database untouched, so the player keeps what they crafted. What they lose
-is the craft appearing on that building. Losing a craft's UI is strictly better
-than losing the account.
-
-## Finding the real cause
-
-The next step is a client-side answer, not another server experiment — the
-server side is exhausted. The reproduction is cheap and reliable, so:
-
-1. Copy a character with a town to a throwaway row, bind the emulator to it.
-2. Add one craft job pointing at a real building → stalls. Change only the
-   `buildingId` → loads.
-3. Instrument the client at that point (the town-build coroutine) and find what
-   returns null.
-
-The fork's own note on report #34 says `GetCraftingStation` returning null makes
-the town-build coroutine never finish. That is the same shape and the obvious
-first thing to check — but the crafting type here is valid for that building, so
-if it is that path, the lookup is failing for a different reason.
+`tools/harness/client-gate.sh boot --checkpoint wolfwalker-250` (blades-capture)
+against a server built from this change, after starting a craft at the Forge and
+relaunching the app: the gate must reach the hub, and the Forge must show the
+running craft. `tools/harness/faults/craft-poison.sh inject` is still the red
+control: it puts a recipe-keyed stackable on the Forge's Smithing station, which
+is exactly what the server now refuses to emit.
