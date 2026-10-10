@@ -15,7 +15,8 @@
 //! `event_material_ladders.json` and `script/extract_event_material_ladders.py`:
 //!
 //! * metals step at the APK's gear unlock levels (1, 8, 13, 18, 23, 28, 33, 39, 45);
-//! * soul gems step at their own measured levels (Petty → Glorious, 28/35/38/47/50/61);
+//! * soul gems step at their own measured levels (Petty → Glorious, 28/35/38/47/49/61;
+//!   Grand at 49 is HauDrauf's, #370 — no capture at 49);
 //! * healing potions and the gem bonuses follow the sigil band (16/26/36/46).
 //!
 //! A reward keeps its quantity; only the item changes.
@@ -165,6 +166,17 @@ mod tests {
         let scales: HashSet<Uuid> = [id(EBONY), id(DRAGON_SCALES)].into();
         assert_eq!(ladder_for(&id(EBONY), &bones).unwrap().item_at(26), id(QUICKSILVER));
         assert_eq!(ladder_for(&id(EBONY), &scales).unwrap().item_at(26), id(MOONSTONE));
+    }
+
+    /// Report #370: Grand from 49 (HauDrauf; no capture at 49), Exceptional at the
+    /// captured 47-48 just below it.
+    #[test]
+    fn grand_soul_gems_start_at_49() {
+        let exceptional = id("3932e499-441e-4c6d-b671-9a03131ebe6f");
+        let grand = id("68d7941e-8c8d-47bf-9f66-becb058f1817");
+        let line = ladder_for(&grand, &HashSet::new()).expect("soul gems are laddered");
+        assert_eq!(line.item_at(48), exceptional);
+        assert_eq!(line.item_at(49), grand);
     }
 
     #[test]

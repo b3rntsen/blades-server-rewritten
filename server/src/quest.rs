@@ -6750,6 +6750,8 @@ mod event_quest_tests {
     /// The band data gave every 16-35 character Petty and every 46+ one Glorious. The
     /// retail captures never show an event paying Greater (or Elevated) at all; at
     /// Sephoris's level retail paid Middling or Common, which is what is served now.
+    /// Grand starts at 49, not 50: HauDrauf (#370) — players parked at 49 to farm
+    /// Grand gems — and no capture exists at 49 to contradict him.
     #[test]
     fn report_367_soul_gems_follow_the_claimants_level() {
         let sd = static_data();
@@ -6760,6 +6762,8 @@ mod event_quest_tests {
             (35, "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029"),  // Middling
             (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
             (47, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional
+            (48, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional (retail L48)
+            (49, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand, per HauDrauf (#370)
             (60, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
             (100, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"), // Glorious
         ] {

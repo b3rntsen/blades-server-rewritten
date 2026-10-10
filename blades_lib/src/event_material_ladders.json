@@ -110,7 +110,7 @@
   },
   {
    "name": "soul gem",
-   "rule": "Measured: the lowest level each gem was captured at (Petty 18-21, Lesser 28-29, Middling 35-37, Common 38-43, Exceptional 47-48, Grand 50-58, Glorious 61-100). Greater and Elevated were never paid by an event.",
+   "rule": "Measured: the lowest level each gem was captured at (Petty 18-21, Lesser 28-29, Middling 35-37, Common 38-43, Exceptional 47-48, Grand 50-58, Glorious 61-100), except Grand, which starts at 49 per HauDrauf (tracker #370: players stopped at 49 to farm Grand gems); no capture exists at 49. Greater and Elevated were never paid by an event.",
    "steps": [
     {
      "minLevel": 1,
@@ -138,7 +138,7 @@
      "label": "Exceptional Soul Gem"
     },
     {
-     "minLevel": 50,
+     "minLevel": 49,
      "item": "68d7941e-8c8d-47bf-9f66-becb058f1817",
      "label": "Grand Soul Gem"
     },
