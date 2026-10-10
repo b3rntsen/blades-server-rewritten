@@ -1290,18 +1290,43 @@ impl EventQuestTemplate {
             })
     }
 
-    /// The `rewards[]` an instance minted for a character of `level` carries.
+    /// The `rewards[]` an instance minted for a character of `level` carries: its
+    /// band's ladder, with each crafting material at `level`'s own step (#362).
     pub fn rewards_for_level(&self, level: i64) -> Vec<crate::economy::RewardGrant> {
-        self.band_for_level(level)
-            .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone())
+        let mut out = self
+            .band_for_level(level)
+            .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone());
+        let slot = self.slot_items(false);
+        for tier in &mut out {
+            crate::features::event_materials::scale_to_level(tier, level, &slot);
+        }
+        out
     }
 
-    /// The `finalReward` an instance minted for a character of `level` carries.
+    /// The `finalReward` an instance minted for a character of `level` carries, its
+    /// material at `level`'s own step like the milestones'.
     pub fn final_reward_for_level(&self, level: i64) -> Option<crate::economy::RewardGrant> {
-        match self.band_for_level(level) {
+        let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
             None => self.final_reward.clone(),
+        }?;
+        crate::features::event_materials::scale_to_level(&mut out, level, &self.slot_items(true));
+        Some(out)
+    }
+
+    /// Every stackable this template pays in one slot — the milestones, or the
+    /// final bonus — across all its bands. It tells a material shared by two lines
+    /// (Ebony, Diamond, ...) which line this template is on.
+    fn slot_items(&self, final_slot: bool) -> std::collections::HashSet<Uuid> {
+        let mut grants: Vec<&crate::economy::RewardGrant> = Vec::new();
+        if final_slot {
+            grants.extend(self.final_reward.iter());
+            grants.extend(self.level_bands.iter().filter_map(|b| b.final_reward.as_ref()));
+        } else {
+            grants.extend(self.rewards.iter());
+            grants.extend(self.level_bands.iter().flat_map(|b| b.rewards.iter()));
         }
+        grants.iter().flat_map(|g| g.stackable_items.keys().copied()).collect()
     }
 }
 

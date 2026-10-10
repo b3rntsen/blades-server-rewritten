@@ -1,0 +1,246 @@
+{
+ "_meta": {
+  "description": "Which crafting material an event-quest milestone or finalReward pays at a character level (reports #362, #367). An event tier's material is not fixed per level band: retail paid the material of the claimant's own level, so within one sigil band a level-17 character got Orichalcum and a level-21 one Dwarven. Each ladder lists that material's steps; a reward keeps its quantity and swaps the item for the step at the character's level.",
+  "evidence": "Every GAME_EVENT instance in the pre-shutdown retail captures (snapshot 2026-06-07 + production api_captures to 2026-06-30), against its character's level at first sighting: 409 distinct (template, level, slot, item) observations across 29 templates and 67 characters at levels 10-100: 409 matched by these ladders, 0 contradicted. One instance whose sigils show it was minted a band below its sighting level is excluded as a stale level. The observations ship as event_material_observations.json and are asserted by the server's tests.",
+  "familyChoice": "An item shared by two lines (Silver, Orichalcum, Dwarven, Ebony, Daedra Heart, Diamond) follows the line of the other items its template pays in the same slot across all its level bands; rewards[] and finalReward are separate slots (8ef9fad8 pays Quicksilver in rewards[] and Moonstone in finalReward).",
+  "generator": "script/extract_event_material_ladders.py"
+ },
+ "ladders": [
+  {
+   "name": "metal: Moonstone / Malachite / Dragon Scales line",
+   "rule": "The APK's gear unlock level (ItemTemplate.requiredLevel) of the material's tier: 1, 8, 13, 18, 23, 28, 33, 39, 45. Every retail observation (levels 10-100) agrees; Steel below level 8 is the same rule extrapolated (no capture below level 10).",
+   "steps": [
+    {
+     "minLevel": 1,
+     "item": "b81952e0-c3c8-4a5c-92c0-8215d3eb71af",
+     "label": "Steel Ingot"
+    },
+    {
+     "minLevel": 8,
+     "item": "b74a5c55-a687-4604-aa59-ba3ddfddcd2a",
+     "label": "Silver Ingot"
+    },
+    {
+     "minLevel": 13,
+     "item": "74f091b5-fd88-464b-a98a-f60a5e8a0f25",
+     "label": "Orichalcum Ingot"
+    },
+    {
+     "minLevel": 18,
+     "item": "f11fb90b-b441-4d72-a33f-50d14d3d6778",
+     "label": "Dwarven Metal Ingot"
+    },
+    {
+     "minLevel": 23,
+     "item": "4312b0ed-e397-4815-9693-a511ecda71de",
+     "label": "Moonstone Ingot"
+    },
+    {
+     "minLevel": 28,
+     "item": "85ed5500-3581-4699-8095-4b5ff6514355",
+     "label": "Malachite Ingot"
+    },
+    {
+     "minLevel": 33,
+     "item": "75112030-b248-49b0-9c70-0da8dea150d1",
+     "label": "Ebony Ingot"
+    },
+    {
+     "minLevel": 39,
+     "item": "f9181a67-b094-4c37-a145-ced9dfe610d6",
+     "label": "Daedra Heart"
+    },
+    {
+     "minLevel": 45,
+     "item": "34ddfe0e-5119-4e52-8eef-a77b6bc810a7",
+     "label": "Dragon Scales"
+    }
+   ]
+  },
+  {
+   "name": "metal: Quicksilver / Chaurus Chitin / Dragon Bones line",
+   "rule": "As the other metal line; the two differ only at tiers 6, 7 and 10, and a template keeps the same line at every level (7f0d1508 pays Dragon Bones for all 16 characters captured at 50+).",
+   "steps": [
+    {
+     "minLevel": 1,
+     "item": "b81952e0-c3c8-4a5c-92c0-8215d3eb71af",
+     "label": "Steel Ingot"
+    },
+    {
+     "minLevel": 8,
+     "item": "b74a5c55-a687-4604-aa59-ba3ddfddcd2a",
+     "label": "Silver Ingot"
+    },
+    {
+     "minLevel": 13,
+     "item": "74f091b5-fd88-464b-a98a-f60a5e8a0f25",
+     "label": "Orichalcum Ingot"
+    },
+    {
+     "minLevel": 18,
+     "item": "f11fb90b-b441-4d72-a33f-50d14d3d6778",
+     "label": "Dwarven Metal Ingot"
+    },
+    {
+     "minLevel": 23,
+     "item": "e80bee76-f92c-4005-9eff-20d1e8c64d24",
+     "label": "Quicksilver Ingot"
+    },
+    {
+     "minLevel": 28,
+     "item": "8ef9f10c-3c46-492c-9a00-29fd1626d85e",
+     "label": "Chaurus Chitin"
+    },
+    {
+     "minLevel": 33,
+     "item": "75112030-b248-49b0-9c70-0da8dea150d1",
+     "label": "Ebony Ingot"
+    },
+    {
+     "minLevel": 39,
+     "item": "f9181a67-b094-4c37-a145-ced9dfe610d6",
+     "label": "Daedra Heart"
+    },
+    {
+     "minLevel": 45,
+     "item": "d523932f-8c7f-4192-9112-5dbd60883c2b",
+     "label": "Dragon Bones"
+    }
+   ]
+  },
+  {
+   "name": "soul gem",
+   "rule": "Measured: the lowest level each gem was captured at (Petty 18-21, Lesser 28-29, Middling 35-37, Common 38-43, Exceptional 47-48, Grand 50-58, Glorious 61-100), except Grand, which starts at 49 per HauDrauf (tracker #370: players stopped at 49 to farm Grand gems); no capture exists at 49. Greater and Elevated were never paid by an event.",
+   "steps": [
+    {
+     "minLevel": 1,
+     "item": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "label": "Petty Soul Gem"
+    },
+    {
+     "minLevel": 28,
+     "item": "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+     "label": "Lesser Soul Gem"
+    },
+    {
+     "minLevel": 35,
+     "item": "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+     "label": "Middling Soul Gem"
+    },
+    {
+     "minLevel": 38,
+     "item": "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+     "label": "Common Soul Gem"
+    },
+    {
+     "minLevel": 47,
+     "item": "3932e499-441e-4c6d-b671-9a03131ebe6f",
+     "label": "Exceptional Soul Gem"
+    },
+    {
+     "minLevel": 49,
+     "item": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "label": "Grand Soul Gem"
+    },
+    {
+     "minLevel": 61,
+     "item": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "label": "Glorious Soul Gem"
+    }
+   ]
+  },
+  {
+   "name": "healing potion",
+   "rule": "The sigil level band (16/26/36/46): Strong 10-13, Plentiful 24, Vigorous 26-32, Intense 42-43, Extreme 57-100.",
+   "steps": [
+    {
+     "minLevel": 1,
+     "item": "aa52a6a4-6500-44b5-ad74-9eb1d58e38c7",
+     "label": "Potion of Strong Healing"
+    },
+    {
+     "minLevel": 16,
+     "item": "21e6557f-17ca-4bd3-9379-00184efe0edc",
+     "label": "Potion of Plentiful Healing"
+    },
+    {
+     "minLevel": 26,
+     "item": "1c5c5ce3-178b-4938-89f3-faf3fa7f0664",
+     "label": "Potion of Vigorous Healing"
+    },
+    {
+     "minLevel": 36,
+     "item": "605786d6-1b00-48ec-b765-eb81c5e4a1df",
+     "label": "Potion of Intense Healing"
+    },
+    {
+     "minLevel": 46,
+     "item": "61b31323-8ba2-49f2-befe-f43111c6e2c7",
+     "label": "Potion of Extreme Healing"
+    }
+   ]
+  },
+  {
+   "name": "gem: Garnet / Amethyst / Faerite / Arentine line",
+   "rule": "The sigil level band, like the potions.",
+   "steps": [
+    {
+     "minLevel": 1,
+     "item": "9df9233f-e7b9-47e8-bc75-f37707917759",
+     "label": "Garnet"
+    },
+    {
+     "minLevel": 16,
+     "item": "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5",
+     "label": "Amethyst"
+    },
+    {
+     "minLevel": 26,
+     "item": "16e102fb-b1c0-42de-8106-0aa27e77f7f0",
+     "label": "Diamond"
+    },
+    {
+     "minLevel": 36,
+     "item": "70f2c013-813e-4f63-8b29-7a54a13b5e58",
+     "label": "Faerite"
+    },
+    {
+     "minLevel": 46,
+     "item": "c1abc963-c03c-4cd9-84d7-433ed8ab3877",
+     "label": "Arentine"
+    }
+   ]
+  },
+  {
+   "name": "gem: Topaz / Ruby / Atronite / Firebreath Opal line",
+   "rule": "The sigil level band; Topaz is bd05e8f6's captured band 1.",
+   "steps": [
+    {
+     "minLevel": 1,
+     "item": "3ca59113-a093-4cc8-8389-0f578ad94851",
+     "label": "Topaz"
+    },
+    {
+     "minLevel": 16,
+     "item": "cf4b1b42-a736-4aa1-99b8-baca9f9c2276",
+     "label": "Ruby"
+    },
+    {
+     "minLevel": 26,
+     "item": "16e102fb-b1c0-42de-8106-0aa27e77f7f0",
+     "label": "Diamond"
+    },
+    {
+     "minLevel": 36,
+     "item": "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95",
+     "label": "Atronite"
+    },
+    {
+     "minLevel": 46,
+     "item": "91c40a5d-36b8-4ed9-9c07-209b52ebc732",
+     "label": "Firebreath Opal"
+    }
+   ]
+  }
+ ]
+}
