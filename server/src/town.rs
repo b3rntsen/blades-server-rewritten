@@ -1173,11 +1173,25 @@ fn prestige_on_complete(building_upgrades: &Value, town: &mut Value, building_id
 /// captured player was doing for four minutes straight. We reproduce it: this is
 /// a fidelity target, not a design.)
 ///
-/// `deploy/static/style_prestige.json` holds the measured values;
-/// `building_upgrades.json`'s `styleInputs[].prestigeForLevel` is the fallback for
-/// the combinations no capture covers. The two agree exactly on the TownHall and
-/// differ by a fixed 65 on the walls and 115 on the main gate — the table's shape
-/// is right and one of its numbers is not, so measurement wins where we have it.
+/// Where the amount comes from, in order:
+///
+/// 1. `deploy/static/style_prestige.json` — the measured values (10 combinations).
+/// 2. The APK's `_prestigeForStyle` for that style at that level
+///    ([`crate::town_construction`]). It equals the measurement on 9 of those 10
+///    (the tenth is a TownHall at level 10, measured at its level-9 value), and it
+///    is what the client shows the player before they choose.
+/// 3. `building_upgrades.json`'s `styleInputs[].prestigeForLevel`, for a building
+///    the APK table lacks.
+///
+/// Step 2 is report #371. Without it every wall and main-gate restyle no capture
+/// covered fell through to step 3, and for those types that row is NOT the
+/// restyle value: it is the level's prestige PLUS the style's (65 + style on a
+/// wall, 115 + style on the main gate) — what *placing* one pays. So a Stone or
+/// HalfTimber restyle of the W01 wall paid 147 / 137 while its measured Castle
+/// restyle paid 104, and the main gate paid 259 / 242 against Castle's 184:
+/// Castle, the dearest style, paid the least — "exactly inverted", as the
+/// reporter put it. The APK pays Castle 104 > Stone 82 > HalfTimber 72 on every
+/// wall and 184 > 144 > 127 on the gate.
 fn prestige_on_style_change(
     building_upgrades: &Value,
     measured: &Value,
@@ -1193,6 +1207,12 @@ fn prestige_on_style_change(
         .get("grants")
         .and_then(|g| g.get(&key))
         .and_then(Value::as_u64)
+    {
+        return v;
+    }
+    if let Some(v) = crate::town_construction::data()
+        .building(type_id)
+        .and_then(|b| b.prestige_for_style(style_id, level))
     {
         return v;
     }
@@ -4018,6 +4038,75 @@ mod when_the_town_is_paid {
         assert_eq!(
             prestige_on_style_change(&table, &json!({}), &town, Uuid::from_u128(9), style),
             0
+        );
+    }
+
+    /// Report #371: renovating the town wall paid Castle the LEAST. Every wall
+    /// segment and the main gate must pay Castle > Stone > HalfTimber, at the
+    /// APK's `_prestigeForStyle` (104 / 82 / 72 on a wall, 184 / 144 / 127 on the
+    /// gate) — whether or not a capture measured that combination. The W00 wall
+    /// was measured for all three styles and was right; W01-W03 and the gate fell
+    /// through to `building_upgrades.json`, whose row for them is the PLACEMENT
+    /// prestige (level 65/115 + style), so Stone paid 147 and Castle 104.
+    #[test]
+    fn every_wall_and_the_main_gate_pay_castle_most_and_halftimber_least() {
+        const CASTLE: &str = "c462a43a-0547-4cd0-a755-5c0aff0f74f8";
+        const STONE: &str = "1d6696b3-963b-48d4-8924-d43505cb2807";
+        const HALF_TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
+        let walls = [
+            ("Wall_D00_W00", "52291bce-3585-49e5-85e4-afbdfa5ba422", [104, 82, 72]),
+            ("Wall_D00_W01", "488f91a9-7a3b-421e-82a9-e2571915beff", [104, 82, 72]),
+            ("Wall_D00_W02", "8c6f4962-6522-42fb-bfcb-f653da832d04", [104, 82, 72]),
+            ("Wall_D00_W03", "84bd568d-4009-4aa7-8984-22327a383277", [104, 82, 72]),
+            ("MainGate", "ce2b1c43-3391-499a-80cf-fc4fa6b92718", [184, 144, 127]),
+        ];
+        let table = upgrades();
+        let measured = measured_styles();
+        let id = Uuid::parse_str(BID).unwrap();
+        for (name, type_id, want) in walls {
+            // Default (e3470241) is what an un-renovated wall wears.
+            let town = town_with(type_id, Some("e3470241-04e6-4962-bc69-6a57f731b876"), 0);
+            let paid = [CASTLE, STONE, HALF_TIMBER].map(|style| {
+                prestige_on_style_change(&table, &measured, &town, id, Uuid::parse_str(style).unwrap())
+            });
+            assert_eq!(paid, want, "{name}: Castle/Stone/HalfTimber restyle paid {paid:?}");
+        }
+    }
+
+    /// The general form: for every building, style and level the APK lists, a
+    /// restyle pays the APK's `_prestigeForStyle` — except where a retail capture
+    /// measured something else, which wins (one combination: a level-10 TownHall
+    /// to Castle, measured at 546, the level-9 value).
+    #[test]
+    fn a_restyle_pays_the_apk_style_prestige_unless_retail_measured_otherwise() {
+        let table = upgrades();
+        let measured = measured_styles();
+        let id = Uuid::parse_str(BID).unwrap();
+        let mut checked = 0;
+        let mut overridden = Vec::new();
+        for (type_id, b) in &crate::town_construction::data().buildings {
+            for (style, levels) in &b.styles {
+                for (level, &apk) in levels.prestige_for_style.iter().enumerate() {
+                    let town = town_with(&type_id.to_string(), None, level as u64);
+                    let ours = prestige_on_style_change(&table, &measured, &town, id, *style);
+                    if ours != apk {
+                        overridden.push(format!("{type_id}/{level}/{style}"));
+                        assert_eq!(
+                            measured["grants"][format!("{type_id}/{level}/{style}")].as_u64(),
+                            Some(ours),
+                            "{type_id} level {level} -> {style}: paid {ours}, APK says {apk}, \
+                             and no capture measured it"
+                        );
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 200, "only {checked} style rows checked");
+        assert_eq!(
+            overridden,
+            ["a6a2de53-d65c-445a-8b55-d2a73c15b635/10/c462a43a-0547-4cd0-a755-5c0aff0f74f8"],
+            "only the measured TownHall/10/Castle restyle may differ from the APK"
         );
     }
 
