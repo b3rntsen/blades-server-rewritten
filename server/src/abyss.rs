@@ -4404,19 +4404,16 @@ mod tests {
     /// the level 20-59 band's retail packages are all materials. Driven the same way
     /// as the level-100 and level-7 runs above, from his deepest floor (149) and from
     /// his own level (floor 48): `/end` still pays the floors' gold and one package
-    /// stack, and across runs some of those stacks are soul gems of his grade (Common,
-    /// Exceptional or Greater), never Transcendent.
+    /// stack, and about half of those stacks are 1-3 Grand Soul Gems ("from level 39
+    /// to 45, 3 Grand at the end"), never Glorious or Transcendent.
     #[test]
     fn a_level_43_run_is_paid_soul_gems_at_end_sometimes() {
         const SEPHORIS: &str = "f7817aa6-5892-4794-871e-9b51a475a606";
+        const GRAND: &str = "68d7941e-8c8d-47bf-9f66-becb058f1817";
+        const GLORIOUS: &str = "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb";
         let ipl = initial_player_level(&real_job_pools(), 43);
         assert_eq!(ipl, 48);
-        let mid_gems = [
-            "1ba210b4-8cca-4f2f-b942-8fab80a52fd8", // Common
-            "3932e499-441e-4c6d-b671-9a03131ebe6f", // Exceptional
-            "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", // Greater
-        ]
-        .map(|u| Uuid::parse_str(u).unwrap());
+        let grand = Uuid::parse_str(GRAND).unwrap();
         let id = Uuid::parse_str(SEPHORIS).unwrap();
         for (start, kills) in [(149u32, DEEP_FLOOR_KILLS), (48, MIXED_KILLS)] {
             let floors = served_run(ipl, start, 4, kills);
@@ -4426,13 +4423,14 @@ mod tests {
                 assert!(!end.currencies.is_empty(), "start {start}: /end pays the floors' gold");
                 assert_eq!(end.stackable_items.len(), 1, "start {start} nonce {nonce}: one package stack");
                 let (template, count) = end.stackable_items.iter().next().unwrap();
-                if mid_gems.contains(template) {
+                if *template == grand {
                     gem_ends += 1;
-                    assert!((4..=6).contains(count), "start {start}: {count} gems");
+                    assert!((1..=3).contains(count), "start {start}: {count} Grand gems");
                 }
                 assert_ne!(template.to_string(), abyss_rewards::TRANSCENDENT_SOUL_GEM);
+                assert_ne!(template.to_string(), GLORIOUS);
             }
-            assert!((8..=36).contains(&gem_ends), "start {start}: {gem_ends}/64 /ends paid soul gems");
+            assert!((20..=44).contains(&gem_ends), "start {start}: {gem_ends}/64 /ends paid soul gems");
         }
     }
 
