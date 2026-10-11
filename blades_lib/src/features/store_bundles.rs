@@ -353,23 +353,21 @@ const SLOT0_OTHER_ONE_IN: u64 = 7;
 /// of 30 at level 17, 10 of 30 at 21, none of 33 at 6, 7 and 26); the one outlier
 /// is level 10, three short of Orcish, at 26 of 60.
 ///
-/// THE SLOT LADDERS (#368). The two slots do not climb the same ladder at the
-/// top. Retail paid Daedric in the upper slot once in 4,697 purchases and Ebony
-/// in the lower slot five times; the 36-50 band pairs Glass+Ebony (18) and then
-/// Daedric+Dragon (38), never Ebony+Daedric, and 54-89 is Daedric+Dragon. So
-/// slot 1 pays the lowest tier of ITS ladder at or above the buyer's unlock
-/// (Daedric -> Dragon), and slot 0 pays the highest tier of its own ladder below
-/// that, catching up only to a tier slot 0 actually pays. Below Ebony both
-/// ladders are the whole ladder and the rule above is unchanged.
+/// THE SLOT LADDERS (#368, #495; slot 1's half superseded below). Retail paid
+/// Daedric in the upper slot once in 4,697 purchases and Ebony in the lower slot
+/// five times; the 36-50 band's pairs are Glass+Ebony 18, Daedric+Dragon 38,
+/// Dragon+Dragon 4, and one each of Ebony+Ebony, Glass+Glass and Ebony+Daedric;
+/// 54-89 is Daedric+Dragon. #495 read that as slot 1 skipping Daedric
+/// (Ebony -> Dragon). Slot 0 still catches up only to a tier it actually paid.
 ///
 /// SLOT 1 AT DAEDRIC (#368 cont.). Skipping Daedric in slot 1 sent every chest at
 /// 39-44 to Dragon, six levels before Dragon unlocks: Sephoris at 43, "too many
 /// Dragon items; they should be there, but not the majority, and ramp up slowly".
 /// Retail's slot 1 never paid Daedric because retail had almost no buyers at
-/// 39-48: the 36-50 band is two populations, Glass+Ebony chests with Ebony
-/// ingots and Exceptional-Elevated soul gems (a 36-38 buyer's) and Daedric+Dragon
-/// chests identical in every stackable to the 54-89 band; the one chest between
-/// them is Ebony+Daedric. At every level retail was measured, slot 1 pays the tier
+/// 39-48: the 36-50 band is two populations, 19 chests with Ebony on top, Ebony
+/// ingots and Exceptional-Elevated soul gems (a 36-38 buyer's), and 42 with
+/// Dragon on top, identical in every stackable to the 54-89 band; the one chest
+/// between them is Ebony+Daedric. At every level retail was measured, slot 1 pays the tier
 /// unlocked at the buyer's level, so slot 1 now climbs the whole ladder: Daedric
 /// at 39-44 (Dragon one roll in five at 43-44, the lookahead), Dragon from 45.
 /// Gear is generated (#496), so a tier with few retail shells borrows the slot's
@@ -469,8 +467,9 @@ const MIN_TIER_PARTS: usize = 12;
 /// however many recorded chests carried it). Returns the shell and the tier to
 /// generate it at. A tier the slot paid too rarely to reach [`MIN_TIER_PARTS`]
 /// anywhere (slot 1 at Daedric: one part in 4,697 chests) borrows the slot's
-/// shells from the nearest tier below and above, which carry the slot's own
-/// tempering and enchantments; the piece is then generated at the slot's tier.
+/// shells from the nearest tier below or above that has enough, one side or the
+/// other with equal chance; they carry the slot's own tempering and
+/// enchantments, and the piece is then generated at the slot's tier.
 /// `None` leaves the slot on the band draw.
 fn legendary_slot_part(
     product: &'static Product,
@@ -481,12 +480,18 @@ fn legendary_slot_part(
     let (ladder, slot0_ladder) = legendary_ladders(product);
     let tier = legendary_slot_tier(ladder, slot0_ladder, slot, level, seed)?;
 
-    let mut shell_tiers = vec![tier];
+    let mut shell_tier = tier;
     if slot_parts(product, slot, tier) < MIN_TIER_PARTS {
+        // Below and above equally: slot 1 at Daedric would otherwise take two
+        // shells in three from Dragon, i.e. a level-54 buyer's enchant tiers.
         let idx = ladder.iter().position(|&t| t == tier)?;
-        let below = ladder[..idx].iter().rev().find(|&&t| slot_parts(product, slot, t) > 0);
-        let above = ladder[idx + 1..].iter().find(|&&t| slot_parts(product, slot, t) > 0);
-        shell_tiers.extend(below.into_iter().chain(above).copied());
+        let enough = |t: &&u64| slot_parts(product, slot, **t) >= MIN_TIER_PARTS;
+        let below = ladder[..idx].iter().rev().find(enough);
+        let above = ladder[idx + 1..].iter().find(enough);
+        let sides: Vec<u64> = below.into_iter().chain(above).copied().collect();
+        if !sides.is_empty() {
+            shell_tier = sides[(mix(seed ^ 0xBB67_AE85_84CA_A73B) % sides.len() as u64) as usize];
+        }
     }
 
     let mut bands: Vec<&Band> = product.by_level.iter().collect();
@@ -500,7 +505,7 @@ fn legendary_slot_part(
             continue;
         }
         for item in band.results.iter().map(|r| &r.reward.items[slot]) {
-            if required_level(&item.item_template_id).is_some_and(|t| shell_tiers.contains(&t))
+            if required_level(&item.item_template_id) == Some(shell_tier)
                 && !candidates.contains(&item)
             {
                 candidates.push(item);
@@ -527,13 +532,16 @@ fn legendary_ladders(product: &Product) -> (&'static [u64], &'static [u64]) {
 const MIN_BASE_CHESTS: usize = 12;
 
 /// The recorded reward a Legendary chest takes its gold, stackables and artifact
-/// slot from (#368 cont.): one from the band whose top slot paid the tier this
-/// buyer's top slot pays, else the highest tier below it that the band holds at
-/// least [`MIN_BASE_CHESTS`] chests of, else the whole band.
+/// stackables from (#368 cont.): one from the band whose top slot paid the tier
+/// unlocked at the buyer's level, else the highest tier below it that the band
+/// holds at least [`MIN_BASE_CHESTS`] chests of, else the whole band. The
+/// artifact slot is not narrowed: it is drawn from the whole band, so its rate
+/// stays the band's.
 ///
-/// THE BUG. The 36-50 band is two retail populations, not one: 20 Glass+Ebony
-/// chests with Ebony and Stalhrim ingots, diamonds and Exceptional to Elevated
-/// soul gems, and 43 Daedric+Dragon chests whose every stackable (Daedra hearts,
+/// THE BUG. The 36-50 band is two retail populations, not one: 19 chests with
+/// Ebony on top (Glass+Ebony 18) carrying Ebony and Stalhrim ingots, diamonds
+/// and Exceptional to Elevated soul gems, and 42 with Dragon on top whose every
+/// stackable (Daedra hearts,
 /// dragon bone and scale, Glorious and Transcendent soul gems) is the 54-89
 /// band's. Drawn whole-band, a level-37 buyer got the level-54 chest two times in
 /// three, and a level-43 buyer every soul gem from Exceptional to Transcendent.
@@ -590,21 +598,21 @@ fn slot_parts(product: &Product, slot: usize, tier: u64) -> usize {
     static COUNTS: std::sync::OnceLock<std::collections::HashMap<(usize, u64), usize>> =
         std::sync::OnceLock::new();
     let counts = COUNTS.get_or_init(|| {
-        let mut parts: Vec<(usize, u64, &Item)> = Vec::new();
+        let mut seen: HashSet<(usize, String)> = HashSet::new();
+        let mut counts = std::collections::HashMap::new();
         for band in &product.by_level {
-            for (s, item) in band.results.iter().flat_map(|r| {
-                r.reward.items.iter().take(core_slots(band)).enumerate()
-            }) {
-                if let Some(t) = required_level(&item.item_template_id)
-                    && !parts.contains(&(s, t, item))
-                {
-                    parts.push((s, t, item));
+            let core = core_slots(band);
+            for r in &band.results {
+                for (s, item) in r.reward.items.iter().take(core).enumerate() {
+                    let Some(t) = required_level(&item.item_template_id) else {
+                        continue;
+                    };
+                    let key = serde_json::to_string(item).unwrap_or_default();
+                    if seen.insert((s, key)) {
+                        *counts.entry((s, t)).or_insert(0) += 1;
+                    }
                 }
             }
-        }
-        let mut counts = std::collections::HashMap::new();
-        for (s, t, _) in parts {
-            *counts.entry((s, t)).or_insert(0) += 1;
         }
         counts
     });
@@ -691,7 +699,14 @@ pub fn roll_bundle_for(
         };
         items.push(piece);
     }
-    items.extend(base.reward.items.iter().skip(core).cloned());
+    // The artifact slot keeps the whole band's rate: a Legendary base narrowed to
+    // a dozen chests would otherwise set it by sampling noise.
+    let extra = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
+        draw(band, mix(seed ^ 0x6A09_E667_F3BC_C909))?
+    } else {
+        base
+    };
+    items.extend(extra.reward.items.iter().skip(core).cloned());
 
     let mut paid_artifacts = HashSet::new();
     for (ordinal, item) in items.iter_mut().enumerate() {

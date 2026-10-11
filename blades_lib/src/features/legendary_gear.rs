@@ -133,7 +133,8 @@ pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Optio
     let tier_key = if base.required_level == required_level {
         (base.required_level, base.tier)
     } else {
-        // The first APK tier unlocked at that level (Ebony before Stalhrim at 33).
+        // The first APK tier unlocked at that level (Iron before Steel at 1, the
+        // only level with two).
         pool.by_kind
             .keys()
             .find(|(r, _, _)| *r == required_level)
