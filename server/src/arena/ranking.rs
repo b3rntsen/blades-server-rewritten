@@ -564,6 +564,26 @@ impl H2hRatingState {
     }
 }
 
+/// Who a row on the head-to-head boards belongs to: the character row plus the
+/// ALT that played (owner decision 2026-10-10: every alt is its own character).
+///
+/// A user's alts take turns occupying one `characters` row, so the character id
+/// alone credited one alt's human-vs-human results to whichever alt was live
+/// (tracker #373). `alt_key` is the match row's `source_alt_uuid`; for a row
+/// recorded before alts were tracked, the alt live now; for a character that has
+/// never had an alt id, the character id itself — see [`H2H_REPLAY_ROWS_CTE`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct H2hKey {
+    pub character_id: Uuid,
+    pub alt_key: Uuid,
+}
+
+impl H2hKey {
+    pub fn new(character_id: Uuid, alt_key: Uuid) -> Self {
+        Self { character_id, alt_key }
+    }
+}
+
 pub fn apply_h2h_rating(
     config: &H2hRatingConfig,
     a: H2hRatingState,
@@ -609,12 +629,12 @@ pub fn is_h2h_match(fighter_count: usize, expected_peers: usize, any_bot: bool) 
     fighter_count == 2 && expected_peers == 2 && !any_bot
 }
 
-pub fn apply_h2h_match_by_season(
+pub fn apply_h2h_match_by_season<K: Ord + Copy>(
     config: &H2hRatingConfig,
-    ratings: &mut SeasonedH2hRatings,
+    ratings: &mut SeasonedH2hRatings<K>,
     season_id: Option<Uuid>,
-    a_id: Uuid,
-    b_id: Uuid,
+    a_id: K,
+    b_id: K,
     outcome: MatchOutcome,
 ) {
     apply_h2h_row(config, &mut ratings.all_time, a_id, b_id, outcome);
@@ -629,9 +649,10 @@ pub fn apply_h2h_match_by_season(
     }
 }
 
-pub fn replay_h2h_ratings<I>(config: &H2hRatingConfig, rows: I) -> BTreeMap<Uuid, H2hRatingState>
+pub fn replay_h2h_ratings<K, I>(config: &H2hRatingConfig, rows: I) -> BTreeMap<K, H2hRatingState>
 where
-    I: IntoIterator<Item = (Uuid, Uuid, MatchOutcome)>,
+    K: Ord + Copy,
+    I: IntoIterator<Item = (K, K, MatchOutcome)>,
 {
     let mut ratings = BTreeMap::new();
     for (a_id, b_id, outcome) in rows {
@@ -640,18 +661,25 @@ where
     ratings
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SeasonedH2hRatings {
-    pub all_time: BTreeMap<Uuid, H2hRatingState>,
-    pub seasons: BTreeMap<Uuid, BTreeMap<Uuid, H2hRatingState>>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeasonedH2hRatings<K: Ord = Uuid> {
+    pub all_time: BTreeMap<K, H2hRatingState>,
+    pub seasons: BTreeMap<Uuid, BTreeMap<K, H2hRatingState>>,
 }
 
-pub fn replay_h2h_ratings_by_season<I>(
+impl<K: Ord> Default for SeasonedH2hRatings<K> {
+    fn default() -> Self {
+        Self { all_time: BTreeMap::new(), seasons: BTreeMap::new() }
+    }
+}
+
+pub fn replay_h2h_ratings_by_season<K, I>(
     config: &H2hRatingConfig,
     rows: I,
-) -> SeasonedH2hRatings
+) -> SeasonedH2hRatings<K>
 where
-    I: IntoIterator<Item = (Option<Uuid>, Uuid, Uuid, MatchOutcome)>,
+    K: Ord + Copy,
+    I: IntoIterator<Item = (Option<Uuid>, K, K, MatchOutcome)>,
 {
     let mut ratings = SeasonedH2hRatings::default();
     for (season_id, a_id, b_id, outcome) in rows {
@@ -660,11 +688,11 @@ where
     ratings
 }
 
-fn apply_h2h_row(
+fn apply_h2h_row<K: Ord + Copy>(
     config: &H2hRatingConfig,
-    ratings: &mut BTreeMap<Uuid, H2hRatingState>,
-    a_id: Uuid,
-    b_id: Uuid,
+    ratings: &mut BTreeMap<K, H2hRatingState>,
+    a_id: K,
+    b_id: K,
     outcome: MatchOutcome,
 ) {
     let a = ratings
@@ -708,13 +736,206 @@ struct H2hReplayRow {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
     character_id: Uuid,
     #[diesel(sql_type = diesel::sql_types::Uuid)]
+    alt_key: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
     opponent_character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    opponent_alt_key: Uuid,
     #[diesel(sql_type = diesel::sql_types::Integer)]
     rounds_won: i32,
     #[diesel(sql_type = diesel::sql_types::Integer)]
     rounds_lost: i32,
     #[diesel(sql_type = diesel::sql_types::Timestamptz)]
     recorded_at: DateTime<Utc>,
+}
+
+/// Every h2h match exactly once, canonically oriented, with the ALT on each side.
+///
+/// Ends in a `replay_rows` relation: `season_id, character_id, alt_key,
+/// opponent_character_id, opponent_alt_key, rounds_won, rounds_lost, recorded_at,
+/// id`, with `character_id < opponent_character_id`. The reconcile replays it in
+/// `recorded_at, id` order; the live increment counts it to tell whether a match
+/// was already absorbed. One definition so the two can never disagree.
+///
+/// Each side's alt comes from that side's OWN audit row (the alt stamped when the
+/// match was recorded), so both of a match's rows give the same answer. A legacy
+/// row (`source_alt_uuid` NULL) counts for the alt live now, as every other arena
+/// reader treats it; a character with no alt id is keyed by its own id. When the
+/// opponent's row is missing (one-sided audit), the opponent's live alt is used.
+pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
+    WITH sided AS ( \
+         SELECT r.id, r.game_session_id, r.recorded_at, r.character_id, r.opponent_character_id, \
+                r.rounds_won, r.rounds_lost, \
+                COALESCE(r.source_alt_uuid, rc.source_alt_uuid, r.character_id) AS alt_key, \
+                COALESCE( \
+                    (SELECT COALESCE(o.source_alt_uuid, oc.source_alt_uuid, o.character_id) \
+                       FROM arena_match_results o \
+                       LEFT JOIN characters oc ON oc.id = o.character_id \
+                      WHERE o.game_session_id = r.game_session_id \
+                        AND o.character_id = r.opponent_character_id \
+                        AND o.opponent_character_id = r.character_id \
+                        AND o.is_h2h = true \
+                      ORDER BY o.recorded_at, o.id \
+                      LIMIT 1), \
+                    (SELECT COALESCE(oc.source_alt_uuid, oc.id) \
+                       FROM characters oc WHERE oc.id = r.opponent_character_id), \
+                    r.opponent_character_id) AS opponent_alt_key \
+         FROM arena_match_results r \
+         LEFT JOIN characters rc ON rc.id = r.character_id \
+         WHERE r.opponent_character_id IS NOT NULL \
+           AND r.is_h2h = true \
+     ), candidates AS ( \
+         SELECT s.id AS season_id, \
+                LEAST(r.character_id, r.opponent_character_id) AS character_id, \
+                GREATEST(r.character_id, r.opponent_character_id) AS opponent_character_id, \
+                CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
+                     THEN r.alt_key ELSE r.opponent_alt_key END AS alt_key, \
+                CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
+                     THEN r.opponent_alt_key ELSE r.alt_key END AS opponent_alt_key, \
+                CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
+                     THEN r.rounds_won ELSE r.rounds_lost END AS rounds_won, \
+                CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
+                     THEN r.rounds_lost ELSE r.rounds_won END AS rounds_lost, \
+                r.recorded_at, r.id, r.game_session_id \
+         FROM sided r \
+         LEFT JOIN LATERAL ( \
+             SELECT id FROM arena_seasons s \
+             WHERE r.recorded_at >= to_timestamp(s.starts_at) \
+               AND r.recorded_at < to_timestamp(s.ends_at) \
+             ORDER BY s.starts_at DESC LIMIT 1 \
+         ) s ON true \
+     ), replay_rows AS ( \
+         SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
+                season_id, character_id, alt_key, opponent_character_id, opponent_alt_key, \
+                rounds_won, rounds_lost, recorded_at, id \
+         FROM candidates \
+         ORDER BY game_session_id, character_id, opponent_character_id, recorded_at, id \
+     )";
+
+/// The public human-vs-human player board: one row per ALT, named as that alt.
+///
+/// `{RATINGS}` / `{SEASON_FILTER}` select the season or all-time table (see
+/// [`h2h_board_sql`]). `$1` is `min_games_listed`, `$2` the limit and, for a
+/// season, `$3` the season id.
+///
+/// The live alt is named from the `characters` row; an alt that has been switched
+/// out is named from its newest saved version — exactly how the in-game
+/// leaderboard (`leaderboards::RANKED_CTE`) names it. A rating whose alt is
+/// neither live nor saved any more (deleted) is not listed. The guild is the one
+/// the alt itself is in: the live membership, or the one parked in its newest
+/// version while that guild exists.
+const H2H_BOARD_ENTRIES_SQL: &str = "\
+    WITH entries AS ( \
+         SELECT r.character_id, r.alt_key, r.rating, r.wins, r.losses, r.ties, r.matches, \
+                r.last_match_at, \
+                (r.alt_key = COALESCE(c.source_alt_uuid, c.id)) AS live, \
+                CASE WHEN r.alt_key = COALESCE(c.source_alt_uuid, c.id) \
+                     THEN COALESCE(c.character ->> 'name', '') \
+                     ELSE COALESCE(saved.name, '') END AS name, \
+                CASE WHEN r.alt_key = COALESCE(c.source_alt_uuid, c.id) \
+                     THEN COALESCE((c.character ->> 'level')::bigint, 0) \
+                     ELSE COALESCE(saved.level, 0) END AS level, \
+                CASE WHEN r.alt_key = COALESCE(c.source_alt_uuid, c.id) \
+                     THEN gm.guild_id::text \
+                     ELSE pg.id::text END AS guild_id, \
+                CASE WHEN r.alt_key = COALESCE(c.source_alt_uuid, c.id) \
+                     THEN g.name \
+                     ELSE pg.name END AS guild_name, \
+                saved.name IS NOT NULL AS saved \
+         FROM {RATINGS} r \
+         INNER JOIN characters c ON c.id = r.character_id \
+         LEFT JOIN LATERAL ( \
+             SELECT v.character ->> 'name' AS name, \
+                    (v.character ->> 'level')::bigint AS level, \
+                    v.server_state -> 'parkedGuildMembers' -> 0 ->> 'guild_id' AS parked_guild_id \
+             FROM character_versions v \
+             WHERE v.character_id = r.character_id \
+               AND v.source_alt_uuid = r.alt_key \
+               AND r.alt_key <> COALESCE(c.source_alt_uuid, c.id) \
+             ORDER BY v.saved_at DESC \
+             LIMIT 1 \
+         ) saved ON true \
+         LEFT JOIN guild_members gm ON gm.character_id = c.id \
+         LEFT JOIN guilds g ON g.id = gm.guild_id \
+         LEFT JOIN guilds pg ON pg.id::text = saved.parked_guild_id \
+         WHERE r.matches >= $1 {SEASON_FILTER} \
+     ) \
+     SELECT row_number() OVER (ORDER BY rating DESC, matches DESC, last_match_at ASC NULLS LAST, \
+                                        character_id, alt_key) AS rank, \
+            character_id, alt_key, name, level, guild_id, guild_name, \
+            rating, wins, losses, ties, matches, last_match_at \
+     FROM entries \
+     WHERE live OR saved \
+     ORDER BY rating DESC, matches DESC, last_match_at ASC NULLS LAST, character_id, alt_key \
+     LIMIT $2";
+
+/// [`H2H_BOARD_ENTRIES_SQL`] for one season (`$3`) or all-time.
+pub fn h2h_board_sql(season: bool) -> String {
+    if season {
+        H2H_BOARD_ENTRIES_SQL
+            .replace("{RATINGS}", "arena_h2h_season_ratings")
+            .replace("{SEASON_FILTER}", "AND r.season_id = $3")
+    } else {
+        H2H_BOARD_ENTRIES_SQL
+            .replace("{RATINGS}", "arena_h2h_ratings")
+            .replace("{SEASON_FILTER}", "")
+    }
+}
+
+/// One row of the public h2h player board (and the input to the h2h guild board).
+#[derive(Debug, Clone, Serialize, diesel::QueryableByName)]
+pub struct H2hBoardEntry {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub rank: i64,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub character_id: Uuid,
+    /// The alt this row belongs to (see [`H2hKey`]). Unique together with
+    /// `character_id`; the website keys its rows on the pair.
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub alt_key: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub name: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    pub level: i64,
+    #[serde(skip)]
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub guild_id: Option<String>,
+    #[serde(skip)]
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    pub guild_name: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub rating: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub wins: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub losses: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub ties: i32,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    pub matches: i32,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
+    pub last_match_at: Option<DateTime<Utc>>,
+}
+
+/// The h2h player board: `season` = `Some(id)` for a season, `None` for all-time.
+pub async fn h2h_board(
+    conn: &mut AsyncPgConnection,
+    season: Option<Uuid>,
+    min_games: i32,
+    limit: i64,
+) -> Result<Vec<H2hBoardEntry>, diesel::result::Error> {
+    let query = diesel::sql_query(h2h_board_sql(season.is_some()))
+        .bind::<diesel::sql_types::Integer, _>(min_games)
+        .bind::<diesel::sql_types::BigInt, _>(limit);
+    match season {
+        Some(season_id) => {
+            query
+                .bind::<diesel::sql_types::Uuid, _>(season_id)
+                .get_results(conn)
+                .await
+        }
+        None => query.get_results(conn).await,
+    }
 }
 
 pub async fn reconcile_h2h_ratings(
@@ -742,8 +963,8 @@ pub async fn reconcile_h2h_ratings_with_config(
                 rows.iter().map(|r| {
                     (
                         r.season_id,
-                        r.character_id,
-                        r.opponent_character_id,
+                        r.key(),
+                        r.opponent_key(),
                         MatchOutcome::new(r.rounds_won.max(0) as u8, r.rounds_lost.max(0) as u8),
                     )
                 }),
@@ -772,60 +993,47 @@ pub async fn lock_h2h_rating_transaction(
 }
 
 async fn load_h2h_replay_rows(conn: &mut AsyncPgConnection) -> Result<Vec<H2hReplayRow>, anyhow::Error> {
-    let rows = diesel::sql_query(
-        "WITH candidates AS ( \
-             SELECT s.id AS season_id, \
-                    LEAST(r.character_id, r.opponent_character_id) AS character_id, \
-                    GREATEST(r.character_id, r.opponent_character_id) AS opponent_character_id, \
-                    CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
-                         THEN r.rounds_won ELSE r.rounds_lost END AS rounds_won, \
-                    CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
-                         THEN r.rounds_lost ELSE r.rounds_won END AS rounds_lost, \
-                    r.recorded_at, r.id, r.game_session_id \
-             FROM arena_match_results r \
-             LEFT JOIN LATERAL ( \
-                 SELECT id FROM arena_seasons s \
-                 WHERE r.recorded_at >= to_timestamp(s.starts_at) \
-                   AND r.recorded_at < to_timestamp(s.ends_at) \
-                 ORDER BY s.starts_at DESC LIMIT 1 \
-             ) s ON true \
-             WHERE r.opponent_character_id IS NOT NULL \
-               AND r.is_h2h = true \
-         ), replay_rows AS ( \
-             SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
-                    season_id, character_id, opponent_character_id, rounds_won, rounds_lost, \
-                    recorded_at, id \
-             FROM candidates \
-             ORDER BY game_session_id, character_id, opponent_character_id, recorded_at, id \
-         ) \
-         SELECT season_id, character_id, opponent_character_id, rounds_won, rounds_lost, recorded_at \
+    let rows = diesel::sql_query(format!(
+        "{H2H_REPLAY_ROWS_CTE} \
+         SELECT season_id, character_id, alt_key, opponent_character_id, opponent_alt_key, \
+                rounds_won, rounds_lost, recorded_at \
          FROM replay_rows \
-         ORDER BY recorded_at, id",
-    )
+         ORDER BY recorded_at, id"
+    ))
     .get_results(conn)
     .await?;
     Ok(rows)
 }
 
-fn h2h_last_seen(rows: &[H2hReplayRow]) -> HashMap<Uuid, DateTime<Utc>> {
+impl H2hReplayRow {
+    fn key(&self) -> H2hKey {
+        H2hKey::new(self.character_id, self.alt_key)
+    }
+
+    fn opponent_key(&self) -> H2hKey {
+        H2hKey::new(self.opponent_character_id, self.opponent_alt_key)
+    }
+}
+
+fn h2h_last_seen(rows: &[H2hReplayRow]) -> HashMap<H2hKey, DateTime<Utc>> {
     rows.iter()
-        .flat_map(|r| [(r.character_id, r.recorded_at), (r.opponent_character_id, r.recorded_at)])
-        .fold(HashMap::<Uuid, DateTime<Utc>>::new(), |mut acc, (id, at)| {
+        .flat_map(|r| [(r.key(), r.recorded_at), (r.opponent_key(), r.recorded_at)])
+        .fold(HashMap::<H2hKey, DateTime<Utc>>::new(), |mut acc, (id, at)| {
             acc.entry(id).and_modify(|old| *old = (*old).max(at)).or_insert(at);
             acc
         })
 }
 
-fn h2h_season_last_seen(rows: &[H2hReplayRow]) -> HashMap<(Uuid, Uuid), DateTime<Utc>> {
+fn h2h_season_last_seen(rows: &[H2hReplayRow]) -> HashMap<(Uuid, H2hKey), DateTime<Utc>> {
     rows.iter()
         .filter_map(|r| r.season_id.map(|season_id| (season_id, r)))
         .flat_map(|(season_id, r)| {
             [
-                ((season_id, r.character_id), r.recorded_at),
-                ((season_id, r.opponent_character_id), r.recorded_at),
+                ((season_id, r.key()), r.recorded_at),
+                ((season_id, r.opponent_key()), r.recorded_at),
             ]
         })
-        .fold(HashMap::<(Uuid, Uuid), DateTime<Utc>>::new(), |mut acc, (key, at)| {
+        .fold(HashMap::<(Uuid, H2hKey), DateTime<Utc>>::new(), |mut acc, (key, at)| {
             acc.entry(key).and_modify(|old| *old = (*old).max(at)).or_insert(at);
             acc
         })
@@ -833,46 +1041,48 @@ fn h2h_season_last_seen(rows: &[H2hReplayRow]) -> HashMap<(Uuid, Uuid), DateTime
 
 async fn write_h2h_ratings(
     conn: &mut AsyncPgConnection,
-    ratings: SeasonedH2hRatings,
-    last_seen: HashMap<Uuid, DateTime<Utc>>,
-    season_last_seen: HashMap<(Uuid, Uuid), DateTime<Utc>>,
+    ratings: SeasonedH2hRatings<H2hKey>,
+    last_seen: HashMap<H2hKey, DateTime<Utc>>,
+    season_last_seen: HashMap<(Uuid, H2hKey), DateTime<Utc>>,
 ) -> Result<(), anyhow::Error> {
     diesel::sql_query("DELETE FROM arena_h2h_ratings").execute(&mut *conn).await?;
     diesel::sql_query("DELETE FROM arena_h2h_season_ratings").execute(&mut *conn).await?;
-    for (character_id, state) in ratings.all_time {
+    for (key, state) in ratings.all_time {
         diesel::sql_query(
             "INSERT INTO arena_h2h_ratings \
-             (character_id, rating, wins, losses, ties, matches, last_match_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             (character_id, alt_key, rating, wins, losses, ties, matches, last_match_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
-        .bind::<diesel::sql_types::Uuid, _>(character_id)
+        .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+        .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
         .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
         .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
         .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
         .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
         .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
         .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
-            last_seen.get(&character_id).copied(),
+            last_seen.get(&key).copied(),
         )
         .execute(&mut *conn)
         .await?;
     }
     for (season_id, season_ratings) in ratings.seasons {
-        for (character_id, state) in season_ratings {
+        for (key, state) in season_ratings {
             diesel::sql_query(
                 "INSERT INTO arena_h2h_season_ratings \
-                 (season_id, character_id, rating, wins, losses, ties, matches, last_match_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                 (season_id, character_id, alt_key, rating, wins, losses, ties, matches, last_match_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind::<diesel::sql_types::Uuid, _>(season_id)
-            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+            .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
             .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
             .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
             .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
             .bind::<diesel::sql_types::Integer, _>(state.ties as i32)
             .bind::<diesel::sql_types::Integer, _>(state.matches as i32)
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>, _>(
-                season_last_seen.get(&(season_id, character_id)).copied(),
+                season_last_seen.get(&(season_id, key)).copied(),
             )
             .execute(&mut *conn)
             .await?;
@@ -1249,7 +1459,11 @@ mod tests {
             "../../../migrations/2026-09-28-000000-0000_add_arena_match_results_h2h_flag/up.sql"
         );
 
-        const SCHEMA: [&str; 6] = [
+        const H2H_PER_ALT_MIGRATION_UP: &str = include_str!(
+            "../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql"
+        );
+
+        const SCHEMA: [&str; 9] = [
             "CREATE TABLE arena_seasons ( \
                  id UUID PRIMARY KEY, number INTEGER NOT NULL, name TEXT NOT NULL, \
                  starts_at BIGINT NOT NULL, ends_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', \
@@ -1267,7 +1481,7 @@ mod tests {
                  trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
                  arena INTEGER NOT NULL DEFAULT 1, arena_level INTEGER NOT NULL DEFAULT 1, \
                  chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
-                 is_h2h BOOLEAN NOT NULL DEFAULT false)",
+                 is_h2h BOOLEAN NOT NULL DEFAULT false, source_alt_uuid UUID)",
             "CREATE TABLE arena_h2h_ratings ( \
                  character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
                  losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
@@ -1277,7 +1491,13 @@ mod tests {
                  wins INTEGER NOT NULL DEFAULT 0, losses INTEGER NOT NULL DEFAULT 0, \
                  ties INTEGER NOT NULL DEFAULT 0, matches INTEGER NOT NULL DEFAULT 0, \
                  last_match_at TIMESTAMPTZ, PRIMARY KEY (season_id, character_id))",
-            "CREATE TABLE characters (id UUID PRIMARY KEY, character JSONB NOT NULL)",
+            "CREATE TABLE characters (id UUID PRIMARY KEY, character JSONB NOT NULL, \
+                 source_alt_uuid UUID)",
+            "CREATE TABLE character_versions (id UUID PRIMARY KEY, character_id UUID NOT NULL, \
+                 source_alt_uuid UUID, character JSONB NOT NULL, server_state JSONB, \
+                 saved_at BIGINT NOT NULL)",
+            "CREATE TABLE guilds (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
+            "CREATE TABLE guild_members (guild_id TEXT NOT NULL, character_id UUID PRIMARY KEY)",
         ];
 
         #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
@@ -1333,6 +1553,18 @@ mod tests {
                 .unwrap();
             for stmt in SCHEMA {
                 diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+            }
+            // The rating tables as production has them: the pre-alt shape above,
+            // migrated by the real migration.
+            let sql: String = H2H_PER_ALT_MIGRATION_UP
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            for stmt in sql.split(';') {
+                if !stmt.trim().is_empty() {
+                    diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+                }
             }
             Some(conn)
         }
@@ -1793,6 +2025,300 @@ mod tests {
                 ]
             );
             assert_eq!(seasonal(&mut conn).await.len(), 2);
+        }
+
+        // ---- One row per alt (tracker #373) --------------------------------
+
+        async fn seed_alt_character(
+            conn: &mut AsyncPgConnection,
+            id: Uuid,
+            live_alt: Option<Uuid>,
+            live_name: &str,
+        ) {
+            diesel::sql_query(
+                "INSERT INTO characters (id, character, source_alt_uuid) VALUES ($1, $2, $3)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name": live_name, "level": 40}))
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(live_alt)
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        async fn seed_saved_alt(
+            conn: &mut AsyncPgConnection,
+            character_id: Uuid,
+            alt: Uuid,
+            name: &str,
+            saved_at: i64,
+        ) {
+            diesel::sql_query(
+                "INSERT INTO character_versions (id, character_id, source_alt_uuid, character, saved_at) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(character_id)
+            .bind::<diesel::sql_types::Uuid, _>(alt)
+            .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name": name, "level": 30}))
+            .bind::<diesel::sql_types::BigInt, _>(saved_at)
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        /// Both audit rows of one h2h match, each stamped with the alt that played
+        /// on that side (`None` = recorded before alts were tracked).
+        async fn seed_alt_match(
+            conn: &mut AsyncPgConnection,
+            gsid: Uuid,
+            (a, a_alt): (Uuid, Option<Uuid>),
+            (b, b_alt): (Uuid, Option<Uuid>),
+            at: &str,
+            score: (i32, i32),
+        ) {
+            for (character_id, alt, opponent, rounds_won, rounds_lost) in [
+                (a, a_alt, b, score.0, score.1),
+                (b, b_alt, a, score.1, score.0),
+            ] {
+                diesel::sql_query(
+                    "INSERT INTO arena_match_results \
+                     (id, character_id, opponent_character_id, game_session_id, win, rounds_won, \
+                      rounds_lost, recorded_at, is_h2h, source_alt_uuid) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, true, $9)",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+                .bind::<diesel::sql_types::Uuid, _>(character_id)
+                .bind::<diesel::sql_types::Uuid, _>(opponent)
+                .bind::<diesel::sql_types::Uuid, _>(gsid)
+                .bind::<diesel::sql_types::Bool, _>(rounds_won > rounds_lost)
+                .bind::<diesel::sql_types::Integer, _>(rounds_won)
+                .bind::<diesel::sql_types::Integer, _>(rounds_lost)
+                .bind::<diesel::sql_types::Text, _>(at)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(alt)
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            }
+        }
+
+        #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+        struct AltRatingRow {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            character_id: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            alt_key: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            wins: i32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            losses: i32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            matches: i32,
+        }
+
+        async fn season_alt_rows(conn: &mut AsyncPgConnection, season: Uuid) -> Vec<AltRatingRow> {
+            diesel::sql_query(
+                "SELECT character_id, alt_key, wins, losses, matches \
+                 FROM arena_h2h_season_ratings WHERE season_id = $1 \
+                 ORDER BY character_id, alt_key",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(season)
+            .get_results(conn)
+            .await
+            .unwrap()
+        }
+
+        /// NBS-2, measured: Ivan (an alt switched out of the live row, whose live
+        /// occupant is Ísdís) beat Sephoris twice. The board rated those wins as
+        /// the shared character id and named them "Ísdís". spacemunk's win over
+        /// Sephoris was likewise listed as newmunk's. Each alt is its own row.
+        #[tokio::test]
+        async fn reconcile_rates_and_names_each_alt_separately() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — per-alt h2h SQL not verified");
+                return;
+            };
+            let season = Uuid::from_u128(1000);
+            seed_season(&mut conn, season, 1_700_000_000, 1_700_086_400).await;
+            // Ivan's account: one live row, three alts; Ísdís is live.
+            let (ivan_row, isdis, ivan, princess) = (
+                Uuid::from_u128(0x7e),
+                Uuid::from_u128(0xd8),
+                Uuid::from_u128(0xf1),
+                Uuid::from_u128(0x26),
+            );
+            seed_alt_character(&mut conn, ivan_row, Some(isdis), "Ísdís").await;
+            seed_saved_alt(&mut conn, ivan_row, ivan, "Ivan (old)", 1_700_000_050).await;
+            seed_saved_alt(&mut conn, ivan_row, ivan, "Ivan", 1_700_000_900).await;
+            seed_saved_alt(&mut conn, ivan_row, princess, "Princess", 1_700_000_950).await;
+            let sephoris = Uuid::from_u128(0xf7);
+            seed_alt_character(&mut conn, sephoris, Some(Uuid::from_u128(0x0b)), "Sephoris").await;
+
+            // Ivan beats Sephoris twice, then Ísdís beats her once. A legacy row
+            // (no stamp) counts for the alt live now, Ísdís.
+            let ivan_side = (ivan_row, Some(ivan));
+            let seph = (sephoris, Some(Uuid::from_u128(0x0b)));
+            seed_alt_match(&mut conn, Uuid::from_u128(1), ivan_side, seph, "2023-11-14 22:20:00+00", (1, 0)).await;
+            seed_alt_match(&mut conn, Uuid::from_u128(2), ivan_side, seph, "2023-11-14 22:22:00+00", (2, 0)).await;
+            seed_alt_match(&mut conn, Uuid::from_u128(3), (ivan_row, None), seph, "2023-11-14 22:30:00+00", (2, 0)).await;
+
+            let cfg = H2hRatingConfig::default();
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+
+            let row = |character_id, alt_key, wins, losses| AltRatingRow {
+                character_id,
+                alt_key,
+                wins,
+                losses,
+                matches: wins + losses,
+            };
+            assert_eq!(
+                season_alt_rows(&mut conn, season).await,
+                vec![
+                    row(ivan_row, isdis, 1, 0),
+                    row(ivan_row, ivan, 2, 0),
+                    row(sephoris, Uuid::from_u128(0x0b), 0, 3),
+                ],
+                "the shared character id must not merge Ivan's and Ísdís's results"
+            );
+
+            let board = h2h_board(&mut conn, Some(season), 1, 100).await.unwrap();
+            let named: Vec<(String, Uuid, i32)> =
+                board.iter().map(|e| (e.name.clone(), e.alt_key, e.matches)).collect();
+            assert_eq!(
+                named,
+                vec![
+                    ("Ivan".to_string(), ivan, 2),
+                    ("Ísdís".to_string(), isdis, 1),
+                    ("Sephoris".to_string(), Uuid::from_u128(0x0b), 3),
+                ],
+                "a switched-out alt is named from its newest saved version, the live alt from the row"
+            );
+            assert_eq!(board.iter().map(|e| e.rank).collect::<Vec<_>>(), vec![1, 2, 3]);
+            assert_eq!(board[0].level, 30, "the switched-out alt's own level");
+
+            // The listing gate is per alt, too: at min 2 matches Ísdís (1) drops out
+            // while Ivan (2) stays — the shared id would have listed "Ísdís" at 3.
+            let gated = h2h_board(&mut conn, Some(season), 2, 100).await.unwrap();
+            assert_eq!(
+                gated.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+                vec!["Ivan", "Sephoris"]
+            );
+            let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
+            assert_eq!(all_time.len(), 3, "the all-time board is per alt as well");
+        }
+
+        /// Each side's alt comes from ITS OWN audit row: an opponent who has since
+        /// switched alts keeps the result on the alt that actually fought.
+        #[tokio::test]
+        async fn the_opponent_is_rated_as_the_alt_that_fought() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — per-alt h2h SQL not verified");
+                return;
+            };
+            let season = Uuid::from_u128(1000);
+            seed_season(&mut conn, season, 1_700_000_000, 1_700_086_400).await;
+            let (low, high) = (Uuid::from_u128(1), Uuid::from_u128(2));
+            let (spacemunk, newmunk) = (Uuid::from_u128(0x2e), Uuid::from_u128(0x47));
+            // The higher-id character fought as spacemunk, and is newmunk now.
+            seed_alt_character(&mut conn, low, None, "Sephoris").await;
+            seed_alt_character(&mut conn, high, Some(newmunk), "newmunk").await;
+            seed_saved_alt(&mut conn, high, spacemunk, "spacemunk", 1_700_000_900).await;
+            seed_alt_match(
+                &mut conn,
+                Uuid::from_u128(9),
+                (low, None),
+                (high, Some(spacemunk)),
+                "2023-11-14 22:20:00+00",
+                (0, 2),
+            )
+            .await;
+
+            reconcile_h2h_ratings_with_config(&mut conn, &H2hRatingConfig::default(), false)
+                .await
+                .unwrap();
+            let rows = season_alt_rows(&mut conn, season).await;
+            assert_eq!(
+                rows,
+                vec![
+                    // No alt id at all: keyed by the character id itself.
+                    AltRatingRow { character_id: low, alt_key: low, wins: 0, losses: 1, matches: 1 },
+                    AltRatingRow { character_id: high, alt_key: spacemunk, wins: 1, losses: 0, matches: 1 },
+                ],
+                "the canonical (lower-id) row must take the opponent's alt from the opponent's row"
+            );
+            let board = h2h_board(&mut conn, Some(season), 1, 100).await.unwrap();
+            assert_eq!(board[0].name, "spacemunk");
+        }
+
+        /// A rating whose alt is neither live nor saved (deleted) is not listed,
+        /// and the guild is the alt's own: live membership or the parked one.
+        #[tokio::test]
+        async fn board_guilds_follow_the_alt_and_deleted_alts_are_not_listed() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — per-alt h2h SQL not verified");
+                return;
+            };
+            let season = Uuid::from_u128(1000);
+            seed_season(&mut conn, season, 1_700_000_000, 1_700_086_400).await;
+            let (row, live, parked, gone) = (
+                Uuid::from_u128(1),
+                Uuid::from_u128(0xa),
+                Uuid::from_u128(0xb),
+                Uuid::from_u128(0xc),
+            );
+            let opp = Uuid::from_u128(2);
+            seed_alt_character(&mut conn, row, Some(live), "Live").await;
+            seed_alt_character(&mut conn, opp, None, "Opp").await;
+            diesel::sql_query(
+                "INSERT INTO character_versions (id, character_id, source_alt_uuid, character, server_state, saved_at) \
+                 VALUES ($1, $2, $3, '{\"name\":\"Parked\",\"level\":7}', \
+                         '{\"parkedGuildMembers\":[{\"guild_id\":\"g-parked\"}]}', 1700000500)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(row)
+            .bind::<diesel::sql_types::Uuid, _>(parked)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            diesel::sql_query("INSERT INTO guilds VALUES ('g-live', 'Live Guild'), ('g-parked', 'Parked Guild')")
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            diesel::sql_query("INSERT INTO guild_members VALUES ('g-live', $1)")
+                .bind::<diesel::sql_types::Uuid, _>(row)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            for (n, alt) in [(1u128, live), (2, parked), (3, gone)] {
+                seed_alt_match(
+                    &mut conn,
+                    Uuid::from_u128(n),
+                    (row, Some(alt)),
+                    (opp, None),
+                    "2023-11-14 22:20:00+00",
+                    (2, 0),
+                )
+                .await;
+            }
+            reconcile_h2h_ratings_with_config(&mut conn, &H2hRatingConfig::default(), false)
+                .await
+                .unwrap();
+            let board = h2h_board(&mut conn, Some(season), 1, 100).await.unwrap();
+            let mut seen: Vec<(String, Option<String>)> = board
+                .iter()
+                .filter(|e| e.character_id == row)
+                .map(|e| (e.name.clone(), e.guild_name.clone()))
+                .collect();
+            seen.sort();
+            assert_eq!(
+                seen,
+                vec![
+                    ("Live".to_string(), Some("Live Guild".to_string())),
+                    ("Parked".to_string(), Some("Parked Guild".to_string())),
+                ],
+                "the deleted alt is not listed; each alt carries its own guild"
+            );
         }
     }
 

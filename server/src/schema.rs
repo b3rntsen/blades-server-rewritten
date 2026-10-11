@@ -25,8 +25,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    arena_h2h_ratings (character_id) {
+    arena_h2h_ratings (character_id, alt_key) {
         character_id -> Uuid,
+        alt_key -> Uuid,
         rating -> Int4,
         wins -> Int4,
         losses -> Int4,
@@ -37,9 +38,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    arena_h2h_season_ratings (season_id, character_id) {
+    arena_h2h_season_ratings (season_id, character_id, alt_key) {
         season_id -> Uuid,
         character_id -> Uuid,
+        alt_key -> Uuid,
         rating -> Int4,
         wins -> Int4,
         losses -> Int4,

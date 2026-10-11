@@ -566,16 +566,42 @@ impl H2hRatingRow {
     }
 }
 
-async fn h2h_state(
+/// The alt a live character is playing as right now — the same key the replay
+/// gives a legacy row ([`ranking::H2H_REPLAY_ROWS_CTE`]): its alt id, or its own
+/// id when it has none (or no row at all).
+async fn h2h_live_key(
     conn: &mut AsyncPgConnection,
     character_id: Uuid,
+) -> Result<ranking::H2hKey, anyhow::Error> {
+    #[derive(diesel::QueryableByName)]
+    struct AltRow {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        alt_key: Uuid,
+    }
+    let row: Option<AltRow> = diesel::sql_query(
+        "SELECT COALESCE(source_alt_uuid, id) AS alt_key FROM characters WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .get_result(conn)
+    .await
+    .optional()?;
+    Ok(ranking::H2hKey::new(
+        character_id,
+        row.map(|r| r.alt_key).unwrap_or(character_id),
+    ))
+}
+
+async fn h2h_state(
+    conn: &mut AsyncPgConnection,
+    key: ranking::H2hKey,
     start: i64,
 ) -> Result<ranking::H2hRatingState, anyhow::Error> {
     let row: Option<H2hRatingRow> = diesel::sql_query(
         "SELECT rating, wins, losses, ties, matches \
-         FROM arena_h2h_ratings WHERE character_id = $1",
+         FROM arena_h2h_ratings WHERE character_id = $1 AND alt_key = $2",
     )
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
     .get_result(conn)
     .await
     .optional()?;
@@ -587,15 +613,17 @@ async fn h2h_state(
 async fn h2h_season_state(
     conn: &mut AsyncPgConnection,
     season_id: Uuid,
-    character_id: Uuid,
+    key: ranking::H2hKey,
     start: i64,
 ) -> Result<ranking::H2hRatingState, anyhow::Error> {
     let row: Option<H2hRatingRow> = diesel::sql_query(
         "SELECT rating, wins, losses, ties, matches \
-         FROM arena_h2h_season_ratings WHERE season_id = $1 AND character_id = $2",
+         FROM arena_h2h_season_ratings \
+         WHERE season_id = $1 AND character_id = $2 AND alt_key = $3",
     )
     .bind::<diesel::sql_types::Uuid, _>(season_id)
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
     .get_result(conn)
     .await
     .optional()?;
@@ -677,12 +705,16 @@ async fn persist_h2h_rating_pair_locked(
         win: outcome.win,
     };
 
-    let a = h2h_state(conn, character_id, cfg.start).await?;
-    let b = h2h_state(conn, opponent_id, cfg.start).await?;
-    if h2h_needs_increment(conn, None, [(&a, character_id), (&b, opponent_id)]).await? {
+    // Both humans are live at match end, so each plays as its live alt.
+    let a_key = h2h_live_key(conn, character_id).await?;
+    let b_key = h2h_live_key(conn, opponent_id).await?;
+
+    let a = h2h_state(conn, a_key, cfg.start).await?;
+    let b = h2h_state(conn, b_key, cfg.start).await?;
+    if h2h_needs_increment(conn, None, [(&a, a_key), (&b, b_key)]).await? {
         let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
-        upsert_h2h_state(conn, character_id, a, completed_at_secs).await?;
-        upsert_h2h_state(conn, opponent_id, b, completed_at_secs).await?;
+        upsert_h2h_state(conn, a_key, a, completed_at_secs).await?;
+        upsert_h2h_state(conn, b_key, b, completed_at_secs).await?;
     } else {
         log::debug!(
             "arena h2h rating: {:?} already covered by reconcile; skipping all-time increment",
@@ -691,18 +723,12 @@ async fn persist_h2h_rating_pair_locked(
     }
 
     if let Some(season_id) = h2h_season_at(conn, completed_at_secs).await? {
-        let a = h2h_season_state(conn, season_id, character_id, cfg.start).await?;
-        let b = h2h_season_state(conn, season_id, opponent_id, cfg.start).await?;
-        if h2h_needs_increment(
-            conn,
-            Some(season_id),
-            [(&a, character_id), (&b, opponent_id)],
-        )
-        .await?
-        {
+        let a = h2h_season_state(conn, season_id, a_key, cfg.start).await?;
+        let b = h2h_season_state(conn, season_id, b_key, cfg.start).await?;
+        if h2h_needs_increment(conn, Some(season_id), [(&a, a_key), (&b, b_key)]).await? {
             let (a, b) = ranking::apply_h2h_rating(cfg, a, b, a_outcome);
-            upsert_h2h_season_state(conn, season_id, character_id, a, completed_at_secs).await?;
-            upsert_h2h_season_state(conn, season_id, opponent_id, b, completed_at_secs).await?;
+            upsert_h2h_season_state(conn, season_id, a_key, a, completed_at_secs).await?;
+            upsert_h2h_season_state(conn, season_id, b_key, b, completed_at_secs).await?;
         } else {
             log::debug!(
                 "arena h2h rating: {:?} already covered by reconcile; skipping season increment",
@@ -717,10 +743,10 @@ async fn persist_h2h_rating_pair_locked(
 async fn h2h_needs_increment(
     conn: &mut AsyncPgConnection,
     season_id: Option<Uuid>,
-    states: [(&ranking::H2hRatingState, Uuid); 2],
+    states: [(&ranking::H2hRatingState, ranking::H2hKey); 2],
 ) -> Result<bool, anyhow::Error> {
-    for (state, character_id) in states {
-        let replay_matches = h2h_replay_match_count(conn, character_id, season_id).await?;
+    for (state, key) in states {
+        let replay_matches = h2h_replay_match_count(conn, key, season_id).await?;
         if state.matches < replay_matches {
             return Ok(true);
         }
@@ -736,36 +762,20 @@ struct H2hReplayCountRow {
 
 async fn h2h_replay_match_count(
     conn: &mut AsyncPgConnection,
-    character_id: Uuid,
+    key: ranking::H2hKey,
     season_id: Option<Uuid>,
 ) -> Result<i64, anyhow::Error> {
-    let row: H2hReplayCountRow = diesel::sql_query(
-        "WITH candidates AS ( \
-             SELECT s.id AS season_id, \
-                    LEAST(r.character_id, r.opponent_character_id) AS character_id, \
-                    GREATEST(r.character_id, r.opponent_character_id) AS opponent_character_id, \
-                    r.recorded_at, r.id, r.game_session_id \
-             FROM arena_match_results r \
-             LEFT JOIN LATERAL ( \
-                 SELECT id FROM arena_seasons s \
-                 WHERE r.recorded_at >= to_timestamp(s.starts_at) \
-                   AND r.recorded_at < to_timestamp(s.ends_at) \
-                 ORDER BY s.starts_at DESC LIMIT 1 \
-             ) s ON true \
-             WHERE r.opponent_character_id IS NOT NULL \
-               AND r.is_h2h = true \
-         ), replay_rows AS ( \
-             SELECT DISTINCT ON (game_session_id, character_id, opponent_character_id) \
-                    season_id, character_id, opponent_character_id, recorded_at, id \
-             FROM candidates \
-             ORDER BY game_session_id, character_id, opponent_character_id, recorded_at, id \
-         ) \
+    let row: H2hReplayCountRow = diesel::sql_query(format!(
+        "{} \
          SELECT COUNT(*) AS matches \
          FROM replay_rows \
-         WHERE ($2 IS NULL OR season_id = $2) \
-           AND (character_id = $1 OR opponent_character_id = $1)",
-    )
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
+         WHERE ($3 IS NULL OR season_id = $3) \
+           AND ((character_id = $1 AND alt_key = $2) \
+             OR (opponent_character_id = $1 AND opponent_alt_key = $2))",
+        ranking::H2H_REPLAY_ROWS_CTE
+    ))
+    .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
     .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(season_id)
     .get_result(conn)
     .await?;
@@ -774,20 +784,21 @@ async fn h2h_replay_match_count(
 
 async fn upsert_h2h_state(
     conn: &mut AsyncPgConnection,
-    character_id: Uuid,
+    key: ranking::H2hKey,
     state: ranking::H2hRatingState,
     completed_at_secs: i64,
 ) -> Result<(), anyhow::Error> {
     diesel::sql_query(
         "INSERT INTO arena_h2h_ratings \
-         (character_id, rating, wins, losses, ties, matches, last_match_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, to_timestamp($7)) \
-         ON CONFLICT (character_id) DO UPDATE SET \
+         (character_id, alt_key, rating, wins, losses, ties, matches, last_match_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8)) \
+         ON CONFLICT (character_id, alt_key) DO UPDATE SET \
              rating = EXCLUDED.rating, wins = EXCLUDED.wins, losses = EXCLUDED.losses, \
              ties = EXCLUDED.ties, matches = EXCLUDED.matches, \
              last_match_at = EXCLUDED.last_match_at",
     )
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
     .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
     .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
     .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
@@ -802,21 +813,22 @@ async fn upsert_h2h_state(
 async fn upsert_h2h_season_state(
     conn: &mut AsyncPgConnection,
     season_id: Uuid,
-    character_id: Uuid,
+    key: ranking::H2hKey,
     state: ranking::H2hRatingState,
     completed_at_secs: i64,
 ) -> Result<(), anyhow::Error> {
     diesel::sql_query(
         "INSERT INTO arena_h2h_season_ratings \
-         (season_id, character_id, rating, wins, losses, ties, matches, last_match_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, to_timestamp($8)) \
-         ON CONFLICT (season_id, character_id) DO UPDATE SET \
+         (season_id, character_id, alt_key, rating, wins, losses, ties, matches, last_match_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9)) \
+         ON CONFLICT (season_id, character_id, alt_key) DO UPDATE SET \
              rating = EXCLUDED.rating, wins = EXCLUDED.wins, losses = EXCLUDED.losses, \
              ties = EXCLUDED.ties, matches = EXCLUDED.matches, \
              last_match_at = EXCLUDED.last_match_at",
     )
     .bind::<diesel::sql_types::Uuid, _>(season_id)
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.character_id)
+    .bind::<diesel::sql_types::Uuid, _>(key.alt_key)
     .bind::<diesel::sql_types::Integer, _>(state.rating as i32)
     .bind::<diesel::sql_types::Integer, _>(state.wins as i32)
     .bind::<diesel::sql_types::Integer, _>(state.losses as i32)
@@ -973,7 +985,25 @@ mod tests {
         ] {
             diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
         }
+        apply_h2h_per_alt_migration(&mut conn).await;
         Some(conn)
+    }
+
+    /// The rating tables as production has them after #373: the real migration.
+    async fn apply_h2h_per_alt_migration(conn: &mut AsyncPgConnection) {
+        const UP: &str = include_str!(
+            "../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql"
+        );
+        let sql: String = UP
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("--"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for stmt in sql.split(';') {
+            if !stmt.trim().is_empty() {
+                diesel::sql_query(stmt).execute(&mut *conn).await.unwrap();
+            }
+        }
     }
 
     fn applied(character_id: Uuid) -> AppliedOutcome {
@@ -1194,9 +1224,11 @@ mod tests {
 
         diesel::sql_query(
             "CREATE TABLE arena_h2h_ratings ( \
-                 character_id UUID PRIMARY KEY, rating INTEGER NOT NULL, wins INTEGER NOT NULL DEFAULT 0, \
+                 character_id UUID NOT NULL, alt_key UUID NOT NULL, rating INTEGER NOT NULL, \
+                 wins INTEGER NOT NULL DEFAULT 0, \
                  losses INTEGER NOT NULL DEFAULT 0, ties INTEGER NOT NULL DEFAULT 0, \
-                 matches INTEGER NOT NULL DEFAULT 0, last_match_at TIMESTAMPTZ)",
+                 matches INTEGER NOT NULL DEFAULT 0, last_match_at TIMESTAMPTZ, \
+                 PRIMARY KEY (character_id, alt_key))",
         )
         .execute(&mut conn)
         .await
@@ -1291,5 +1323,86 @@ mod tests {
             ],
             "the canonical incremental path must not double-apply a match that reconcile already absorbed"
         );
+    }
+
+    /// The live increment keys by alt as the reconcile does (tracker #373): a
+    /// user who fights as one alt, switches, and fights as another gets two
+    /// board rows, and the reconcile afterwards changes nothing.
+    #[tokio::test]
+    async fn live_increment_rates_each_alt_and_agrees_with_reconcile() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — per-alt h2h increment not verified");
+            return;
+        };
+        let cfg = ranking::H2hRatingConfig::default();
+        diesel::sql_query(
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
+             VALUES ($1, 1, 'test', 1700000000, 1700002000)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::from_u128(10))
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let (me, opp) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (alt_a, alt_b) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+        diesel::sql_query("INSERT INTO characters VALUES ($1, $2), ($3, NULL)")
+            .bind::<diesel::sql_types::Uuid, _>(me)
+            .bind::<diesel::sql_types::Uuid, _>(alt_a)
+            .bind::<diesel::sql_types::Uuid, _>(opp)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        async fn fight(conn: &mut AsyncPgConnection, cfg: &ranking::H2hRatingConfig, gsid: u128) {
+            let (me, opp) = (Uuid::from_u128(1), Uuid::from_u128(2));
+            let gs = Uuid::from_u128(gsid);
+            // Distinct times: Elo is order-dependent and the replay orders by time.
+            let mut mine = h2h_outcome(me, opp, gs, true);
+            mine.completed_at_secs += gsid as i64;
+            persist_h2h_audit_and_rating(conn, cfg, &mine, &applied(me), opp).await.unwrap();
+            let mut theirs = h2h_outcome(opp, me, gs, false);
+            theirs.completed_at_secs = mine.completed_at_secs;
+            persist_h2h_audit_and_rating(conn, cfg, &theirs, &applied(opp), me).await.unwrap();
+        }
+        fight(&mut conn, &cfg, 100).await;
+        diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Uuid, _>(alt_b)
+            .bind::<diesel::sql_types::Uuid, _>(me)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        fight(&mut conn, &cfg, 101).await;
+
+        #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            character_id: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            alt_key: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            rating: i32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            matches: i32,
+        }
+        async fn rows(conn: &mut AsyncPgConnection, table: &str) -> Vec<Row> {
+            diesel::sql_query(format!(
+                "SELECT character_id, alt_key, rating, matches FROM {table} ORDER BY character_id, alt_key"
+            ))
+            .get_results(conn)
+            .await
+            .unwrap()
+        }
+        let live_all = rows(&mut conn, "arena_h2h_ratings").await;
+        let live_season = rows(&mut conn, "arena_h2h_season_ratings").await;
+        assert_eq!(
+            live_all.iter().map(|r| (r.character_id, r.alt_key, r.matches)).collect::<Vec<_>>(),
+            vec![(me, alt_a, 1), (me, alt_b, 1), (opp, opp, 2)],
+            "two alts, two rows; the opponent without an alt id is keyed by its own id"
+        );
+        assert_eq!(live_season.len(), 3);
+
+        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+        assert_eq!(rows(&mut conn, "arena_h2h_ratings").await, live_all, "reconcile agrees");
+        assert_eq!(rows(&mut conn, "arena_h2h_season_ratings").await, live_season);
     }
 }
