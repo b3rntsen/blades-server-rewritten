@@ -73,9 +73,34 @@ tests.
 
 ## Verifying on the client
 
-`tools/harness/client-gate.sh boot --checkpoint wolfwalker-250` (blades-capture)
-against a server built from this change, after starting a craft at the Forge and
-relaunching the app: the gate must reach the hub, and the Forge must show the
-running craft. `tools/harness/faults/craft-poison.sh inject` is still the red
-control: it puts a recipe-keyed stackable on the Forge's Smithing station, which
-is exactly what the server now refuses to emit.
+Run the real client against a **local** server built from this change. Do not
+use `client-gate.sh boot --checkpoint wolfwalker-250`: that checkpoint
+reconnects WireGuard to production, so the client talks to prod's arena and
+never sees this branch.
+
+The local-target mode in blades-capture `tools/harness/local-target/` does the
+routing. On the emulator it redirects DNS and :443 to a mitmproxy on the Mac.
+Every game API call goes to the local server, bundles and announcements are
+fetched GET-only from the public edge, and WireGuard stays off. Steps:
+
+1. Build the server from this branch, then run it against a throwaway Postgres DB.
+2. `local-target.sh up` and clear the app. Play the intro and let the bundles
+   download. The new player gets a starter character on the local server.
+3. On the local DB only, give that character a Forge, materials and gold
+   (`prep-town.py`). Start a craft at the Forge.
+4. Fully restart the app. The client must reach the hub. `GET /crafts` in the
+   router log must show the job on its real `buildingId`. The client's
+   `Save_<character>.bin` must hold the job under the Forge's Smithing
+   station, and its timer must end at `completedAt`.
+5. Red control: on the local DB, set the job's `results` to
+   `{"stackableItems": {"<recipe id>": 1}}`. Serve it raw on the Forge from a
+   build with the repair and detach turned off. The client must hang on the
+   title spinner after its boot calls. Restart this branch's build on the same
+   row: it must repair the result and the town must load. To show the control
+   build itself is not at fault, serve the clean row from it as well; that
+   must load too.
+6. `local-target.sh down`. This removes the emulator redirects and the local CA.
+
+This was run on 2026-10-11 (PR #493). All four outcomes came out as expected:
+PR on the clean job loads, control on the poisoned job hangs, PR on the
+poisoned job loads, control on the clean job loads.
