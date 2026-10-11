@@ -791,4 +791,89 @@ mod event_dungeons_as_retail_built_them {
             assert_eq!((e.enemy_level, e.given_xp), (40, 123));
         }
     }
+
+    /// EQ21 (SA01), the event HauDrauf (level 100, difficulty 78) and Sephoris
+    /// (level 43) played on 2026-10-11, and EQ27, the one before it.
+    const EQ21: &str = "9bc6b965-3644-4020-9b75-2a7eb6a434dd";
+    const EQ27: &str = "0ea438d5-3238-44d7-b642-22c7f81fbc3f";
+    const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
+
+    /// Mean gold and items per container of each size over `runs` seeded runs.
+    fn pay_by_size(gd: &GameData, dungeon: &str, level: i64, runs: u64) -> HashMap<String, (f64, f64)> {
+        let gold = uuid(GOLD);
+        let spawns = &gd.dungeons[&uuid(dungeon)].spawn_info.item;
+        let mut sums: HashMap<String, (f64, f64, f64)> = HashMap::new();
+        for run in 0..runs {
+            let data = generate_for_event_dungeon_with_seed(gd, &uuid(dungeon), run, level, &shipped())
+                .unwrap();
+            for (spawn, pile) in &data.item_generated_data {
+                let name = spawns[spawn].name.clone().unwrap_or_default();
+                let entry = sums.entry(name).or_default();
+                for container in pile {
+                    entry.2 += 1.0;
+                    for loot in container.loot_table_loot.values() {
+                        entry.0 += loot.currencies.get(&gold).copied().unwrap_or(0) as f64;
+                        entry.1 += loot.stackable_items.values().sum::<u64>() as f64;
+                    }
+                }
+            }
+        }
+        sums.into_iter().map(|(k, (g, i, n))| (k, (g / n, i / n))).collect()
+    }
+
+    /// Tracker #374: in retail a bigger character's medium and large containers
+    /// paid more -- level-100 characters 1,278 gold per large container against 886
+    /// for level 40-43 ones. We paid both about 1,080, because both levels drew from
+    /// one level band (see `container_pay_by_level_374` in util/dungeon.rs).
+    #[test]
+    fn todays_event_pays_a_level_78_player_more_than_a_level_43_one() {
+        let gd = game_data();
+        let high = pay_by_size(&gd, EQ21, 78, 300);
+        let mid = pay_by_size(&gd, EQ21, 43, 300);
+        let (large_high, large_mid) = (high["Breakable_T3"], mid["Breakable_T3"]);
+        assert!(
+            large_high.0 >= 1.25 * large_mid.0,
+            "large container gold: level 78 {:.0}, level 43 {:.0}",
+            large_high.0,
+            large_mid.0
+        );
+        assert!(
+            large_high.1 >= 1.15 * large_mid.1,
+            "large container items: level 78 {:.1}, level 43 {:.1}",
+            large_high.1,
+            large_mid.1
+        );
+        let (medium_high, medium_mid) = (high["Breakable_T2"], mid["Breakable_T2"]);
+        assert!(
+            medium_high.0 >= 1.15 * medium_mid.0,
+            "medium container gold: level 78 {:.0}, level 43 {:.0}",
+            medium_high.0,
+            medium_mid.0
+        );
+        // CONTROL: size still orders the pay at both levels.
+        for pay in [&high, &mid] {
+            assert!(pay["Breakable_T3"].0 > pay["Breakable_T2"].0);
+            assert!(pay["Breakable_T2"].0 > pay["Breakable_T1"].0);
+            assert!(pay["Breakable_T3"].1 > pay["Breakable_T2"].1);
+            assert!(pay["Breakable_T2"].1 > pay["Breakable_T1"].1);
+        }
+    }
+
+    /// CONTROL for report #374's "fewer containers": both events place exactly the
+    /// containers retail sent for them -- 7 small, 3 medium, 1 large in all six
+    /// captured generations (EQ21 at difficulty 23 and 78, EQ27 at 22 and 72).
+    #[test]
+    fn the_reported_events_place_retails_container_count() {
+        let gd = game_data();
+        for dungeon in [EQ21, EQ27] {
+            for level in [43, 78] {
+                let data = generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
+                assert_eq!(
+                    piles(&gd, dungeon, &data),
+                    vec![("Breakable_T1".into(), 7), ("Breakable_T2".into(), 3), ("Breakable_T3".into(), 1)],
+                    "{dungeon} at {level}"
+                );
+            }
+        }
+    }
 }

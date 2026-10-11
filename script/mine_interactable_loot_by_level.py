@@ -32,6 +32,24 @@ side draws both through one function:
 A table too thin to fill two bands is left out, and `roll_loot_table` keeps
 drawing it from the pooled `interactable_loot.json`, exactly as before.
 
+ONE BAND PER LEVEL, DRAWN THROUGH A WINDOW (tracker #374)
+---------------------------------------------------------
+This used to cut each table into greedy contiguous bands of at least 300
+observations, from level 1 upwards. Retail's rich containers were rolled far
+less often than its small ones, so the medium and large event containers
+(tables 49173c2c and 6cb97b90) came out as [41, 87] and [29, 87]: one band
+for a level-43 and a level-78 player alike. Retail paid them differently --
+the large container's gold averaged 886 for level 40-43 characters and 1,278
+for level-100 ones (events, this snapshot) -- and the shared band paid both
+about 1,080: the high-level player short, the mid-level one over. Drawn
+through a 200-observation window they pay 778 and 1,224.
+
+Each observed level is now its own band, and the Rust side draws from the
+nearest levels until it holds `windowObservations` results
+(`floor_window_results`). Where retail rolled a table often the window is one
+level wide; where it rarely did, it widens symmetrically around the player's
+level instead of being anchored at level 1.
+
 LEVEL
 -----
 A floor pile carries no level of its own. The level is the enemy level of the
@@ -48,7 +66,7 @@ RUN
 ---
     python3 script/mine_interactable_loot_by_level.py \
         --db ~/blades-prod-backups/20260607-112415/blades-snapshot-20260607-112415.db \
-        --out blades_lib/src/interactable_loot_by_level.json
+        --out blades_lib/src/interactable_loot_by_level.json --window 200
 
 Opens the database read-only. Only https://blades.bgs.services/ is mined.
 """
@@ -135,8 +153,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--min-band", type=int, default=300,
-                    help="minimum observations in one level band")
+    ap.add_argument("--window", type=int, default=200,
+                    help="observations one draw gathers from the nearest levels; a "
+                         "table needs twice this many to be kept")
+    ap.add_argument("--min-band", type=int, default=1,
+                    help="minimum observations in one level band (1: one band per "
+                         "level, which the window reads; the pre-#374 file was "
+                         "--min-band 300 --window 0)")
     a = ap.parse_args()
 
     con = sqlite3.connect(f"file:{a.db}?mode=ro", uri=True)
@@ -171,7 +194,7 @@ def main():
     out_tables, left_out = {}, {}
     for tid, by_level in sorted(tables.items()):
         total = sum(sum(c.values()) for c in by_level.values())
-        if total < 2 * a.min_band:
+        if total < 2 * max(a.min_band, a.window):
             left_out[tid] = total
             continue
         bands = []
@@ -200,13 +223,16 @@ def main():
                        "banded by the enemy level of the same generated dungeon.",
         "authoritative": "every result appeared verbatim in a retail response from "
                          + RETAIL_HOST + "; nothing is interpolated",
-        "howToDraw": "pick the byLevel band whose [minEnemyLevel, maxEnemyLevel] "
-                     "contains the dungeon's enemy level, or the nearest band if none "
-                     "does, and draw one whole result weighted by n. A table absent "
-                     "here is drawn from the pooled interactable_loot.json.",
+        "howToDraw": "start at the byLevel band whose [minEnemyLevel, maxEnemyLevel] "
+                     "contains the dungeon's enemy level (or the nearest band), add the "
+                     "next-nearest band on either side (the lower one on a tie) until "
+                     "the bands hold windowObservations results, and draw one whole "
+                     "result weighted by n from all of them. A table absent here is "
+                     "drawn from the pooled interactable_loot.json.",
         "generator": "script/mine_interactable_loot_by_level.py",
         "source": a.db.rsplit("/", 1)[-1],
         "minBandObservations": a.min_band,
+        "windowObservations": a.window,
         "responsesRead": responses,
         "dungeonEntriesSeen": entries,
         "distinctGenerationsKept": kept,

@@ -1263,7 +1263,10 @@ mod report152_stale_story_loot_tests {
                 })
             })
             .count();
-        assert_eq!(paying_spawns, 37, "the capture-derived deterministic rolls");
+        // A count of our own deterministic rolls, so it moves with the floor-loot
+        // corpus: 37 before #374 drew each table from the levels nearest the
+        // dungeon's, which changed the level-48 results these rolls pick from.
+        assert_eq!(paying_spawns, 36, "the capture-derived deterministic rolls");
 
         // Exact shape of the reporter's durable pre-fix row: spawn/table ids exist,
         // but every result is empty. Preserve the enemy/chest sections verbatim.
