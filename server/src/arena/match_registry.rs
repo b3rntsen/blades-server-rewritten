@@ -1134,7 +1134,14 @@ impl MatchRegistry {
         let Some(m) = matches.get(&game_session_id) else {
             return false;
         };
-        if m.reached_capacity || m.players.len() >= m.capacity {
+        if m.reached_capacity || m.abandoned || m.players.len() >= m.capacity {
+            return false;
+        }
+        // A connected peer whose fighter slot is not known yet (shared NAT, or a UDP
+        // source that differs from the HTTP one) may well BE this player. Don't guess:
+        // a duplicate `Succeeded` to a client that is already connecting is worse than
+        // a missed replay, which the sweep still turns into a clean disconnect.
+        if m.players.iter().any(|p| !m.peer_to_slot.contains_key(&p.addr)) {
             return false;
         }
         match m.psid_to_slot.get(player_session_id) {

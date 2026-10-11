@@ -12,7 +12,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
     BladeApiError, ServerGlobal,
-    arena::{MatchmakingMessage, matchmaker::replayable_match},
+    arena::MatchmakingMessage,
     session::SessionLookedUpMaybe,
 };
 
@@ -51,22 +51,22 @@ async fn matchmaking_ws(
     let (tx, rx) = mpsc::unbounded_channel::<MatchmakingMessage>();
     let mut rx = UnboundedReceiverStream::new(rx);
 
-    user_session.session.set_matchmaking_ws(tx.clone()).await;
-
-    // A client that missed its `MatchmakingSucceeded` (sent while it was between
-    // sockets, or into one it had already abandoned) gets it now, if its match is
-    // still waiting for it (#375).
-    if let Some(replay) = replayable_match(
-        &user_session.session,
-        &app_state.arena.registry,
-        std::time::Instant::now(),
-    ) {
+    // Register the socket — and, under the same lock, hand it a `MatchmakingSucceeded`
+    // the client missed (sent while it was between sockets, or into one it had already
+    // abandoned) if its match is still waiting for it (#375).
+    let registry = &app_state.arena.registry;
+    let now = std::time::Instant::now();
+    if user_session
+        .session
+        .replay_pending_match(Some(tx.clone()), |p| {
+            crate::arena::matchmaker::match_still_wants(p, registry, now)
+        })
+        .await
+    {
         log::info!(
-            "rms: replaying MatchmakingSucceeded for ticket {} (user {}) on a reconnected socket",
-            replay.ticket_id(),
+            "rms: replayed MatchmakingSucceeded (user {}) on a reconnected socket",
             user_session.session.user_id
         );
-        let _ = tx.send(replay);
     }
 
     // Kept so the teardown below can tell "the slot still holds MY sender" from

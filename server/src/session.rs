@@ -67,6 +67,9 @@ pub struct PendingMatch {
     pub game_session_id: Uuid,
     pub message: MatchmakingMessage,
     pub sent_at: std::time::Instant,
+    /// The socket this message was last written to. A socket never gets the same
+    /// `Succeeded` twice — a client that read it is already connecting (#375 review).
+    pub sent_on: Option<UnboundedSender<MatchmakingMessage>>,
 }
 
 impl Session {
@@ -176,8 +179,13 @@ impl Session {
         })
     }
 
-    /// Remember a `MatchmakingSucceeded` for replay. Anything else is ignored.
-    pub fn remember_pending_match(&self, message: &MatchmakingMessage) {
+    /// Remember a `MatchmakingSucceeded` for replay, as written to `sent_on`.
+    /// Anything else is ignored.
+    fn remember_pending_match(
+        &self,
+        message: &MatchmakingMessage,
+        sent_on: Option<UnboundedSender<MatchmakingMessage>>,
+    ) {
         if let MatchmakingMessage::Succeeded {
             ticket_id,
             game_session_id,
@@ -190,9 +198,70 @@ impl Session {
                     game_session_id: *game_session_id,
                     message: message.clone(),
                     sent_at: std::time::Instant::now(),
+                    sent_on,
                 });
             }
         }
+    }
+
+    /// Send a matchmaking message to the CURRENT rms socket; a `Succeeded` is also
+    /// remembered for replay. `Err(())` when there is no live socket right now.
+    ///
+    /// Remember-and-send happens under the `matchmaking_ws` lock, the same lock
+    /// [`replay_pending_match`](Self::replay_pending_match) registers a new socket
+    /// under, so the two serialize: either this writes to the old socket and the new
+    /// one replays, or the new socket is registered first and this writes to it and
+    /// nothing replays. Never both onto one socket, never neither.
+    pub async fn send_matchmaking(&self, message: MatchmakingMessage) -> Result<(), ()> {
+        let slot = self.matchmaking_ws.lock().await;
+        let tx = slot.clone();
+        self.remember_pending_match(&message, tx.clone());
+        match tx {
+            Some(tx) => tx.send(message).map_err(|_| ()),
+            None => Err(()),
+        }
+    }
+
+    /// Replay the remembered `Succeeded` onto a socket that has not had it yet.
+    ///
+    /// `new_socket`: register this sender as the live socket first (a freshly opened
+    /// rms socket) — or `None` to target the socket already registered (a repeated
+    /// `matches/create`). `still_wanted` decides whether the match still needs this
+    /// player; an unwanted one is forgotten. Returns whether a frame was sent.
+    pub async fn replay_pending_match(
+        &self,
+        new_socket: Option<UnboundedSender<MatchmakingMessage>>,
+        still_wanted: impl FnOnce(&PendingMatch) -> bool,
+    ) -> bool {
+        let mut slot = self.matchmaking_ws.lock().await;
+        if let Some(tx) = new_socket {
+            *slot = Some(tx);
+            if let Ok(mut feed) = self.rms_feed.lock() {
+                feed.lost_at = None;
+            }
+        }
+        let Some(target) = slot.clone() else {
+            return false;
+        };
+        let Ok(mut feed) = self.rms_feed.lock() else {
+            return false;
+        };
+        let Some(pending) = feed.pending.as_mut() else {
+            return false;
+        };
+        if pending
+            .sent_on
+            .as_ref()
+            .is_some_and(|sent| sent.same_channel(&target))
+        {
+            return false;
+        }
+        if !still_wanted(pending) {
+            feed.pending = None;
+            return false;
+        }
+        pending.sent_on = Some(target.clone());
+        target.send(pending.message.clone()).is_ok()
     }
 
     /// The remembered `MatchmakingSucceeded`, if any.
