@@ -195,7 +195,7 @@ mod tests {
     /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the idle/under-capacity sweep is disabled, so
     /// a solo connected peer with no opponent persists indefinitely (the round-start
     /// freeze window). Default (HOLD off) still reclaims it. We advance the clock past
-    /// both `MATCH_MAX_AGE` (600 s) and `CONNECT_DEADLINE` (45 s) and check the
+    /// both `MATCH_MAX_AGE` (600 s) and `CONNECT_DEADLINE` (30 s) and check the
     /// surviving match count.
     #[test]
     fn debug_hold_disables_idle_sweep() {

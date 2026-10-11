@@ -32,6 +32,41 @@ pub struct Session {
     /// session, not the character, so only the logged-in player can set their own, and
     /// never persisted: the client re-reports it in every analytics batch.
     pub client_gear_ratings: std::sync::Mutex<HashMap<Uuid, u32>>,
+    /// What the matchmaker needs to know about this client's rms feed beyond the live
+    /// sender: when it last lost one, and the `MatchmakingSucceeded` it may not have
+    /// read yet. See [`RmsFeedState`] (#375).
+    pub rms_feed: std::sync::Mutex<RmsFeedState>,
+}
+
+/// The rms WebSocket is not a stable pipe: the client reconnects it roughly once a
+/// minute, after every app pause and after every network hiccup, and a socket that the
+/// client has already abandoned can still accept frames for a while. A
+/// `MatchmakingSucceeded` written into that gap is gone — it is the only frame that
+/// carries the arena address, and the client never asks for it again — so its
+/// opponent sits on "Connecting" until the server gives up on the match (#375: three
+/// of the five no-show matches on prod paired a player whose socket had closed 5–11 s
+/// earlier).
+///
+/// Two facts fix that:
+/// - `lost_at` — when the feed last went away. A ticket whose feed is merely between
+///   sockets is still a waiting player; only one that has stayed away past the
+///   matchmaker's reconnect grace has really left.
+/// - `pending` — the last `MatchmakingSucceeded` sent to this client, replayed on the
+///   next socket (and on a repeated `matches/create`) for as long as its match is
+///   still waiting for this player.
+#[derive(Default)]
+pub struct RmsFeedState {
+    pub lost_at: Option<std::time::Instant>,
+    pub pending: Option<PendingMatch>,
+}
+
+/// A `MatchmakingSucceeded` the client may not have read.
+#[derive(Clone, Debug)]
+pub struct PendingMatch {
+    pub ticket_id: Uuid,
+    pub game_session_id: Uuid,
+    pub message: MatchmakingMessage,
+    pub sent_at: std::time::Instant,
 }
 
 impl Session {
@@ -53,6 +88,7 @@ impl Session {
             request_count: AtomicU64::new(1),
             matchmaking_ws: Mutex::new(None),
             client_gear_ratings: Default::default(),
+            rms_feed: Default::default(),
         }
     }
 
@@ -86,6 +122,9 @@ impl Session {
     /// newest one is always the live one.
     pub async fn set_matchmaking_ws(&self, tx: UnboundedSender<MatchmakingMessage>) {
         *self.matchmaking_ws.lock().await = Some(tx);
+        if let Ok(mut feed) = self.rms_feed.lock() {
+            feed.lost_at = None;
+        }
     }
 
     /// Release the slot on socket teardown, but ONLY if it still holds `tx`.
@@ -106,8 +145,69 @@ impl Session {
         let is_owner = slot.as_ref().is_some_and(|cur| cur.same_channel(tx));
         if is_owner {
             *slot = None;
+            if let Ok(mut feed) = self.rms_feed.lock() {
+                feed.lost_at = Some(std::time::Instant::now());
+            }
         }
         is_owner
+    }
+
+    /// How long this client has had no usable rms feed: `None` while a live socket is
+    /// registered, the time since it was lost otherwise. A client that has never opened
+    /// one reads as `Duration::MAX` — it cannot be reached at all.
+    ///
+    /// A registered sender whose socket task has already exited (closed, not yet
+    /// cleared) counts as lost just now: it is between sockets, not gone.
+    pub async fn rms_down_for(&self, now: std::time::Instant) -> Option<Duration> {
+        let live = self
+            .matchmaking_ws
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|tx| !tx.is_closed());
+        if live {
+            return None;
+        }
+        let lost_at = self.rms_feed.lock().ok().and_then(|feed| feed.lost_at);
+        Some(match lost_at {
+            Some(at) => now.saturating_duration_since(at),
+            None if self.matchmaking_ws.lock().await.is_some() => Duration::ZERO,
+            None => Duration::MAX,
+        })
+    }
+
+    /// Remember a `MatchmakingSucceeded` for replay. Anything else is ignored.
+    pub fn remember_pending_match(&self, message: &MatchmakingMessage) {
+        if let MatchmakingMessage::Succeeded {
+            ticket_id,
+            game_session_id,
+            ..
+        } = message
+        {
+            if let Ok(mut feed) = self.rms_feed.lock() {
+                feed.pending = Some(PendingMatch {
+                    ticket_id: *ticket_id,
+                    game_session_id: *game_session_id,
+                    message: message.clone(),
+                    sent_at: std::time::Instant::now(),
+                });
+            }
+        }
+    }
+
+    /// The remembered `MatchmakingSucceeded`, if any.
+    pub fn pending_match(&self) -> Option<PendingMatch> {
+        self.rms_feed.lock().ok().and_then(|feed| feed.pending.clone())
+    }
+
+    /// Forget the remembered match — all of it with `None`, or only if it belongs to
+    /// `ticket_id`.
+    pub fn clear_pending_match(&self, ticket_id: Option<Uuid>) {
+        if let Ok(mut feed) = self.rms_feed.lock() {
+            if ticket_id.is_none_or(|t| feed.pending.as_ref().is_some_and(|p| p.ticket_id == t)) {
+                feed.pending = None;
+            }
+        }
     }
 
     /// Whether a matchmaking feed is currently registered (what `create_match`
@@ -126,6 +226,44 @@ mod matchmaking_slot_tests {
 
     fn session() -> Session {
         Session::new(Uuid::new_v4(), Uuid::new_v4(), StdDuration::from_secs(3600))
+    }
+
+    /// #375: the matchmaker must tell "between sockets" from "gone", so losing the
+    /// slot records when, and a new socket clears it.
+    #[tokio::test]
+    async fn losing_the_socket_records_when() {
+        let s = session();
+        let now = std::time::Instant::now();
+        assert_eq!(s.rms_down_for(now).await, Some(StdDuration::MAX), "never connected");
+
+        let (a, _ra) = unbounded_channel();
+        s.set_matchmaking_ws(a.clone()).await;
+        assert_eq!(s.rms_down_for(std::time::Instant::now()).await, None, "live");
+
+        assert!(s.clear_matchmaking_ws_if_owner(&a).await);
+        let down = s
+            .rms_down_for(std::time::Instant::now())
+            .await
+            .expect("down after the socket closed");
+        assert!(down < StdDuration::from_secs(1), "lost just now, not never-connected");
+
+        let (b, _rb) = unbounded_channel();
+        s.set_matchmaking_ws(b).await;
+        assert_eq!(s.rms_down_for(std::time::Instant::now()).await, None);
+        assert!(s.rms_feed.lock().unwrap().lost_at.is_none());
+    }
+
+    /// A registered sender whose socket task already exited is between sockets.
+    #[tokio::test]
+    async fn a_closed_but_registered_sender_reads_as_just_lost() {
+        let s = session();
+        let (a, ra) = unbounded_channel();
+        s.set_matchmaking_ws(a).await;
+        drop(ra);
+        assert_eq!(
+            s.rms_down_for(std::time::Instant::now()).await,
+            Some(StdDuration::ZERO)
+        );
     }
 
     fn chan() -> UnboundedSender<MatchmakingMessage> {
@@ -511,6 +649,7 @@ async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session
         request_count: AtomicU64::new(1),
         matchmaking_ws: Mutex::new(None),
         client_gear_ratings: Default::default(),
+        rms_feed: Default::default(),
     })
 }
 
