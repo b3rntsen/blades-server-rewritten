@@ -528,4 +528,129 @@ mod tests {
             }
         }
     }
+
+    /// Report #368: "check that Wooden, Silver and Gold chests ramp up with
+    /// level; players built their characters mainly from these three". They do,
+    /// as retail's did: at every level with at least five retail openings within
+    /// two levels, the median gold sits within 30% of retail's there (single
+    /// levels vary that much in retail itself: the 12 Silver openings at 25 paid
+    /// a median 2,701, the 42 at 23-27 2,126), and it
+    /// never falls by more than a tenth as the level rises (Gold: 3,847 at 10,
+    /// 7,433 at 30, 8,185 at 43, 8,965 at 80; retail 4,145 / 7,508 / 8,185 / 8,965).
+    #[test]
+    fn treasury_chests_ramp_with_level_like_retail() {
+        let t = committed();
+        let median = |mut v: Vec<u64>| {
+            v.sort_unstable();
+            v[v.len() / 2]
+        };
+        for tier in 1..=3u64 {
+            let mut previous = 0;
+            for level in (5..=100u64).step_by(5) {
+                let ours = median(
+                    (0..400)
+                        .map(|i| {
+                            let key = format!("ramp:{i}:{tier}:{level}");
+                            let r =
+                                roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap();
+                            r.currencies.get(&GOLD).copied().unwrap_or(0)
+                        })
+                        .collect(),
+                );
+                let retail: Vec<u64> = t.tiers[&tier]
+                    .iter()
+                    .filter(|s| s.chest_level.abs_diff(level) <= 2)
+                    .map(|s| s.reward.currencies.get(&GOLD).copied().unwrap_or(0))
+                    .collect();
+                if retail.len() >= 5 {
+                    let retail = median(retail);
+                    assert!(
+                        ours.abs_diff(retail) * 10 <= retail * 3,
+                        "tier {tier} level {level}: median gold {ours}, retail {retail}"
+                    );
+                }
+                assert!(
+                    ours * 10 >= previous * 9,
+                    "tier {tier}: median gold fell from {previous} to {ours} at level {level}"
+                );
+                previous = ours;
+            }
+        }
+    }
+
+    /// Wooden, Silver and Gold chests by chest level, ours against the retail
+    /// openings within two levels (#368). `cargo test -p blades_lib
+    /// print_treasury_progression -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn print_treasury_progression() {
+        use crate::features::store_bundles::SOUL_GEMS;
+        let t = committed();
+        let names = [
+            "Pet", "Les", "Mid", "Com", "Exc", "Gre", "Ele", "Gra", "Glo", "Tra",
+        ];
+        let summarise = |rewards: &[RewardGrant]| -> String {
+            let mut gold: Vec<u64> = rewards
+                .iter()
+                .map(|r| r.currencies.get(&GOLD).copied().unwrap_or(0))
+                .collect();
+            gold.sort_unstable();
+            let mut gems = [0usize; 10];
+            let mut tiers: BTreeMap<u64, usize> = BTreeMap::new();
+            let mut pieces = 0;
+            for r in rewards {
+                for (k, id) in SOUL_GEMS.iter().enumerate() {
+                    gems[k] += usize::from(r.stackable_items.contains_key(id));
+                }
+                for i in &r.items {
+                    if let Some(l) =
+                        crate::features::legendary_gear::required_level(&i.item.item_template_id)
+                    {
+                        *tiers.entry(l).or_default() += 1;
+                        pieces += 1;
+                    }
+                }
+            }
+            let n = rewards.len().max(1) as f64;
+            let g: Vec<String> = (0..10)
+                .filter(|&k| gems[k] > 0)
+                .map(|k| format!("{} {:.0}%", names[k], gems[k] as f64 * 100.0 / n))
+                .collect();
+            let tier_txt: Vec<String> = tiers
+                .iter()
+                .map(|(l, c)| format!("T{l} {:.0}%", *c as f64 * 100.0 / pieces.max(1) as f64))
+                .collect();
+            format!(
+                "n={:4} gold~{:5} | gems {} | gear {}",
+                rewards.len(),
+                gold.get(gold.len() / 2).copied().unwrap_or(0),
+                g.join(" "),
+                tier_txt.join(" ")
+            )
+        };
+        for tier in 1..=3u64 {
+            println!("== tier {tier}");
+            for level in [10u64, 20, 30, 37, 43, 47, 49, 60, 80, 100] {
+                let retail: Vec<RewardGrant> = t.tiers[&tier]
+                    .iter()
+                    .filter(|s| s.chest_level.abs_diff(level) <= 2)
+                    .map(|s| s.reward.clone())
+                    .collect();
+                let ours: Vec<RewardGrant> = (0..2_000)
+                    .map(|i| {
+                        roll_loot(
+                            &t,
+                            tier as i64,
+                            level,
+                            &format!("p:{i}:{tier}:{level}"),
+                            &HashSet::new(),
+                        )
+                        .unwrap()
+                    })
+                    .collect();
+                println!("L{level:3} retail {}", summarise(&retail));
+                println!("     ours   {}", summarise(&ours));
+            }
+        }
+    }
 }

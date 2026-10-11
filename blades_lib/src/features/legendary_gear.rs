@@ -114,10 +114,31 @@ fn pick(seed: u64, n: usize) -> usize {
 /// Generate a Legendary gear piece around the retail `shell` the tier rule
 /// picked. `None` when the shell is not a pool template (it is then paid as is).
 pub(crate) fn generate(shell: &Item, seed: u64) -> Option<Item> {
+    let required_level = pool()
+        .table
+        .templates
+        .get(&shell.item_template_id)?
+        .required_level;
+    generate_at(shell, required_level, seed)
+}
+
+/// [`generate`] at the material tier unlocked at `required_level` rather than the
+/// shell's own: a slot whose tier retail paid too rarely to have shells of its own
+/// borrows the slot's shells from the neighbouring tiers (#368, slot 1 at
+/// Daedric). The shell still carries tempering, enchant count and enchant tier.
+pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Option<Item> {
     let pool = pool();
     let table = &pool.table;
     let base = table.templates.get(&shell.item_template_id)?;
-    let tier_key = (base.required_level, base.tier);
+    let tier_key = if base.required_level == required_level {
+        (base.required_level, base.tier)
+    } else {
+        // The first APK tier unlocked at that level (Ebony before Stalhrim at 33).
+        pool.by_kind
+            .keys()
+            .find(|(r, _, _)| *r == required_level)
+            .map(|(r, t, _)| (*r, *t))?
+    };
 
     // The kind: jewellery keeps its own; equipment draws by retail's shares among
     // the kinds this tier has.
