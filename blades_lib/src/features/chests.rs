@@ -241,9 +241,32 @@ pub fn roll_loot(
     let elder_treasury = tables.provisional_tiers.get(&4).map(Vec::as_slice);
     crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned, elder_treasury)
         .or_else(|| {
-        let (pool, _) = tables.pool_for(tier)?;
-        compose_loot(pool, level, nonce)
-    })
+            let (pool, _) = tables.pool_for(tier)?;
+            let mut grant = compose_loot(pool, level, nonce)?;
+            if tier == 3 {
+                add_gold_chest_artifact(&mut grant, level, nonce, owned);
+            }
+            Some(grant)
+        })
+}
+
+/// A Gold chest's rare third item (#378 follow-up): one chest in
+/// [`GOLD_ARTIFACT_SLOT`](crate::features::store_bundles::GOLD_ARTIFACT_SLOT)
+/// has an artifact slot, rolled exactly as a Legendary chest's: an artifact
+/// whose level window holds the chest's level, or for one the character holds
+/// the generated Legendary piece (#310).
+fn add_gold_chest_artifact(grant: &mut RewardGrant, level: u64, nonce: u64, owned: &HashSet<Uuid>) {
+    use crate::features::store_bundles::{GOLD_ARTIFACT_SLOT, artifact_slot_item, mix};
+    let seed = mix(nonce ^ 0x9B05_688C_2B3E_6C1F);
+    let (hits, chests) = GOLD_ARTIFACT_SLOT;
+    if mix(seed) % chests >= hits {
+        return;
+    }
+    if let Some(item) = artifact_slot_item(level, seed, owned) {
+        // The handler re-mints instance ids; this one only has to be distinct.
+        let id = Uuid::from_u64_pair(mix(seed ^ 1), mix(seed ^ 2));
+        grant.items.push(crate::economy::RewardItem { id, item });
+    }
 }
 
 #[cfg(test)]
@@ -485,10 +508,11 @@ mod tests {
 
         for i in 0..300 {
             let r = roll_loot(&t, 3, 100, &format!("c:{i}:3:100:{i}"), &HashSet::new()).unwrap();
-            assert_eq!(r.items.len(), 2, "retail's Gold chest pays exactly two items");
+            // Two items; a third only in the rare artifact slot (#378).
+            assert!((2..=3).contains(&r.items.len()), "a Gold chest pays two items");
             let gold = gold_of(&r);
             assert!((lo..=hi).contains(&gold), "level-100 Gold chest paid {gold} gold");
-            for item in &r.items {
+            for item in &r.items[..2] {
                 assert!(
                     high_templates.contains(&item.item.item_template_id),
                     "level-100 Gold chest paid {}, which retail paid only below level 81",
@@ -515,7 +539,7 @@ mod tests {
                     match tier {
                         1 => assert!(r.items.len() <= 1),
                         2 => assert_eq!(r.items.len(), 1),
-                        _ => assert_eq!(r.items.len(), 2),
+                        _ => assert!((2..=3).contains(&r.items.len())),
                     }
                     if tier == 1 {
                         assert!(r.currencies.contains_key(&gem), "every Wooden chest paid gems");
