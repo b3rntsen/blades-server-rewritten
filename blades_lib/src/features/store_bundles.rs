@@ -176,6 +176,124 @@ pub fn is_artifact(template: &Uuid) -> bool {
     ARTIFACT_TEMPLATES.contains(template)
 }
 
+/// Every artifact with its APK `requiredLevel` and `lootWeight`
+/// (`reference/game-defs/items.json`; durability is the APK `maxDurability`,
+/// 0 for the two rings, which retail sent without tempering or durability).
+///
+/// The lootWeight is authored per kind: 2 for a weapon, 7 for a shield, 9 for
+/// armour and rings. The corpus's 27 artifacts are 13 weapons, 11 armour pieces
+/// or rings and 3 shields, of 17, 5 and 2 artifacts: the weights predict 10 /
+/// 13 / 4, a uniform pick 19 / 6 / 2.
+const ARTIFACT_LOOT: [(Uuid, u64, u64, f64); 24] = [
+    (Uuid::from_u128(0x4e841f5e_c5d7_47cd_899a_116846dbbfc0), 6, 2, 355.0), // Bloodthirst
+    (Uuid::from_u128(0x12c4920e_a9e0_4498_b134_3ce66fb9558f), 6, 9, 473.0), // Savior's Hide
+    (Uuid::from_u128(0xe86a6f9a_4e40_40d6_a9dd_1036b4190caa), 13, 2, 220.0), // Fork of Horripilation
+    (Uuid::from_u128(0x899b63a7_6eb7_4689_a450_8c6b507763c6), 13, 2, 585.0), // Guardian's Claymore
+    (Uuid::from_u128(0x05862206_b6db_4cd4_9f7a_ed2e03fc90af), 13, 9, 0.0), // Ring of Namira
+    (Uuid::from_u128(0x59c720fb_d761_4ad1_b14c_2aa8c1a4d554), 18, 2, 446.0), // Mace of Molag Bal
+    (Uuid::from_u128(0x6ab76008_dd08_461f_bdcc_6373799ea489), 18, 2, 446.0), // Rueful Axe
+    (Uuid::from_u128(0x86a4ad9d_e2e8_49cd_9642_b553475b6580), 18, 7, 405.0), // Pandemonium
+    (Uuid::from_u128(0xbe1484e6_c156_47db_bdab_3cf5b75096a0), 23, 2, 410.0), // Chrysamere
+    (Uuid::from_u128(0x4b59cdbe_f857_4673_9e40_741ca06aa5d0), 23, 2, 338.0), // Spellbane
+    (Uuid::from_u128(0x8a69bdb2_d179_4f2d_984a_322f9397aedf), 28, 2, 340.0), // Rimelink
+    (Uuid::from_u128(0xaf7759d9_f38e_4384_bf36_1de0c3d150a7), 28, 2, 453.0), // Volendrung
+    (Uuid::from_u128(0xdef810af_e9f5_4e23_9247_1edf391d82e1), 28, 9, 453.0), // Ebony Mail
+    (Uuid::from_u128(0x515450b1_ab21_4cbf_a8ed_c4e0e51df4c0), 33, 2, 496.0), // Dragon's Blight
+    (Uuid::from_u128(0x21f8b677_c1a9_4d5f_87ef_294fc6ba4ba5), 33, 2, 454.0), // Ebony Blade
+    (Uuid::from_u128(0xa0d7dd5e_692e_4fbb_bbf2_19c6a874f3f5), 33, 2, 248.0), // Mehrunes' Razor
+    (Uuid::from_u128(0xca1e2d0f_b902_4c82_b8d6_e82b83dcc9e0), 38, 2, 346.0), // Dawnbreaker
+    (Uuid::from_u128(0x9a22b59a_cdbc_4987_bf4a_0cc812428aeb), 38, 7, 462.0), // Spellbreaker
+    (Uuid::from_u128(0x7d2dfa88_e7ca_4fd6_a173_862cfb077c04), 44, 2, 537.0), // Stendarr's Hammer
+    (Uuid::from_u128(0x23607f09_a103_4ed3_a0de_33e0498f8018), 44, 9, 0.0), // Warlock's Ring
+    (Uuid::from_u128(0x9107fb63_f88b_45fa_bca9_7fe2f9bceb2c), 50, 2, 434.0), // Chillrend
+    (Uuid::from_u128(0x21ed2758_5cf5_4b7d_9047_59bbdbd61820), 50, 2, 626.0), // Onyx Cleaver
+    (Uuid::from_u128(0xda0cf5aa_6d37_48da_8b18_3f4e914145d3), 50, 2, 626.0), // Onyx Saber
+    (Uuid::from_u128(0x975509a9_196f_41c9_8df4_6f0e2d1f02ce), 50, 9, 497.0), // Lord's Mail
+];
+
+/// How often a chest has its third, artifact slot: (chests with it, chests).
+///
+/// THE REPORT (#378). Sephoris at 45, ~200 Legendary chests: "no artifact,
+/// although many chests had three items; the third item is always the same
+/// sword, ring or shield". The slot used to be copied from one recorded chest of
+/// the buyer's band, so the band decided WHICH artifact: the 36-50 band holds one
+/// (Onyx Cleaver, which he owns), so every artifact roll at 36-50 was his owned
+/// Onyx Cleaver and fell back, to one of the band's four recorded fallback pieces.
+///
+/// Retail: 60 of the 1,186 Legendary corpus chests have the slot (5.1%; the
+/// 306 exact-level snapshot purchases: 16, 5.2%), flat in level (3.2% to 7.9%
+/// per band, no trend). The Elder (Epic) chest has it in 4 of 405 (snapshot: 3
+/// of 287). Gold, Silver and Wooden chests never do: 0 of 729 treasury openings
+/// have a third item or any artifact.
+const LEGENDARY_ARTIFACT_SLOT: (u64, u64) = (60, 1186);
+const ELDER_ARTIFACT_SLOT: (u64, u64) = (4, 405);
+
+/// How far above the buyer's level an artifact's `requiredLevel` may sit. Every
+/// one of the 29 retail artifacts recorded with a buyer level is within it, and
+/// it is reached: Fork of Horripilation (13) at level 3, Ebony Mail (28) at 19,
+/// Pandemonium (18) at 10, Dragon's Blight (33) at 26. There is no floor: a
+/// player who owns the low artifacts already has them re-rolled, which is all
+/// that kept them from high-level buyers (retail player 78f2b668 at 17-28: 6
+/// fallbacks in 11 artifact slots; this rule with the artifacts he held, 52%).
+const ARTIFACT_LEVELS_AHEAD: u64 = 10;
+
+/// The artifact a chest's artifact slot rolls at `level`: weighted by the APK
+/// lootWeight among the artifacts within [`ARTIFACT_LEVELS_AHEAD`] (#378).
+fn roll_artifact(level: u64, seed: u64) -> Option<(Uuid, f64)> {
+    let pool: Vec<&(Uuid, u64, u64, f64)> = ARTIFACT_LOOT
+        .iter()
+        .filter(|(_, required, _, _)| *required <= level + ARTIFACT_LEVELS_AHEAD)
+        .collect();
+    let total: u64 = pool.iter().map(|a| a.2).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut at = mix(seed) % total;
+    pool.iter()
+        .find(|a| {
+            if at < a.2 {
+                true
+            } else {
+                at -= a.2;
+                false
+            }
+        })
+        .map(|a| (a.0, a.3))
+}
+
+/// An artifact as retail paid it: untempered, unenchanted, full durability.
+fn artifact_item(template: Uuid, durability: f64) -> Item {
+    Item {
+        item_template_id: template,
+        grade: None,
+        tempering_level: 0,
+        durability,
+        properties: Default::default(),
+        arcane_tier: None,
+    }
+}
+
+/// The "Legendary - High (Chests)" piece paid when the rolled artifact is one the
+/// buyer holds (#310), GENERATED like a regular Legendary slot (#378).
+///
+/// It used to be one of the pieces retail happened to pay in the slot in the
+/// buyer's band, four or five per band, frozen: Sephoris holds five identical
+/// Stalhrim Shields and five identical Ebony Atronite Rings from it. Retail's
+/// seven fallbacks at an exact buyer level (snapshot, player 78f2b668 at 8-28)
+/// are all at the tier Legendary slot 0 pays at that level ([`legendary_slot_tier`]:
+/// the tier below until three levels past an unlock, e.g. Orcish at 17, 19 and
+/// 20, Dwarven at 21, Elven at 28), with slot 0's tempering and enchantments. So
+/// it is slot 0's roll: a retail slot-0 shell at that tier, generated around.
+/// Of the 42 retail fallbacks two are jewellery and 40 equipment, which is what
+/// slot 0's shells give; HauDrauf expected mostly jewellery, the record does not
+/// bear that out.
+fn artifact_fallback_piece(level: u64, seed: u64) -> Option<Item> {
+    let legendary = corpus_product(&LEGENDARY_CHEST_PRODUCT_ID)?;
+    let (shell, tier) = legendary_slot_part(legendary, 0, level, seed)?;
+    super::legendary_gear::generate_at(shell, tier, mix(seed ^ 0x4F1B_BCDC_BFA5_3E0B))
+        .or_else(|| Some(shell.clone()))
+}
+
 /// The number of item slots every reward in the band has. Retail's chest paid
 /// that many regular pieces; a reward with more carries the artifact slot.
 fn core_slots(band: &Band) -> usize {
@@ -204,11 +322,6 @@ fn artifact_fallbacks() -> &'static [(u64, u64, Item)] {
         }
         out
     })
-}
-
-#[cfg(test)]
-fn artifact_fallback_templates() -> HashSet<Uuid> {
-    artifact_fallbacks().iter().map(|(_, _, i)| i.item_template_id).collect()
 }
 
 /// The mined product that backs `product_id`: its own, else its promo twin's.
@@ -494,6 +607,22 @@ fn legendary_slot_part(
         }
     }
 
+    let candidates = slot_shells(product, &[slot], shell_tier, level);
+    if candidates.is_empty() {
+        return None;
+    }
+    Some((candidates[(mix(seed) % candidates.len() as u64) as usize], tier))
+}
+
+/// What `product` paid in regular `slots` at material tier `tier`, from the bands
+/// nearest `level`, widening band by band until there are at least
+/// [`MIN_TIER_PARTS`] DISTINCT parts (#368).
+fn slot_shells(
+    product: &'static Product,
+    slots: &[usize],
+    tier: u64,
+    level: u64,
+) -> Vec<&'static Item> {
     let mut bands: Vec<&Band> = product.by_level.iter().collect();
     bands.sort_by_key(|b| level_distance(level, b.min_buyer_level, b.max_buyer_level));
     let mut candidates: Vec<&Item> = Vec::new();
@@ -501,16 +630,58 @@ fn legendary_slot_part(
         if candidates.len() >= MIN_TIER_PARTS {
             break;
         }
-        if slot >= core_slots(band) {
-            continue;
-        }
-        for item in band.results.iter().map(|r| &r.reward.items[slot]) {
-            if required_level(&item.item_template_id) == Some(shell_tier)
-                && !candidates.contains(&item)
-            {
-                candidates.push(item);
+        for &slot in slots {
+            if slot >= core_slots(band) {
+                continue;
+            }
+            for item in band.results.iter().map(|r| &r.reward.items[slot]) {
+                if required_level(&item.item_template_id) == Some(tier)
+                    && !candidates.contains(&item)
+                {
+                    candidates.push(item);
+                }
             }
         }
+    }
+    candidates
+}
+
+/// A part for an Elder chest's regular slot at `level` and the tier to generate
+/// it at (#378).
+///
+/// THE REPORT. "The contents of Gold and Elder chests are set too low." For
+/// Elder they were: every buyer from 31 up drew from the one 31-89 band, a
+/// population of mid-30s buyers (Ebony and Stalhrim ingots): 74% Glass gear
+/// with tier 3-4 enchantments for a level-45 or level-90 chest. Retail's own
+/// Elder chests at 54-94 (the 11 tier-4 treasury openings) paid Daedric in 19
+/// of 22 slots and Dragon in 3, with tier 5-7 enchantments.
+///
+/// THE RULE, measured on the 287 retail Elder purchases at their exact buyer
+/// level (2026-06-07 snapshot): both slots pay what a Legendary chest's LOWER
+/// slot pays ([`legendary_slot_tier`] slot 0) — the tier below the buyer's
+/// until three levels past an unlock, then the buyer's (retail: 249 slots a
+/// tier down, 306 at the buyer's tier, 19 a tier up, of 574; the two slots
+/// alike) — and at the top of the ladder Daedric, Dragon one roll in seven
+/// (retail 19 / 3 of 22).
+/// The shell is Elder's own retail piece at that tier from the nearest bands;
+/// where Elder paid the tier too rarely (Daedric: 8 pieces, Dragon: none), a
+/// Legendary slot-0 piece of the tier stands in, and the piece is generated
+/// around it like a Legendary one (#496).
+fn elder_slot_part(
+    elder: &'static Product,
+    slot: usize,
+    level: u64,
+    seed: u64,
+) -> Option<(&'static Item, u64)> {
+    let legendary = corpus_product(&LEGENDARY_CHEST_PRODUCT_ID)?;
+    let (ladder, slot0_ladder) = legendary_ladders(legendary);
+    let tier = legendary_slot_tier(ladder, slot0_ladder, 0, level, mix(seed ^ slot as u64))?;
+    let mut candidates = slot_shells(elder, &[0, 1], tier, level);
+    if candidates.len() < MIN_TIER_PARTS {
+        candidates = slot_shells(legendary, &[0], tier, level);
+    }
+    if candidates.is_empty() {
+        candidates = slot_shells(legendary, &[1], tier, level);
     }
     if candidates.is_empty() {
         return None;
@@ -531,12 +702,11 @@ fn legendary_ladders(product: &Product) -> (&'static [u64], &'static [u64]) {
 /// The fewest recorded chests a Legendary base draw is narrowed to.
 const MIN_BASE_CHESTS: usize = 12;
 
-/// The recorded reward a Legendary chest takes its gold, stackables and artifact
-/// stackables from (#368 cont.): one from the band whose top slot paid the tier
+/// The recorded reward a Legendary chest takes its gold and stackables from
+/// (#368 cont.): one from the band whose top slot paid the tier
 /// unlocked at the buyer's level, else the highest tier below it that the band
 /// holds at least [`MIN_BASE_CHESTS`] chests of, else the whole band. The
-/// artifact slot is not narrowed: it is drawn from the whole band, so its rate
-/// stays the band's.
+/// artifact slot is not taken from it (#378: [`LEGENDARY_ARTIFACT_SLOT`]).
 ///
 /// THE BUG. The 36-50 band is two retail populations, not one: 19 chests with
 /// Ebony on top (Glass+Ebony 18) carrying Ebony and Stalhrim ingots, diamonds
@@ -637,17 +807,44 @@ fn slot_parts(product: &Product, slot: usize, tier: u64) -> usize {
 /// tier and enchantments rolled from the APK tables, keeping the piece's
 /// tempering, enchant count and tier (see [`super::legendary_gear`]).
 ///
-/// THE ARTIFACT RULE (#310). An artifact is unique. An artifact the buyer
-/// already holds — or one this same chest already paid — is replaced by a
-/// piece retail itself paid in the artifact slot, as `LootEnhancementData`'s
-/// "Legendary - High (Chests)" fallback dictates.
+/// THE ARTIFACT RULE (#310, #378). An artifact is unique. A Legendary or Elder
+/// chest pays its artifact slot at retail's rate, with an artifact drawn by the
+/// APK weights within reach of the buyer's level ([`roll_artifact`]); one the
+/// buyer already holds is replaced by a generated "Legendary - High (Chests)"
+/// piece, as `LootEnhancementData`'s fallback dictates
+/// ([`artifact_fallback_piece`]). Other products keep the recorded slot, with a
+/// held artifact replaced by a piece retail paid there.
 pub fn roll_bundle_for(
     product_id: &Uuid,
     buyer_level: u64,
     nonce: u64,
     owned: &HashSet<Uuid>,
 ) -> Option<RewardGrant> {
+    roll_bundle_with(product_id, buyer_level, nonce, owned, None)
+}
+
+/// The level from which an Elder chest's gold and stackables come from retail's
+/// own high-level Elder chests rather than the Epic corpus's 31-89 band (#378).
+///
+/// The band is a mid-30s population (Ebony and Stalhrim ingots, Exceptional
+/// soul gems, median 19,885 gold); the 11 retail tier-4 treasury openings at
+/// 54-94 pay Daedra hearts, dragon scale and bone and a median 22,066 gold. No
+/// retail Elder chest is dated at 39-53, so the switch follows the Legendary
+/// chest's (#368): from 45, where Dragon unlocks and its population changes.
+pub const ELDER_HIGH_LEVEL: u64 = 45;
+
+/// [`roll_bundle_for`], with retail's tier-4 treasury openings for an Elder chest
+/// at [`ELDER_HIGH_LEVEL`] and above (`None` keeps the band).
+pub fn roll_bundle_with(
+    product_id: &Uuid,
+    buyer_level: u64,
+    nonce: u64,
+    owned: &HashSet<Uuid>,
+    elder_treasury: Option<&[crate::features::chests::ChestLootSample]>,
+) -> Option<RewardGrant> {
     let product = corpus_product(product_id)?;
+    let is_legendary = product.product_id == LEGENDARY_CHEST_CORPUS_ID;
+    let is_elder = product.product_id == ELDER_CHEST_CORPUS_ID;
 
     // The band containing the buyer's level, else the nearest one — a level above
     // or below everything retail was observed at clamps rather than falling back
@@ -664,7 +861,7 @@ pub fn roll_bundle_for(
         })?;
 
     let seed = mix(product_id.as_u128() as u64 ^ mix(nonce) ^ buyer_level.rotate_left(13));
-    let base = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
+    let base = if is_legendary {
         legendary_base(product, band, buyer_level, seed)?
     } else {
         draw(band, seed)?
@@ -674,10 +871,13 @@ pub fn roll_bundle_for(
     let mut items: Vec<Item> = Vec::with_capacity(base.reward.items.len());
     for slot in 0..core {
         let slot_seed = mix(seed ^ 0xA076_1D64_78BD_642F_u64.wrapping_mul(slot as u64 + 1));
-        // Legendary gear is picked at the buyer's own tier (#339), not anywhere
-        // in the band; the other chests keep the band draw.
-        let tiered = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
+        // Legendary and Elder gear is picked at the tier retail paid at the
+        // buyer's level (#339, #378), not anywhere in the band; the other chests
+        // keep the band draw.
+        let tiered = if is_legendary {
             legendary_slot_part(product, slot, buyer_level, slot_seed)
+        } else if is_elder {
+            elder_slot_part(product, slot, buyer_level, slot_seed)
         } else {
             None
         };
@@ -685,9 +885,9 @@ pub fn roll_bundle_for(
             Some((item, tier)) => (item.clone(), Some(tier)),
             None => (draw(band, slot_seed)?.reward.items[slot].clone(), None),
         };
-        // Legendary gear is then GENERATED around that retail piece, as retail
-        // generated it (#368); the other chests keep the retail piece.
-        let piece = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
+        // The piece is then GENERATED around that retail piece, as retail
+        // generated it (#368, #378); the other chests keep the retail piece.
+        let piece = if is_legendary || is_elder {
             let gen_seed = mix(slot_seed ^ 0x4F1B_BCDC_BFA5_3E0B);
             match tier {
                 Some(tier) => super::legendary_gear::generate_at(&shell, tier, gen_seed),
@@ -699,14 +899,30 @@ pub fn roll_bundle_for(
         };
         items.push(piece);
     }
-    // The artifact slot keeps the whole band's rate: a Legendary base narrowed to
-    // a dozen chests would otherwise set it by sampling noise.
-    let extra = if product.product_id == LEGENDARY_CHEST_CORPUS_ID {
-        draw(band, mix(seed ^ 0x6A09_E667_F3BC_C909))?
+    // The artifact slot (#378): at retail's rate, an artifact by the APK weights
+    // within reach of the buyer's level, and for one the buyer holds the
+    // generated "Legendary - High (Chests)" piece (#310).
+    let artifact_slot = if is_legendary {
+        Some(LEGENDARY_ARTIFACT_SLOT)
+    } else if is_elder {
+        Some(ELDER_ARTIFACT_SLOT)
     } else {
-        base
+        None
     };
-    items.extend(extra.reward.items.iter().skip(core).cloned());
+    match artifact_slot {
+        Some((hits, chests)) => {
+            if mix(seed ^ 0x6A09_E667_F3BC_C909) % chests < hits {
+                let art_seed = mix(seed ^ 0xE703_7ED1_A0B4_28DB);
+                match roll_artifact(buyer_level, art_seed) {
+                    Some((template, durability)) if !owned.contains(&template) => {
+                        items.push(artifact_item(template, durability));
+                    }
+                    _ => items.extend(artifact_fallback_piece(buyer_level, mix(art_seed))),
+                }
+            }
+        }
+        None => items.extend(base.reward.items.iter().skip(core).cloned()),
+    }
 
     let mut paid_artifacts = HashSet::new();
     for (ordinal, item) in items.iter_mut().enumerate() {
@@ -732,7 +948,20 @@ pub fn roll_bundle_for(
         town_xp: base.reward.town_xp,
         ..RewardGrant::default()
     };
-    if [LEGENDARY_CHEST_CORPUS_ID, ELDER_CHEST_CORPUS_ID].contains(&product.product_id) {
+    // A high-level Elder chest pays retail's high-level Elder gold and
+    // stackables: one treasury opening for the currencies, another for the
+    // stackables, as for Gold chests (#335).
+    if is_elder && buyer_level >= ELDER_HIGH_LEVEL {
+        if let Some(pool) = elder_treasury.filter(|p| !p.is_empty()) {
+            let near = crate::features::chests::neighbourhood(pool, buyer_level);
+            if !near.is_empty() {
+                let pick = |k: u64| near[(mix(seed ^ k) % near.len() as u64) as usize];
+                grant.currencies = pick(0x1F83_D9AB_FB41_BD6B).reward.currencies.clone();
+                grant.stackable_items = pick(0x5BE0_CD19_137E_2179).reward.stackable_items.clone();
+            }
+        }
+    }
+    if is_legendary || is_elder {
         apply_soul_gem_ladder(
             &mut grant.stackable_items,
             buyer_level,
@@ -877,18 +1106,22 @@ fn apply_soul_gem_ladder(
 /// treasury open but 4,697 retail Legendary chest purchases with the same reward
 /// shape; tier 4 (Elder) has eleven opens, at levels 54-94 only, against 405 Epic
 /// Chest purchases — the product the APK catalogue sells as `_rarity: 4`.
+///
+/// `elder_treasury` is retail's own tier-4 treasury openings (54-94), which pay
+/// a high-level Elder chest's gold and stackables ([`ELDER_HIGH_LEVEL`], #378).
 pub fn roll_treasury_chest(
     tier: u64,
     chest_level: u64,
     nonce: u64,
     owned: &HashSet<Uuid>,
+    elder_treasury: Option<&[crate::features::chests::ChestLootSample]>,
 ) -> Option<RewardGrant> {
     let product = match tier {
         5 => LEGENDARY_CHEST_PRODUCT_ID,
         4 => EPIC_CHEST_PRODUCT_ID,
         _ => return None,
     };
-    roll_bundle_for(&product, chest_level, nonce, owned)
+    roll_bundle_with(&product, chest_level, nonce, owned, elder_treasury)
 }
 
 #[cfg(test)]
@@ -1149,9 +1382,11 @@ mod tests {
     }
 
     /// The replacement is retail's: the chest keeps its shape and its other
-    /// contents, and the artifact slot pays a non-artifact piece that retail
-    /// itself paid in that slot. Retail player 78f2b668 shows it seven times —
-    /// e.g. holding Pandemonium at level 18, the slot paid an Orcish Scaled Shield.
+    /// contents, and the artifact slot pays a non-artifact Legendary piece.
+    /// Retail player 78f2b668 shows it seven times — e.g. holding Pandemonium at
+    /// level 18, the slot paid an Orcish Scaled Shield. Since #378 the piece is
+    /// generated at the tier Legendary slot 0 pays at the level, as all seven
+    /// of retail's were (at 15: Silver, Orcish one roll in seven).
     #[test]
     fn a_duplicate_artifact_becomes_a_retail_legendary_piece() {
         let nonce = (0..5_000u64)
@@ -1169,12 +1404,15 @@ mod tests {
         assert_eq!(held.items.len(), fresh.items.len(), "the slot is replaced, not dropped");
         assert_eq!(held.currencies, fresh.currencies, "only the artifact slot changes");
         assert_eq!(held.stackable_items, fresh.stackable_items);
-        let fallbacks = artifact_fallback_templates();
         for (a, b) in fresh.items.iter().zip(&held.items) {
             if a.item.item_template_id == PANDEMONIUM {
                 let t = b.item.item_template_id;
                 assert!(!is_artifact(&t), "replaced with another artifact {t}");
-                assert!(fallbacks.contains(&t), "{t} was never a retail artifact-slot payout");
+                assert!(
+                    matches!(required_level(&t), Some(8 | 13)),
+                    "{t} is not slot 0's Silver or Orcish"
+                );
+                assert_eq!(legendary_gear::rule_broken(&b.item), None);
             } else {
                 assert_eq!(a.item, b.item);
             }
@@ -1215,13 +1453,13 @@ mod tests {
     fn elder_treasury_chests_roll_from_the_epic_chest_corpus() {
         let mut seen = HashSet::new();
         for nonce in 0..40u64 {
-            let g = roll_treasury_chest(4, 60, nonce, &HashSet::new())
+            let g = roll_treasury_chest(4, 60, nonce, &HashSet::new(), None)
                 .expect("a tier-4 chest must roll from the Epic corpus");
             assert!(g.chests.is_empty());
             seen.insert(fingerprint(&g));
         }
         assert!(seen.len() >= 38, "40 Elder chests gave {} distinct", seen.len());
-        assert!(roll_treasury_chest(3, 60, 1, &HashSet::new()).is_none(), "tier 3 keeps its table");
+        assert!(roll_treasury_chest(3, 60, 1, &HashSet::new(), None).is_none(), "tier 3 keeps its table");
     }
 
     /// The artifact list is the APK's `Item.Tag.Artifact` set, and every artifact
@@ -1952,7 +2190,8 @@ mod tests {
     /// Every retail piece, used as a shell, generates: never `None` (which would
     /// silently pay the recorded piece), always at the shell's own material tier,
     /// with the shell's tempering, enchant count and tier, a primary distinct
-    /// from the secondaries, and jewellery keeping its kind, grade and GRADING.
+    /// from the secondaries, and jewellery keeping its kind, grade and GRADING
+    /// tiers.
     #[test]
     fn every_retail_shell_generates_at_its_own_tier() {
         for (i, (_, items)) in retail_banded().iter().enumerate() {
@@ -1973,7 +2212,14 @@ mod tests {
                     if kind == "ring" || kind == "necklace" {
                         assert_eq!(legendary_gear::kind_of(t), Some(kind));
                         assert_eq!(g.grade, shell.grade);
-                        assert_eq!(g.properties.grading, shell.properties.grading);
+                        // The grade's tiers stay; the properties are drawn (#378).
+                        let tiers = |v: &[crate::user_data::ItemSingleProperty]| {
+                            v.iter().map(|p| p.tier).collect::<Vec<_>>()
+                        };
+                        assert_eq!(
+                            tiers(&g.properties.grading),
+                            tiers(&shell.properties.grading)
+                        );
                     }
                     if let Some(why) = legendary_gear::rule_broken(&g) {
                         panic!("{why}");
@@ -2047,5 +2293,357 @@ mod tests {
             }
         }
     }
-}
 
+    // ---- #378: artifacts, the third slot, Elder chests by level ----------------
+
+    /// The six artifacts Sephoris (f7817aa6, level 45) held on 2026-10-12.
+    const SEPHORIS_ARTIFACTS: [u128; 6] = [
+        0xdef810af_e9f5_4e23_9247_1edf391d82e1, // Ebony Mail
+        0x9a22b59a_cdbc_4987_bf4a_0cc812428aeb, // Spellbreaker
+        0x21ed2758_5cf5_4b7d_9047_59bbdbd61820, // Onyx Cleaver
+        0xa0d7dd5e_692e_4fbb_bbf2_19c6a874f3f5, // Mehrunes' Razor
+        0x86a4ad9d_e2e8_49cd_9642_b553475b6580, // Pandemonium
+        0x12c4920e_a9e0_4498_b134_3ce66fb9558f, // Savior's Hide
+    ];
+
+    fn sephoris_owned() -> HashSet<Uuid> {
+        SEPHORIS_ARTIFACTS.iter().map(|&u| Uuid::from_u128(u)).collect()
+    }
+
+    /// (chests with a third item, artifacts paid, artifact templates seen).
+    fn third_slots(
+        product: &Uuid,
+        level: u64,
+        rolls: u64,
+        owned: &HashSet<Uuid>,
+    ) -> (u64, u64, HashSet<Uuid>) {
+        let (mut third, mut arts, mut kinds) = (0, 0, HashSet::new());
+        for nonce in 0..rolls {
+            let g = roll_bundle_for(product, level, nonce.wrapping_mul(7919), owned).unwrap();
+            third += u64::from(g.items.len() > 2);
+            for i in &g.items {
+                if is_artifact(&i.item.item_template_id) {
+                    arts += 1;
+                    kinds.insert(i.item.item_template_id);
+                }
+            }
+        }
+        (third, arts, kinds)
+    }
+
+    /// THE REPORT (#378). Sephoris at 45 opened ~200 Legendary chests after #500:
+    /// "no artifact came, although many chests had three items". The slot copied
+    /// one recorded chest of his band, and the 36-50 band's one artifact is Onyx
+    /// Cleaver, which he holds: 0 artifacts in 6,000 chests. Retail paid the slot
+    /// in 5.1% of chests (60 of 1,186) and an artifact by the APK weights within
+    /// reach of the level; with his six artifacts held (36 of the 93 weight),
+    /// 5.1% x 57/93 = 3.1% of his chests pay one.
+    #[test]
+    fn sephoris_gets_artifacts_at_retails_rate() {
+        let (third, arts, kinds) = third_slots(&legendary(), 45, 6_000, &sephoris_owned());
+        let (third, arts) = (third as f64 / 6_000.0, arts as f64 / 6_000.0);
+        assert!((0.04..=0.062).contains(&third), "third slot in {:.1}% of chests", third * 100.0);
+        assert!((0.022..=0.038).contains(&arts), "artifacts in {:.2}% of chests", arts * 100.0);
+        assert!(kinds.len() >= 14, "only {} different artifacts", kinds.len());
+        assert!(kinds.is_disjoint(&sephoris_owned()), "a held artifact was paid again");
+    }
+
+    /// Retail's artifact slot at every level: the slot in about 5.1% of Legendary
+    /// chests, the artifact never more than [`ARTIFACT_LEVELS_AHEAD`] levels above
+    /// the buyer, and most of the reachable artifacts reachable in 4,000 chests.
+    #[test]
+    fn the_artifact_slot_follows_retail_at_every_level() {
+        let none = HashSet::new();
+        for level in [3u64, 10, 19, 26, 33, 45, 60, 90] {
+            let (third, arts, seen) = third_slots(&legendary(), level, 4_000, &none);
+            assert_eq!(third, arts, "level {level}: nothing held, every slot is an artifact");
+            let rate = third as f64 / 4_000.0;
+            assert!((0.04..=0.062).contains(&rate), "level {level}: slot in {:.1}%", rate * 100.0);
+            for t in &seen {
+                let req = ARTIFACT_LOOT.iter().find(|a| a.0 == *t).unwrap().1;
+                assert!(req <= level + 10, "level {level}: artifact of level {req}");
+            }
+            let reachable = ARTIFACT_LOOT.iter().filter(|a| a.1 <= level + 10).count();
+            assert!(
+                seen.len() * 4 >= reachable * 3,
+                "level {level}: {} of {reachable} reachable artifacts",
+                seen.len()
+            );
+        }
+    }
+
+    /// The APK lootWeight decides the kind: the corpus's 27 artifacts are 13
+    /// weapons (lootWeight 2, 17 artifacts), 11 armour pieces or rings (9, 5) and
+    /// 3 shields (7, 2) — the weights give 10 / 13 / 4, a uniform pick 19 / 6 / 2.
+    #[test]
+    fn artifacts_follow_the_apk_loot_weights() {
+        let mut by_weight: std::collections::HashMap<u64, u64> = Default::default();
+        for nonce in 0..400_000u64 {
+            if let Some((t, _)) = roll_artifact(90, mix(nonce)) {
+                let w = ARTIFACT_LOOT.iter().find(|a| a.0 == t).unwrap().2;
+                *by_weight.entry(w).or_default() += 1;
+            }
+        }
+        let n: u64 = by_weight.values().sum();
+        let share = |w: u64| by_weight.get(&w).copied().unwrap_or(0) as f64 / n as f64;
+        assert!((share(9) - 45.0 / 93.0).abs() < 0.01, "armour and rings {:.3}", share(9));
+        assert!((share(7) - 14.0 / 93.0).abs() < 0.01, "shields {:.3}", share(7));
+        assert!((share(2) - 34.0 / 93.0).abs() < 0.01, "weapons {:.3}", share(2));
+    }
+
+    /// THE REPORT (#378): "the third item is always the same sword, ring or
+    /// shield". With the rolled artifact held, the slot paid one of the four or
+    /// five pieces retail recorded in that slot in the band, frozen: at 45 the
+    /// Ebony Longsword, Stalhrim Shield, Ebony Atronite Ring or Dragonplate
+    /// Helmet, each with the same enchantments every time (Sephoris holds five
+    /// Stalhrim Shields and five identical Ebony Atronite Rings). It is now
+    /// generated like Legendary slot 0 (Daedric at 45, Dragon one roll in seven).
+    #[test]
+    fn the_fallback_piece_is_generated_and_varied() {
+        let all: HashSet<Uuid> = ARTIFACT_TEMPLATES.iter().copied().collect();
+        let mut pieces: std::collections::HashMap<String, u64> = Default::default();
+        let mut templates = HashSet::new();
+        let mut n = 0;
+        for nonce in 0..12_000u64 {
+            let g = roll_bundle_for(&legendary(), 45, nonce, &all).unwrap();
+            let Some(third) = g.items.get(2) else { continue };
+            let item = &third.item;
+            assert!(!is_artifact(&item.item_template_id));
+            assert_eq!(legendary_gear::rule_broken(item), None);
+            let tier = required_level(&item.item_template_id);
+            assert!(matches!(tier, Some(39 | 45)), "fallback at tier {tier:?}");
+            templates.insert(item.item_template_id);
+            *pieces.entry(serde_json::to_string(item).unwrap()).or_default() += 1;
+            n += 1;
+        }
+        assert!(n > 400, "{n} fallbacks");
+        assert!(templates.len() >= 25, "{} templates in {n} fallbacks", templates.len());
+        let most = pieces.values().max().unwrap();
+        assert!(*most * 50 <= n, "one piece came {most} times in {n}");
+    }
+
+    /// THE REPORT (#378): "the jewellery is always the same". The generator
+    /// copied a jewellery shell's GRADING (its ability bonus ranks), so a ring
+    /// was one of the two or three recorded rings of the tier: Sephoris holds
+    /// twelve Ebony Faerite Rings with Adrenaline Dodge 2, Fireball 2 and
+    /// Indomitable Smash 1. Retail paid all 34 ring and 15 necklace abilities
+    /// (`jewelry_grade`), and its 307 regular-slot jewellery pieces are 288
+    /// distinct template-and-ability sets, none more than three times.
+    #[test]
+    fn generated_jewellery_rolls_its_abilities() {
+        let mut sets: std::collections::HashMap<(Uuid, Vec<Uuid>), u64> = Default::default();
+        let mut props: HashSet<Uuid> = HashSet::new();
+        let mut n = 0;
+        let levels = [8u64, 18, 23, 28, 39, 45, 60];
+        for nonce in 0..40_000u64 {
+            let level = levels[(nonce % levels.len() as u64) as usize];
+            let g = roll_bundle(&legendary(), level, nonce).unwrap();
+            for i in &g.items[..2] {
+                let kind = legendary_gear::kind_of(&i.item.item_template_id);
+                if !matches!(kind, Some("ring" | "necklace")) {
+                    continue;
+                }
+                assert_eq!(legendary_gear::rule_broken(&i.item), None);
+                let mut ids: Vec<Uuid> = i.item.properties.grading.iter().map(|p| p.id).collect();
+                props.extend(ids.iter().copied());
+                ids.sort();
+                if n < 307 {
+                    *sets.entry((i.item.item_template_id, ids)).or_default() += 1;
+                }
+                n += 1;
+            }
+        }
+        assert_eq!(props.len(), 34 + 15, "every ring and necklace ability must be reachable");
+        let most = sets.values().max().unwrap();
+        assert!(sets.len() >= 260, "{} distinct in 307 pieces (retail 288)", sets.len());
+        assert!(*most <= 4, "one ring or necklace came {most} times in 307 (retail 3)");
+    }
+
+    fn committed_chest_tables() -> crate::features::chests::ChestLootTables {
+        serde_json::from_str(include_str!("../../../deploy/static/chest_loots.json")).unwrap()
+    }
+
+    /// THE REPORT (#378): "the contents of Gold and Elder chests are set too low".
+    /// For Elder they were: from 31 up every chest drew from the 31-89 band, a
+    /// mid-30s population, so a level-45 to 94 Elder chest paid Glass in 74% of
+    /// slots at enchant tier 3-4 and a median 19,885 gold. Retail's own Elder
+    /// chests at 54-94 (11 treasury openings) paid Daedric in 19 of 22 slots and
+    /// Dragon in 3, and 20,958-23,920 gold.
+    #[test]
+    fn high_level_elder_chests_pay_retails_high_level_elder_loot() {
+        let t = committed_chest_tables();
+        let retail = &t.provisional_tiers[&4];
+        let gold = |r: &RewardGrant| r.currencies.get(&gold_id()).copied().unwrap_or(0);
+        let lo = retail.iter().map(|s| gold(&s.reward)).min().unwrap();
+        let hi = retail.iter().map(|s| gold(&s.reward)).max().unwrap();
+        for level in [45u64, 54, 72, 86, 94, 100] {
+            let mut tiers: std::collections::HashMap<u64, u64> = Default::default();
+            for i in 0..600u64 {
+                let key = format!("elder:{i}:4:{level}");
+                let r = crate::features::chests::roll_loot(&t, 4, level, &key, &HashSet::new())
+                    .unwrap();
+                assert!((lo..=hi).contains(&gold(&r)), "level {level}: {} gold", gold(&r));
+                for item in &r.items[..2] {
+                    assert_eq!(legendary_gear::rule_broken(&item.item), None);
+                    let tier = required_level(&item.item.item_template_id).unwrap();
+                    *tiers.entry(tier).or_default() += 1;
+                }
+            }
+            let share = |t: u64| tiers.get(&t).copied().unwrap_or(0) as f64 / 1200.0;
+            assert!(
+                (0.78..=0.94).contains(&share(39)),
+                "level {level}: Daedric {:.0}%: {tiers:?}",
+                share(39) * 100.0
+            );
+            assert!((0.06..=0.22).contains(&share(45)), "level {level}: {tiers:?}");
+        }
+    }
+
+    /// Elder slots at the buyer's exact level climb like a Legendary chest's
+    /// lower slot (#378). Retail's 287 Elder purchases in the 2026-06-07 snapshot
+    /// (level, purchases) paid a tier below the buyer's in 249 of 574 slots, the
+    /// buyer's tier in 306 and a tier up in 19, never two tiers down. Rolled at
+    /// the same levels, ours is within twelve points of each share (the
+    /// Legendary slot-0 rule leans a little low: 54% a tier down), and from 31
+    /// on, where the band draw paid Glass, never two tiers down.
+    #[test]
+    fn elder_gear_follows_the_buyers_tier() {
+        const RETAIL_LEVELS: [(u64, u64); 15] = [
+            (3, 8), (4, 20), (6, 9), (7, 10), (8, 20), (10, 60), (17, 30), (19, 20),
+            (20, 10), (21, 30), (25, 20), (26, 10), (28, 20), (29, 10), (30, 10),
+        ];
+        let ladder = [1u64, 8, 13, 18, 23, 28, 33, 39, 45];
+        let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
+        let offset = |level: u64, item: &Item| {
+            let own = ladder.iter().rposition(|&t| t <= level).unwrap() as i64;
+            let t = required_level(&item.item_template_id).unwrap();
+            ladder.iter().position(|&x| x == t).unwrap() as i64 - own
+        };
+        let mut tally: std::collections::HashMap<i64, u64> = Default::default();
+        let mut n = 0;
+        for (level, purchases) in RETAIL_LEVELS {
+            for nonce in 0..purchases * 20 {
+                for i in &roll_bundle(&epic, level, nonce).unwrap().items[..2] {
+                    *tally.entry(offset(level, &i.item)).or_default() += 1;
+                    n += 1;
+                }
+            }
+        }
+        let share = |k: i64| tally.get(&k).copied().unwrap_or(0) as f64 / n as f64;
+        assert!((share(-1) - 249.0 / 574.0).abs() <= 0.12, "{tally:?}");
+        assert!((share(0) - 306.0 / 574.0).abs() <= 0.12, "{tally:?}");
+        assert!(share(1) <= 0.08 && share(-2) == 0.0, "{tally:?}");
+        for level in 31..=100u64 {
+            for nonce in 0..40u64 {
+                for i in &roll_bundle(&epic, level, nonce).unwrap().items[..2] {
+                    let at = offset(level, &i.item);
+                    assert!((-1..=1).contains(&at), "level {level}: {at} tiers from the buyer's");
+                }
+            }
+        }
+    }
+
+    /// HauDrauf asked whether Gold and Elder chests pay artifacts. Retail: never
+    /// in 270 Gold (or 459 Wooden and Silver) treasury openings, all of which pay
+    /// exactly their slot count; Elder in 4 of 405 chests ([`ELDER_ARTIFACT_SLOT`]).
+    #[test]
+    fn gold_chests_never_pay_artifacts_and_elder_chests_rarely() {
+        let t = committed_chest_tables();
+        for tier in 1..=3u64 {
+            for s in &t.tiers[&tier] {
+                assert!(s.reward.items.iter().all(|i| !is_artifact(&i.item.item_template_id)));
+            }
+            for level in [10u64, 45, 90] {
+                for i in 0..500 {
+                    let key = format!("g{i}");
+                    let r = crate::features::chests::roll_loot(
+                        &t,
+                        tier as i64,
+                        level,
+                        &key,
+                        &HashSet::new(),
+                    )
+                    .unwrap();
+                    assert!(r.items.iter().all(|i| !is_artifact(&i.item.item_template_id)));
+                }
+            }
+        }
+        let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
+        let (third, arts, _) = third_slots(&epic, 45, 20_000, &HashSet::new());
+        let rate = third as f64 / 20_000.0;
+        assert_eq!(third, arts);
+        assert!((0.005..=0.015).contains(&rate), "Elder artifact slot in {:.2}%", rate * 100.0);
+    }
+
+    /// The #378 tables for the PR, ours against fork/main.
+    /// `cargo test -p blades_lib print_378_table -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn print_378_table() {
+        let seph: HashSet<Uuid> = [
+            0xdef810af_e9f5_4e23_9247_1edf391d82e1u128,
+            0x9a22b59a_cdbc_4987_bf4a_0cc812428aeb,
+            0x21ed2758_5cf5_4b7d_9047_59bbdbd61820,
+            0xa0d7dd5e_692e_4fbb_bbf2_19c6a874f3f5,
+            0x86a4ad9d_e2e8_49cd_9642_b553475b6580,
+            0x12c4920e_a9e0_4498_b134_3ce66fb9558f,
+        ]
+        .iter()
+        .map(|&u| Uuid::from_u128(u))
+        .collect();
+        let leg: Uuid = BIG.parse().unwrap();
+        let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
+        for (name, product) in [("Legendary", leg), ("Elder", epic)] {
+            for (who, owned) in [("nothing held", HashSet::new()), ("Sephoris's 6", seph.clone())] {
+                for level in [10u64, 20, 30, 45, 60, 90] {
+                    let n = 10_000u64;
+                    let (mut third, mut arts) = (0, 0);
+                    let mut art_kinds = HashSet::new();
+                    let mut fb: HashSet<String> = HashSet::new();
+                    let mut fb_n = 0;
+                    for nonce in 0..n {
+                        let g = roll_bundle_for(&product, level, nonce.wrapping_mul(7919), &owned).unwrap();
+                        if let Some(x) = g.items.get(2) {
+                            third += 1;
+                            if is_artifact(&x.item.item_template_id) {
+                                arts += 1;
+                                art_kinds.insert(x.item.item_template_id);
+                            } else {
+                                fb_n += 1;
+                                fb.insert(serde_json::to_string(&x.item).unwrap());
+                            }
+                        }
+                    }
+                    println!(
+                        "{name:9} {who:12} L{level:3}: third slot {:4.1}%  artifact {:4.2}%  ({} kinds)  fallback {} distinct of {}",
+                        third as f64 * 100.0 / n as f64,
+                        arts as f64 * 100.0 / n as f64,
+                        art_kinds.len(),
+                        fb.len(),
+                        fb_n
+                    );
+                }
+            }
+        }
+        let t: crate::features::chests::ChestLootTables =
+            serde_json::from_str(include_str!("../../../deploy/static/chest_loots.json")).unwrap();
+        for level in [20u64, 33, 40, 45, 60, 90] {
+            let mut tiers: std::collections::BTreeMap<u64, u64> = Default::default();
+            let mut ench: std::collections::BTreeMap<u64, u64> = Default::default();
+            let mut golds = Vec::new();
+            for i in 0..2_000u64 {
+                let r = crate::features::chests::roll_loot(&t, 4, level, &format!("e:{i}:{level}"), &HashSet::new()).unwrap();
+                golds.push(r.currencies.get(&GOLD.parse::<Uuid>().unwrap()).copied().unwrap_or(0));
+                for i in &r.items[..2] {
+                    *tiers.entry(required_level(&i.item.item_template_id).unwrap_or(0)).or_default() += 1;
+                    *ench.entry(i.item.properties.enchanting.first().map_or(0, |e| e.tier)).or_default() += 1;
+                }
+            }
+            golds.sort_unstable();
+            let pct = |m: &std::collections::BTreeMap<u64, u64>| {
+                m.iter().map(|(k, v)| format!("{k}:{:.0}%", *v as f64 * 100.0 / 4000.0)).collect::<Vec<_>>().join(" ")
+            };
+            println!("Elder treasury L{level:3}: gold median {}  tiers {}  ench tier {}", golds[1000], pct(&tiers), pct(&ench));
+        }
+    }
+}

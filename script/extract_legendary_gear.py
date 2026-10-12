@@ -28,8 +28,15 @@ per-template count would give. Within a kind every template is equally likely
 secondary draws are uniform (the corpus frequencies are flat; the crafting
 weights in enchanting.json are not what the chest used).
 
+GRADING (#378). A ring's or necklace's GRADING properties (the ability bonus
+ranks) are distinct members of the APK's RingGradePropertyList (34) or
+NecklaceGradePropertyList (15), with tiers fixed by the grade
+(JewelryGradeData: grade 4 = [2, 1, 1], ...). Checked here on every corpus
+jewellery piece. The generator keeps the retail piece's grade and tiers and
+draws the properties uniformly, as it does the enchantments.
+
 usage: extract_legendary_gear.py <items.json> <enchanting.json> <item_durability.json>
-                                 <store_bundle_loot.json> <out.json>
+                                 <store_bundle_loot.json> <out.json> <grade_properties.json>
 """
 import collections
 import json
@@ -79,8 +86,13 @@ def recipe_allows(r, it):
     return True
 
 
-def main(items_path, enchanting_path, durability_path, corpus_path, out_path):
+def main(items_path, enchanting_path, durability_path, corpus_path, out_path, grades_path):
     items = json.load(open(items_path))
+    grades = json.load(open(grades_path))
+    grading_tables = {
+        "ring": sorted(grades["RingGradePropertyList"]),
+        "necklace": sorted(grades["NecklaceGradePropertyList"]),
+    }
     ench = json.load(open(enchanting_path))
     dur = json.load(open(durability_path))
     corpus = json.load(open(corpus_path))
@@ -152,6 +164,15 @@ def main(items_path, enchanting_path, durability_path, corpus_path, out_path):
                     want = entry["durability"][it.get("temperingLevel", 0)]
                     if abs(want - it["durability"]) > 0.005:
                         fails["durability"] += 1
+                if entry["category"] in ("ring", "necklace"):
+                    gr = it.get("properties", {}).get("GRADING", [])
+                    ids = [g["id"] for g in gr]
+                    if (
+                        it.get("grade") != sum(g["tier"] for g in gr)
+                        or len(set(ids)) != len(ids)
+                        or any(i not in grading_tables[entry["category"]] for i in ids)
+                    ):
+                        fails["grading"] += 1
                 ens = it.get("properties", {}).get("ENCHANTING", [])
                 if not ens:
                     continue
@@ -184,12 +205,16 @@ def main(items_path, enchanting_path, durability_path, corpus_path, out_path):
                       "deploy/static/enchanting.json, deploy/static/item_durability.json, "
                       "blades_lib/src/store_bundle_loot.json (categoryWeights only)",
             "generator": "script/extract_legendary_gear.py",
+            "gradingTables": "APK RingGradePropertyList / NecklaceGradePropertyList "
+                             "(reference/game-defs/grade_properties.json): the GRADING properties a "
+                             "generated ring or necklace draws from (#378)",
             "pool": "lootWeight > 0, gear types, not Artifact / NPCExclusive / CannotBeEnchanted",
             "categoryWeights": "regular-slot pieces of the 4,697-purchase Legendary corpus by kind; "
                                "jewellery keeps the kind of the retail piece it replaces because its "
                                "GRADING properties are kind-specific",
         },
         "categoryWeights": dict(sorted(weights.items())),
+        "gradingTables": grading_tables,
         "secondaryTables": tables,
         "primaryGroups": groups,
         "templates": pool,
@@ -201,4 +226,4 @@ def main(items_path, enchanting_path, durability_path, corpus_path, out_path):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:6])
+    main(*sys.argv[1:7])
