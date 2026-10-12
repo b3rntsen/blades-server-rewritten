@@ -303,18 +303,102 @@ fn interactable_loot_by_level() -> &'static serde_json::Value {
     })
 }
 
-/// The results one floor table draws from at `enemy_level`: its level band when
-/// retail was observed often enough to band it, otherwise the pooled table.
-fn interactable_table_results(table_id: &Uuid, enemy_level: i64) -> Option<&'static Vec<serde_json::Value>> {
+/// The results one floor table draws from at `enemy_level`: the retail results
+/// rolled at the levels nearest it when retail was observed often enough to
+/// band the table, otherwise the pooled table.
+fn interactable_table_results(table_id: &Uuid, enemy_level: i64) -> Option<Vec<&'static serde_json::Value>> {
     let key = table_id.to_string();
-    if let Some(entry) = interactable_loot_by_level()["tables"].get(&key) {
-        return enemy_table_results(entry, enemy_level);
+    let by_level = interactable_loot_by_level();
+    if let Some(entry) = by_level["tables"].get(&key) {
+        let window = by_level["_meta"]["windowObservations"].as_u64().unwrap_or(0);
+        return floor_window_results(entry, enemy_level, window);
     }
     interactable_loot()
         .get("tables")
         .and_then(|t| t.get(&key))
         .and_then(|e| e.get("results"))
         .and_then(|r| r.as_array())
+        .map(|r| r.iter().collect())
+}
+
+/// The results of the level bands nearest `enemy_level`, widened one band at a
+/// time until they hold at least `window` observations (tracker #374).
+///
+/// Starts at the band holding the level, or the nearest one, as
+/// [`enemy_table_results`] does, then adds whichever neighbouring band is closer
+/// in level -- the lower one on a tie -- so the window stays centred on the
+/// player instead of being anchored where the table's data happens to start.
+///
+/// The bands it replaced were greedy runs of 300 observations from level 1 up.
+/// Retail rolled its medium and large containers too rarely to fill many of
+/// those, so they came out as [41, 87] (49173c2c) and [29, 87] (6cb97b90): a
+/// level-43 and a level-78 character drew from the same results, and the large
+/// container paid both about 1,080 gold where retail paid level-40-43 characters
+/// 886 and level-100 ones 1,278. With one band per level and a 200-observation
+/// window those two draws come from levels 24-58 and 70-85, and pay 778 and 1,224.
+///
+/// `window == 0` is exactly the old single-band lookup.
+fn floor_window_results(
+    entry: &'static serde_json::Value,
+    enemy_level: i64,
+    window: u64,
+) -> Option<Vec<&'static serde_json::Value>> {
+    if entry["levelKeyed"].as_bool() != Some(true) {
+        return entry["results"].as_array().map(|r| r.iter().collect());
+    }
+    let mut bands: Vec<(i64, i64, &'static serde_json::Value)> = entry["byLevel"]
+        .as_array()?
+        .iter()
+        .map(|b| {
+            (
+                b["minEnemyLevel"].as_i64().unwrap_or(i64::MIN),
+                b["maxEnemyLevel"].as_i64().unwrap_or(i64::MAX),
+                b,
+            )
+        })
+        .collect();
+    if bands.is_empty() {
+        return None;
+    }
+    bands.sort_by_key(|(lo, _, _)| *lo);
+    let distance = |(lo, hi, _): &(i64, i64, &serde_json::Value)| {
+        if enemy_level < *lo {
+            lo.saturating_sub(enemy_level)
+        } else if enemy_level > *hi {
+            enemy_level.saturating_sub(*hi)
+        } else {
+            0
+        }
+    };
+    // The first band at the smallest distance: the containing one, else the
+    // nearest, the lower of two equally near.
+    let start = (0..bands.len()).min_by_key(|&i| (distance(&bands[i]), i))?;
+    let observations = |b: &serde_json::Value| b["observations"].as_u64().unwrap_or(0);
+    let (mut lo, mut hi) = (start, start);
+    let mut held = observations(bands[start].2);
+    while held < window && (lo > 0 || hi + 1 < bands.len()) {
+        let below = (lo > 0).then(|| distance(&bands[lo - 1]));
+        let above = (hi + 1 < bands.len()).then(|| distance(&bands[hi + 1]));
+        let take_below = match (below, above) {
+            (Some(b), Some(a)) => b <= a,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        if take_below {
+            lo -= 1;
+            held += observations(bands[lo].2);
+        } else {
+            hi += 1;
+            held += observations(bands[hi].2);
+        }
+    }
+    Some(
+        bands[lo..=hi]
+            .iter()
+            .filter_map(|(_, _, b)| b["results"].as_array())
+            .flatten()
+            .collect(),
+    )
 }
 
 fn interactable_loot() -> &'static serde_json::Value {
@@ -561,20 +645,24 @@ fn enemy_rng(
 }
 
 /// Draw one entry from an array of `{..., "n": weight}` observations.
-fn draw_weighted<'a>(rng: &mut LootRng, options: &'a [serde_json::Value]) -> Option<&'a serde_json::Value> {
-    let total: u64 = options.iter().filter_map(|o| o["n"].as_u64()).sum();
+fn draw_weighted<'a, V: std::borrow::Borrow<serde_json::Value>>(
+    rng: &mut LootRng,
+    options: &'a [V],
+) -> Option<&'a serde_json::Value> {
+    let total: u64 = options.iter().filter_map(|o| o.borrow()["n"].as_u64()).sum();
     if total == 0 {
         return None;
     }
     let mut pick = rng.next() % total;
     for o in options {
+        let o = o.borrow();
         let n = o["n"].as_u64().unwrap_or(0);
         if pick < n {
             return Some(o);
         }
         pick -= n;
     }
-    options.last()
+    options.last().map(|o| o.borrow())
 }
 
 /// The results to draw from for one table at one enemy level.
@@ -658,8 +746,8 @@ fn roll_enemy_loot_with_context(
     };
 
     for table_id in tables {
-        let results = match enemy_loot()["tables"].get(table_id.to_string()) {
-            Some(entry) => enemy_table_results(entry, enemy_level),
+        let results: Option<Vec<&serde_json::Value>> = match enemy_loot()["tables"].get(table_id.to_string()) {
+            Some(entry) => enemy_table_results(entry, enemy_level).map(|r| r.iter().collect()),
             // A table left out of the ENEMY corpus as too thin to model. The
             // floor-loot corpus may still know it: 8858f284 is the DoorKey table,
             // 25 enemy observations (too few to keep) but 269 of 269 DoorKeys on
@@ -672,7 +760,7 @@ fn roll_enemy_loot_with_context(
         // Known to neither corpus: retail keyed it on this enemy, so the key is
         // still sent, empty -- dropping the key would be a shape retail never sent.
         if let Some(results) = results {
-            if let Some(drawn) = draw_weighted(&mut rng, results) {
+            if let Some(drawn) = draw_weighted(&mut rng, &results) {
                 let loot = &drawn["loot"];
                 if let Some(stacks) = loot["stackableItems"].as_object() {
                     for (id, qty) in stacks {
@@ -1413,9 +1501,135 @@ mod floor_loot_level_tests {
         let thin: Uuid = "b9240d3c-dffc-474b-a773-b7588bf9bb71".parse().unwrap();
         assert!(interactable_loot_by_level()["tables"].get(thin.to_string()).is_none());
         assert_eq!(
-            interactable_table_results(&thin, 2),
-            interactable_loot()["tables"][thin.to_string()]["results"].as_array()
+            interactable_table_results(&thin, 2).map(|r| r.into_iter().cloned().collect::<Vec<_>>()),
+            interactable_loot()["tables"][thin.to_string()]["results"].as_array().cloned()
         );
+    }
+}
+
+/// Medium and large containers pay by the player's level, as retail paid them
+/// (tracker #374).
+///
+/// Retail, event containers in the 2026-06-07 snapshot: the large container
+/// (Breakable_T3, table 6cb97b90) averaged 886 gold for level 40-43 characters
+/// and 1,278 for level-100 ones (difficulty 77-78); the medium one (Breakable_T2,
+/// 49173c2c) 160 and 207. The greedy 300-observation bands gave both tables one
+/// band from the 40s to 87, so a level-43 and a level-78 character drew the same
+/// results -- about 1,076 and 220 gold -- the high-level player short and the
+/// mid-level one over. That is the report: Sephoris, level 43, getting the larger
+/// stacks, HauDrauf, level 100, the smaller.
+#[cfg(test)]
+mod container_pay_by_level_374 {
+    use super::*;
+
+    const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
+    const SMALL: &str = "7ee92f4b-18e7-4d15-91c6-ed0436180b81";
+    const MEDIUM: &str = "49173c2c-e34c-4664-b2cd-d1bae46c39fa";
+    const LARGE: &str = "6cb97b90-6ab2-4ddc-bc81-4f7db6db3e7f";
+
+    fn draws(table: &str, level: i64) -> Vec<&'static serde_json::Value> {
+        interactable_table_results(&table.parse().unwrap(), level).expect("a banded table")
+    }
+
+    /// The expected gold of one draw, straight from the weights (no sampling).
+    fn expected_gold(table: &str, level: i64) -> f64 {
+        let results = draws(table, level);
+        let total: f64 = results.iter().map(|r| r["n"].as_f64().unwrap()).sum();
+        results
+            .iter()
+            .map(|r| r["loot"]["currencies"][GOLD].as_f64().unwrap_or(0.0) * r["n"].as_f64().unwrap())
+            .sum::<f64>()
+            / total
+    }
+
+    /// The levels of the bands a draw at `level` reads, found by identity.
+    fn levels_read(table: &str, level: i64) -> Vec<i64> {
+        let picked = draws(table, level);
+        let mut out: Vec<i64> = interactable_loot_by_level()["tables"][table]["byLevel"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|band| {
+                band["results"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|r| picked.iter().any(|p| std::ptr::eq(*p, r)))
+            })
+            .map(|band| band["minEnemyLevel"].as_i64().unwrap())
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_level_78_large_container_pays_what_retail_paid_level_100_characters() {
+        let large = expected_gold(LARGE, 78);
+        assert!(
+            (1_150.0..=1_400.0).contains(&large),
+            "large container at level 78: {large:.0} gold, retail 1,278 (was 1,076)"
+        );
+        let medium = expected_gold(MEDIUM, 78);
+        assert!(
+            (186.0..=240.0).contains(&medium),
+            "medium container at level 78: {medium:.0} gold, retail 207"
+        );
+    }
+
+    #[test]
+    fn a_level_43_medium_container_pays_what_retail_paid_level_40_to_43_characters() {
+        let medium = expected_gold(MEDIUM, 43);
+        assert!(
+            (136.0..=184.0).contains(&medium),
+            "medium container at level 43: {medium:.0} gold, retail 160 (was 220)"
+        );
+        let large = expected_gold(LARGE, 43);
+        assert!(
+            (700.0..=1_000.0).contains(&large),
+            "large container at level 43: {large:.0} gold, retail 886 (was 1,076)"
+        );
+    }
+
+    /// The property that broke: a bigger player gets a bigger large container.
+    /// Retail's ratio between level-100 and level-40-43 characters is 1.44.
+    #[test]
+    fn the_large_container_grows_with_the_players_level() {
+        let ratio = expected_gold(LARGE, 78) / expected_gold(LARGE, 43);
+        assert!(ratio >= 1.3, "level 78 / level 43 large-container gold = {ratio:.2}");
+        let ratio = expected_gold(MEDIUM, 78) / expected_gold(MEDIUM, 43);
+        assert!(ratio >= 1.2, "level 78 / level 43 medium-container gold = {ratio:.2}");
+    }
+
+    /// The window is centred on the player: a level-43 draw reads nothing retail
+    /// rolled at 70 or above, and a level-78 draw nothing below 60.
+    #[test]
+    fn a_draw_reads_only_levels_near_the_player() {
+        for table in [MEDIUM, LARGE] {
+            let mid = levels_read(table, 43);
+            assert!(mid.iter().all(|&l| l < 70), "{table} at 43 reads {mid:?}");
+            assert!(mid[0] <= 43 && 43 <= mid[mid.len() - 1], "{table} at 43 reads {mid:?}");
+            let high = levels_read(table, 78);
+            assert!(high.iter().all(|&l| l >= 60), "{table} at 78 reads {high:?}");
+        }
+    }
+
+    /// CONTROL: where retail rolled a table often the window is the one level.
+    /// The small container was rolled 643 times at exactly level 72.
+    #[test]
+    fn a_densely_observed_level_reads_only_itself() {
+        assert_eq!(levels_read(SMALL, 72), vec![72]);
+    }
+
+    /// The sidecar is the per-level shape the window reads.
+    #[test]
+    fn the_sidecar_has_one_band_per_level_and_a_window() {
+        let corpus = interactable_loot_by_level();
+        assert_eq!(corpus["_meta"]["windowObservations"].as_u64(), Some(200));
+        for (table, entry) in corpus["tables"].as_object().unwrap() {
+            for band in entry["byLevel"].as_array().unwrap() {
+                assert_eq!(band["minEnemyLevel"], band["maxEnemyLevel"], "{table}");
+            }
+        }
     }
 }
 
