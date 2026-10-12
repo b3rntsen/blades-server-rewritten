@@ -25,7 +25,8 @@
 //!   captured total (~2923 gold / 958 XP) by an assumed floor count, i.e. fitted with zero
 //!   degrees of freedom, so its apparent agreement with that total meant nothing.
 //!   Plus retail's `/end` package — one material or soul-gem stack, drawn by
-//!   character level from the retail packages (#294); see [`end_reward`].
+//!   character level from the retail packages (#294; below level 60, soul gems
+//!   graded to the level, #371); see [`end_reward`].
 //! * Score-gauge rungs (`abyssFutureRewards`) — paid on the `/update` whose action
 //!   crosses them, as a top-level `reward`, once per rung per run; see
 //!   [`grant_reached_rungs`].
@@ -4396,6 +4397,40 @@ mod tests {
             let fifty = paid.iter().find(|(r, _)| *r == 50).unwrap();
             assert_eq!(fifty.1.chests[0].level, 7);
             assert_eq!(end.stackable_items.len(), 1, "/end pays its package");
+        }
+    }
+
+    /// Report #371: Sephoris, level 43 (ipl 48), was never paid a soul gem at `/end` —
+    /// the level 20-59 band's retail packages are all materials. Driven the same way
+    /// as the level-100 and level-7 runs above, from his deepest floor (149) and from
+    /// his own level (floor 48): `/end` still pays the floors' gold and one package
+    /// stack, and about half of those stacks are 1-3 Grand Soul Gems ("from level 39
+    /// to 45, 3 Grand at the end"), never Glorious or Transcendent.
+    #[test]
+    fn a_level_43_run_is_paid_soul_gems_at_end_sometimes() {
+        const SEPHORIS: &str = "f7817aa6-5892-4794-871e-9b51a475a606";
+        const GRAND: &str = "68d7941e-8c8d-47bf-9f66-becb058f1817";
+        const GLORIOUS: &str = "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb";
+        let ipl = initial_player_level(&real_job_pools(), 43);
+        assert_eq!(ipl, 48);
+        let grand = Uuid::parse_str(GRAND).unwrap();
+        let id = Uuid::parse_str(SEPHORIS).unwrap();
+        for (start, kills) in [(149u32, DEEP_FLOOR_KILLS), (48, MIXED_KILLS)] {
+            let floors = served_run(ipl, start, 4, kills);
+            let mut gem_ends = 0;
+            for nonce in 0..64u64 {
+                let (_, end) = drive(43, ipl, generate_run_seed(id, nonce), &floors);
+                assert!(!end.currencies.is_empty(), "start {start}: /end pays the floors' gold");
+                assert_eq!(end.stackable_items.len(), 1, "start {start} nonce {nonce}: one package stack");
+                let (template, count) = end.stackable_items.iter().next().unwrap();
+                if *template == grand {
+                    gem_ends += 1;
+                    assert!((1..=3).contains(count), "start {start}: {count} Grand gems");
+                }
+                assert_ne!(template.to_string(), abyss_rewards::TRANSCENDENT_SOUL_GEM);
+                assert_ne!(template.to_string(), GLORIOUS);
+            }
+            assert!((20..=44).contains(&gem_ends), "start {start}: {gem_ends}/64 /ends paid soul gems");
         }
     }
 
