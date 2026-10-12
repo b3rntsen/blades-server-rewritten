@@ -6829,6 +6829,11 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
                 bot_choose_hold_and_factor(&mut combat.fighters[bot], &game_session_id, bot, now);
             combat.fighters[bot].charge_side = Some(side);
             combat.fighters[bot].charge_began_at = Some(now);
+            // The wind-up is an exit from the previous swing's Recovery, exactly as
+            // for a human (both op46 DOWN paths do this). Drop that swing's queued
+            // Idle, or it fires mid-wind-up and the opponent sees the bot lower its
+            // weapon and then strike out of nothing (tracker #357).
+            combat.fighters[bot].clear_scheduled_states();
             combat.fighters[bot].set_actor_state(ActorStateType::Charging, now);
             combat.fighters[bot].bot_ai.pending_swing_factor = factor;
             let latency_comp = combat.bot_latency_compensation(bot, target);
@@ -15277,6 +15282,144 @@ mod report_31_high_block_stun {
             c.fighters[0].is_staggered(land_at),
             "the ATTACKER must be stunned by the bot's high block — this is the thing \
              a player could never experience before bots guarded",
+        );
+    }
+
+    /// Every actor-state frame (gmid, stateId, tick) the bot's avatar put on viewer 0's
+    /// wire, plus the tick of the first op29, while the engine is ticked every 5 ms
+    /// from `from` to `until` with the round-end flush running first, as `engine.rs`
+    /// does.
+    fn tick_bot_fight(
+        c: &mut MatchCombat,
+        from: Instant,
+        until: Instant,
+    ) -> (Vec<(i64, i64, Instant)>, Option<Instant>) {
+        let bot_obj = c.fighters[1].net_object_id as i64;
+        let mut frames = Vec::new();
+        let mut death = None;
+        let mut t = from;
+        while t < until {
+            t += Duration::from_millis(5);
+            let mut out = super::flush_round_end(c, t);
+            out.extend(super::on_tick(c, t, false));
+            for (viewer, bytes) in out {
+                if viewer != 0 || bytes.len() < 3 || bytes[1] != 0x36 {
+                    continue;
+                }
+                let p = arena_proto::parse_netdata(&bytes[2..]);
+                let gmid = p.int(3).unwrap_or(-1);
+                if gmid == 29 && death.is_none() {
+                    death = Some(t);
+                }
+                if matches!(gmid, 39 | 40 | 41 | 43 | 44 | 45 | 52) && p.int(0) == Some(bot_obj) {
+                    frames.push((gmid, p.int(6).unwrap_or(-1), t));
+                }
+            }
+        }
+        (frames, death)
+    }
+
+    /// A solo-vs-bot fight with a Heavy-weapon bot (recoveryTime 1.0 s — Aurora's
+    /// `swing_factor` 1.987 in the #357 log is the Heavy `maxDamageFactor`) and a
+    /// human with `hp` health who never acts.
+    fn heavy_bot_fight(now: Instant, hp: u32) -> MatchCombat {
+        let mut c = combat(now, 1);
+        c.fighters[1].loadout.weapon.weight = Some(super::super::tables::Weight::Heavy);
+        c.fighters[0].max_health = hp.max(c.fighters[0].max_health);
+        c.fighters[0].health = hp;
+        c
+    }
+
+    /// Tracker #357: a bot's wind-up is never cut short by its PREVIOUS swing's Idle.
+    ///
+    /// A swing schedules FollowThrough, Recovery and then Idle at
+    /// `release + 50 ms + 17 ms + recoveryTime` (1.0 s on a Heavy weapon). The bot may
+    /// begin its next charge as soon as the weapon cadence allows — before that Idle
+    /// is due — and its charge path did not drop the schedule, as both human charge
+    /// paths and every guard path do. So the stale Idle fired mid-wind-up: the
+    /// opponent saw the bot raise its weapon, drop back to Idle, then hit with a
+    /// 50 ms swing out of nothing. Huge Goober's report: "Round 2 ended with no
+    /// visual swing" — the prod log puts that Idle 435 ms into a 784 ms wind-up.
+    ///
+    /// Retail (s503/615/616): all 593 decoded gmid-52 frames have a gmid 45 for the
+    /// same avatar IMMEDIATELY before them.
+    #[test]
+    fn a_bot_wind_up_is_not_cut_short_by_its_last_swings_idle() {
+        let now = Instant::now();
+        let mut c = heavy_bot_fight(now, 1_000_000);
+        let (frames, _) = tick_bot_fight(&mut c, now, now + Duration::from_secs(8));
+
+        let swings: Vec<usize> = frames
+            .iter()
+            .enumerate()
+            .filter(|(_, (g, _, _))| *g == 52)
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            swings.len() >= 3,
+            "the rig must exercise back-to-back bot swings, got {} in {frames:?}",
+            swings.len()
+        );
+        for i in swings {
+            assert!(i > 0, "a 52 with no wind-up before it: {frames:?}");
+            let (gmid, state, _) = frames[i - 1];
+            assert_eq!(
+                (gmid, state),
+                (45, ActorStateType::Charging as i64),
+                "the bot's frame before its gmid 52 must be its gmid 45 wind-up \
+                 (retail 593/593), got gmid {gmid} state {state}: {frames:?}",
+            );
+        }
+    }
+
+    /// The killing swing of a round, the case #357 reported: wind-up (45) → swing
+    /// (52) → follow-through (43) → op29, with the wind-up uninterrupted for at least
+    /// the weapon's MinDamageTime, so the client has a visible swing to play.
+    #[test]
+    fn a_bot_killing_swing_has_its_full_wind_up_before_the_death() {
+        let now = Instant::now();
+        // Let two swings land on a durable human, then drop them to 1 HP so the THIRD
+        // swing kills — mid-chain, like the prod kill, where the previous swing's Idle
+        // is still scheduled when the killing wind-up begins.
+        let mut c = heavy_bot_fight(now, 1_000_000);
+        let mut frames = Vec::new();
+        let mut t = now;
+        let follow_throughs = |f: &Vec<(i64, i64, Instant)>| f.iter().filter(|x| x.0 == 43).count();
+        while follow_throughs(&frames) < 2 {
+            let in_time = t < now + Duration::from_secs(8);
+            assert!(in_time, "the bot must land two swings");
+            let next = t + Duration::from_millis(5);
+            frames.extend(tick_bot_fight(&mut c, t, next).0);
+            t = next;
+        }
+        let two_hits_landed = c.fighters[0].health < 1_000_000;
+        assert!(two_hits_landed, "the two swings must connect");
+        // Back to a normal pool: a million-HP pool regenerates ~1,700 HP/s.
+        c.fighters[0].max_health = combat(now, 1).fighters[0].max_health;
+        c.fighters[0].health = 1;
+        let (rest, death) = tick_bot_fight(&mut c, t, t + Duration::from_secs(5));
+        frames.extend(rest);
+        let death = death.expect("the bot must win the round");
+
+        let before: Vec<_> = frames.iter().filter(|(_, _, t)| *t <= death).collect();
+        assert_eq!(
+            before.iter().filter(|f| f.0 == 52).count(),
+            3,
+            "the third swing must be the killing one: {before:?}",
+        );
+        let n = before.len();
+        let tail: Vec<i64> = before[n - 3..].iter().map(|f| f.0).collect();
+        assert_eq!(
+            tail,
+            vec![45, 52, 43],
+            "the killing swing's beats must be 45 → 52 → 43 before the op29: {before:?}",
+        );
+        let wind_up = before[n - 2].2.duration_since(before[n - 3].2);
+        let min_damage_time = c.fighters[1].loadout.charge_params().min_damage_time(1.0);
+        assert!(
+            wind_up.as_secs_f32() >= min_damage_time,
+            "the wind-up the client sees ({wind_up:?}) must last at least MinDamageTime \
+             ({min_damage_time} s)",
         );
     }
 
