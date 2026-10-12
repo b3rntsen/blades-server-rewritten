@@ -223,26 +223,79 @@ const ARTIFACT_LOOT: [(Uuid, u64, u64, f64); 24] = [
 /// Retail: 60 of the 1,186 Legendary corpus chests have the slot (5.1%; the
 /// 306 exact-level snapshot purchases: 16, 5.2%), flat in level (3.2% to 7.9%
 /// per band, no trend). The Elder (Epic) chest has it in 4 of 405 (snapshot: 3
-/// of 287). Gold, Silver and Wooden chests never do: 0 of 729 treasury openings
-/// have a third item or any artifact.
+/// of 287). Gold chests: see [`GOLD_ARTIFACT_SLOT`]; Silver and Wooden never
+/// (0 of 459 treasury openings).
 const LEGENDARY_ARTIFACT_SLOT: (u64, u64) = (60, 1186);
 const ELDER_ARTIFACT_SLOT: (u64, u64) = (4, 405);
 
-/// How far above the buyer's level an artifact's `requiredLevel` may sit. Every
-/// one of the 29 retail artifacts recorded with a buyer level is within it, and
-/// it is reached: Fork of Horripilation (13) at level 3, Ebony Mail (28) at 19,
-/// Pandemonium (18) at 10, Dragon's Blight (33) at 26. There is no floor: a
-/// player who owns the low artifacts already has them re-rolled, which is all
-/// that kept them from high-level buyers (retail player 78f2b668 at 17-28: 6
-/// fallbacks in 11 artifact slots; this rule with the artifacts he held, 52%).
-const ARTIFACT_LEVELS_AHEAD: u64 = 10;
+/// A Gold chest's artifact slot (#378 follow-up): one chest in a thousand.
+///
+/// HauDrauf recorded three retail Gold chest openings (BigHump, level 60, and
+/// others) each paying an artifact as a third item beside the usual two gear
+/// pieces, gold (8,304-9,712) and materials: Spellbreaker, Warlock's Ring and
+/// Chillrend. He puts it at about one Gold chest in a thousand. The 270
+/// captured Gold openings hold none, which a 0.1% rate predicts (76% chance of
+/// none in 270), so the rate is his.
+pub const GOLD_ARTIFACT_SLOT: (u64, u64) = (1, 1000);
+
+/// The levels at which retail's chests paid an artifact of each tier, keyed by
+/// the tier's APK `requiredLevel`: (required level, first level, last level).
+///
+/// THE EVIDENCE (#378 follow-up). A community table HauDrauf supplied (Discord,
+/// IWonderMilkl, 2026-04-04) gives, per tier, the level an artifact stops
+/// dropping ("findable before", tiers 2-7) and one player's lowest level for
+/// each. Retail's own captures are the harder evidence and win where the two
+/// disagree; the first level is the lowest either source shows:
+///
+/// | tier (usable) | first: table / captures -> used | last (table) |
+/// |---|---|---|
+/// | 2 (6)  | 1 (Savior's Hide) / 4 -> 1 | 22 |
+/// | 3 (13) | 1 (Guardian's Claymore) / 3 (Fork) -> 1 | 27 |
+/// | 4 (18) | 11 / 10 (Pandemonium, snapshot) -> 10 | 32 |
+/// | 5 (23) | 23 / 21 (Chrysamere, snapshot) -> 21 | 37 |
+/// | 6 (28) | 23 / 19 (Ebony Mail, snapshot) -> 19 | 43 |
+/// | 7 (33) | - / 26 (Dragon's Blight; Ebony Blade in an Elder chest) -> 26 | 49 |
+/// | 8 (38) | - / Spellbreaker in a Glass+Glass chest -> 31 | none |
+/// | 9-10 (44, 50) | HauDrauf: from about 39 -> 39 | none |
+///
+/// Tier 8 has no dated drop: retail's one tier-8 Legendary drop is Spellbreaker
+/// in a 29-35 chest whose top slot is Glass (paid at 28-32, Ebony from 33) with
+/// a Greater soul gem (the ladder's from about 31), so a buyer of 31-32. 31 is
+/// also the lead every dated tier shows over its usable level (tier 4 at 10, 8
+/// ahead; tier 6 at 19, 9; tier 7 at 26, 7): 38 - 7. The 33 a "usable at
+/// tier 7" guess would give is contradicted by that chest. Tiers 8-10 still
+/// drop at any higher level (the table has no cap; HauDrauf; retail paid
+/// Dawnbreaker, tier 8, and Warlock's Ring, tier 9, in the 54-89 band).
+///
+/// Every one of the 29 retail artifacts with a buyer level falls inside its
+/// tier's window (`retail_artifact_drops_fall_inside_their_windows`).
+pub(crate) const ARTIFACT_WINDOWS: [(u64, u64, u64); 9] = [
+    (6, 1, 22),
+    (13, 1, 27),
+    (18, 10, 32),
+    (23, 21, 37),
+    (28, 19, 43),
+    (33, 26, 49),
+    (38, 31, u64::MAX),
+    (44, 39, u64::MAX),
+    (50, 39, u64::MAX),
+];
+
+/// Whether an artifact of APK `requiredLevel` `required` can drop at `level`.
+fn artifact_in_window(required: u64, level: u64) -> bool {
+    ARTIFACT_WINDOWS
+        .iter()
+        .find(|(r, _, _)| *r == required)
+        .is_some_and(|(_, first, last)| (*first..=*last).contains(&level.max(1)))
+}
 
 /// The artifact a chest's artifact slot rolls at `level`: weighted by the APK
-/// lootWeight among the artifacts within [`ARTIFACT_LEVELS_AHEAD`] (#378).
+/// lootWeight among the artifacts whose tier's window holds the level
+/// ([`ARTIFACT_WINDOWS`], #378).
 fn roll_artifact(level: u64, seed: u64) -> Option<(Uuid, f64)> {
     let pool: Vec<&(Uuid, u64, u64, f64)> = ARTIFACT_LOOT
         .iter()
-        .filter(|(_, required, _, _)| *required <= level + ARTIFACT_LEVELS_AHEAD)
+        .filter(|(_, required, _, _)| artifact_in_window(*required, level))
         .collect();
     let total: u64 = pool.iter().map(|a| a.2).sum();
     if total == 0 {
@@ -259,6 +312,18 @@ fn roll_artifact(level: u64, seed: u64) -> Option<(Uuid, f64)> {
             }
         })
         .map(|a| (a.0, a.3))
+}
+
+/// What a chest's artifact slot pays at `level`: the rolled artifact, or for one
+/// the character holds the generated "Legendary - High (Chests)" piece (#310).
+pub(crate) fn artifact_slot_item(level: u64, seed: u64, owned: &HashSet<Uuid>) -> Option<Item> {
+    let art_seed = mix(seed ^ 0xE703_7ED1_A0B4_28DB);
+    match roll_artifact(level, art_seed) {
+        Some((template, durability)) if !owned.contains(&template) => {
+            Some(artifact_item(template, durability))
+        }
+        _ => artifact_fallback_piece(level, mix(art_seed)),
+    }
 }
 
 /// An artifact as retail paid it: untempered, unenchanted, full durability.
@@ -900,7 +965,7 @@ pub fn roll_bundle_with(
         items.push(piece);
     }
     // The artifact slot (#378): at retail's rate, an artifact by the APK weights
-    // within reach of the buyer's level, and for one the buyer holds the
+    // among those whose level window holds the buyer's level, and for one the buyer holds the
     // generated "Legendary - High (Chests)" piece (#310).
     let artifact_slot = if is_legendary {
         Some(LEGENDARY_ARTIFACT_SLOT)
@@ -912,13 +977,7 @@ pub fn roll_bundle_with(
     match artifact_slot {
         Some((hits, chests)) => {
             if mix(seed ^ 0x6A09_E667_F3BC_C909) % chests < hits {
-                let art_seed = mix(seed ^ 0xE703_7ED1_A0B4_28DB);
-                match roll_artifact(buyer_level, art_seed) {
-                    Some((template, durability)) if !owned.contains(&template) => {
-                        items.push(artifact_item(template, durability));
-                    }
-                    _ => items.extend(artifact_fallback_piece(buyer_level, mix(art_seed))),
-                }
+                items.extend(artifact_slot_item(buyer_level, seed, owned));
             }
         }
         None => items.extend(base.reward.items.iter().skip(core).cloned()),
@@ -2335,22 +2394,23 @@ mod tests {
     /// "no artifact came, although many chests had three items". The slot copied
     /// one recorded chest of his band, and the 36-50 band's one artifact is Onyx
     /// Cleaver, which he holds: 0 artifacts in 6,000 chests. Retail paid the slot
-    /// in 5.1% of chests (60 of 1,186) and an artifact by the APK weights within
-    /// reach of the level; with his six artifacts held (36 of the 93 weight),
-    /// 5.1% x 57/93 = 3.1% of his chests pay one.
+    /// in 5.1% of chests (60 of 1,186) and an artifact by the APK weights among
+    /// those whose window holds the level: at 45 tiers 7-10, weight 41, of which
+    /// he holds Mehrunes' Razor, Spellbreaker and Onyx Cleaver (11), so 5.1% x
+    /// 30/41 = 3.7% of his chests pay one, any of the other eight.
     #[test]
     fn sephoris_gets_artifacts_at_retails_rate() {
         let (third, arts, kinds) = third_slots(&legendary(), 45, 6_000, &sephoris_owned());
         let (third, arts) = (third as f64 / 6_000.0, arts as f64 / 6_000.0);
         assert!((0.04..=0.062).contains(&third), "third slot in {:.1}% of chests", third * 100.0);
-        assert!((0.022..=0.038).contains(&arts), "artifacts in {:.2}% of chests", arts * 100.0);
-        assert!(kinds.len() >= 14, "only {} different artifacts", kinds.len());
+        assert!((0.028..=0.046).contains(&arts), "artifacts in {:.2}% of chests", arts * 100.0);
+        assert_eq!(kinds.len(), 8, "the eight unheld artifacts of tiers 7-10");
         assert!(kinds.is_disjoint(&sephoris_owned()), "a held artifact was paid again");
     }
 
     /// Retail's artifact slot at every level: the slot in about 5.1% of Legendary
-    /// chests, the artifact never more than [`ARTIFACT_LEVELS_AHEAD`] levels above
-    /// the buyer, and most of the reachable artifacts reachable in 4,000 chests.
+    /// chests, every artifact inside its tier's [`ARTIFACT_WINDOWS`], and every
+    /// artifact whose window holds the level turning up in 4,000 chests.
     #[test]
     fn the_artifact_slot_follows_retail_at_every_level() {
         let none = HashSet::new();
@@ -2361,14 +2421,10 @@ mod tests {
             assert!((0.04..=0.062).contains(&rate), "level {level}: slot in {:.1}%", rate * 100.0);
             for t in &seen {
                 let req = ARTIFACT_LOOT.iter().find(|a| a.0 == *t).unwrap().1;
-                assert!(req <= level + 10, "level {level}: artifact of level {req}");
+                assert!(artifact_in_window(req, level), "level {level}: artifact of level {req}");
             }
-            let reachable = ARTIFACT_LOOT.iter().filter(|a| a.1 <= level + 10).count();
-            assert!(
-                seen.len() * 4 >= reachable * 3,
-                "level {level}: {} of {reachable} reachable artifacts",
-                seen.len()
-            );
+            let reachable = ARTIFACT_LOOT.iter().filter(|a| artifact_in_window(a.1, level)).count();
+            assert_eq!(seen.len(), reachable, "level {level}");
         }
     }
 
@@ -2386,9 +2442,11 @@ mod tests {
         }
         let n: u64 = by_weight.values().sum();
         let share = |w: u64| by_weight.get(&w).copied().unwrap_or(0) as f64 / n as f64;
-        assert!((share(9) - 45.0 / 93.0).abs() < 0.01, "armour and rings {:.3}", share(9));
-        assert!((share(7) - 14.0 / 93.0).abs() < 0.01, "shields {:.3}", share(7));
-        assert!((share(2) - 34.0 / 93.0).abs() < 0.01, "weapons {:.3}", share(2));
+        // At 90 the windows hold tiers 8-10: Warlock's Ring and Lord's Mail (9
+        // each), Spellbreaker (7), five weapons (2 each), 35 in all.
+        assert!((share(9) - 18.0 / 35.0).abs() < 0.01, "armour and rings {:.3}", share(9));
+        assert!((share(7) - 7.0 / 35.0).abs() < 0.01, "shields {:.3}", share(7));
+        assert!((share(2) - 10.0 / 35.0).abs() < 0.01, "weapons {:.3}", share(2));
     }
 
     /// THE REPORT (#378): "the third item is always the same sword, ring or
@@ -2543,36 +2601,116 @@ mod tests {
         }
     }
 
-    /// HauDrauf asked whether Gold and Elder chests pay artifacts. Retail: never
-    /// in 270 Gold (or 459 Wooden and Silver) treasury openings, all of which pay
-    /// exactly their slot count; Elder in 4 of 405 chests ([`ELDER_ARTIFACT_SLOT`]).
+    /// Every retail artifact drop that can be placed in level falls inside its
+    /// tier's window: the snapshot's nine at an exact buyer level, the corpus's
+    /// by band (dated by the chest's gear where the band is wide), and
+    /// HauDrauf's three Gold chests opened at level 60 (#378 follow-up). The old
+    /// rule (required level at most ten ahead, no floor) let a level-60 buyer
+    /// draw Savior's Hide, which the community table caps at 22.
     #[test]
-    fn gold_chests_never_pay_artifacts_and_elder_chests_rarely() {
+    fn retail_artifact_drops_fall_inside_their_windows() {
+        // (required level, lowest and highest level the buyer can have been).
+        const DROPS: [(u64, u64, u64, &str); 31] = [
+            (13, 3, 3, "Fork of Horripilation, snapshot"),
+            (6, 4, 4, "Savior's Hide, snapshot"),
+            (6, 5, 5, "Savior's Hide, snapshot"),
+            (13, 10, 10, "Ring of Namira, snapshot"),
+            (18, 10, 10, "Pandemonium, snapshot"),
+            (28, 19, 19, "Ebony Mail, snapshot"),
+            (23, 21, 21, "Chrysamere, snapshot"),
+            (28, 25, 25, "Rimelink, snapshot"),
+            (33, 26, 26, "Dragon's Blight, snapshot"),
+            (33, 26, 26, "Ebony Blade (Elder), snapshot"),
+            (13, 1, 5, "Fork of Horripilation"),
+            (13, 1, 5, "Fork of Horripilation"),
+            (6, 1, 5, "Savior's Hide"),
+            (6, 1, 5, "Savior's Hide"),
+            (6, 1, 5, "Savior's Hide"),
+            (13, 1, 5, "Guardian's Claymore"),
+            (13, 6, 8, "Guardian's Claymore"),
+            (6, 6, 8, "Savior's Hide"),
+            (13, 6, 8, "Ring of Namira"),
+            (13, 9, 14, "Ring of Namira"),
+            (18, 15, 17, "Pandemonium"),
+            (28, 18, 23, "Ebony Mail"),
+            (23, 18, 23, "Chrysamere"),
+            (28, 18, 23, "Rimelink"),
+            (18, 18, 23, "Pandemonium"),
+            (38, 31, 32, "Spellbreaker, Glass+Glass chest, Greater soul gem"),
+            (33, 33, 35, "Mehrunes' Razor, Ebony on top"),
+            (50, 43, 50, "Onyx Cleaver, Daedric+Dragon chest"),
+            (38, 31, 89, "Dawnbreaker (Elder)"),
+            (50, 54, 89, "Lord's Mail / Chillrend"),
+            (44, 54, 89, "Warlock's Ring"),
+        ];
+        for (req, lo, hi, what) in DROPS {
+            assert!(
+                (lo..=hi).any(|l| artifact_in_window(req, l)),
+                "{what} (required level {req}) at {lo}-{hi} is outside its window"
+            );
+        }
+        for (req, what) in [(38, "Spellbreaker"), (44, "Warlock's Ring"), (50, "Chillrend")] {
+            assert!(artifact_in_window(req, 60), "HauDrauf's Gold chest {what} at 60");
+        }
+        // The windows bite: no tier 2-7 artifact past its "findable before"
+        // level, no tier 9-10 artifact before 39.
+        assert!(!artifact_in_window(6, 23) && !artifact_in_window(33, 50));
+        assert!(!artifact_in_window(44, 38) && !artifact_in_window(50, 38));
+        assert!(artifact_in_window(50, 39) && artifact_in_window(38, 100));
+    }
+
+    /// HauDrauf's three retail Gold chests with an artifact (#378 follow-up):
+    /// about one Gold chest in a thousand, beside its usual two items, rolled
+    /// like any artifact slot. The 270 captured Gold openings have none (a 76%
+    /// outcome at 0.1%). Wooden and Silver chests never (0 of 459). Elder chests
+    /// keep 4 in 405, with the same windows.
+    #[test]
+    fn gold_chests_pay_an_artifact_about_once_in_a_thousand() {
         let t = committed_chest_tables();
-        for tier in 1..=3u64 {
-            for s in &t.tiers[&tier] {
-                assert!(s.reward.items.iter().all(|i| !is_artifact(&i.item.item_template_id)));
-            }
+        for tier in 1..=2u64 {
             for level in [10u64, 45, 90] {
-                for i in 0..500 {
+                for i in 0..2_000 {
                     let key = format!("g{i}");
-                    let r = crate::features::chests::roll_loot(
-                        &t,
-                        tier as i64,
-                        level,
-                        &key,
-                        &HashSet::new(),
-                    )
-                    .unwrap();
-                    assert!(r.items.iter().all(|i| !is_artifact(&i.item.item_template_id)));
+                    let r = crate::features::chests::roll_loot(&t, tier as i64, level, &key, &HashSet::new())
+                        .unwrap();
+                    assert!(r.items.len() <= 1, "tier {tier} paid a third item");
                 }
             }
         }
+        let n = 60_000u64;
+        let (mut third, mut arts) = (0u64, 0u64);
+        for i in 0..n {
+            let level = [20u64, 45, 60][(i % 3) as usize];
+            let key = format!("gold:{i}:3:{level}");
+            let r = crate::features::chests::roll_loot(&t, 3, level, &key, &HashSet::new()).unwrap();
+            assert!((2..=3).contains(&r.items.len()));
+            if let Some(x) = r.items.get(2) {
+                third += 1;
+                let tpl = x.item.item_template_id;
+                assert!(is_artifact(&tpl), "nothing held, the slot is an artifact");
+                let req = ARTIFACT_LOOT.iter().find(|a| a.0 == tpl).unwrap().1;
+                assert!(artifact_in_window(req, level), "level {level}: required level {req}");
+                arts += 1;
+            }
+        }
+        assert!((35..=90).contains(&third), "{third} Gold chests of {n} had a third item");
+        assert_eq!(third, arts);
+        // A held artifact is replaced, never paid twice (#310).
+        let all: HashSet<Uuid> = ARTIFACT_TEMPLATES.iter().copied().collect();
+        for i in 0..n / 3 {
+            let r = crate::features::chests::roll_loot(&t, 3, 60, &format!("gold:{i}:3:60"), &all)
+                .unwrap();
+            assert!(r.items.iter().all(|x| !is_artifact(&x.item.item_template_id)));
+        }
         let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
-        let (third, arts, _) = third_slots(&epic, 45, 20_000, &HashSet::new());
+        let (third, arts, seen) = third_slots(&epic, 45, 20_000, &HashSet::new());
         let rate = third as f64 / 20_000.0;
         assert_eq!(third, arts);
         assert!((0.005..=0.015).contains(&rate), "Elder artifact slot in {:.2}%", rate * 100.0);
+        for tpl in seen {
+            let req = ARTIFACT_LOOT.iter().find(|a| a.0 == tpl).unwrap().1;
+            assert!(artifact_in_window(req, 45), "Elder at 45: required level {req}");
+        }
     }
 
     /// The #378 tables for the PR, ours against fork/main.
