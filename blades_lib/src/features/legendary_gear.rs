@@ -30,7 +30,12 @@
 //! - the primary enchantment, uniformly among the recipes allowed on the template
 //!   at the shell's enchant tier, and the secondaries uniformly without repeats
 //!   from the template's secondary table. Retail's frequencies are flat; the
-//!   crafting weights in `enchanting.json` are not what the chest used.
+//!   crafting weights in `enchanting.json` are not what the chest used;
+//! - for a ring or necklace, the GRADING properties (the ability bonus ranks)
+//!   uniformly without repeats from the APK's ring or necklace grade list, at the
+//!   shell's tiers (#378: Sephoris held twelve Ebony Faerite Rings with the same
+//!   three bonuses, because the shell's GRADING was copied). The grade, and so
+//!   the tiers, stay the shell's.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -46,6 +51,9 @@ static LEGENDARY_GEAR_RAW: &str = include_str!("../legendary_gear.json");
 #[serde(rename_all = "camelCase")]
 struct Table {
     category_weights: BTreeMap<String, u64>,
+    /// The GRADING properties a ring / necklace can carry (#378).
+    #[serde(default)]
+    grading_tables: BTreeMap<String, Vec<Uuid>>,
     secondary_tables: Vec<Vec<Uuid>>,
     primary_groups: Vec<BTreeMap<Uuid, Vec<u64>>>,
     templates: HashMap<Uuid, Template>,
@@ -75,6 +83,7 @@ fn pool() -> &'static Pool {
     POOL.get_or_init(|| {
         let table: Table = serde_json::from_str(LEGENDARY_GEAR_RAW).unwrap_or(Table {
             category_weights: BTreeMap::new(),
+            grading_tables: BTreeMap::new(),
             secondary_tables: Vec::new(),
             primary_groups: Vec::new(),
             templates: HashMap::new(),
@@ -187,17 +196,45 @@ pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Optio
         shell.properties.enchanting.first().map_or(0, |e| e.tier),
         seed,
     )?;
+    let grading = roll_grading(
+        &template.category,
+        &shell.properties.grading,
+        seed ^ 0x2F2D_C2B1_7A4E_9D63,
+    );
     Some(Item {
         item_template_id: template_id,
         grade: shell.grade,
         tempering_level: shell.tempering_level,
         durability,
-        properties: ItemPropertiesAll {
-            enchanting,
-            grading: shell.properties.grading.clone(),
-        },
+        properties: ItemPropertiesAll { enchanting, grading },
         arcane_tier: shell.arcane_tier,
     })
+}
+
+/// The shell's GRADING tiers with the properties drawn afresh, uniformly and
+/// without repeats, from the ring or necklace grade list (#378). Anything else,
+/// or a table that did not load, keeps the shell's GRADING.
+fn roll_grading(
+    category: &str,
+    shell: &[ItemSingleProperty],
+    seed: u64,
+) -> Vec<ItemSingleProperty> {
+    let Some(table) = pool().table.grading_tables.get(category) else {
+        return shell.to_vec();
+    };
+    if !is_jewelry(category) || table.len() < shell.len() {
+        return shell.to_vec();
+    }
+    let mut ids = table.clone();
+    shell
+        .iter()
+        .enumerate()
+        .map(|(k, p)| {
+            let j = k + pick(seed ^ (k as u64 + 1).rotate_left(37), ids.len() - k);
+            ids.swap(k, j);
+            ItemSingleProperty { id: ids[k], tier: p.tier }
+        })
+        .collect()
 }
 
 /// `count` enchantments at `tier`: a recipe primary allowed on the template at
@@ -266,6 +303,22 @@ pub(crate) fn rule_broken(item: &Item) -> Option<String> {
         }
         None if item.grade.is_none() => return Some("jewellery without a grade".into()),
         None => {}
+    }
+    if is_jewelry(&t.category) {
+        let gr = &item.properties.grading;
+        let ids: std::collections::HashSet<_> = gr.iter().map(|g| g.id).collect();
+        if item.grade != Some(gr.iter().map(|g| g.tier).sum()) {
+            return Some("grade is not the sum of its GRADING tiers".into());
+        }
+        if ids.len() != gr.len() {
+            return Some("repeated GRADING property".into());
+        }
+        if let Some(g) = gr
+            .iter()
+            .find(|g| !table.grading_tables[&t.category].contains(&g.id))
+        {
+            return Some(format!("GRADING {} not in the {} list", g.id, t.category));
+        }
     }
     let ens = &item.properties.enchanting;
     let Some(first) = ens.first() else {
@@ -340,6 +393,8 @@ mod tests {
             "21 loot templates for each of 10 material tiers"
         );
         assert_eq!(t.secondary_tables.len(), 16);
+        assert_eq!(t.grading_tables["ring"].len(), 34, "RingGradePropertyList");
+        assert_eq!(t.grading_tables["necklace"].len(), 15, "NecklaceGradePropertyList");
         assert_eq!(
             t.category_weights.values().sum::<u64>(),
             2065,

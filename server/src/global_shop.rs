@@ -1239,13 +1239,21 @@ pub async fn purchase_global_shop(
             // bundle twice in a row cannot return the same thing. The character id
             // is folded in so two players at the same level do not walk the same
             // sequence of chests. The held templates are what keep an artifact the
-            // buyer already owns from being handed out again (#310).
+            // buyer already owns from being handed out again (#310). The Epic
+            // Chest is a tier-4 (Elder) chest, so from level 45 it pays retail's
+            // high-level Elder gold and stackables like a treasury one (#378).
             let reward = {
-                blades_lib::features::store_bundles::roll_bundle_for(
+                blades_lib::features::store_bundles::roll_bundle_with(
                     &product_id,
                     u64::from(entry.character.0.level),
                     bought_before ^ (character_id.as_u128() as u64).rotate_left(29),
                     &entry.inventory.0.item_templates(),
+                    globals
+                        .static_data
+                        .chest_loots
+                        .provisional_tiers
+                        .get(&4)
+                        .map(Vec::as_slice),
                 )
                 .unwrap_or(reward)
             };
