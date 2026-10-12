@@ -42,8 +42,44 @@ use crate::arena::ranking::MatchRankingContext;
 /// "at capacity (2 matches)" after a couple of failed connects. `sweep_expired`
 /// reclaims such matches. Conservative first values from the 1–2-player tests
 /// (clients that connect do so within seconds of `Succeeded`); easy to tune.
-const CONNECT_DEADLINE: Duration = Duration::from_secs(45); // under-capacity → reclaim
+///
+/// 30 s, down from 45 (#375). Every client that dials at all does so within ~5 s of
+/// `Succeeded` (74 of 74 paired arrivals on prod 2026-10-01..11); the rest of the
+/// window only buys a replay over a reconnected rms socket (see
+/// `Session::rms_feed`), which the client's 3–10 s reconnect backoff fits inside.
+/// Past it the player who DID connect is told the match is off (see
+/// [`ReclaimedPeer`]) instead of being left on "Connecting".
+pub const CONNECT_DEADLINE: Duration = Duration::from_secs(30); // under-capacity → reclaim
 const MATCH_MAX_AGE: Duration = Duration::from_secs(600); // absolute safety net
+/// An abandoned (ticket-cancelled) match is still given this long before the sweep
+/// takes it. A cancel can cross a `Succeeded` in flight: on 2026-10-01 19:38:03 a
+/// client cancelled its 55-second-old ticket in the same second it was paired, then
+/// connected two seconds later and played the match. Reclaiming on the cancel alone
+/// would have killed that fight.
+const ABANDONED_MIN_AGE: Duration = Duration::from_secs(10);
+
+/// Retail `BGS.Game.Network.Shared.DisconnectReason` values (il2cpp dump.cs,
+/// TypeDefIndex 12558), passed as the ENet disconnect `data` so a client that reads
+/// it can tell the player why the match ended.
+pub mod disconnect_reason {
+    /// `DisconnectReason.Timeout`.
+    pub const TIMEOUT: u32 = 2;
+    /// `DisconnectReason.NotEnoughPlayers` — the opponent never joined. What a retail
+    /// game server sent the player left waiting when FlexMatch's other half no-showed.
+    pub const NOT_ENOUGH_PLAYERS: u32 = 6;
+}
+
+/// A connected peer of a match the sweep just reclaimed, and the
+/// [`disconnect_reason`] to disconnect it with.
+///
+/// Before #375 the sweep dropped the match and forgot its peers: the ENet connection
+/// stayed up, nothing was ever sent on it again, and the player who had connected sat
+/// on "Connecting" until they killed the game. The serve loop now disconnects these.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReclaimedPeer {
+    pub addr: SocketAddr,
+    pub reason: u32,
+}
 
 /// How long a full match waits for every peer's fighter slot to become
 /// **authoritatively** known before it gives up and proceeds on the FIFO admission
@@ -113,6 +149,9 @@ struct Match {
     /// "under capacity" means someone LEFT, which is not the leak the sweep exists
     /// to plug; MATCH_MAX_AGE and the empty-match path still bound its lifetime.
     reached_capacity: bool,
+    /// A player of this not-yet-full match abandoned its ticket (cancel), so nobody is
+    /// coming: the next sweep reclaims it without waiting out [`CONNECT_DEADLINE`].
+    abandoned: bool,
     _permit: OwnedSemaphorePermit,
     /// `playerSessionId → fighter slot` — populated at allocation so that when the
     /// client's encrypted PlayerInfo (op20) arrives, we can bind its peer address to
@@ -631,6 +670,7 @@ impl MatchRegistry {
                 instance,
                 created_at: Instant::now(),
             reached_capacity: false,
+                abandoned: false,
                 _permit: permit,
                 psid_to_slot,
                 expected_ip_to_slot,
@@ -1086,6 +1126,48 @@ impl MatchRegistry {
             .is_some_and(|m| !m.instance.is_decided())
     }
 
+    /// The match is still filling and the fighter slot of `player_session_id` has no connection
+    /// bound to it yet. A replayed `Succeeded` goes only to a player this is true for —
+    /// never to one already connecting, whose client is past matchmaking.
+    pub fn awaits_player(&self, game_session_id: Uuid, player_session_id: &str) -> bool {
+        let matches = self.matches.lock().unwrap();
+        let Some(m) = matches.get(&game_session_id) else {
+            return false;
+        };
+        if m.reached_capacity || m.abandoned || m.players.len() >= m.capacity {
+            return false;
+        }
+        // A connected peer whose fighter slot is not known yet (shared NAT, or a UDP
+        // source that differs from the HTTP one) may well BE this player. Don't guess:
+        // a duplicate `Succeeded` to a client that is already connecting is worse than
+        // a missed replay, which the sweep still turns into a clean disconnect.
+        if m.players.iter().any(|p| !m.peer_to_slot.contains_key(&p.addr)) {
+            return false;
+        }
+        match m.psid_to_slot.get(player_session_id) {
+            Some(slot) => !m.peer_to_slot.values().any(|s| s == slot),
+            None => false,
+        }
+    }
+
+    /// A player abandoned its ticket for this match (a `matches/{id}/cancel` after
+    /// `Succeeded`). If the match never filled, nobody is coming: mark it so the sweep
+    /// reclaims it (once it is [`ABANDONED_MIN_AGE`] old) and releases whoever is
+    /// already waiting in it, rather than holding them for the rest of
+    /// [`CONNECT_DEADLINE`]. A match that has filled is a
+    /// fight in progress and is left alone (leaving it is a concession, handled on
+    /// disconnect). Returns whether the match was marked.
+    pub fn abandon_unfilled(&self, game_session_id: Uuid) -> bool {
+        let mut matches = self.matches.lock().unwrap();
+        match matches.get_mut(&game_session_id) {
+            Some(m) if !m.reached_capacity => {
+                m.abandoned = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn decide_for_test(&self, game_session_id: Uuid, winner: usize) {
         if let Some(m) = self.matches.lock().unwrap().get_mut(&game_session_id) {
@@ -1231,12 +1313,15 @@ impl MatchRegistry {
     /// (an opponent never connected — the abandoned-`Succeeded` leak) or older than
     /// `MATCH_MAX_AGE` (safety net for a stuck full match). Dropping the `Match`
     /// frees its `Semaphore` slot. Collect-then-purge so the locks never nest.
-    pub fn sweep_expired(&self, now: Instant) {
+    ///
+    /// Returns the peers that WERE connected to a reclaimed match, so the ENet loop can
+    /// disconnect them (#375) — see [`ReclaimedPeer`].
+    pub fn sweep_expired(&self, now: Instant) -> Vec<ReclaimedPeer> {
         // DEBUG-HOLD: suspend cleanup only during the bounded injection window.
         // Once it expires, already-held matches become reclaimable on this same
         // process; no restart or environment edit is required.
         if self.debug_hold_active_at(now) {
-            return;
+            return Vec::new();
         }
         let mut reclaimed: Vec<(Uuid, usize, usize, &'static str, Vec<SocketAddr>)> = Vec::new();
         {
@@ -1247,7 +1332,8 @@ impl MatchRegistry {
                     let age = now.saturating_duration_since(m.created_at);
                     (m.players.len() < m.capacity
                         && !m.reached_capacity
-                        && age > CONNECT_DEADLINE)
+                        && (age > CONNECT_DEADLINE
+                            || (m.abandoned && age > ABANDONED_MIN_AGE)))
                         || age > MATCH_MAX_AGE
                 })
                 .map(|m| m.game_session_id)
@@ -1255,7 +1341,11 @@ impl MatchRegistry {
             for gsid in dead {
                 if let Some(m) = matches.remove(&gsid) {
                     let reason = if m.players.len() < m.capacity {
-                        "opponent never connected"
+                        if m.abandoned {
+                            "opponent never connected; ticket cancelled"
+                        } else {
+                            "opponent never connected"
+                        }
                     } else {
                         "max age"
                     };
@@ -1266,7 +1356,7 @@ impl MatchRegistry {
             }
         }
         if reclaimed.is_empty() {
-            return;
+            return Vec::new();
         }
         let dead_gsids: std::collections::HashSet<Uuid> =
             reclaimed.iter().map(|(g, ..)| *g).collect();
@@ -1282,13 +1372,21 @@ impl MatchRegistry {
             .lock()
             .unwrap()
             .retain(|_, gsid| !dead_gsids.contains(gsid));
-        for (gsid, connected, capacity, reason, _) in &reclaimed {
+        let mut released = Vec::new();
+        for (gsid, connected, capacity, reason, addrs) in &reclaimed {
             warn!(
                 "match registry: reclaimed match {gsid} ({reason}; {connected}/{capacity} connected) — {} slot(s) free of {}",
                 self.semaphore.available_permits(),
                 self.max_matches
             );
+            let code = if connected < capacity {
+                disconnect_reason::NOT_ENOUGH_PLAYERS
+            } else {
+                disconnect_reason::TIMEOUT
+            };
+            released.extend(addrs.iter().map(|&addr| ReclaimedPeer { addr, reason: code }));
         }
+        released
     }
 
     /// Drive the per-match tick: server-initiated s2c (the flow-control state
@@ -1969,6 +2067,99 @@ mod tests {
             0,
             "an abandoned match must still be reclaimed or its permit leaks"
         );
+    }
+
+    fn half_joined(reg: &MatchRegistry) -> (Uuid, SocketAddr, Instant) {
+        let gsid = Uuid::new_v4();
+        assert!(reg.allocate(
+            &["psess-came".to_string(), "psess-never".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+        ));
+        let at = Instant::now();
+        let a: SocketAddr = "93.165.250.244:50976".parse().unwrap();
+        assert!(reg.admit(a, "psess-came", &[7u8; 32]).is_some());
+        (gsid, a, at)
+    }
+
+    /// #375: the sweep hands back the player who DID connect, with retail's
+    /// `NotEnoughPlayers`, so the ENet loop can release them. It used to return
+    /// nothing and leave them on "Connecting".
+    #[test]
+    fn reclaiming_a_no_show_match_releases_the_player_who_came() {
+        let reg = MatchRegistry::new(4);
+        let (_gsid, a, at) = half_joined(&reg);
+        let released = reg.sweep_expired(at + CONNECT_DEADLINE + Duration::from_secs(1));
+        assert_eq!(
+            released,
+            vec![ReclaimedPeer {
+                addr: a,
+                reason: disconnect_reason::NOT_ENOUGH_PLAYERS
+            }]
+        );
+        assert!(!reg.is_active(&a));
+    }
+
+    /// Every client that dials does so within ~5 s of `Succeeded`; the waiting player
+    /// must not sit 45 s on "Connecting" first (Flappety killed the game at ~50 s).
+    #[test]
+    fn a_no_show_is_given_up_on_within_half_a_minute() {
+        let reg = MatchRegistry::new(4);
+        let (_gsid, _a, at) = half_joined(&reg);
+        assert!(reg.sweep_expired(at + Duration::from_secs(20)).is_empty());
+        assert_eq!(reg.active_count(), 1, "still inside the window an opponent may dial in");
+        assert_eq!(reg.sweep_expired(at + Duration::from_secs(31)).len(), 1);
+        assert_eq!(reg.active_count(), 0);
+    }
+
+    /// A cancelled ticket means its player is not coming — but a cancel can cross a
+    /// `Succeeded` in flight (2026-10-01 19:38:03: cancel and pairing in the same
+    /// second, the client connected 2 s later and played). So an abandoned match is
+    /// released early, not instantly.
+    #[test]
+    fn an_abandoned_match_is_released_early_but_not_instantly() {
+        let reg = MatchRegistry::new(4);
+        let (gsid, a, at) = half_joined(&reg);
+        assert!(reg.abandon_unfilled(gsid));
+        assert!(
+            reg.sweep_expired(at + Duration::from_secs(5)).is_empty(),
+            "a cancel that crossed the Succeeded must not kill the match outright"
+        );
+        assert_eq!(
+            reg.sweep_expired(at + ABANDONED_MIN_AGE + Duration::from_secs(1)),
+            vec![ReclaimedPeer {
+                addr: a,
+                reason: disconnect_reason::NOT_ENOUGH_PLAYERS
+            }],
+            "well before CONNECT_DEADLINE"
+        );
+    }
+
+    /// Leaving a FULL match is a concession, not a no-show: cancel never touches it.
+    #[test]
+    fn a_full_match_cannot_be_abandoned() {
+        let reg = MatchRegistry::new(4);
+        let (gsid, _a, at) = half_joined(&reg);
+        let b: SocketAddr = "5.91.28.0:31781".parse().unwrap();
+        assert!(reg.admit(b, "psess-never", &[8u8; 32]).is_some());
+        assert!(!reg.abandon_unfilled(gsid));
+        assert!(reg.sweep_expired(at + ABANDONED_MIN_AGE + Duration::from_secs(1)).is_empty());
+        assert_eq!(reg.active_count(), 1);
+    }
+
+    /// A replayed `Succeeded` is for a player the match is still waiting for — never
+    /// for one already connecting.
+    #[test]
+    fn awaits_player_is_per_fighter_slot() {
+        let reg = MatchRegistry::new(4);
+        let (gsid, _a, _at) = half_joined(&reg);
+        assert!(!reg.awaits_player(gsid, "psess-came"), "already connected");
+        assert!(reg.awaits_player(gsid, "psess-never"), "still expected");
+        assert!(!reg.awaits_player(gsid, "psess-unknown"));
+        assert!(!reg.awaits_player(Uuid::new_v4(), "psess-never"), "no such match");
+        let b: SocketAddr = "5.91.28.0:31781".parse().unwrap();
+        assert!(reg.admit(b, "psess-never", &[8u8; 32]).is_some());
+        assert!(!reg.awaits_player(gsid, "psess-never"), "a full match awaits nobody");
     }
 
     #[test]

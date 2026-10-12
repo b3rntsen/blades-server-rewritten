@@ -233,7 +233,7 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
         // never sticks "at capacity" after abandoned connects) + a liveness line,
         // so a stuck or zero-connect host is obvious from the logs alone.
         if now.saturating_duration_since(last_housekeep) >= Duration::from_secs(5) {
-            registry.sweep_expired(now);
+            release_reclaimed(&mut host, &mut peer_at, registry.sweep_expired(now));
             debug!(
                 "arena-enet: alive — peers {}, matches {}, permits {}/{} free",
                 peer_at.len(),
@@ -244,6 +244,31 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
             last_housekeep = now;
         }
         thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Disconnect the peers of matches the registry just reclaimed (#375).
+///
+/// A match whose opponent never connected used to vanish from the registry while its
+/// one connected player stayed ENet-connected to a match that no longer existed:
+/// nothing was ever sent to them again, and the client sat on "Connecting" until the
+/// player killed the game. Retail's game server disconnected that player with
+/// `DisconnectReason.NotEnoughPlayers`, and the client returned to the arena lobby
+/// with an error. `disconnect_later` for the same reason as the post-match teardown —
+/// it never throws away queued frames.
+fn release_reclaimed(
+    host: &mut ArenaHost,
+    peer_at: &mut HashMap<std::net::SocketAddr, PeerID>,
+    reclaimed: Vec<crate::arena::match_registry::ReclaimedPeer>,
+) {
+    for r in reclaimed {
+        if let Some(pid) = peer_at.remove(&r.addr) {
+            info!(
+                "arena-enet: match reclaimed → disconnect_later peer {} (DisconnectReason {})",
+                r.addr, r.reason
+            );
+            host.peer_mut(pid).disconnect_later(r.reason);
+        }
     }
 }
 
@@ -588,6 +613,8 @@ mod tests {
         pid: PeerID,
         connected: bool,
         disconnected: bool,
+        /// The `data` of the last ENet disconnect the server sent (DisconnectReason).
+        disconnect_data: Option<u32>,
         inbox: Vec<Vec<u8>>,
         crypto: Option<CryptoCtx>,
     }
@@ -608,6 +635,7 @@ mod tests {
                 pid,
                 connected: false,
                 disconnected: false,
+                disconnect_data: None,
                 inbox: Vec::new(),
                 crypto: None,
             }
@@ -637,9 +665,10 @@ mod tests {
                         }
                         self.inbox.push(d);
                     }
-                    Event::Disconnect { .. } => {
+                    Event::Disconnect { data, .. } => {
                         self.connected = false;
                         self.disconnected = true;
+                        self.disconnect_data = Some(data);
                     }
                 }
             }
@@ -879,6 +908,75 @@ mod tests {
         let peer = &registry.debug_list()[0].peers[0];
         assert_eq!(peer.rebind_count, 1);
         assert_eq!(peer.last_match_state_ack.as_deref(), Some("StateTimeout"));
+    }
+
+    /// #375, the waiting player's side. A paired match whose opponent never dials is
+    /// reclaimed by the sweep; the player who DID connect must be disconnected (with
+    /// retail's `DisconnectReason.NotEnoughPlayers`) so the client leaves "Connecting"
+    /// and returns to the arena lobby. Before the fix the sweep forgot the match and
+    /// the peer, nothing was ever sent on the connection again, and the client hung
+    /// until the player killed the game (FlappetyFlap, 2026-10-11 20:36:40 and
+    /// 20:44:43).
+    #[test]
+    fn the_player_left_waiting_by_a_no_show_is_disconnected_not_stranded() {
+        use crate::arena::match_registry::{CONNECT_DEADLINE, disconnect_reason};
+        let registry = MatchRegistry::new(4);
+        let gsid = Uuid::new_v4();
+        assert!(registry.allocate(
+            &["psess-waits".to_string(), "psess-never-dials".to_string()],
+            Vec::new(),
+            gsid
+        ));
+        let allocated_at = std::time::Instant::now();
+
+        let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server_sock.local_addr().unwrap();
+        let mut server = Host::new(
+            BladesEnetSocket::new(server_sock),
+            HostSettings { peer_limit: 4, ..Default::default() },
+        )
+        .unwrap();
+        let mut peer_at = HashMap::new();
+        let mut a = Client::connect(server_addr);
+        macro_rules! pump_until {
+            ($cond:expr, $msg:expr) => {{
+                let mut ok = false;
+                for _ in 0..2000 {
+                    while pump(&mut server, &registry, &mut peer_at) {}
+                    server.flush();
+                    a.drain();
+                    if $cond {
+                        ok = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                assert!(ok, $msg);
+            }};
+        }
+        pump_until!(a.connected, "the waiting player's ENet session connects");
+        let (_sk, pk) = gen_keypair();
+        a.send_plain(&hs_c2s(&pk));
+        pump_until!(!a.inbox.is_empty(), "the waiting player is admitted");
+        assert!(registry.is_active(&a.addr()), "A is bound to the half-full match");
+
+        // Inside the deadline nothing happens: the opponent may still be dialling.
+        let early = registry.sweep_expired(allocated_at + CONNECT_DEADLINE / 2);
+        release_reclaimed(&mut server, &mut peer_at, early);
+        pump_until!(true, "pump");
+        assert!(!a.disconnected, "nobody is released while the opponent may still come");
+
+        // Past it, the serve loop's housekeeping releases A.
+        let late = registry.sweep_expired(allocated_at + CONNECT_DEADLINE + Duration::from_secs(1));
+        assert_eq!(late.len(), 1, "the one connected peer is handed back for disconnect");
+        release_reclaimed(&mut server, &mut peer_at, late);
+        pump_until!(a.disconnected, "the waiting client is disconnected, not left on Connecting");
+        assert_eq!(
+            a.disconnect_data,
+            Some(disconnect_reason::NOT_ENOUGH_PLAYERS),
+            "retail DisconnectReason.NotEnoughPlayers rides the ENet disconnect"
+        );
+        assert_eq!(registry.active_count(), 0, "the slot is free again");
     }
 
     /// Two rusty_enet clients, a shared 2-player match: both CONNECT, op-0x38

@@ -44,7 +44,7 @@ use crate::{
     },
     models::CharacterDbEntryCharacterWalletInventory,
     schema::{arena_ai_mimic_control, arena_ai_mimics, arena_seasons, characters},
-    session::{Session, SessionLookedUpMaybe},
+    session::{PendingMatch, Session, SessionLookedUpMaybe},
 };
 
 /// How the matchmaker reaches a ticket's client over its RMS WebSocket.
@@ -84,13 +84,31 @@ impl RmsHandle {
         }
     }
 
-    /// True iff the client currently has NO live rms sender (never connected, or the
-    /// sender is closed because its WS reader task exited). Used to skip resolving a
-    /// ticket whose client is gone.
+    /// True iff the client has really left: it has had no live rms socket for longer
+    /// than [`RMS_RECONNECT_GRACE`] (or never had one). Used to drop a waiting ticket
+    /// instead of pairing it.
+    ///
+    /// A client merely BETWEEN sockets is not gone. It reconnects the rms socket
+    /// roughly once a minute and after every pause, and now that a dead socket is
+    /// released the moment it closes (`matchmaking::matchmaking_ws`), "no sender right
+    /// now" is an ordinary state for a player who is still on the search screen. Its
+    /// `Succeeded` is remembered and replayed on the next socket (#375).
     async fn is_gone(&self) -> bool {
-        match self.current().await {
-            Some(tx) => tx.is_closed(),
-            None => true,
+        match self {
+            RmsHandle::Session(s) => s
+                .rms_down_for(Instant::now())
+                .await
+                .is_some_and(|down| down > RMS_RECONNECT_GRACE),
+            RmsHandle::Direct(tx) => tx.is_closed(),
+        }
+    }
+
+    /// Send a `Succeeded`, remembering it on the session (atomically with the send) so
+    /// a client that is between sockets still gets it on the next one.
+    async fn send_succeeded(&self, msg: MatchmakingMessage) -> Result<(), ()> {
+        match self {
+            RmsHandle::Session(s) => s.send_matchmaking(msg).await,
+            RmsHandle::Direct(tx) => tx.send(msg).map_err(|_| ()),
         }
     }
 
@@ -102,6 +120,57 @@ impl RmsHandle {
             None => Err(()),
         }
     }
+}
+
+/// How long a ticket's client may be without an rms socket and still count as
+/// waiting. The client's own reconnect backoff is 3–10 s (`RmsManager`
+/// RECONNECTION_ATTEMPT_MIN/MAX_SECONDS) behind a 10 s socket timeout.
+pub const RMS_RECONNECT_GRACE: Duration = Duration::from_secs(30);
+
+/// How long after `Succeeded` a replay may still go out. Short of
+/// [`CONNECT_DEADLINE`](crate::arena::match_registry::CONNECT_DEADLINE) by a margin
+/// that covers the client's dial: a replay that lands just before the sweep would
+/// produce a connect just after it, into a match that no longer exists — and
+/// `admit_connection` would then seat it in whatever other match is open.
+pub const REPLAY_CUTOFF: Duration = Duration::from_secs(
+    crate::arena::match_registry::CONNECT_DEADLINE.as_secs() - 8,
+);
+
+/// Whether a remembered `MatchmakingSucceeded` is still worth sending again: its
+/// match is still waiting for this very player, and it is young enough that the
+/// client can dial before the sweep gives the match up.
+///
+/// Asked when a new rms socket opens and when a client repeats `matches/create` for
+/// a ticket that already has a match — the two moments a client that missed its
+/// `Succeeded` shows itself (#375: on 2026-10-11 20:37:17 Eugene's client re-created
+/// while the match it had been paired into at 20:36:40 was still holding Flappety; we
+/// answered with the old ticket and no frames, and both players sat until the sweep).
+pub fn match_still_wants(pending: &PendingMatch, registry: &MatchRegistry, now: Instant) -> bool {
+    let MatchmakingMessage::Succeeded {
+        player_session_id, ..
+    } = &pending.message
+    else {
+        return false;
+    };
+    now.saturating_duration_since(pending.sent_at) <= REPLAY_CUTOFF
+        && registry.awaits_player(pending.game_session_id, player_session_id)
+}
+
+/// Abandon the match a cancelled ticket was resolved into, if it never filled, and
+/// release the ticket so the player's next `matches/create` starts a fresh search
+/// rather than being handed back the dead one. Returns the abandoned match.
+fn abandon_matched_ticket(
+    active_tickets: &ActiveTickets,
+    registry: &MatchRegistry,
+    user_id: Uuid,
+    ticket_id: Uuid,
+) -> Option<Uuid> {
+    let game_session_id = active_tickets.matched_game_session(user_id, ticket_id)?;
+    if !registry.abandon_unfilled(game_session_id) {
+        return None;
+    }
+    active_tickets.remove(user_id, ticket_id);
+    Some(game_session_id)
 }
 
 /// A command handed to the matchmaker actor over its single channel. Cancellation is
@@ -3423,6 +3492,16 @@ impl ActiveTickets {
         }
     }
 
+    /// The match this user's live ticket was resolved into, if `ticket_id` is that
+    /// ticket and it has one.
+    fn matched_game_session(&self, user_id: Uuid, ticket_id: Uuid) -> Option<Uuid> {
+        let by_user = self.by_user.lock().unwrap();
+        by_user
+            .get(&user_id)
+            .filter(|ticket| ticket.ticket_id == ticket_id)
+            .and_then(|ticket| ticket.game_session_id)
+    }
+
     fn remove_queued(&self, user_id: Uuid, ticket_id: Uuid) {
         let mut by_user = self.by_user.lock().unwrap();
         if matches!(
@@ -4416,13 +4495,14 @@ async fn resolve(
         // Send to the client's CURRENT live rms sender (re-fetched here, not the sender
         // captured at enqueue): the client reconnects its rms WS repeatedly, so a
         // captured sender would be a stale channel it no longer reads → the ONLY frame
-        // carrying the arena address vanishes → permanent "determining server". If the
-        // live sender is closed/absent, log it (the client is genuinely gone).
-        if t.rms.send(succeeded).await.is_err() {
-            // The match's capacity permit is held until both players connect; an
-            // abandoned ticket leaks one slot until expiry (TODO: deadline sweep).
+        // carrying the arena address vanishes → permanent "determining server".
+        //
+        // And remember it: a client between sockets has no sender at all right now,
+        // and one whose socket died a moment ago may never read this frame. The next
+        // socket it opens gets it replayed (`Session::replay_pending_match`).
+        if t.rms.send_succeeded(succeeded).await.is_err() {
             warn!(
-                "matchmaker: ticket {} — no live client RMS sender for Succeeded (client gone or reconnecting)",
+                "matchmaker: ticket {} — no live client RMS sender for Succeeded (between sockets); held for replay on reconnect",
                 t.ticket_id
             );
         }
@@ -4559,7 +4639,17 @@ pub async fn create_match(
     // blind-cleared the slot on teardown, so a client with a perfectly healthy
     // WebSocket got 409-4-1 on every match for the rest of its session. See
     // Session::clear_matchmaking_ws_if_owner.
-    if !session.session.has_matchmaking_ws().await {
+    //
+    // A client BETWEEN sockets is still accepted (#375). Now that a closed socket
+    // releases the slot immediately instead of ~20 s later, refusing every create
+    // that lands in a reconnect gap would turn a routine reconnect into a 409; the
+    // ticket's `Succeeded` is remembered and replayed on the next socket anyway.
+    if session
+        .session
+        .rms_down_for(Instant::now())
+        .await
+        .is_some_and(|down| down > RMS_RECONNECT_GRACE)
+    {
         log::warn!(
             "matchmaker: refusing ticket for user {} — no rms feed registered",
             session.session.user_id
@@ -4574,6 +4664,24 @@ pub async fn create_match(
         &app_state.arena.registry,
     );
     if ticket_id != new_ticket_id {
+        // The same player asking again while their ticket is live. If that ticket is
+        // already matched and the match is still waiting for them, the client missed
+        // its `Succeeded` — send it again rather than a bare QUEUED that nothing will
+        // ever follow (#375).
+        let registry = &app_state.arena.registry;
+        let now = Instant::now();
+        if session
+            .session
+            .replay_pending_match(None, |p| {
+                p.ticket_id == ticket_id && match_still_wants(p, registry, now)
+            })
+            .await
+        {
+            info!(
+                "matchmaker: repeated create for matched ticket {ticket_id} (user {}) — replayed MatchmakingSucceeded",
+                session.session.user_id
+            );
+        }
         return Ok(Json(CreateMatchResponse {
             r#match: MatchTicket {
                 ticket_id,
@@ -4582,6 +4690,9 @@ pub async fn create_match(
             },
         }));
     }
+
+    // A brand-new search: whatever match an earlier ticket was sent is not this one.
+    session.session.clear_pending_match(None);
 
     // Read the player's strength once, here, so the matchmaker actor stays
     // synchronous over its queue and never blocks pairing on a database round trip.
@@ -4651,6 +4762,21 @@ pub async fn cancel_match(
     let session = session.get_session_or_error()?;
     let ticket_id = path.into_inner();
     info!("matchmaker: cancel ticket {ticket_id}");
+    session.session.clear_pending_match(Some(ticket_id));
+    // A cancel for a ticket that already has a match: this player is not coming. If
+    // the match never filled, let the sweep release whoever is waiting in it now
+    // instead of after the full connect deadline (#375: on 2026-10-01 21:11:01 the
+    // no-show cancelled seven seconds after being paired; the opponent waited 41 more).
+    if let Some(game_session_id) = abandon_matched_ticket(
+        &app_state.arena.active_tickets,
+        &app_state.arena.registry,
+        session.session.user_id,
+        ticket_id,
+    ) {
+        info!(
+            "matchmaker: ticket {ticket_id} cancelled after it was matched — match {game_session_id} will be released"
+        );
+    }
     app_state
         .arena
         .active_tickets
@@ -6282,5 +6408,363 @@ mod a_bot_is_a_copy {
             .expect("the loader exists");
         let body = &loader[..loader.find("\nasync fn ").unwrap_or(loader.len())];
         assert!(body.contains("mark_loadout_as_bot(&mut lo)"));
+    }
+}
+
+/// #375 — "Played Shoyr a few times. Then stuck on connecting."
+///
+/// Five paired matches on prod (2026-10-01..11) never got their second player. In
+/// every one the missing player was the ticket that had been WAITING in the queue,
+/// never the one whose arrival made the pair; in three of them that player's rms
+/// socket had closed 5–11 s before the pairing, so its `MatchmakingSucceeded` went
+/// into a socket nobody read.
+#[cfg(test)]
+mod no_show_375 {
+    use super::*;
+    use crate::arena::match_registry::CONNECT_DEADLINE;
+    use std::time::Duration as StdDuration;
+
+    fn session() -> Arc<Session> {
+        Arc::new(Session::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            StdDuration::from_secs(3600),
+        ))
+    }
+
+    /// A session whose rms socket has just closed — the client is reconnecting.
+    async fn between_sockets() -> Arc<Session> {
+        let s = session();
+        let (tx, _rx) = unbounded_channel();
+        s.set_matchmaking_ws(tx.clone()).await;
+        assert!(s.clear_matchmaking_ws_if_owner(&tx).await);
+        s
+    }
+
+    fn succeeded(ticket_id: Uuid, game_session_id: Uuid, psid: &str) -> MatchmakingMessage {
+        MatchmakingMessage::Succeeded {
+            ticket_id,
+            player_session_id: psid.to_string(),
+            game_session_id,
+            address: "203.0.113.7".into(),
+            port: 7777,
+        }
+    }
+
+    /// A player between rms sockets is still on the search screen; only one that has
+    /// stayed away past the grace has left.
+    #[tokio::test]
+    async fn a_client_between_rms_sockets_is_not_gone() {
+        let s = between_sockets().await;
+        let handle = RmsHandle::Session(s.clone());
+        assert!(
+            !handle.is_gone().await,
+            "a socket that closed a moment ago is a reconnect, not a departure"
+        );
+
+        s.rms_feed.lock().unwrap().lost_at =
+            Some(Instant::now() - RMS_RECONNECT_GRACE - StdDuration::from_secs(1));
+        assert!(handle.is_gone().await, "away past the grace: really gone");
+
+        let (tx, _rx) = unbounded_channel();
+        s.set_matchmaking_ws(tx).await;
+        assert!(!handle.is_gone().await, "a fresh socket brings it back");
+
+        assert!(
+            RmsHandle::Session(session()).is_gone().await,
+            "a client that never opened a socket cannot be reached"
+        );
+    }
+
+    /// The actor end of it: a waiting player who is merely reconnecting its socket is
+    /// still paired with the next arrival, not discarded as stale. (DB-less, so the
+    /// pair is then refused by the appearance guard and both get `Failed` — which is
+    /// how the test sees that they were paired at all; discarded, B would wait out
+    /// its 15 s solo fallback instead.)
+    #[tokio::test]
+    async fn a_waiting_player_mid_reconnect_is_still_paired() {
+        let registry = MatchRegistry::new(4);
+        let config = ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: 15,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
+            busy_fallback_secs: 230,
+            recent_fallback_secs: 30,
+            recent_window_secs: 300,
+        };
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry.clone(),
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
+
+        let a = between_sockets().await;
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: false,
+            expected_udp_ip: None,
+            ticket_id: Uuid::new_v4(),
+            user_id: a.user_id,
+            character_id: None,
+            rms: RmsHandle::Session(a),
+            skill: None,
+        }))
+        .unwrap();
+        tokio::time::sleep(StdDuration::from_millis(150)).await;
+
+        let (rms_b, mut recv_b) = unbounded_channel();
+        let ticket_b = Uuid::new_v4();
+        tx.send(MatchmakerCommand::Enqueue(TicketRequest {
+            via_vpn: false,
+            expected_udp_ip: None,
+            ticket_id: ticket_b,
+            user_id: Uuid::new_v4(),
+            character_id: None,
+            rms: RmsHandle::Direct(rms_b),
+            skill: None,
+        }))
+        .unwrap();
+
+        let deadline = tokio::time::Instant::now() + StdDuration::from_secs(2);
+        let mut paired = false;
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, recv_b.recv()).await {
+            if matches!(msg, MatchmakingMessage::Failed { ticket_id } if ticket_id == ticket_b) {
+                paired = true;
+                break;
+            }
+        }
+        assert!(
+            paired,
+            "B must be paired with the reconnecting A, not left alone in the queue"
+        );
+    }
+
+    /// What the rms handler does when a socket opens.
+    async fn open_socket(
+        s: &Session,
+        registry: &MatchRegistry,
+        now: Instant,
+    ) -> (UnboundedSender<MatchmakingMessage>, tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>, bool) {
+        let (tx, rx) = unbounded_channel();
+        let replayed = s
+            .replay_pending_match(Some(tx.clone()), |p| match_still_wants(p, registry, now))
+            .await;
+        (tx, rx, replayed)
+    }
+
+    fn two_slot_match(registry: &MatchRegistry) -> Uuid {
+        let gsid = Uuid::new_v4();
+        assert!(registry.allocate(
+            &["psess-flappety".to_string(), "psess-eugene".to_string()],
+            Vec::new(),
+            gsid
+        ));
+        gsid
+    }
+
+    /// A `Succeeded` sent while the client had no socket is remembered and handed to
+    /// the next socket, for as long as the match is still waiting for this player.
+    #[tokio::test]
+    async fn a_succeeded_sent_between_sockets_reaches_the_next_socket() {
+        let registry = MatchRegistry::new(4);
+        let gsid = two_slot_match(&registry);
+        let eugene = between_sockets().await;
+        let ticket = Uuid::new_v4();
+        let handle = RmsHandle::Session(eugene.clone());
+
+        // What `resolve` does for every ticket.
+        assert!(
+            handle.send_succeeded(succeeded(ticket, gsid, "psess-eugene")).await.is_err(),
+            "no socket: the live send is lost"
+        );
+
+        // The client reconnects.
+        let (_tx, mut rx, replayed) = open_socket(&eugene, &registry, Instant::now()).await;
+        assert!(replayed, "the match is still waiting for Eugene: replay it");
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(MatchmakingMessage::Succeeded { ticket_id, game_session_id, .. })
+                if ticket_id == ticket && game_session_id == gsid
+        ));
+
+        // Once Eugene has connected there is nothing left to replay.
+        let peer: std::net::SocketAddr = "174.196.197.55:2997".parse().unwrap();
+        assert!(registry.admit(peer, "psess-eugene", &[9u8; 32]).is_some());
+        let (_tx, _rx, replayed) = open_socket(&eugene, &registry, Instant::now()).await;
+        assert!(!replayed);
+        assert!(eugene.pending_match().is_none(), "a spent replay is forgotten");
+    }
+
+    /// Review follow-up 1: a socket never gets the same `Succeeded` twice — not the
+    /// socket `resolve` already wrote it to, and not one that already had the replay.
+    #[tokio::test]
+    async fn a_socket_never_gets_the_same_succeeded_twice() {
+        let registry = MatchRegistry::new(4);
+        let gsid = two_slot_match(&registry);
+        let s = session();
+        let (live, mut rx) = unbounded_channel();
+        s.set_matchmaking_ws(live).await;
+        let ticket = Uuid::new_v4();
+        assert!(RmsHandle::Session(s.clone())
+            .send_succeeded(succeeded(ticket, gsid, "psess-eugene"))
+            .await
+            .is_ok());
+        assert!(rx.try_recv().is_ok(), "delivered live");
+
+        // A repeated create on the same socket: it already has this frame.
+        let now = Instant::now();
+        assert!(
+            !s.replay_pending_match(None, |p| p.ticket_id == ticket
+                && match_still_wants(p, &registry, now))
+                .await
+        );
+        assert!(rx.try_recv().is_err(), "no second copy on the socket that had it");
+
+        // A new socket gets it once, and only once.
+        let (new_tx, mut new_rx, replayed) = open_socket(&s, &registry, now).await;
+        assert!(replayed);
+        assert!(new_rx.try_recv().is_ok());
+        assert!(!s.replay_pending_match(None, |p| match_still_wants(p, &registry, now)).await);
+        assert!(new_rx.try_recv().is_err());
+        drop(new_tx);
+    }
+
+    /// Review follow-up 1: a connected peer whose slot is still unknown may be this
+    /// very player (shared NAT / UDP source ≠ HTTP source) — no replay then.
+    #[tokio::test]
+    async fn no_replay_while_a_connected_peer_is_unidentified() {
+        let registry = MatchRegistry::new(4);
+        let gsid = two_slot_match(&registry);
+        let s = between_sockets().await;
+        let _ = RmsHandle::Session(s.clone())
+            .send_succeeded(succeeded(Uuid::new_v4(), gsid, "psess-eugene"))
+            .await;
+        // Live ENet path, no trusted IP: the peer is admitted but its slot is unknown.
+        let peer: std::net::SocketAddr = "93.165.250.244:50976".parse().unwrap();
+        assert!(registry.admit_connection(peer, &[3u8; 32]).is_some());
+        let (_tx, _rx, replayed) = open_socket(&s, &registry, Instant::now()).await;
+        assert!(!replayed, "that peer may be Eugene himself, already connecting");
+    }
+
+    /// Review follow-up 2: never replay so late that the dial lands after the sweep.
+    #[tokio::test]
+    async fn a_succeeded_is_not_replayed_near_the_reclaim_deadline() {
+        let registry = MatchRegistry::new(4);
+        let gsid = two_slot_match(&registry);
+        let s = between_sockets().await;
+        let _ = RmsHandle::Session(s.clone())
+            .send_succeeded(succeeded(Uuid::new_v4(), gsid, "psess-eugene"))
+            .await;
+        let near_deadline = Instant::now() + CONNECT_DEADLINE - StdDuration::from_secs(5);
+        let (_tx, _rx, replayed) = open_socket(&s, &registry, near_deadline).await;
+        assert!(!replayed, "5 s before the sweep is too late to start a dial");
+        assert!(s.pending_match().is_none());
+    }
+
+    /// Review follow-up 3: an abandoned match wants nobody.
+    #[tokio::test]
+    async fn an_abandoned_match_is_not_replayed() {
+        let registry = MatchRegistry::new(4);
+        let gsid = two_slot_match(&registry);
+        let s = between_sockets().await;
+        let _ = RmsHandle::Session(s.clone())
+            .send_succeeded(succeeded(Uuid::new_v4(), gsid, "psess-eugene"))
+            .await;
+        assert!(registry.abandon_unfilled(gsid));
+        let (_tx, _rx, replayed) = open_socket(&s, &registry, Instant::now()).await;
+        assert!(!replayed);
+    }
+
+    /// Never replay a match the registry no longer holds.
+    #[tokio::test]
+    async fn a_vanished_match_is_not_replayed() {
+        let registry = MatchRegistry::new(4);
+        let s = between_sockets().await;
+        let _ = RmsHandle::Session(s.clone())
+            .send_succeeded(succeeded(Uuid::new_v4(), Uuid::new_v4(), "psess-b"))
+            .await;
+        let (_tx, _rx, replayed) = open_socket(&s, &registry, Instant::now()).await;
+        assert!(!replayed);
+        assert!(s.pending_match().is_none());
+    }
+
+    /// Cancel and re-create clear what is remembered; cancel only for its own ticket.
+    #[tokio::test]
+    async fn pending_match_is_cleared_per_ticket() {
+        let s = between_sockets().await;
+        let h = RmsHandle::Session(s.clone());
+        let mine = Uuid::new_v4();
+        let _ = h.send_succeeded(succeeded(mine, Uuid::new_v4(), "psess-x")).await;
+        s.clear_pending_match(Some(Uuid::new_v4()));
+        assert!(s.pending_match().is_some(), "another ticket's cancel leaves it");
+        s.clear_pending_match(Some(mine));
+        assert!(s.pending_match().is_none());
+        let _ = h.send_succeeded(succeeded(mine, Uuid::new_v4(), "psess-x")).await;
+        s.clear_pending_match(None);
+        assert!(s.pending_match().is_none(), "a new search forgets everything");
+        let _ = s.send_matchmaking(MatchmakingMessage::Searching { ticket_id: mine }).await;
+        assert!(s.pending_match().is_none(), "only Succeeded is worth replaying");
+    }
+
+    /// Review follow-up 4: cancelling a matched ticket whose match never filled frees
+    /// the ticket, so the next create is a fresh search, not the dead ticket again.
+    #[test]
+    fn cancel_then_recreate_gets_a_fresh_ticket() {
+        let registry = MatchRegistry::new(4);
+        let active = ActiveTickets::default();
+        let gsid = two_slot_match(&registry);
+        let (user, ticket) = (Uuid::new_v4(), Uuid::new_v4());
+        active.reserve_or_existing(user, ticket, &registry);
+        active.mark_matched(user, ticket, gsid);
+        assert_eq!(
+            abandon_matched_ticket(&active, &registry, user, ticket),
+            Some(gsid)
+        );
+        let next = Uuid::new_v4();
+        assert_eq!(
+            active.reserve_or_existing(user, next, &registry),
+            next,
+            "a re-create after the cancel must not be handed the abandoned ticket"
+        );
+    }
+
+    /// …but a cancel during a match that FILLED changes nothing (it is a fight).
+    #[test]
+    fn cancel_during_a_full_match_keeps_the_ticket() {
+        let registry = MatchRegistry::new(4);
+        let active = ActiveTickets::default();
+        let gsid = two_slot_match(&registry);
+        for (i, psid) in ["psess-flappety", "psess-eugene"].iter().enumerate() {
+            let peer: std::net::SocketAddr = format!("10.0.0.{}:5000", i + 1).parse().unwrap();
+            assert!(registry.admit(peer, psid, &[i as u8; 32]).is_some());
+        }
+        let (user, ticket) = (Uuid::new_v4(), Uuid::new_v4());
+        active.reserve_or_existing(user, ticket, &registry);
+        active.mark_matched(user, ticket, gsid);
+        assert_eq!(abandon_matched_ticket(&active, &registry, user, ticket), None);
+        assert_eq!(active.reserve_or_existing(user, Uuid::new_v4(), &registry), ticket);
+    }
+
+    /// The cancel handler finds the match a cancelled ticket was resolved into.
+    #[test]
+    fn a_matched_ticket_names_its_match_for_the_cancel_path() {
+        let registry = MatchRegistry::new(4);
+        let active = ActiveTickets::default();
+        let (user, ticket, gsid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        assert!(registry.allocate(&["p0".into(), "p1".into()], Vec::new(), gsid));
+        active.reserve_or_existing(user, ticket, &registry);
+        assert_eq!(active.matched_game_session(user, ticket), None, "still queued");
+        active.mark_matched(user, ticket, gsid);
+        assert_eq!(active.matched_game_session(user, ticket), Some(gsid));
+        assert_eq!(active.matched_game_session(user, Uuid::new_v4()), None);
+        assert_eq!(active.matched_game_session(Uuid::new_v4(), ticket), None);
     }
 }
