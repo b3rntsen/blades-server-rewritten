@@ -295,28 +295,30 @@ pub struct H2hGuildsResponse {
     pub rows: Vec<H2hGuildRow>,
 }
 
-/// Same eligibility and character join as `admin::h2h_top_for_season`, plus the
-/// guild membership. `{RATINGS}` / `{SEASON_FILTER}` select season or all-time.
-const H2H_GUILD_MEMBERS_SQL: &str = "\
-    SELECT gm.guild_id, g.name AS guild_name, \
-           r.rating, r.wins, r.losses, r.ties, r.matches \
-    FROM {RATINGS} r \
-    INNER JOIN characters c ON c.id = r.character_id \
-    INNER JOIN guild_members gm ON gm.character_id = r.character_id \
-    INNER JOIN guilds g ON g.id = gm.guild_id \
-    WHERE r.matches >= $1 {SEASON_FILTER}";
-
-fn h2h_guild_members_sql(season: bool) -> String {
-    if season {
-        H2H_GUILD_MEMBERS_SQL
-            .replace("{RATINGS}", "arena_h2h_season_ratings")
-            .replace("{SEASON_FILTER}", "AND r.season_id = $2")
-    } else {
-        H2H_GUILD_MEMBERS_SQL
-            .replace("{RATINGS}", "arena_h2h_ratings")
-            .replace("{SEASON_FILTER}", "")
-    }
+/// The guild members on the human PLAYER board: the same per-alt rows
+/// ([`ranking::h2h_board`]), so the two Humans tabs agree about who is ranked and
+/// in which guild — a switched-out alt counts for the guild it is parked in, not
+/// for the live alt's guild.
+pub fn h2h_guild_members(entries: Vec<ranking::H2hBoardEntry>) -> Vec<H2hGuildMemberRow> {
+    entries
+        .into_iter()
+        .filter_map(|e| {
+            let guild_id = e.guild_id?;
+            Some(H2hGuildMemberRow {
+                guild_id,
+                guild_name: e.guild_name.unwrap_or_default(),
+                rating: e.rating,
+                wins: e.wins,
+                losses: e.losses,
+                ties: e.ties,
+                matches: e.matches,
+            })
+        })
+        .collect()
 }
+
+/// Every board row, not a top 100: a guild's score needs all its ranked members.
+const ALL_BOARD_ROWS: i64 = i64::MAX;
 
 /// `GET /api/dev/v1/arena-ranking/h2h-guilds?season=current|all|<uuid>&limit=N`.
 #[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-guilds")]
@@ -335,22 +337,15 @@ pub async fn get_arena_h2h_guilds(
     }
     let min_games = ranking::load(&app_state.db_pool).await.config.h2h_rating.min_games_listed as i32;
     let mut conn = app_state.db_pool.get().await.map_err(BladeApiError::generic_internal_error)?;
-    let (season, members): (Option<H2hSeasonSummary>, Vec<H2hGuildMemberRow>) = match selection {
+    let (season, entries): (Option<H2hSeasonSummary>, Vec<ranking::H2hBoardEntry>) = match selection {
         ranking::H2hSeasonSelection::AllTime => {
-            let members = diesel::sql_query(h2h_guild_members_sql(false))
-                .bind::<diesel::sql_types::Integer, _>(min_games)
-                .get_results(&mut conn)
-                .await?;
-            (None, members)
+            (None, ranking::h2h_board(&mut conn, None, min_games, ALL_BOARD_ROWS).await?)
         }
         ranking::H2hSeasonSelection::Current => match active_season(&mut conn).await? {
             Some(season) => {
-                let members = diesel::sql_query(h2h_guild_members_sql(true))
-                    .bind::<diesel::sql_types::Integer, _>(min_games)
-                    .bind::<diesel::sql_types::Uuid, _>(season.id)
-                    .get_results(&mut conn)
-                    .await?;
-                (Some(season), members)
+                let entries =
+                    ranking::h2h_board(&mut conn, Some(season.id), min_games, ALL_BOARD_ROWS).await?;
+                (Some(season), entries)
             }
             None => (None, Vec::new()),
         },
@@ -361,14 +356,12 @@ pub async fn get_arena_h2h_guilds(
                     .get_result(&mut conn)
                     .await
                     .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 85))?;
-            let members = diesel::sql_query(h2h_guild_members_sql(true))
-                .bind::<diesel::sql_types::Integer, _>(min_games)
-                .bind::<diesel::sql_types::Uuid, _>(season.id)
-                .get_results(&mut conn)
-                .await?;
-            (Some(season), members)
+            let entries =
+                ranking::h2h_board(&mut conn, Some(season.id), min_games, ALL_BOARD_ROWS).await?;
+            (Some(season), entries)
         }
     };
+    let members = h2h_guild_members(entries);
     let rows = h2h_guild_board(members, limit as usize);
     let value = serde_json::to_value(H2hGuildsResponse { season, rows })
         .map_err(BladeApiError::generic_internal_error)?;
@@ -455,20 +448,34 @@ mod tests {
         assert_eq!(rows.iter().map(|r| r.guild_id.as_str()).collect::<Vec<_>>(), vec!["b", "c"]);
     }
 
-    /// The humans guild board must admit exactly the characters the human player
-    /// board admits: same ratings tables, same `matches >= min_games` gate, same
-    /// inner join to live characters.
+    /// The humans guild board must admit exactly the rows the human player board
+    /// admits — it is built from them — and count each alt for its own guild.
     #[test]
-    fn humans_guild_membership_matches_the_player_board_gate() {
-        let season = h2h_guild_members_sql(true);
-        assert!(season.contains("FROM arena_h2h_season_ratings r"));
-        assert!(season.contains("r.matches >= $1"));
-        assert!(season.contains("r.season_id = $2"));
-        assert!(season.contains("INNER JOIN characters c ON c.id = r.character_id"));
-        let all = h2h_guild_members_sql(false);
-        assert!(all.contains("FROM arena_h2h_ratings r"));
-        assert!(!all.contains("season_id"));
-        assert!(!all.contains("{"), "template fully substituted: {all}");
+    fn humans_guild_membership_is_the_player_board() {
+        let entry = |alt: u128, guild: Option<&str>| ranking::H2hBoardEntry {
+            rank: 1,
+            character_id: Uuid::from_u128(1),
+            alt_key: Uuid::from_u128(alt),
+            name: "x".into(),
+            level: 1,
+            guild_id: guild.map(str::to_string),
+            guild_name: guild.map(|g| format!("Guild {g}")),
+            rating: 1000,
+            wins: 2,
+            losses: 1,
+            ties: 0,
+            matches: 3,
+            last_match_at: None,
+        };
+        let members = h2h_guild_members(vec![entry(1, Some("a")), entry(2, Some("b")), entry(3, None)]);
+        assert_eq!(
+            members.iter().map(|m| m.guild_id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "two alts of one character count for their own guilds; guildless rows drop out"
+        );
+        let src = include_str!("top100_boards.rs");
+        let handler = &src[src.find("pub async fn get_arena_h2h_guilds(").unwrap()..];
+        assert!(handler[..handler.find("\n}\n").unwrap()].contains("ranking::h2h_board("));
     }
 
     /// The website's "All matches" player rows are the in-game entries, field for

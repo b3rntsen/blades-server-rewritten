@@ -1688,30 +1688,6 @@ pub async fn get_arena_ranking_config_history(
     Ok(Json(rows))
 }
 
-#[derive(Serialize, diesel::QueryableByName)]
-pub struct H2hTopEntry {
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    pub rank: i64,
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    pub character_id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    pub name: String,
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    pub level: i64,
-    #[diesel(sql_type = diesel::sql_types::Integer)]
-    pub rating: i32,
-    #[diesel(sql_type = diesel::sql_types::Integer)]
-    pub wins: i32,
-    #[diesel(sql_type = diesel::sql_types::Integer)]
-    pub losses: i32,
-    #[diesel(sql_type = diesel::sql_types::Integer)]
-    pub ties: i32,
-    #[diesel(sql_type = diesel::sql_types::Integer)]
-    pub matches: i32,
-    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Timestamptz>)]
-    pub last_match_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
 #[derive(Debug, Clone, Serialize, diesel::QueryableByName)]
 pub struct H2hSeasonSummary {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
@@ -1741,7 +1717,7 @@ pub struct H2hSeasonListEntry {
 #[derive(Serialize)]
 pub struct H2hTopResponse {
     pub season: Option<H2hSeasonSummary>,
-    pub rows: Vec<H2hTopEntry>,
+    pub rows: Vec<ranking::H2hBoardEntry>,
 }
 
 #[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-top")]
@@ -1759,20 +1735,7 @@ pub async fn get_arena_h2h_top(
         .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 81))?;
     let (season, rows) = match selection {
         ranking::H2hSeasonSelection::AllTime => {
-            let rows = diesel::sql_query(
-                "SELECT row_number() OVER (ORDER BY r.rating DESC, r.matches DESC, r.last_match_at ASC NULLS LAST, r.character_id) AS rank, \
-                        r.character_id, COALESCE(c.character ->> 'name', '') AS name, \
-                        COALESCE((c.character ->> 'level')::bigint, 0) AS level, \
-                        r.rating, r.wins, r.losses, r.ties, r.matches, r.last_match_at \
-                 FROM arena_h2h_ratings r \
-                 INNER JOIN characters c ON c.id = r.character_id \
-                 WHERE r.matches >= $1 \
-                 ORDER BY r.rating DESC, r.matches DESC, r.last_match_at ASC NULLS LAST, r.character_id LIMIT $2",
-            )
-            .bind::<diesel::sql_types::Integer, _>(min_games)
-            .bind::<diesel::sql_types::BigInt, _>(limit)
-            .get_results(&mut conn)
-            .await?;
+            let rows = ranking::h2h_board(&mut conn, None, min_games, limit).await?;
             (None, rows)
         }
         ranking::H2hSeasonSelection::Current => {
@@ -1784,7 +1747,7 @@ pub async fn get_arena_h2h_top(
             .await
             .optional()?;
             let rows = if let Some(season) = season.as_ref() {
-                h2h_top_for_season(&mut conn, season.id, min_games, limit).await?
+                ranking::h2h_board(&mut conn, Some(season.id), min_games, limit).await?
             } else {
                 Vec::new()
             };
@@ -1797,35 +1760,11 @@ pub async fn get_arena_h2h_top(
                     .get_result(&mut conn)
                     .await
                     .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 82))?;
-            let rows = h2h_top_for_season(&mut conn, season.id, min_games, limit).await?;
+            let rows = ranking::h2h_board(&mut conn, Some(season.id), min_games, limit).await?;
             (Some(season), rows)
         }
     };
     Ok(Json(H2hTopResponse { season, rows }))
-}
-
-async fn h2h_top_for_season(
-    conn: &mut diesel_async::pooled_connection::bb8::PooledConnection<'_, diesel_async::AsyncPgConnection>,
-    season_id: Uuid,
-    min_games: i32,
-    limit: i64,
-) -> Result<Vec<H2hTopEntry>, BladeApiError> {
-    let rows = diesel::sql_query(
-        "SELECT row_number() OVER (ORDER BY r.rating DESC, r.matches DESC, r.last_match_at ASC NULLS LAST, r.character_id) AS rank, \
-                r.character_id, COALESCE(c.character ->> 'name', '') AS name, \
-                COALESCE((c.character ->> 'level')::bigint, 0) AS level, \
-                r.rating, r.wins, r.losses, r.ties, r.matches, r.last_match_at \
-         FROM arena_h2h_season_ratings r \
-         INNER JOIN characters c ON c.id = r.character_id \
-         WHERE r.season_id = $1 AND r.matches >= $2 \
-         ORDER BY r.rating DESC, r.matches DESC, r.last_match_at ASC NULLS LAST, r.character_id LIMIT $3",
-    )
-    .bind::<diesel::sql_types::Uuid, _>(season_id)
-    .bind::<diesel::sql_types::Integer, _>(min_games)
-    .bind::<diesel::sql_types::BigInt, _>(limit)
-    .get_results(conn)
-    .await?;
-    Ok(rows)
 }
 
 #[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-seasons")]
