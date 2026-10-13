@@ -32,9 +32,12 @@
 //! THE `/end` PACKAGE. Retail's `/end` paid one stackable besides the per-floor
 //! gold and XP — a material, or a stack of soul gems — see [`end_package`]. A band
 //! with no captured gem package (everything below level 60) still pays gems
-//! (report #371): at levels 39-59 as retail screenshots show (Grand, up to 7),
+//! (report #371): at levels 39-48 as retail screenshots show (Grand, up to 7),
 //! below that at the pooled retail rate, graded to the character's level. The
 //! rungs either side of the golden chest can pay a Grand gem at 39-59.
+//!
+//! THE TOP BAND OPENS AT 49 (report #383). A character of level 49 or more draws
+//! the top band's rewards — see [`TOP_BAND_FROM_LEVEL`].
 
 use std::collections::HashMap;
 
@@ -146,7 +149,29 @@ fn instance_uuid(seed: u64, ordinal: usize) -> Uuid {
 /// Brass Ingot and Garlic. The observed levels cluster as 3-8, 34-57 and 64-100,
 /// and the bands follow those clusters. The first corpus threw the level away, so
 /// a level-100 character drew level-3 results (#294).
+///
+/// These bands sort the retail OBSERVATIONS. Which band a CHARACTER draws from is
+/// [`character_band`]: the same, except that the top band opens at
+/// [`TOP_BAND_FROM_LEVEL`].
 pub const LEVEL_BANDS: [std::ops::RangeInclusive<u64>; 3] = [0..=19, 20..=59, 60..=u64::MAX];
+
+/// The character level from which a character draws the top band's rewards — the
+/// level 64-100 captures — rather than the level 34-57 ones (report #383).
+///
+/// NOT A CAPTURED THRESHOLD. The captures put no retail run between level 58 and
+/// 63, so the 60 in [`LEVEL_BANDS`] only splits the observed clusters; nothing
+/// measured where retail's own boundary was. Only two of the 26 captured runs
+/// were made at level 49-59 (54 and 57), and both reached rung 35 alone, where
+/// they were paid Fire Salts ×5 and Honeycomb ×6 — kinds the top band pays too
+/// (Fire Salts ×5 at level 66, Honeycomb ×5 at 93). No capture shows a level 49-59
+/// character paid what only the lower band pays (rung 70's Quicksilver, say).
+/// HauDrauf, a trusted retail player: "From 45 a player is practically done, by
+/// 50 completely. Many players stayed at 49. So everything must be obtainable by
+/// level 49 at the latest." Where the data cannot decide, he is trusted.
+///
+/// The observations keep their bands, so a level-60+ character draws exactly the
+/// pool it drew before, and a level 20-48 one too.
+pub const TOP_BAND_FROM_LEVEL: u64 = 49;
 
 fn band(level: u64) -> usize {
     LEVEL_BANDS
@@ -155,11 +180,20 @@ fn band(level: u64) -> usize {
         .unwrap_or(LEVEL_BANDS.len() - 1)
 }
 
+/// The band a CHARACTER of `level` draws from — see [`TOP_BAND_FROM_LEVEL`].
+fn character_band(level: u64) -> usize {
+    if level >= TOP_BAND_FROM_LEVEL {
+        LEVEL_BANDS.len() - 1
+    } else {
+        band(level)
+    }
+}
+
 /// The observations a character of `level` draws from: those in its own band, or —
 /// for a rung no retail run in that band reached — the band of the observation
 /// nearest in level. Never empty unless `observations` is.
 fn level_pool<T>(observations: &[T], level: u64, level_of: impl Fn(&T) -> u64) -> Vec<&T> {
-    let own = band(level);
+    let own = character_band(level);
     let target = if observations.iter().any(|o| band(level_of(o)) == own) {
         own
     } else {
@@ -215,9 +249,12 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 /// rest of the time it pays its own band's material, as before. The 60+ band is
 /// unchanged.
 ///
-/// LEVELS 39-59 follow the retail screenshots the reporter later supplied: half
-/// the runs pay 1-3 Grand (39-44) or 1-7 Greater/Elevated/Grand (45-59) — see
+/// LEVELS 39-48 follow the retail screenshots the reporter later supplied: half
+/// the runs pay 1-3 Grand (39-44) or 1-7 Greater/Elevated/Grand (45-48) — see
 /// [`mid_level_soul_gems`]. The re-grading above now applies below level 39 only.
+///
+/// FROM LEVEL 49 the package is the top band's, drawn as at level 100 (report #383,
+/// [`TOP_BAND_FROM_LEVEL`]): Glorious gems and the Transcendent upgrade included.
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
     let mut grant = RewardGrant::default();
     if score < END_PACKAGE_MIN_SCORE {
@@ -276,8 +313,11 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
 }
 
 /// The character levels whose `/end` soul gems follow retail screenshots rather
-/// than the captures (report #371) — see [`mid_level_soul_gems`].
-pub const MID_LEVEL_GEMS: std::ops::RangeInclusive<u64> = 39..=59;
+/// than the captures (report #371) — see [`mid_level_soul_gems`]. It ended at 59;
+/// from [`TOP_BAND_FROM_LEVEL`] the top band's captured packages apply instead
+/// (report #383). The level-57/58 screenshots' single Grand is still paid there,
+/// by the rungs beside the golden chest ([`GRAND_BESIDE_THE_GOLDEN_CHEST`]).
+pub const MID_LEVEL_GEMS: std::ops::RangeInclusive<u64> = 39..=TOP_BAND_FROM_LEVEL - 1;
 
 /// A level in [`MID_LEVEL_GEMS`] is paid soul gems at `/end` one run in this many
 /// — retail's measured rate at level 60+ (5 gem stacks in 10 paid packages). The
@@ -324,6 +364,12 @@ const GRAND: usize = 7;
 /// rungs before (190) and after (490) it.
 const RUNGS_BESIDE_THE_GOLDEN_CHEST: [u32; 2] = [190, 490];
 
+/// The character levels a rung beside the golden chest can pay a Grand gem at —
+/// see [`grand_gem_beside_the_golden_chest`]. Unchanged by #383: it ADDS a result
+/// to the top band's pool these levels already drew at those rungs, and it is how
+/// the level-57/58 screenshots' single Grand is reached.
+const GRAND_BESIDE_THE_GOLDEN_CHEST: std::ops::RangeInclusive<u64> = 39..=59;
+
 /// A rung beside the golden chest can pay one Grand Soul Gem to a level-39..59
 /// character (report #371): "there is a Grand one before a golden chest, and one
 /// after", and the level-57/58 end screens above show a single Grand among the
@@ -333,11 +379,10 @@ const RUNGS_BESIDE_THE_GOLDEN_CHEST: [u32; 2] = [190, 490];
 /// that pool as one more equally likely result, not as a certainty ("mostly
 /// after the golden chest").
 fn grand_gem_beside_the_golden_chest(rung: u32, level: u64) -> Option<ObservedReward> {
-    (RUNGS_BESIDE_THE_GOLDEN_CHEST.contains(&rung) && MID_LEVEL_GEMS.contains(&level)).then(|| {
-        ObservedReward {
-            stackable_items: HashMap::from([(Uuid::parse_str(SOUL_GEMS[GRAND]).unwrap(), 1)]),
-            items: Vec::new(),
-        }
+    let beside = RUNGS_BESIDE_THE_GOLDEN_CHEST.contains(&rung);
+    (beside && GRAND_BESIDE_THE_GOLDEN_CHEST.contains(&level)).then(|| ObservedReward {
+        stackable_items: HashMap::from([(Uuid::parse_str(SOUL_GEMS[GRAND]).unwrap(), 1)]),
+        items: Vec::new(),
     })
 }
 
@@ -508,7 +553,7 @@ fn borrow_from_above<'a>(
     pool: &[&'a LevelledResult],
     level: u64,
 ) -> Option<(Vec<&'a LevelledResult>, u64)> {
-    let own = band(level);
+    let own = character_band(level);
     let pool_band = band(pool.first()?.level);
     if pool_band >= own {
         return None;
@@ -987,13 +1032,15 @@ mod tests {
     }
 
     /// The screenshot cases: retail's end screen paid Grand ×6 at level 47, and a
-    /// single Grand at levels 57 and 58. From 45 the stack is 1-7 of Greater,
-    /// Elevated or Grand ("up to 7 of every kind"), never Glorious or Transcendent.
+    /// single Grand at levels 57 and 58. From 45 to 48 the `/end` stack is 1-7 of
+    /// Greater, Elevated or Grand ("up to 7 of every kind"), never Glorious or
+    /// Transcendent. From 49 `/end` is the top band's (report #383), and the
+    /// level-57/58 single Grand is paid by the rungs beside the golden chest.
     #[test]
-    fn levels_45_to_59_are_paid_up_to_seven_and_the_screenshots_are_reachable() {
+    fn levels_45_to_48_are_paid_up_to_seven_and_the_screenshots_are_reachable() {
         let grand = uuid(ALL_SOUL_GEMS[GRAND]);
         let kinds = [GREATER, ELEVATED, GRAND].map(|g| uuid(ALL_SOUL_GEMS[g]));
-        for level in [45u64, 47, 57, 58, 59] {
+        for level in [45u64, 47, 48] {
             let (gems, n) = end_gems(level, 10_000);
             assert!(gems.iter().all(|g| kinds.contains(&g.0)), "level {level}: {gems:?}");
             let counts: std::collections::BTreeSet<u64> = gems.iter().map(|g| g.1).collect();
@@ -1005,9 +1052,56 @@ mod tests {
         let (at47, _) = end_gems(47, 10_000);
         assert!(at47.contains(&(grand, 6)), "level 47: retail's Grand ×6 never comes up");
         for level in [57u64, 58] {
-            let (gems, _) = end_gems(level, 10_000);
-            assert!(gems.contains(&(grand, 1)), "level {level}: retail's single Grand never comes up");
+            let single_grand = (0..400i64).any(|seed| {
+                [190u32, 490].iter().any(|rung| {
+                    future_reward_for_rung(*rung, level, seed).unwrap().stackable_items
+                        == HashMap::from([(grand, 1)])
+                })
+            });
+            assert!(single_grand, "level {level}: retail's single Grand never comes up");
         }
+    }
+
+    /// Report #383: from level 49 every rung and the `/end` package draw what a
+    /// level-100 character draws for the same seed — Giant's Toe at rung 70, the top
+    /// band's soul gems at `/end` (Glorious, and the Transcendent upgrade). Chests
+    /// take the character's level, and rungs 190/490 keep #371's extra Grand
+    /// (39-59). Level 48 is the control: it keeps the level 34-57 pool.
+    #[test]
+    fn from_level_49_every_reward_is_the_top_bands() {
+        let giants_toe = uuid(GIANTS_TOE);
+        let top_end: std::collections::HashSet<Uuid> = (0..2_000i64)
+            .flat_map(|seed| end_package(100.0, 100, seed).stackable_items.into_keys())
+            .collect();
+        for level in [49u64, 50, 54, 57, 59] {
+            for seed in 0..500i64 {
+                for rung in [35u32, 70, 95, 135, 260, 650] {
+                    assert_eq!(
+                        future_reward_for_rung(rung, level, seed),
+                        future_reward_for_rung(rung, 100, seed),
+                        "level {level} rung {rung} seed {seed}"
+                    );
+                }
+                assert_eq!(end_package(100.0, level, seed), end_package(100.0, 100, seed));
+            }
+            let ends: std::collections::HashSet<Uuid> = (0..2_000i64)
+                .flat_map(|seed| end_package(100.0, level, seed).stackable_items.into_keys())
+                .collect();
+            assert_eq!(ends, top_end, "level {level}: /end reaches every top-band package");
+        }
+        for glorious_or_better in [ALL_SOUL_GEMS[8], TRANSCENDENT_SOUL_GEM] {
+            assert!(top_end.contains(&uuid(glorious_or_better)), "{glorious_or_better} unreachable");
+        }
+        let toe = |level: u64| {
+            (0..500i64).any(|seed| single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == giants_toe)
+        };
+        assert!(toe(49), "level 49 never draws Giant's Toe at rung 70");
+        assert!(!toe(48), "level 48 keeps the level 34-57 rung-70 pool");
+        let quicksilver = uuid("e80bee76-f92c-4005-9eff-20d1e8c64d24");
+        let quick = |level: u64| {
+            (0..500i64).any(|seed| single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == quicksilver)
+        };
+        assert!(quick(48) && !quick(49), "Quicksilver at rung 70 is the level 20-48 pool's");
     }
 
     /// Below 39 the re-graded retail stack still applies: a level-3 character is
