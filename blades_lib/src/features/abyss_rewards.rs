@@ -465,6 +465,61 @@ pub fn future_reward_for_rung(
     Some(rung_reward(rung, character_level, run_seed))
 }
 
+/// Rung results seen on retail screenshots rather than in a capture, by rung.
+///
+/// Rung 70, level 63: Giant's Toe ×29 — the end screen of a level-63, floor-68 run
+/// (#371's screenshots, see [`mid_level_soul_gems`]). It is a rung-70 stack: rung 70
+/// paid 27-35 at level 66-100 in every capture, while `/end` packages were 4-19.
+/// The captures alone hold one Giant's Toe in seven level-60+ rung-70 draws against
+/// four Nightshade, which report #381 calls too much Nightshade.
+fn screenshot_results(rung: u32) -> &'static [LevelledResult] {
+    static RUNG_70: std::sync::OnceLock<Vec<LevelledResult>> = std::sync::OnceLock::new();
+    match rung {
+        70 => RUNG_70.get_or_init(|| {
+            vec![LevelledResult {
+                level: 63,
+                reward: ObservedReward {
+                    stackable_items: HashMap::from([(
+                        Uuid::parse_str("a4d5e792-5a27-4bb3-851f-e0917c0962db").unwrap(), // Giant's Toe
+                        29,
+                    )]),
+                    items: Vec::new(),
+                },
+            }]
+        }),
+        _ => &[],
+    }
+}
+
+/// Report #381: "in the Abyss, instead of Pearls, there should be Diamonds and
+/// Atronite". Rungs 190 and 490 were never captured for a level 20-59 character,
+/// and [`level_pool`] lent a level 20-36 one the nearest observations in level —
+/// the level-3/7 runs: one Pearl, seven Steel Ingots, one Petty Soul Gem. Lending
+/// from the level-66/81 runs instead pays Emerald, Malachite and a soul gem, the
+/// gem moved down to the character's level ([`regrade_soul_gems`]).
+///
+/// Only for a pool [`level_pool`] borrowed from a band BELOW the character's, so
+/// every character it already served from its own band or from above (37-100,
+/// the level-43 and level-100 runs) draws exactly as before. The rung-260 gear is
+/// not lent upwards: a level-66 weapon is no fitter for a level-21 character than
+/// a level-7 one is. Returns the pool and the lowest level in it.
+fn borrow_from_above<'a>(
+    observations: &[&'a LevelledResult],
+    pool: &[&'a LevelledResult],
+    level: u64,
+) -> Option<(Vec<&'a LevelledResult>, u64)> {
+    let own = band(level);
+    let pool_band = band(pool.first()?.level);
+    if pool_band >= own {
+        return None;
+    }
+    let above = observations.iter().map(|o| band(o.level)).filter(|b| *b > own).min()?;
+    let lent: Vec<&LevelledResult> =
+        observations.iter().copied().filter(|o| band(o.level) == above).collect();
+    let lowest = lent.iter().map(|o| o.level).min()?;
+    Some((lent, lowest))
+}
+
 /// The single resolution of a rung's reward, shared by the advertisement and the
 /// grant. The draw is a function of the run seed and the rung only — never of
 /// the score that selected it — so advertising and paying cannot disagree.
@@ -483,7 +538,19 @@ fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant 
         return grant;
     }
 
-    let pool = level_pool(&rung.results, character_level, |r| r.level);
+    let screenshots = screenshot_results(rung.score);
+    let observations: Vec<&LevelledResult> = rung.results.iter().chain(screenshots).collect();
+    let mut pool: Vec<&LevelledResult> =
+        level_pool(&observations, character_level, |r| r.level).into_iter().copied().collect();
+    // A material rung the character's band never showed us borrows from the band
+    // ABOVE rather than below (report #381) — see [`borrow_from_above`].
+    let mut regrade_from: Option<u64> = None;
+    if rung.kind == "stackableItems" {
+        if let Some((above, lowest)) = borrow_from_above(&observations, &pool, character_level) {
+            pool = above;
+            regrade_from = Some(lowest);
+        }
+    }
     if pool.is_empty() {
         // A rung we somehow hold no observation for advertises nothing rather
         // than inventing a reward. The score still shows, which is what the
@@ -499,7 +566,10 @@ fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant 
     }
     let drawn = candidates[(seed % candidates.len() as u64) as usize];
 
-    grant.stackable_items = drawn.stackable_items.clone();
+    grant.stackable_items = match regrade_from {
+        Some(observed) => regrade_soul_gems(&drawn.stackable_items, observed, character_level),
+        None => drawn.stackable_items.clone(),
+    };
     for (ordinal, item) in drawn.items.iter().enumerate() {
         grant.items.push(RewardItem {
             id: instance_uuid(seed, ordinal),
@@ -735,6 +805,70 @@ mod tests {
             seen.insert(item);
         }
         assert!(seen.contains(&uuid(NIGHTSHADE)) && seen.contains(&uuid(GIANTS_TOE)));
+    }
+
+    /// Report #381: "the share of Nightshade is too high, it should alternate more
+    /// with Giant's Toe". The captures alone gave a level-60+ character Nightshade
+    /// 4 times in 7 and Giant's Toe once; with the level-63 screenshot it is 4 in 8
+    /// and 2 in 8. The level-43 (20-59) pool, which has no Giant's Toe in retail,
+    /// is untouched.
+    #[test]
+    fn rung_70_alternates_nightshade_with_giants_toe_at_high_level() {
+        let draws = 4000i64;
+        let share = |level: u64, id: &str| {
+            (0..draws)
+                .filter(|seed| single_stack(&future_reward_for_rung(70, level, *seed).unwrap()).0 == uuid(id))
+                .count() as f64
+                / draws as f64
+        };
+        let (nightshade, toe) = (share(100, NIGHTSHADE), share(100, GIANTS_TOE));
+        println!("rung 70, level 100: Nightshade {nightshade:.3}, Giant's Toe {toe:.3}");
+        assert!((0.44..=0.56).contains(&nightshade), "Nightshade {nightshade}");
+        assert!((0.20..=0.30).contains(&toe), "Giant's Toe {toe}");
+        assert_eq!(share(43, GIANTS_TOE), 0.0, "level 43 keeps its own retail pool");
+        assert!((0.20..=0.30).contains(&share(43, NIGHTSHADE)));
+    }
+
+    /// Report #381: "in the Abyss, instead of Pearls, Diamonds and Atronite". Rungs
+    /// 190 and 490 have no capture between level 20 and 59; a level 20-36 character
+    /// was lent the level-3/7 results (Pearl, Steel Ingot, Petty Soul Gem) and is now
+    /// lent the level-66/81 ones (Emerald, Malachite, a soul gem graded to its level).
+    /// Level 7 keeps its own retail Pearl; level 43 and 100 draw exactly as before.
+    #[test]
+    fn a_mid_level_rung_190_and_490_are_never_a_pearl() {
+        const PEARL: &str = "89ece62c-9ff6-470a-a152-d45ef4e0c222";
+        const STEEL: &str = "b81952e0-c3c8-4a5c-92c0-8215d3eb71af";
+        const EMERALD: &str = "4d1231be-d3fa-4282-81b2-0f7bed4aabff";
+        let low = [PEARL, STEEL, ALL_SOUL_GEMS[0]].map(uuid);
+        for level in [20u64, 25, 30, 36] {
+            let mut seen = std::collections::HashSet::new();
+            for seed in 0..400i64 {
+                for rung in [190, 490] {
+                    let (item, _) = single_stack(&future_reward_for_rung(rung, level, seed).unwrap());
+                    assert!(!low.contains(&item), "level {level} rung {rung} drew {item}");
+                    if let Some(grade) = soul_gem_grade(&item) {
+                        assert!(grade <= 4, "level {level}: soul gem grade {grade} is not regraded");
+                    }
+                    seen.insert(item);
+                }
+            }
+            assert!(seen.contains(&uuid(EMERALD)), "level {level}: {seen:?}");
+        }
+        // Control: retail's own level-3/7 results still serve a level-7 character.
+        let level_7: std::collections::HashSet<Uuid> = (0..200i64)
+            .map(|seed| single_stack(&future_reward_for_rung(190, 7, seed).unwrap()).0)
+            .collect();
+        assert!(level_7.contains(&uuid(PEARL)));
+        // Level 37+ was already lent the level-66/81 results; unchanged, gems ungraded.
+        for level in [43u64, 100] {
+            for seed in 0..200i64 {
+                let (item, _) = single_stack(&future_reward_for_rung(490, level, seed).unwrap());
+                assert!(!low.contains(&item));
+                if let Some(grade) = soul_gem_grade(&item) {
+                    assert!(grade >= 6, "level {level}: {item} was regraded");
+                }
+            }
+        }
     }
 
     /// The low-level control: a level-7 character keeps retail's level 3-7 results.
