@@ -4507,6 +4507,48 @@ mod tests {
     }
     const LEVEL_45_FROM_149_DIGEST: u64 = 0xa32e_d7f5_fda6_1e5d;
 
+    /// Report #383: "by 50 [a player is] completely done … everything must be
+    /// obtainable by level 49". A level-49 run from floor 149 draws every material
+    /// rung and its `/end` package from the top band — the very draw a level-100
+    /// character makes for the same seed — so rung 70 pays Giant's Toe and never
+    /// Quicksilver. Rungs 50/360 are chests at the character's own level, and
+    /// 190/490 keep #371's extra Grand gem (levels 39-59), so those differ by design.
+    #[test]
+    fn a_level_49_run_from_floor_149_draws_the_top_band() {
+        const GIANTS_TOE: &str = "a4d5e792-5a27-4bb3-851f-e0917c0962db";
+        let giants_toe = Uuid::parse_str(GIANTS_TOE).unwrap();
+        let quicksilver = Uuid::parse_str(QUICKSILVER_INGOT).unwrap();
+        let top = [NIGHTSHADE, GIANTS_TOE, CHAURUS_CHITIN, MALACHITE_INGOT]
+            .map(|u| Uuid::parse_str(u).unwrap());
+        let mut toes = 0;
+        for run in &payouts(49, 149, 4, DEEP_FLOOR_KILLS) {
+            let seventy = template_of(rung_draw(run, 70).expect("reaches rung 70")).unwrap();
+            assert!(top.contains(&seventy), "level 49 rung 70 drew {seventy}");
+            assert_ne!(seventy, quicksilver);
+            toes += usize::from(seventy == giants_toe);
+            let fifty = rung_draw(run, 50).unwrap();
+            assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, 49));
+        }
+        assert!(toes >= 8, "Giant's Toe on only {toes}/64 level-49 rung 70s");
+
+        let id = Uuid::from_u128(0x383);
+        for nonce in 0..64u64 {
+            let seed = generate_run_seed(id, nonce);
+            for rung in [35u32, 70, 95, 135, 260, 650] {
+                assert_eq!(
+                    abyss_rewards::future_reward_for_rung(rung, 49, seed),
+                    abyss_rewards::future_reward_for_rung(rung, 100, seed),
+                    "rung {rung} nonce {nonce}"
+                );
+            }
+            assert_eq!(
+                abyss_rewards::end_package(100.0, 49, seed),
+                abyss_rewards::end_package(100.0, 100, seed),
+                "/end nonce {nonce}"
+            );
+        }
+    }
+
     /// Prints the digests [`payouts`] gives today (`--ignored --nocapture`), to pin
     /// them: run on the unchanged code, never to paper over a moved level-100 draw.
     #[test]
