@@ -78,6 +78,12 @@ fn pool(item_type: u64) -> Option<Vec<Uuid>> {
     )
 }
 
+/// Whether a ring (`RING`) or necklace (`NECKLACE`) can carry GRADING property
+/// `id` — i.e. it is on that slot's APK list. `false` for any other item type.
+pub fn slot_allows(item_type: u64, id: Uuid) -> bool {
+    pool(item_type).is_some_and(|p| p.contains(&id))
+}
+
 /// Roll `(grade, GRADING)` for a freshly minted item of `item_type`.
 ///
 /// `None` for anything that is not a ring or necklace — those are never graded.

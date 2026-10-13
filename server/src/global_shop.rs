@@ -786,9 +786,11 @@ fn grant_from_offer_contents_with_enchanting(
                 && entry.grading.is_empty()
                 && entry.arcane_tier > 0
             {
-                Some(blades_lib::features::sigil_grades::roll_grading(
+                Some(roll_arcane_grading(
+                    entry.item_template_id,
                     entry.arcane_tier,
                     roll_nonce,
+                    items,
                 )?)
             } else {
                 None
@@ -887,6 +889,99 @@ fn grant_from_offer_contents_with_enchanting(
         return None;
     }
     Some(reward)
+}
+
+/// The GRADING one purchase of an arcane item with no authored grading gets.
+///
+/// Jewellery draws only from the retail outcomes its own slot could have had:
+/// graded, and every property from that slot's APK list. The unfiltered corpus
+/// handed an arcane necklace no grade about half the time and a ring's
+/// properties about one time in seven (#386). A tier whose corpus holds no such
+/// outcome (tier 1 holds only ungraded weapons) falls back to the APK grade table
+/// rings and necklaces are always rolled from (`jewelry_grade`). Anything else
+/// draws from the whole corpus, as before. `None` — refuse the sale — only for a
+/// tier retail never showed at all.
+fn roll_arcane_grading(
+    template: Uuid,
+    arcane_tier: u64,
+    roll_nonce: u64,
+    items: &std::collections::HashMap<Uuid, blades_lib::game_data::GameDataItem>,
+) -> Option<Vec<blades_lib::user_data::ItemSingleProperty>> {
+    use crate::jewelry_grade::{NECKLACE, RING};
+    let item_type = items.get(&template).map(|i| i.r#type);
+    let Some(slot @ (RING | NECKLACE)) = item_type else {
+        return blades_lib::features::sigil_grades::roll_grading(arcane_tier, roll_nonce);
+    };
+    if !blades_lib::features::sigil_grades::can_roll(arcane_tier) {
+        return None;
+    }
+    blades_lib::features::sigil_grades::roll_grading_where(arcane_tier, roll_nonce, |g| {
+        !g.is_empty() && g.iter().all(|p| crate::jewelry_grade::slot_allows(slot, p.id))
+    })
+    .or_else(|| {
+        let mut rng =
+            crate::jewelry_roll::seeded(&[template.as_bytes(), b"arcane-grade"], roll_nonce);
+        crate::jewelry_grade::roll(slot, &mut rng).map(|(_, grading)| grading)
+    })
+}
+
+/// The per-purchase roll nonce: how many times this character bought the
+/// product before, with the character folded in so two players do not walk the
+/// same sequence of rolls (#386). Store bundles were already seeded this way.
+fn purchase_roll_nonce(bought_before: u64, character_id: Uuid) -> u64 {
+    bought_before ^ (character_id.as_u128() as u64).rotate_left(29)
+}
+
+/// Whether this product sells a ring or necklace the server rolls per purchase.
+///
+/// For these a captured retail grant is ONE recorded purchase: cloning it hands
+/// every buyer the identical necklace for ever (#386, the #170 class). A
+/// fixed-template ring (the Ultimate rings, #8) is never rolled, so it does not
+/// count.
+fn rolls_jewelry_per_purchase(
+    static_data: &blades_lib::static_data::StaticData,
+    items: &std::collections::HashMap<Uuid, blades_lib::game_data::GameDataItem>,
+    product_id: Uuid,
+) -> bool {
+    static_data
+        .global_shop_offer_contents
+        .get(&product_id)
+        .is_some_and(|c| {
+            c.contents.iter().any(|e| {
+                crate::jewelry_roll::is_jewelry_template(e.item_template_id, items)
+                    && !crate::fixed_templates::has_mandatory_properties(e.item_template_id)
+            })
+        })
+}
+
+/// The reward one purchase of a non-randomised product pays, or `None` when it
+/// has nothing deliverable.
+///
+/// A captured retail grant wins — it is what retail handed over, instance stats
+/// and all — EXCEPT for products that sell rolled jewellery, which roll from the
+/// APK contents every time. Should that roll be impossible the capture is still
+/// paid rather than the sale refused.
+fn purchase_reward(
+    static_data: &blades_lib::static_data::StaticData,
+    repair_data: &blades_lib::features::repair::RepairData,
+    items: &std::collections::HashMap<Uuid, blades_lib::game_data::GameDataItem>,
+    product_id: Uuid,
+    roll_nonce: u64,
+) -> Option<RewardGrant> {
+    let rolled = || {
+        grant_from_offer_contents_with_enchanting(
+            static_data.global_shop_offer_contents.get(&product_id),
+            repair_data,
+            items,
+            &static_data.enchanting,
+            roll_nonce,
+        )
+    };
+    match captured_grant_for_product(static_data, product_id) {
+        Some(r) if !rolls_jewelry_per_purchase(static_data, items, product_id) => Some(r.clone()),
+        Some(r) => Some(rolled().unwrap_or_else(|| r.clone())),
+        None => rolled(),
+    }
 }
 
 /// A captured reward for this catalogue product, including a capture from an
@@ -1095,7 +1190,8 @@ pub async fn purchase_global_shop(
     //
     // A capture-derived grant always WINS: it is a recording of what retail
     // actually handed over, instance stats and all, where the fallback below
-    // knows only templates and quantities.
+    // knows only templates and quantities. Except for rolled jewellery, which
+    // re-rolls every purchase (#386) — see `purchase_reward`.
     //
     // A randomised bundle is rolled inside the transaction below, so its recorded
     // grant (if any) is never what the player gets. Checked FIRST because the
@@ -1203,15 +1299,16 @@ pub async fn purchase_global_shop(
                 .copied()
                 .unwrap_or(0);
 
-            let reward = match captured_grant_for_product(&globals.static_data, product_id) {
-                _ if randomised => RewardGrant::default(),
-                Some(r) => r.clone(),
-                None => grant_from_offer_contents_with_enchanting(
-                    globals.static_data.global_shop_offer_contents.get(&product_id),
+            let roll_nonce = purchase_roll_nonce(bought_before, character_id);
+            let reward = if randomised {
+                RewardGrant::default()
+            } else {
+                purchase_reward(
+                    &globals.static_data,
                     &globals.repair_data,
                     &globals.game_data.items_template,
-                    &globals.static_data.enchanting,
-                    bought_before,
+                    product_id,
+                    roll_nonce,
                 )
                 .ok_or_else(|| {
                     log::warn!(
@@ -1220,7 +1317,7 @@ pub async fn purchase_global_shop(
                          rather than a 404, which would brick the client",
                     );
                     map_purchase_err(PurchaseError::InvalidPrice)
-                })?,
+                })?
             };
 
             // Charge the (validated) price after proving the reward is deliverable.
@@ -1272,7 +1369,7 @@ pub async fn purchase_global_shop(
                 blades_lib::features::store_bundles::roll_bundle_with(
                     &product_id,
                     u64::from(entry.character.0.level),
-                    bought_before ^ (character_id.as_u128() as u64).rotate_left(29),
+                    roll_nonce,
                     &entry.inventory.0.item_templates(),
                     globals
                         .static_data
@@ -3653,17 +3750,7 @@ mod report353_store_prestige {
             let paid = if blades_lib::features::store_bundles::is_randomised_bundle(&product) {
                 0
             } else {
-                match captured_grant_for_product(&sd, product) {
-                    Some(r) => r.town_xp,
-                    None => grant_from_offer_contents_with_enchanting(
-                        sd.global_shop_offer_contents.get(&product),
-                        &repair,
-                        items,
-                        &sd.enchanting,
-                        0,
-                    )
-                    .map_or(0, |r| r.town_xp),
-                }
+                purchase_reward(&sd, &repair, items, product, 0).map_or(0, |r| r.town_xp)
             };
             // A product the store cannot grant was never bought, so it owes
             // nothing either way; every grantable one must agree exactly.
@@ -3728,5 +3815,262 @@ mod report353_store_prestige {
         let count = body.find(".global_shop_purchases\n                .entry(product_id)").expect("counted");
         assert!(credit < count, "pay the town first, then count the purchase");
         assert!(body.contains("CharacterDbEntryTownEconomy::as_select()"), "the row must carry the town");
+    }
+}
+
+/// Tracker #386: "I'm buying the necklaces with two guaranteed enchantments —
+/// always the same one comes." The Ebony Faerite Necklace of Assured Imbuement
+/// (arcane tier 2: "guaranteed to receive exactly 2 bonus enchantments") has a
+/// captured retail grant, and the captured grant won over the per-purchase roll,
+/// so every buyer got that one recorded necklace — same grade, same GRADING —
+/// on every purchase. Prod held 21 purchases of it across four characters, each
+/// a copy of the capture.
+#[cfg(test)]
+mod report_386_captured_jewelry_rolls {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Ebony Faerite Necklace of Assured Imbuement — the reporter's offer.
+    const ARCANE_NECKLACE_OFFER: Uuid = Uuid::from_u128(0x79995d29_eac2_49a3_bfec_ce9e547b98de);
+    /// Ebony Faerite Necklace (Armsman, Fortify Magicka Regen): TWO authored
+    /// enchantments, also captured.
+    const TWO_ENCHANT_NECKLACE_OFFER: Uuid =
+        Uuid::from_u128(0xfc8f44dd_d4cf_48b8_b8b2_77eaaa0643b8);
+    /// Every non-randomised product whose captured grant shadowed a jewellery roll.
+    const CAPTURED_ROLLED_JEWELRY: [&str; 6] = [
+        "579141c5-4960-4280-9b29-98b8a88f9dfe",
+        "79995d29-eac2-49a3-bfec-ce9e547b98de",
+        "812ea9ef-c2af-406b-9b93-1897db4a6879",
+        "dac59a1a-7f22-4306-9117-fa90d44aee3d",
+        "e87d0348-84ee-48be-a19e-6201b38e4b74",
+        "fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8",
+    ];
+    const CHAR_A: Uuid = Uuid::from_u128(0x489620db_7f90_4a03_bb7c_f7e92a9c73cb);
+    const CHAR_B: Uuid = Uuid::from_u128(0xf7817aa6_5892_4794_871e_9b51a475a606);
+    const PURCHASES: u64 = 40;
+
+    fn sd() -> &'static blades_lib::static_data::StaticData {
+        static SD: std::sync::OnceLock<blades_lib::static_data::StaticData> =
+            std::sync::OnceLock::new();
+        SD.get_or_init(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            crate::static_loader::load(&dir)
+        })
+    }
+
+    /// What `purchase_global_shop` pays this character's `n`-th purchase.
+    fn buy(product: Uuid, character: Uuid, n: u64) -> blades_lib::user_data::Item {
+        let r = purchase_reward(
+            sd(),
+            &repair_data(),
+            item_table(),
+            product,
+            purchase_roll_nonce(n, character),
+        )
+        .expect("the offer is deliverable");
+        assert_eq!(r.items.len(), 1, "{product}: one item");
+        r.items[0].item.clone()
+    }
+
+    fn roll_key(item: &blades_lib::user_data::Item) -> String {
+        format!(
+            "{:?}|{:?}|{:?}",
+            item.grade, item.properties.grading, item.properties.enchanting
+        )
+    }
+
+    fn enchant_set(item: &blades_lib::user_data::Item) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = item.properties.enchanting.iter().map(|p| p.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The defect itself, as a before/after: the captured grant is one fixed
+    /// instance, and the purchase now rolls a fresh one per buy.
+    #[test]
+    fn the_reporters_necklace_is_rolled_per_purchase_not_cloned() {
+        let sd = sd();
+        assert!(
+            captured_grant_for_product(sd, ARCANE_NECKLACE_OFFER).is_some(),
+            "fixture: the offer must carry a captured grant, or this tests nothing"
+        );
+        assert!(rolls_jewelry_per_purchase(sd, item_table(), ARCANE_NECKLACE_OFFER));
+
+        let necklace = Uuid::from_u128(0x54a7fc91_93e7_4908_a29a_0667d0b07179);
+        let mut seen = HashSet::new();
+        for n in 0..PURCHASES {
+            let item = buy(ARCANE_NECKLACE_OFFER, CHAR_A, n);
+            assert_eq!(item.item_template_id, necklace);
+            assert_eq!(item.arcane_tier, Some(2), "the Assured Imbuement tier survives");
+            assert!(
+                item.properties.enchanting.is_empty(),
+                "retail's arcane necklace arrives un-enchanted (the capture has none)"
+            );
+            // Retail rings and necklaces are always graded, from their own slot.
+            let grade = item.grade.expect("an arcane necklace is always graded");
+            assert_eq!(grade, item.properties.grading.iter().map(|p| p.tier).sum::<u64>());
+            assert!(!item.properties.grading.is_empty());
+            for p in &item.properties.grading {
+                assert!(
+                    crate::jewelry_grade::slot_allows(crate::jewelry_grade::NECKLACE, p.id),
+                    "purchase {n}: GRADING {} is not a necklace property",
+                    p.id
+                );
+            }
+            assert_eq!(item.durability, 0.0, "jewellery never wears");
+            seen.insert(roll_key(&item));
+        }
+        eprintln!(
+            "#386 arcane necklace: {} distinct rolls in {PURCHASES} purchases (captured clone: 1)",
+            seen.len()
+        );
+        assert!(
+            seen.len() as u64 >= PURCHASES / 2,
+            "only {} distinct necklaces in {PURCHASES} purchases",
+            seen.len()
+        );
+    }
+
+    /// The named two-enchantment necklace: exactly two enchantments every time,
+    /// and the pair varies from purchase to purchase.
+    #[test]
+    fn a_two_enchantment_necklace_rolls_a_fresh_pair_each_purchase() {
+        let sd = sd();
+        let authored = &sd.global_shop_offer_contents[&TWO_ENCHANT_NECKLACE_OFFER].contents[0];
+        assert_eq!(authored.enchanting.len(), 2, "fixture: the two-enchantment offer");
+        let captured = captured_grant_for_product(sd, TWO_ENCHANT_NECKLACE_OFFER)
+            .expect("fixture: captured");
+        assert_eq!(captured.items[0].item.properties.enchanting.len(), 2);
+
+        let mut pairs = HashSet::new();
+        for n in 0..PURCHASES {
+            let item = buy(TWO_ENCHANT_NECKLACE_OFFER, CHAR_A, n);
+            assert_eq!(
+                item.properties.enchanting.len(),
+                2,
+                "purchase {n}: the authored count of enchantments"
+            );
+            let ids = enchant_set(&item);
+            assert_ne!(ids[0], ids[1], "purchase {n}: one enchantment twice");
+            assert!(item.grade.is_some(), "purchase {n}: ungraded necklace");
+            pairs.insert(ids);
+        }
+        eprintln!(
+            "#386 two-enchantment necklace: {} distinct pairs in {PURCHASES} purchases (captured clone: 1)",
+            pairs.len()
+        );
+        assert!(
+            pairs.len() as u64 >= PURCHASES / 4,
+            "only {} distinct enchantment pairs in {PURCHASES} purchases",
+            pairs.len()
+        );
+    }
+
+    /// Suspect 2 of the report: the nonce was only the purchase count, so every
+    /// player's n-th purchase was the same item as everyone else's.
+    #[test]
+    fn two_characters_walk_different_sequences() {
+        for product in [ARCANE_NECKLACE_OFFER, TWO_ENCHANT_NECKLACE_OFFER] {
+            let a: Vec<String> = (0..20).map(|n| roll_key(&buy(product, CHAR_A, n))).collect();
+            let b: Vec<String> = (0..20).map(|n| roll_key(&buy(product, CHAR_B, n))).collect();
+            let same = a.iter().zip(&b).filter(|(x, y)| x == y).count();
+            assert!(same <= 5, "{product}: {same}/20 purchases identical between two characters");
+        }
+        // Control: the same character buying the same n-th time is reproducible,
+        // so the difference above is the character and not noise.
+        assert_eq!(
+            roll_key(&buy(ARCANE_NECKLACE_OFFER, CHAR_A, 3)),
+            roll_key(&buy(ARCANE_NECKLACE_OFFER, CHAR_A, 3))
+        );
+    }
+
+    /// Every captured jewellery product now varies, and keeps its template,
+    /// arcane tier and authored enchantment count.
+    #[test]
+    fn no_captured_jewelry_product_hands_out_one_frozen_item() {
+        let sd = sd();
+        for raw in CAPTURED_ROLLED_JEWELRY {
+            let product = Uuid::parse_str(raw).unwrap();
+            let authored = &sd.global_shop_offer_contents[&product].contents[0];
+            assert!(captured_grant_for_product(sd, product).is_some(), "{raw}: fixture");
+            let mut seen = HashSet::new();
+            for n in 0..PURCHASES {
+                let item = buy(product, CHAR_A, n);
+                assert_eq!(item.item_template_id, authored.item_template_id, "{raw}");
+                assert_eq!(item.arcane_tier, (authored.arcane_tier > 0).then_some(authored.arcane_tier), "{raw}");
+                assert_eq!(item.properties.enchanting.len(), authored.enchanting.len(), "{raw}");
+                assert!(item.grade.is_some(), "{raw}: purchase {n} ungraded");
+                seen.insert(roll_key(&item));
+            }
+            assert!(seen.len() > 1, "{raw}: one frozen item for {PURCHASES} purchases");
+        }
+    }
+
+    /// CONTROLS. The fix must not reach captured grants it has no business with:
+    /// the fixed-template Ultimate rings (#8) and captured gear still arrive
+    /// exactly as recorded, apart from the fresh instance id.
+    #[test]
+    fn fixed_rings_and_captured_gear_still_pay_the_capture() {
+        let sd = sd();
+        for raw in [
+            "0a2a58e0-e26f-47e3-8170-c0806a577414", // LTUltimate Defensive Spells Ring
+            "b579ca24-28be-41c0-a205-35f8d08d1bfa", // Ultimate Ring of Frost
+            "e4ea78fa-f49a-44de-8ad0-d0965f5ce487", // Ultimate Defensive Spells Ring
+            "5e40760a-4d88-44fb-b0b5-2f07b2dd8443", // arcane Dragonbone Light Hammer
+            "c05dfce1-b221-4906-a67d-84c4e13b0172", // Ultimate Shock Mace
+        ] {
+            let product = Uuid::parse_str(raw).unwrap();
+            let captured = captured_grant_for_product(sd, product).expect("fixture: captured");
+            assert!(!rolls_jewelry_per_purchase(sd, item_table(), product), "{raw}");
+            for n in 0..5 {
+                let paid = purchase_reward(
+                    sd,
+                    &repair_data(),
+                    item_table(),
+                    product,
+                    purchase_roll_nonce(n, CHAR_A),
+                )
+                .unwrap();
+                assert_eq!(&paid, captured, "{raw}: the capture must still be paid verbatim");
+            }
+        }
+    }
+
+    /// Arcane jewellery with NO capture used to draw from the whole arcane corpus:
+    /// ungraded about half the time, a ring's properties on a necklace about one
+    /// time in seven. Now always graded from its own slot — including arcane tier
+    /// 1, whose corpus holds only ungraded weapons.
+    #[test]
+    fn uncaptured_arcane_jewelry_is_graded_from_its_own_slot() {
+        let sd = sd();
+        let mut checked = 0;
+        for (product, c) in &sd.global_shop_offer_contents {
+            if captured_grant_for_product(sd, *product).is_some() {
+                continue;
+            }
+            let [e] = c.contents.as_slice() else { continue };
+            let Some(slot) = item_table().get(&e.item_template_id).map(|i| i.r#type) else {
+                continue;
+            };
+            if !matches!(slot, crate::jewelry_grade::RING | crate::jewelry_grade::NECKLACE)
+                || e.arcane_tier == 0
+                || !e.grading.is_empty()
+            {
+                continue;
+            }
+            checked += 1;
+            for n in 0..30 {
+                let item = buy(*product, CHAR_B, n);
+                assert!(item.grade.is_some(), "{product}: purchase {n} ungraded");
+                assert!(
+                    item.properties
+                        .grading
+                        .iter()
+                        .all(|p| crate::jewelry_grade::slot_allows(slot, p.id)),
+                    "{product}: purchase {n} carries another slot's GRADING"
+                );
+            }
+        }
+        assert!(checked >= 10, "fixture: arcane jewellery offers found: {checked}");
     }
 }

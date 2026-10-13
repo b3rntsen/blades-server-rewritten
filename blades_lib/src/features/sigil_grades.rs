@@ -93,19 +93,36 @@ pub fn can_roll(arcane_tier: u64) -> bool {
 /// the tier is absent from the corpus, which the caller must treat as "still not
 /// grantable" rather than "no grade".
 pub fn roll_grading(arcane_tier: u64, nonce: u64) -> Option<Vec<ItemSingleProperty>> {
+    roll_grading_where(arcane_tier, nonce, |_| true)
+}
+
+/// [`roll_grading`] over only the outcomes `keep` accepts, weighted as before.
+///
+/// The corpus mixes every arcane item retail sold: at tier 2, 111 of 235 grants
+/// are ungraded (the weapons and armour, which are never graded — #220), 92 are
+/// necklaces and 32 are rings. Drawing a NECKLACE's grade from all of them hands
+/// it no grade half the time and a ring's properties one time in seven (#386), so
+/// the caller narrows the draw to the outcomes its item could have had. `None`
+/// when no outcome of this tier survives the filter.
+pub fn roll_grading_where(
+    arcane_tier: u64,
+    nonce: u64,
+    keep: impl Fn(&[ItemSingleProperty]) -> bool,
+) -> Option<Vec<ItemSingleProperty>> {
     let tier = corpus().by_arcane_tier.get(&arcane_tier.to_string())?;
-    let total: u64 = tier.results.iter().map(|r| r.n).sum();
+    let kept: Vec<&Outcome> = tier.results.iter().filter(|o| keep(&o.grading)).collect();
+    let total: u64 = kept.iter().map(|r| r.n).sum();
     if total == 0 {
         return None;
     }
     let mut pick = mix(nonce ^ arcane_tier.rotate_left(29)) % total;
-    for outcome in &tier.results {
+    for outcome in &kept {
         if pick < outcome.n {
             return Some(outcome.grading.clone());
         }
         pick -= outcome.n;
     }
-    tier.results.last().map(|o| o.grading.clone())
+    kept.last().map(|o| o.grading.clone())
 }
 
 #[cfg(test)]
