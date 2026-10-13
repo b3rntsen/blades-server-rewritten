@@ -261,11 +261,11 @@ pub const HALLOWEEN_THEME_QUESTS: [Uuid; 5] = [
 /// moment, inside the window, outside it, and across both edges.
 ///
 /// Inside the window every `cadence_days`-th day's opening is a themed event —
-/// the least-run one so far, in list order — and the other days walk the ordinary
-/// rotation in its usual order with the themed events left out. The cadence is
-/// the largest that still gives each themed event two openings
-/// (`days / (2 x themed)`, at least 1), so a 21-day window with the five Halloween
-/// events opens a themed event every second day and each of them twice or more.
+/// the least-run one so far, in list order — and the other days walk the
+/// ordinary rotation in its usual order with the themed events left out. The
+/// cadence is the largest that still gives each themed event two openings (see
+/// [`theme_cadence_days`]), so a 21-day window with the five Halloween events
+/// opens a themed event every second day, and a 28-day one every third.
 ///
 /// A themed event's own `annual`/`preview` instance is hidden while the window's
 /// openings are live, so it is never open twice at once, and shows as usual on
@@ -282,6 +282,24 @@ pub struct EventTheme {
 /// `ceil(a / b)` for a positive `b`, correct for negative `a` too.
 fn ceil_div(a: i64, b: i64) -> i64 {
     a.div_euclid(b) + i64::from(a.rem_euclid(b) != 0)
+}
+
+/// Every how many days a themed window opens a themed event: the LARGEST cadence
+/// whose `ceil(days / cadence)` themed openings still give each of the `themed`
+/// events two (the owner's "more than once"), and at least 1.
+///
+/// Largest because every themed opening is a day the retail rotation does not
+/// turn, and the themed events come round again `cadence x themed` days apart
+/// against retail's 39 (#382). The earlier `days / (2 x themed)` was the right
+/// answer only when it divided evenly: for the 28-day Halloween 2026 window it
+/// gave 2, opening 14 themed days and repeating each event every 10 days, when 3
+/// already gives each of the five its two openings, 15 days apart.
+pub fn theme_cadence_days(days: i64, themed: usize) -> i64 {
+    let needed = 2 * themed as i64;
+    (1..=days.max(1))
+        .rev()
+        .find(|&c| ceil_div(days, c) >= needed)
+        .unwrap_or(1)
 }
 
 /// The longest themed window accepted, in days. A season is weeks; a value far
@@ -359,7 +377,7 @@ impl EventTheme {
         let walk: Vec<&EventDef> = walk.into_iter().map(|(_, d)| d).collect();
 
         let days = end_day - first_day;
-        let cadence_days = (days / (2 * themed.len() as i64)).max(1);
+        let cadence_days = theme_cadence_days(days, themed.len());
 
         let mut openers: Vec<(&EventDef, bool)> = Vec::with_capacity(days as usize);
         let mut themed_runs = vec![0u32; themed.len()];
@@ -1588,7 +1606,7 @@ mod themed_window {
             quest_ids: vec![HALLOWEEN_THEME_QUESTS[0]],
         };
         let plan = theme.plan(&lib).unwrap();
-        assert_eq!(plan.cadence_days(), 4, "8 days / (2 x 1)");
+        assert_eq!(plan.cadence_days(), 7, "8 days: openings on days 0 and 7");
         let mut t = theme.start_secs - 3 * DAY;
         while t < theme.end_secs + 3 * DAY {
             let open = active_events_themed(&lib, Some(&theme), t);
@@ -1603,6 +1621,84 @@ mod themed_window {
             .openings()
             .filter(|(_, q, _)| *q == HALLOWEEN_THEME_QUESTS[0])
             .count();
-        assert_eq!(witch_days, 2, "8 days at a 4-day cadence");
+        assert_eq!(witch_days, 2, "8 days at a 7-day cadence");
+    }
+
+    /// The cadence is the LARGEST that still runs each themed event twice
+    /// (#382). Checked against the definition for every small window, and
+    /// pinned for the windows that matter: 21 days of five events stays every
+    /// second day, the committed 28-day Halloween 2026 window is every third
+    /// (it was every second, which repeated each event every 10 days).
+    #[test]
+    fn the_cadence_is_the_largest_that_still_runs_each_themed_event_twice() {
+        assert_eq!(theme_cadence_days(21, 5), 2);
+        assert_eq!(theme_cadence_days(28, 5), 3);
+        assert_eq!(theme_cadence_days(30, 5), 3);
+        assert_eq!(theme_cadence_days(8, 1), 7);
+        assert_eq!(theme_cadence_days(5, 5), 1, "too short for two each");
+        assert_eq!(theme_cadence_days(1, 1), 1);
+        for days in 1..=90 {
+            for n in 1..=8usize {
+                let c = theme_cadence_days(days, n);
+                let enough = |c: i64| ceil_div(days, c) >= 2 * n as i64;
+                assert!(c >= 1, "days={days} n={n}");
+                assert!(c == 1 || enough(c), "days={days} n={n}: {c} is too sparse");
+                assert!(c >= days || !enough(c + 1), "days={days} n={n}: {c} is not the largest");
+            }
+        }
+    }
+
+    /// Report #382, against the committed Halloween 2026 window (5 Oct - 2 Nov):
+    /// counted from the served feed over the window and two months either side,
+    /// no event comes back within two weeks, and each themed event still opens
+    /// exactly twice inside the window (the owner's "more than once").
+    ///
+    /// Before: every second day was themed, so Wrath of the Undying opened
+    /// 26 Sep (its own rotation day) and again 9 Oct, and each themed event then
+    /// every 10 days. Retail's rotation: 39 events, each every 39 days; ours
+    /// has 44, one opening a day. CONTROL: with no theme the shortest gap is
+    /// that rotation length, so the bound is measuring the window.
+    #[test]
+    fn the_halloween_2026_window_repeats_nothing_within_two_weeks() {
+        let lib = library();
+        let theme = EventTheme {
+            start_secs: utc_midnight(2026, 10, 5),
+            end_secs: utc_midnight(2026, 11, 2),
+            quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
+        };
+        let (from, to) = (theme.start_secs - 60 * DAY, theme.end_secs + 60 * DAY);
+        let openings = |theme: Option<&EventTheme>| {
+            let mut starts: BTreeMap<Uuid, BTreeSet<i64>> = BTreeMap::new();
+            let mut t = from;
+            while t < to {
+                for e in active_events_themed(&lib, theme, t) {
+                    starts.entry(e.quest_id).or_default().insert(e.start_time_secs);
+                }
+                t += 6 * HOUR;
+            }
+            starts
+        };
+        let shortest_gap = |starts: &BTreeMap<Uuid, BTreeSet<i64>>| {
+            starts
+                .values()
+                .flat_map(|s| s.iter().zip(s.iter().skip(1)).map(|(a, b)| (b - a) / DAY))
+                .min()
+                .unwrap()
+        };
+
+        let themed = openings(Some(&theme));
+        let gap = shortest_gap(&themed);
+        assert!(gap >= 14, "an event came back after {gap} days");
+        for q in HALLOWEEN_THEME_QUESTS {
+            let inside = themed[&q]
+                .iter()
+                .filter(|&&s| s >= theme.start_secs && s < theme.end_secs)
+                .count();
+            assert_eq!(inside, 2, "{q} opened {inside} times in the window");
+        }
+
+        let rotating = lib.iter().filter(|d| d.is_rotating()).count() as i64;
+        assert_eq!(rotating, 44, "the rotation pool");
+        assert_eq!(shortest_gap(&openings(None)), rotating, "CONTROL: untouched rotation");
     }
 }
