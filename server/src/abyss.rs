@@ -4926,6 +4926,101 @@ mod tests {
         assert!(grants[0].items.is_empty(), "the bonus never pays gear");
     }
 
+    /// #383, HauDrauf: the enchanting ingredients are "these and treated the same".
+    /// On the Abyss rule's runs -- level 7 from floor 1, level 45 and level 100 from
+    /// floor 149 -- each of the seven effect ingredients is 1/7 of the enchanting
+    /// bonus (within 3 points), Deathbell included, at the stack sizes the level's
+    /// candidates list. Every corpse is generated with and without the bonus: gold,
+    /// gear and retail's own stackables are the same, the bonus is the only addition.
+    #[test]
+    fn abyss_runs_draw_each_effect_ingredient_equally() {
+        use blades_lib::util::dungeon::{abyss_bonus_candidates, abyss_bonus_material, EFFECT_INGREDIENTS};
+        const DEATHBELL: &str = "8b7d0044-3a38-4ee0-af45-d2892b0f508d";
+        let gd = game_data();
+        let names = ingredient_names();
+        let deathbell = Uuid::parse_str(DEATHBELL).unwrap();
+        // `ingredient_values.json` still labels Deathbell "Beehive Husk".
+        let name = |id: &Uuid| {
+            if *id == deathbell { "Deathbell".to_string() } else { names.get(id).cloned().unwrap_or_else(|| id.to_string()) }
+        };
+        for (level, start) in [(7u32, 1u32), (45, 149), (100, 149)] {
+            let ipl = initial_player_level(&real_job_pools(), level);
+            let (mut corpses, mut enchanting) = (0usize, 0usize);
+            let mut per_item: HashMap<Uuid, usize> = HashMap::new();
+            for nonce in 0..256u64 {
+                let seed = generate_run_seed(Uuid::from_u128(0x383e), nonce);
+                let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
+                assert_eq!(slices[0].floor_index, start, "L{level}: the run starts at floor {start}");
+                for slice in slices.iter().take(30) {
+                    let before = floor_generated_data(&gd, slice, seed, 0).unwrap();
+                    let after = floor_generated_data(&gd, slice, seed, level).unwrap();
+                    for (group, spawners) in &after.enemy_generated_data {
+                        for (spawner, enemies) in spawners.iter().enumerate() {
+                            for (index, enemy) in enemies.iter().enumerate() {
+                                corpses += 1;
+                                let was = before.enemy_generated_data[group][spawner][index].merged_loot_table();
+                                let mut now = enemy.merged_loot_table();
+                                assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
+                                let gear = |l: &blades_lib::user_data::LootTableResult| {
+                                    let mut ids: Vec<Uuid> = l.item.0.keys().copied().collect();
+                                    ids.sort();
+                                    ids
+                                };
+                                assert_eq!(gear(&now), gear(&was), "L{level}: the bonus changed gear");
+                                let drawn = abyss_bonus_material(
+                                    &slice.dungeon_settings_id,
+                                    seed as u64,
+                                    group,
+                                    spawner,
+                                    index,
+                                    i64::from(level),
+                                );
+                                // Retail's stackables are exactly what is left once the bonus is taken off.
+                                if let Some((item, qty)) = drawn {
+                                    let left = now.stackable_items[&item] - qty;
+                                    if left == 0 {
+                                        now.stackable_items.remove(&item);
+                                    } else {
+                                        now.stackable_items.insert(item, left);
+                                    }
+                                }
+                                assert_eq!(now.stackable_items, was.stackable_items, "L{level}: retail stackables moved");
+                                let Some((item, qty)) = drawn else { continue };
+                                if !EFFECT_INGREDIENTS.contains(&item.as_u128()) {
+                                    continue;
+                                }
+                                assert!(
+                                    abyss_bonus_candidates(i64::from(level), true).iter().any(|c| c.0 == item && c.1 == qty),
+                                    "L{level}: {} x{qty} is not one of the level's stack sizes",
+                                    name(&item)
+                                );
+                                enchanting += 1;
+                                *per_item.entry(item).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            let mut shares: Vec<(String, f64)> = EFFECT_INGREDIENTS
+                .iter()
+                .map(|id| {
+                    let id = Uuid::from_u128(*id);
+                    (name(&id), per_item.get(&id).copied().unwrap_or(0) as f64 / enchanting.max(1) as f64)
+                })
+                .collect();
+            shares.sort_by(|a, b| a.0.cmp(&b.0));
+            println!(
+                "L{level} from {start}: {corpses} corpses, {enchanting} enchanting bonus stacks: {:?}",
+                shares.iter().map(|(n, s)| format!("{n} {:.1}%", 100.0 * s)).collect::<Vec<_>>()
+            );
+            assert!(enchanting >= 1000, "L{level}: {enchanting} enchanting stacks is too few to measure");
+            for (n, s) in &shares {
+                assert!((s - 1.0 / 7.0).abs() <= 0.03, "L{level}: {n} is {s} of the enchanting bonus");
+            }
+            assert!(per_item.get(&deathbell).is_some_and(|n| *n > 0), "L{level}: no Deathbell");
+        }
+    }
+
     /// `/end` is the floors' gold and XP plus the package. Retail paid the package
     /// with no rewarded floor at all (two level-66 runs: four soul gems, no gold),
     /// and nothing to a run that scored nothing (level 8, no kill).
