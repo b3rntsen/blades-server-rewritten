@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
-    models::{CharacterDbEntryEconomy, CharacterDbEntryServerState},
+    models::{CharacterDbEntryServerState, CharacterDbEntryTownEconomy},
     session::SessionLookedUpMaybe,
     util::get_only_single_character_and_check_permission,
 };
@@ -637,6 +637,32 @@ struct PurchaseResponse {
     wallet: CompleteWallet,
     global_shop: GlobalShopState,
     reward: RewardGrant,
+    /// The buyer's town after the purchase's `townXp` was paid into it — present
+    /// only when the reward paid any, as retail sent it (#353).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    town: Option<Value>,
+}
+
+/// The town prestige one purchase of `product_id` pays — the `townXp` of the
+/// reward [`purchase_global_shop`] resolves for it. A randomised bundle is
+/// rolled, and no rolled store bundle carries any (`store_bundle_loot.json`).
+///
+/// The town-load backfill (#353) prices past purchases with this, so it must
+/// agree with the purchase path; a test holds the two together.
+pub(crate) fn product_town_xp(
+    static_data: &blades_lib::static_data::StaticData,
+    product_id: Uuid,
+) -> u64 {
+    if blades_lib::features::store_bundles::is_randomised_bundle(&product_id) {
+        return 0;
+    }
+    match captured_grant_for_product(static_data, product_id) {
+        Some(grant) => grant.town_xp,
+        None => static_data
+            .global_shop_offer_contents
+            .get(&product_id)
+            .map_or(0, |c| c.town_xp),
+    }
 }
 
 /// Build a grantable reward from an offer's APK-derived contents, or `None` when
@@ -1118,7 +1144,7 @@ pub async fn purchase_global_shop(
                 characters::table
                     .filter(characters::id.eq(character_id))
                     .filter(characters::user_id.eq(user_id))
-                    .select(CharacterDbEntryEconomy::as_select())
+                    .select(CharacterDbEntryTownEconomy::as_select())
                     .for_no_key_update()
                     .load(&mut conn)
                     .await?
@@ -1285,6 +1311,21 @@ pub async fn purchase_global_shop(
                 }
                 entry.inventory.0.treasury_version += 1;
             }
+            // TOWN PRESTIGE (#353). `apply_reward` has no town to pay `townXp`
+            // into, so it was sent to the client and dropped: a decoration bought
+            // here never counted. Retail paid it with the purchase — 11 of 11
+            // measurable store purchases moved the town's experiencePoints by
+            // exactly the reward's townXp (Fighters' Trophy +80 among them).
+            //
+            // Paid BEFORE this purchase is counted below: taking the town runs the
+            // one-time backfill over `globalShopPurchases`, which must not yet
+            // include the purchase being paid here.
+            let town = crate::town::credit_town_xp(
+                &mut entry.town,
+                &mut entry.server_state.0,
+                &globals,
+                reward.town_xp,
+            )?;
             *entry
                 .server_state
                 .0
@@ -1325,6 +1366,7 @@ pub async fn purchase_global_shop(
                     global_shop_purchases,
                 },
                 reward,
+                town,
             }))
         }
         .scope_boxed()
@@ -3549,5 +3591,142 @@ mod report238_calendar_tests {
             window_of(&cat["globalShopOverrides"][TRANSCENDENT]),
             Some((start, end))
         );
+    }
+}
+
+/// Tracker #353: a decoration bought in the store ("Victor's Trophy" / Fighters'
+/// Trophy, Sephoris) paid no town prestige. Retail paid every store purchase's
+/// `townXp` into the town on the spot — 11 of 11 measurable retail purchases
+/// moved `town.levelInfo.experiencePoints` by exactly the reward's `townXp`.
+#[cfg(test)]
+mod report353_store_prestige {
+    use super::*;
+
+    fn shipped() -> blades_lib::static_data::StaticData {
+        crate::static_loader::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static"
+        )))
+    }
+
+    const FIGHTERS_TROPHY_OFFER: &str = "0db1411b-f1b6-4422-9dfc-1d1c4decdb99";
+
+    /// Retail capture 51225: the Fighters' Trophy offer paid +80 (77272 -> 77352).
+    #[test]
+    fn the_fighters_trophy_pays_eighty() {
+        let sd = shipped();
+        assert_eq!(product_town_xp(&sd, Uuid::parse_str(FIGHTERS_TROPHY_OFFER).unwrap()), 80);
+    }
+
+    /// The other measured purchases, each paid exactly its `townXp` on retail.
+    #[test]
+    fn every_measured_retail_purchase_pays_what_retail_paid() {
+        let sd = shipped();
+        for (product, retail_delta) in [
+            ("afc71167-0544-4112-ad28-7cd1b2ea95d1", 142), // capture 761
+            ("67b7a1eb-05fb-417d-b013-1e5fc037acc0", 59),  // 10214, 55525
+            ("fd022c2e-a06c-4271-aa66-4424b1a8a7ab", 143), // 10226
+            ("6324182a-c722-4059-89d0-040ba500b4f8", 82),  // 10242
+            ("ab94a2e0-9770-4fee-9f7f-8d9a34946750", 86),  // 10254
+            ("c820b311-5b84-4bd6-be6c-a76cf0a5c57b", 72),  // 11416
+            ("1185efd6-bb85-44d3-ae0d-e14272b2f8eb", 56),  // 15338
+            ("8e35aa43-0e1c-4abd-9db2-3a908f851669", 168), // 23459
+            ("bb5631a5-e68d-4455-a01e-bc3080bcf054", 133), // 30428
+            (FIGHTERS_TROPHY_OFFER, 80),                   // 51225
+        ] {
+            assert_eq!(product_town_xp(&sd, Uuid::parse_str(product).unwrap()), retail_delta, "{product}");
+        }
+    }
+
+    /// The backfill prices past purchases with `product_town_xp`, so it must say
+    /// what the purchase path actually pays, for every product in the catalogue.
+    #[test]
+    fn product_town_xp_agrees_with_the_purchase_reward() {
+        let sd = shipped();
+        let items = item_table();
+        let repair = repair_data();
+        let mut products: std::collections::HashSet<Uuid> =
+            sd.global_shop_offer_contents.keys().copied().collect();
+        products.extend(sd.global_shop_grants.keys().copied());
+        let mut paying = 0;
+        for product in products {
+            let paid = if blades_lib::features::store_bundles::is_randomised_bundle(&product) {
+                0
+            } else {
+                match captured_grant_for_product(&sd, product) {
+                    Some(r) => r.town_xp,
+                    None => grant_from_offer_contents_with_enchanting(
+                        sd.global_shop_offer_contents.get(&product),
+                        &repair,
+                        items,
+                        &sd.enchanting,
+                        0,
+                    )
+                    .map_or(0, |r| r.town_xp),
+                }
+            };
+            // A product the store cannot grant was never bought, so it owes
+            // nothing either way; every grantable one must agree exactly.
+            let owed = product_town_xp(&sd, product);
+            assert!(owed == paid || paid == 0, "{product}: backfill {owed}, purchase {paid}");
+            paying += usize::from(paid > 0);
+        }
+        assert!(paying >= 20, "the store's prestige-paying offers: {paying}");
+    }
+
+    /// Every store offer that sells a single decoration pays prestige.
+    #[test]
+    fn every_store_decoration_pays_prestige() {
+        let sd = shipped();
+        let items = item_table();
+        let mut decorations = 0;
+        for (product, c) in &sd.global_shop_offer_contents {
+            let is_decoration = |t: &Uuid| items.get(t).is_some_and(|i| i.r#type == 4);
+            if c.contents.len() == 1 && is_decoration(&c.contents[0].item_template_id) {
+                decorations += 1;
+                assert!(product_town_xp(&sd, *product) > 0, "{product} sells a decoration for no prestige");
+            }
+        }
+        assert!(decorations >= 10, "{decorations}");
+    }
+
+    /// The response carries `town` only when the purchase paid prestige.
+    #[test]
+    fn the_response_carries_town_only_when_prestige_was_paid() {
+        let base = || PurchaseResponse {
+            inventory: CompleteInventoryUpdate {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 1,
+            },
+            wallet: CompleteWallet::default(),
+            global_shop: GlobalShopState { global_shop_purchases: vec![] },
+            reward: RewardGrant::default(),
+            town: None,
+        };
+        assert!(serde_json::to_value(base()).unwrap().get("town").is_none());
+        let mut paid = base();
+        paid.town = Some(serde_json::json!({"levelInfo": {"level": 10, "experiencePoints": 77352}}));
+        assert_eq!(
+            serde_json::to_value(paid).unwrap()["town"]["levelInfo"]["experiencePoints"],
+            77352
+        );
+    }
+
+    /// The purchase pays the town BEFORE it counts itself into
+    /// `globalShopPurchases`: taking the town runs the one-time backfill over those
+    /// counts, and a purchase counted first would be paid twice.
+    #[test]
+    fn the_purchase_pays_the_town_before_counting_itself() {
+        let src = include_str!("global_shop.rs");
+        let start = src.find("pub async fn purchase_global_shop(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let credit = body.find("crate::town::credit_town_xp(").expect("the purchase pays the town");
+        let count = body.find(".global_shop_purchases\n                .entry(product_id)").expect("counted");
+        assert!(credit < count, "pay the town first, then count the purchase");
+        assert!(body.contains("CharacterDbEntryTownEconomy::as_select()"), "the row must carry the town");
     }
 }

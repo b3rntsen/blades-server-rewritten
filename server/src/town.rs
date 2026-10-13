@@ -174,7 +174,7 @@ pub async fn set_town_name(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &globals)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &globals)?;
 
             name_town(&mut town, &req.name);
 
@@ -826,7 +826,7 @@ pub async fn upgrade_building(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &globals)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &globals)?;
 
             // Resolve the building's current facts, then the cost of the NEXT level.
             let (type_id, style_id, cur_level) = read_building_facts(&town, building_id)
@@ -959,7 +959,7 @@ pub async fn complete_building(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &app_state_clone)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &app_state_clone)?;
 
             // A 404 before anything is charged: an unknown building must never cost
             // gems. (`find_building` is the read-only pre-scan; the mutation borrows
@@ -1277,7 +1277,7 @@ pub async fn place_building(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &globals)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &globals)?;
 
             // Placement is the level-0 build (initial construction on an empty lot).
             // Placement PICKS the style, so it pays for it. The price and timer
@@ -1411,7 +1411,7 @@ pub async fn destroy_building(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &app_state_clone)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &app_state_clone)?;
 
             charge_destruction(&mut town, building_id, &mut entry.wallet.0)?;
 
@@ -1488,7 +1488,7 @@ pub async fn set_building_style(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &app_state_clone)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &app_state_clone)?;
 
             // 404 on an unknown building — same as `destroy`. Silently succeeding
             // would tell the client a style was applied that the town does not
@@ -1712,7 +1712,7 @@ pub async fn remove_town_props(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &app_state_clone)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &app_state_clone)?;
 
             // Process prop removals and get decoration IDs removed
             let (removed_count, failed_props, removed_decoration_ids, removed_prop_ids) =
@@ -1985,7 +1985,7 @@ pub async fn place_town_props(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_town_economy(&mut conn, character_id, user_id).await?;
-            let mut town = take_town(&mut entry, &app_state_clone)?;
+            let mut town = take_town(&mut entry.town, &mut entry.server_state.0, &app_state_clone)?;
 
             // Process prop placements and get decoration IDs placed
             let (placed_count, failed_props, placed_decoration_ids) =
@@ -2631,7 +2631,7 @@ mod prop_tests {
 
 /// Load the character's town+wallet+inventory+character row, locked for the
 /// read-modify-write and ownership-checked by the `user_id` filter.
-async fn load_town_economy(
+pub(crate) async fn load_town_economy(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
@@ -2661,18 +2661,24 @@ pub(crate) fn load_default_town(app_state: &ServerGlobal) -> Result<Value, Blade
 
 /// Take the character's town JSON out of the loaded row for in-place mutation.
 /// If the character has no captured town (or a null town), create one from the default.
-fn take_town(
-    entry: &mut CharacterDbEntryTownEconomy,
+///
+/// Takes the row's `town` column and `server_state` rather than a whole row type,
+/// so every handler that loads both — the town lifecycle, the global store, the
+/// merchants, crafting — heals and backfills the town the same way before it
+/// touches it.
+pub(crate) fn take_town(
+    town_column: &mut Option<JsonDbWrapper<Value>>,
+    server_state: &mut blades_lib::server_state::ServerState,
     app_state: &ServerGlobal,
 ) -> Result<Value, BladeApiError> {
-    let mut town = match entry.town.take() {
+    let mut town = match town_column.take() {
         Some(JsonDbWrapper(v)) if !v.is_null() => v,
         _ => {
             // No town exists - load from default template
             let town = load_default_town(app_state)?;
 
             // Store it back in the entry so it gets saved
-            entry.town = Some(JsonDbWrapper(town.clone()));
+            *town_column = Some(JsonDbWrapper(town.clone()));
             town
         }
     };
@@ -2684,11 +2690,12 @@ fn take_town(
     // Before any mutation is priced: a town built under the old rules must have
     // its sites cleared first, or the next completion would number its site
     // points from zero.
-    backfill_town_sites_once(
-        &mut entry.server_state.0,
-        &mut town,
-        &app_state.building_upgrades,
-    );
+    backfill_town_sites_once(server_state, &mut town, &app_state.building_upgrades);
+    // Before this request's own store purchase is counted, so the backfill
+    // cannot pay it a second time (#353).
+    backfill_store_town_xp_once(server_state, &mut town, |product| {
+        crate::global_shop::product_town_xp(&app_state.static_data, product)
+    });
     Ok(town)
 }
 
@@ -2719,6 +2726,70 @@ fn backfill_town_sites_once(
     }
     state.town_sites_backfilled = true;
     grant
+}
+
+/// The one-time store-prestige backfill (tracker #353), gated on
+/// `ServerState::store_town_xp_backfilled`. Returns the town XP granted.
+///
+/// Until #353 a global-store purchase paid no town prestige although retail paid
+/// its offer's `townXp` on the spot (11 of 11 measurable retail purchases moved
+/// `town.levelInfo.experiencePoints` by exactly that). `globalShopPurchases` is a
+/// lifetime count per product written only by our own store, so the prestige
+/// those purchases owed is `count x townXp`, summed. `town_xp_of` is the
+/// per-purchase value the store pays today ([`crate::global_shop::product_town_xp`]).
+fn backfill_store_town_xp_once(
+    state: &mut blades_lib::server_state::ServerState,
+    town: &mut Value,
+    town_xp_of: impl Fn(Uuid) -> u64,
+) -> u64 {
+    if state.store_town_xp_backfilled {
+        return 0;
+    }
+    let grant = state
+        .global_shop_purchases
+        .iter()
+        .map(|(product, count)| town_xp_of(*product).saturating_mul(*count))
+        .fold(0u64, u64::saturating_add);
+    if grant > 0 {
+        apply_prestige_and_level_up(town, grant);
+    }
+    state.store_town_xp_backfilled = true;
+    grant
+}
+
+/// Pay `town_xp` of prestige into the row's town and return the `town` block a
+/// response carries — `None`, with nothing touched, when there is nothing to pay.
+///
+/// Retail answered every reward that paid town XP with the town's new
+/// `{levelInfo, name, validationFlags}` beside the usual keys: 14 of 14 store
+/// purchases and 14 of 14 quest completions that paid `townXp`, and the one
+/// decoration craft collected. Nothing else carried it.
+pub(crate) fn credit_town_xp(
+    town_column: &mut Option<JsonDbWrapper<Value>>,
+    server_state: &mut blades_lib::server_state::ServerState,
+    app_state: &ServerGlobal,
+    town_xp: u64,
+) -> Result<Option<Value>, BladeApiError> {
+    if town_xp == 0 {
+        return Ok(None);
+    }
+    let mut town = take_town(town_column, server_state, app_state)?;
+    apply_prestige_and_level_up(&mut town, town_xp);
+    let wire = town_xp_wire(&town);
+    *town_column = Some(JsonDbWrapper(town));
+    Ok(Some(wire))
+}
+
+/// The `town` block retail returned with a town-XP reward: the level, the name
+/// when the town has one, and the validation flags — never the districts.
+fn town_xp_wire(town: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    for key in ["levelInfo", "name", "validationFlags"] {
+        if let Some(v) = town.get(key) {
+            out.insert(key.to_string(), v.clone());
+        }
+    }
+    Value::Object(out)
 }
 
 /// Run the backfill when the owner loads their town, so the town XP it owes
@@ -2755,6 +2826,7 @@ async fn backfill_on_load(
                     &mut entry.server_state.0,
                     &mut town,
                     &globals.building_upgrades,
+                    |product| crate::global_shop::product_town_xp(&globals.static_data, product),
                 ) {
                     return Ok(());
                 }
@@ -2783,11 +2855,16 @@ fn repair_town_on_load(
     state: &mut blades_lib::server_state::ServerState,
     town: &mut Value,
     building_upgrades: &Value,
+    store_town_xp_of: impl Fn(Uuid) -> u64,
 ) -> bool {
     let mut changed = mark_named_town_validated(town);
     changed |= assign_generic_shop_npcs(town);
     if !state.town_sites_backfilled {
         backfill_town_sites_once(state, town, building_upgrades);
+        changed = true;
+    }
+    if !state.store_town_xp_backfilled {
+        backfill_store_town_xp_once(state, town, store_town_xp_of);
         changed = true;
     }
     changed
@@ -5191,14 +5268,14 @@ mod town_name_validation {
         assert!(client_blocks_arena_and_guilds(&town), "precondition: the #320 shape");
 
         assert!(
-            repair_town_on_load(&mut state, &mut town, &shipped_upgrades()),
+            repair_town_on_load(&mut state, &mut town, &shipped_upgrades(), |_| 0),
             "the healed town must be written back"
         );
         assert_eq!(flags(&town), 1);
         assert!(!client_blocks_arena_and_guilds(&town));
 
         // Idempotent: the next load writes nothing.
-        assert!(!repair_town_on_load(&mut state, &mut town, &shipped_upgrades()));
+        assert!(!repair_town_on_load(&mut state, &mut town, &shipped_upgrades(), |_| 0));
     }
 
     #[test]
@@ -5456,5 +5533,149 @@ mod shop_npcs {
         let start = src.find("pub async fn get_town(").unwrap();
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
         assert!(body.contains("assign_generic_shop_npcs(&mut town)"), "the served copy is repaired too");
+    }
+}
+
+/// Tracker #353 ("Sieger-Trophäe", Sephoris): a decoration paid no town
+/// prestige. Retail paid it when the decoration was ACQUIRED — bought in the
+/// store or from a merchant, or collected from a Workshop craft — never on
+/// placement (the client's per-prop-type prestige table is declared but unused,
+/// and 7 retail placements moved the town's XP by 0).
+#[cfg(test)]
+mod report353_decoration_prestige {
+    use super::*;
+
+    const TROPHY: u128 = 0x0db1411b;
+    const LAMP: u128 = 2;
+    const UNPAID: u128 = 3;
+
+    fn xp_of(product: Uuid) -> u64 {
+        match product.as_u128() {
+            TROPHY => 80,
+            LAMP => 12,
+            _ => 0,
+        }
+    }
+
+    fn town_at(xp: u64, level: u64) -> Value {
+        json!({ "levelInfo": { "level": level, "experiencePoints": xp }, "name": "Seyda Neen",
+                "validationFlags": 1, "districts": [] })
+    }
+
+    fn experience(town: &Value) -> u64 {
+        town["levelInfo"]["experiencePoints"].as_u64().unwrap()
+    }
+
+    /// Sephoris on prod: three Fighters' Trophies bought, 0 prestige paid. The
+    /// first town load after the fix pays the 240 owed, once.
+    #[test]
+    fn past_store_purchases_are_paid_once_on_load() {
+        let mut state = blades_lib::server_state::ServerState::default();
+        state.global_shop_purchases.insert(Uuid::from_u128(TROPHY), 3);
+        state.global_shop_purchases.insert(Uuid::from_u128(LAMP), 2);
+        state.global_shop_purchases.insert(Uuid::from_u128(UNPAID), 9);
+        state.town_sites_backfilled = true;
+        let mut town = town_at(72_667, 10);
+
+        assert!(repair_town_on_load(&mut state, &mut town, &json!({}), xp_of));
+        assert_eq!(experience(&town), 72_667 + 3 * 80 + 2 * 12);
+        assert!(state.store_town_xp_backfilled);
+
+        // Idempotent: the next load pays nothing and writes nothing.
+        assert!(!repair_town_on_load(&mut state, &mut town, &json!({}), xp_of));
+        assert_eq!(experience(&town), 72_667 + 264);
+    }
+
+    /// A town with no store purchases owes nothing; it only records the marker.
+    #[test]
+    fn a_town_without_store_purchases_is_left_alone() {
+        let mut state = blades_lib::server_state::ServerState::default();
+        let mut town = town_at(500, 1);
+        assert_eq!(backfill_store_town_xp_once(&mut state, &mut town, xp_of), 0);
+        assert_eq!(experience(&town), 500);
+        assert!(state.store_town_xp_backfilled);
+    }
+
+    /// The backfill can level the town up, from the same thresholds a building
+    /// completion uses.
+    #[test]
+    fn the_backfill_levels_the_town_up() {
+        let mut state = blades_lib::server_state::ServerState::default();
+        state.global_shop_purchases.insert(Uuid::from_u128(TROPHY), 1);
+        let mut town = town_at(450, 0);
+        assert_eq!(backfill_store_town_xp_once(&mut state, &mut town, xp_of), 80);
+        assert_eq!(town["levelInfo"]["level"], 1, "530 crosses the 500 threshold");
+    }
+
+    /// The purchase sequence: take the town (backfilling history), pay this
+    /// purchase, THEN count it. Paying 80 for the 4th trophy must leave the town
+    /// exactly 4 x 80 up — never 5 x 80 — and a later load must pay nothing more.
+    #[test]
+    fn a_new_purchase_is_paid_exactly_once_alongside_the_backfill() {
+        let mut state = blades_lib::server_state::ServerState::default();
+        state.global_shop_purchases.insert(Uuid::from_u128(TROPHY), 3);
+        state.town_sites_backfilled = true;
+        let mut town = town_at(1_000, 1);
+
+        // `take_town` → backfill; `credit_town_xp` → this purchase; then the count.
+        backfill_store_town_xp_once(&mut state, &mut town, xp_of);
+        apply_prestige_and_level_up(&mut town, 80);
+        *state.global_shop_purchases.get_mut(&Uuid::from_u128(TROPHY)).unwrap() += 1;
+        assert_eq!(experience(&town), 1_000 + 4 * 80);
+
+        assert!(!repair_town_on_load(&mut state, &mut town, &json!({}), xp_of));
+        assert_eq!(experience(&town), 1_000 + 4 * 80);
+    }
+
+    /// The `town` block a prestige-paying response carries is retail's: level,
+    /// name, validation flags — no districts.
+    #[test]
+    fn the_wire_block_is_retails_three_keys() {
+        let wire = town_xp_wire(&town_at(77_352, 10));
+        let mut keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["levelInfo", "name", "validationFlags"]);
+        // An unnamed retail town (capture 16408) carried no `name`.
+        let unnamed = town_xp_wire(&json!({"levelInfo": {"level": 0, "experiencePoints": 12},
+                                           "validationFlags": 0, "districts": []}));
+        assert!(unnamed.get("name").is_none());
+    }
+
+    fn body_of<'a>(src: &'a str, signature: &str) -> &'a str {
+        let start = src.find(signature).unwrap_or_else(|| panic!("{signature} exists"));
+        &src[start..start + src[start..].find("\n}\n").unwrap()]
+    }
+
+    /// Both ways into a town — the owner's load and any mutation — run the store
+    /// backfill, so the owed prestige lands whichever comes first.
+    #[test]
+    fn every_load_and_every_mutation_runs_the_store_backfill() {
+        let src = include_str!("town.rs");
+        for f in ["fn take_town(", "fn repair_town_on_load("] {
+            assert!(body_of(src, f).contains("backfill_store_town_xp_once("), "{f}");
+        }
+    }
+
+    /// Every way to acquire a prestige-paying decoration pays the town.
+    #[test]
+    fn every_acquisition_path_pays_the_town() {
+        for (src, f) in [
+            (include_str!("global_shop.rs"), "pub async fn purchase_global_shop("),
+            (include_str!("shop.rs"), "pub async fn buy_from_shop("),
+            (include_str!("shop.rs"), "pub async fn buy_from_social_shop("),
+            (include_str!("craft.rs"), "pub async fn finish_craft("),
+        ] {
+            assert!(body_of(src, f).contains("crate::town::credit_town_xp("), "{f} must pay the town");
+        }
+    }
+
+    /// Placing or removing a decoration pays nothing — retail never did.
+    #[test]
+    fn placing_a_decoration_pays_no_prestige() {
+        let src = include_str!("town.rs");
+        for f in ["fn place_props_in_town(", "fn remove_props_from_town("] {
+            let body = body_of(src, f);
+            assert!(!body.contains("apply_prestige_and_level_up("), "{f}");
+        }
     }
 }
