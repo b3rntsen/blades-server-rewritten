@@ -1202,6 +1202,19 @@ pub struct PayableTier {
     pub observations: u64,
 }
 
+/// The character level from which an event instance is minted at its template's
+/// top level band: the full Sigil ladder, with the gold, materials and final bonus
+/// that come with it (report #385).
+///
+/// `event_quests.json` puts the top band at 46, a guess inside an unmeasured gap.
+/// The capture corpus pins the boundary only to 44..=47: band 4 at level 43
+/// (the highest level seen on it), band 5 at level 47 (the lowest). HauDrauf,
+/// who played retail to the end, reports the full Sigil count from 45, which sits
+/// inside that gap. Retail's bands are atomic — every captured instance carries
+/// one band's whole ladder, never band-5 Sigils with band-4 gold — so the band
+/// moves, not just its Sigils.
+pub const EVENT_TOP_BAND_FROM_LEVEL: i64 = 45;
+
 /// One event-quest TEMPLATE, keyed by `gldQuestId` (`event_quests.json`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1276,18 +1289,15 @@ impl EventQuestTemplate {
 
     /// The band a character of `level` is minted at: the highest band whose
     /// `min_level` it has reached, or the lowest band below every threshold.
-    /// `None` for a template without bands.
+    /// From [`EVENT_TOP_BAND_FROM_LEVEL`] on it is always the top band, whatever
+    /// threshold the data carries for it. `None` for a template without bands.
     pub fn band_for_level(&self, level: i64) -> Option<&EventLevelBand> {
-        self.level_bands
-            .iter()
-            .filter(|b| b.min_level <= level && !b.rewards.is_empty())
+        let bands = || self.level_bands.iter().filter(|b| !b.rewards.is_empty());
+        let reached = if level >= EVENT_TOP_BAND_FROM_LEVEL { i64::MAX } else { level };
+        bands()
+            .filter(|b| b.min_level <= reached)
             .max_by_key(|b| b.min_level)
-            .or_else(|| {
-                self.level_bands
-                    .iter()
-                    .filter(|b| !b.rewards.is_empty())
-                    .min_by_key(|b| b.min_level)
-            })
+            .or_else(|| bands().min_by_key(|b| b.min_level))
     }
 
     /// The `rewards[]` an instance minted for a character of `level` carries: its

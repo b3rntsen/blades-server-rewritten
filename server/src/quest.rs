@@ -6619,8 +6619,8 @@ mod event_quest_tests {
     /// count (its "family"). Measured 2026-10-04 over every captured event instance
     /// (snapshot 20260607 + prod `api_captures`): no captured ladder falls outside
     /// this table, and each row matches the character's level — band 1 at levels
-    /// 10-15, band 2 at 17-25, band 3 at 26-35, band 4 at 37-43, band 5 at 48-100.
-    /// Family 5's band 1 was never captured.
+    /// 10-15, band 2 at 17-25, band 3 at 26-35, band 4 at 37-43, band 5 at 47-100
+    /// (47: re-measured 2026-10-13 for #385). Family 5's band 1 was never captured.
     const RETAIL_SIGIL_BANDS: &[(u64, [Option<[u64; 5]>; 5])] = &[
         (1, [Some([1, 2, 5, 7, 10]), Some([1, 3, 6, 9, 12]), Some([1, 4, 7, 11, 16]), Some([1, 4, 8, 12, 18]), Some([1, 4, 9, 14, 22])]),
         (3, [Some([3, 4, 7, 10, 15]), Some([3, 6, 9, 12, 16]), Some([3, 6, 9, 15, 21]), Some([3, 6, 10, 16, 24]), Some([3, 6, 12, 18, 27])]),
@@ -6660,7 +6660,9 @@ mod event_quest_tests {
     #[test]
     fn report_333_events_pay_the_sigil_band_of_the_characters_level() {
         let family = |paid: &[u64]| RETAIL_SIGIL_BANDS.iter().find(|(f, _)| *f == paid[0]);
-        for (level, band) in [(57i64, 4usize), (10, 0)] {
+        // 44 and 45 straddle the top band's boundary (#385); 49 is where many
+        // players stopped.
+        for (level, band) in [(57i64, 4usize), (49, 4), (45, 4), (44, 3), (10, 0)] {
             let paid = sigils_by_event_at(level);
             assert!(paid.len() >= 30, "level {level}: only {} events minted", paid.len());
             let mut wrong = Vec::new();
@@ -6699,15 +6701,54 @@ mod event_quest_tests {
         }
     }
 
-    /// The band boundaries: 16, 26, 36, 46. 25 -> 26 is pinned by one character's
-    /// consecutive mints; the others sit inside the measured gaps.
+    /// The band boundaries: 16, 26, 36, 45. 25 -> 26 is pinned by one character's
+    /// consecutive mints; the others sit inside the measured gaps. The top band's
+    /// 45 is HauDrauf's (#385), inside the measured 44..=47 gap; the data still
+    /// says 46 and the code overrides it.
     #[test]
     fn report_333_band_thresholds() {
         let sd = static_data();
         let tmpl = &sd.event_quests.templates[&"7486296a-335a-4b46-aee1-5102090ce34f".parse::<Uuid>().unwrap()];
         let first_tier = |level| sigils_paid(&tmpl.rewards_for_level(level)[4]);
-        for (level, want) in [(0, 17), (1, 17), (15, 17), (16, 20), (25, 20), (26, 24), (35, 24), (36, 29), (45, 29), (46, 34), (57, 34), (100, 34)] {
+        for (level, want) in [(0, 17), (1, 17), (15, 17), (16, 20), (25, 20), (26, 24), (35, 24), (36, 29), (44, 29), (45, 34), (46, 34), (57, 34), (100, 34)] {
             assert_eq!(first_tier(level), want, "level {level}");
+        }
+    }
+
+    /// Report #385: from level 45 every template mints its top band — the full
+    /// Sigil ladder and final bonus, with the gold and materials that come with it
+    /// — and level 44 still mints the band below.
+    #[test]
+    fn report_385_full_sigils_from_level_45_for_every_template() {
+        let sd = static_data();
+        assert!(sd.event_quests.templates.len() >= 39);
+        let ladder = |rewards: &[RewardGrant]| rewards.iter().map(sigils_paid).collect::<Vec<u64>>();
+        // Counts only: the material item is re-stepped to the level (#362), the
+        // amounts are the band's.
+        let amounts = |r: &RewardGrant| {
+            let mut v: Vec<u64> = r.stackable_items.values().chain(r.currencies.values()).copied().collect();
+            v.sort_unstable();
+            v
+        };
+        for (gld, tmpl) in &sd.event_quests.templates {
+            let top = tmpl.level_bands.iter().max_by_key(|b| b.min_level).expect("bands");
+            let below = tmpl.level_bands.iter().filter(|b| b.min_level <= 44).max_by_key(|b| b.min_level).unwrap();
+            assert!(ladder(&top.rewards) > ladder(&below.rewards), "{gld}: the top band pays more sigils");
+            for level in [45i64, 46, 49] {
+                assert!(std::ptr::eq(tmpl.band_for_level(level).unwrap(), top), "{gld} level {level}: top band");
+                let minted = tmpl.rewards_for_level(level);
+                assert_eq!(ladder(&minted), ladder(&top.rewards), "{gld} level {level}: sigils");
+                let got: Vec<_> = minted.iter().map(amounts).collect();
+                let want: Vec<_> = top.rewards.iter().map(amounts).collect();
+                assert_eq!(got, want, "{gld} level {level}: milestone amounts");
+                assert_eq!(
+                    tmpl.final_reward_for_level(level).as_ref().map(amounts),
+                    top.final_reward.as_ref().map(amounts),
+                    "{gld} level {level}: final bonus"
+                );
+            }
+            assert!(std::ptr::eq(tmpl.band_for_level(44).unwrap(), below), "{gld} level 44: unchanged");
+            assert_eq!(ladder(&tmpl.rewards_for_level(44)), ladder(&below.rewards), "{gld} level 44: sigils");
         }
     }
 

@@ -45,7 +45,9 @@ RETAIL_PREFIX = "https://blades.bgs.services/%"
 # band 1 at 10-15, band 2 from 17 (Ruukoto's first band-2 mint) to 25, band 3 from 26
 # (Ruukoto: 25 -> band 2, 26 -> band 3, one level apart) to 35, band 4 at 37-43, band 5
 # from 48 (Humperdinck) to 100. 16, 36 and 44-47 are unobserved; the thresholds take
-# the ten-level spacing the 26 boundary pins.
+# the ten-level spacing the 26 boundary pins. Re-measured 2026-10-13 (#385): band 5
+# also at 47, so the top boundary is in 44..=47; the server mints the top band from 45
+# regardless of this value (blades_lib EVENT_TOP_BAND_FROM_LEVEL).
 BAND_MIN_LEVEL = [1, 16, 26, 36, 46]
 
 SIGIL_BANDS = {
