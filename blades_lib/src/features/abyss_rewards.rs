@@ -38,6 +38,10 @@
 //!
 //! THE TOP BAND OPENS AT 49 (report #383). A character of level 49 or more draws
 //! the top band's rewards — see [`TOP_BAND_FROM_LEVEL`].
+//!
+//! RETAIL END SCREENS (reports #371, #383). Rewards seen on screenshots of the
+//! original game, not in a capture, are added beside the corpus by the slot they
+//! were paid in: a rung ([`screenshot_results`]) or `/end` ([`screenshot_end_packages`]).
 
 use std::collections::HashMap;
 
@@ -228,7 +232,10 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 ///
 /// Drawn whole from the retail packages paid in the character's level band. In
 /// the 60+ band that is 5 soul-gem stacks (4-6 Greater/Grand/Elevated/Glorious)
-/// in 10 runs. Seeded from the run, so a retried `/end` pays the same thing.
+/// and 5 enchanting ingredients (Glow Dust ×7 thrice, Fire Salts ×19, Imp Stool ×7)
+/// in 10 captured runs, plus 3 Transcendent ×4 from retail end screens (report #383,
+/// [`screenshot_end_packages`]). Seeded from the run, so a retried `/end` pays the
+/// same thing.
 /// Gear, which retail added to 3 of the 4 runs that passed rung 360, is not
 /// modelled here.
 ///
@@ -266,7 +273,11 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
         .iter()
         .filter(|o| o.package.is_some())
         .collect();
-    let pool = level_pool(&paid, character_level, |o| o.level);
+    // The captures plus the #383 screenshots ([`screenshot_end_packages`]); `paid`
+    // alone still sets the pooled capture rate below.
+    let observed: Vec<&EndObservation> =
+        paid.iter().copied().chain(screenshot_end_packages()).collect();
+    let pool = level_pool(&observed, character_level, |o| o.level);
     if pool.is_empty() {
         return grant;
     }
@@ -443,7 +454,10 @@ const SOUL_GEMS: [&str; 10] = [
 /// Transcendent Soul Gem (SoulGem10).
 ///
 /// NOT FROM A CAPTURE. None of the 18 captured retail `/end`s paid one (their gem
-/// stacks were 4-6 Greater, Grand, Elevated or Glorious). #294's reporter, a
+/// stacks were 4-6 Greater, Grand, Elevated or Glorious). Three retail end screens
+/// at level 82-95 show it paid ×4 (report #383, [`screenshot_end_packages`]), and
+/// those join the top band's pool as observations; the upgrade below is kept for
+/// the counts above 4 ("up to 7"). #294's reporter, a
 /// level-100 player, reports retail's `/end` paying "up to 7 greater, glorious or
 /// transcendent soul gems, but not every run", backed by a screenshot, and that
 /// players on Discord put the highest count at 7. The APK's server-only
@@ -517,24 +531,82 @@ pub fn future_reward_for_rung(
 /// paid 27-35 at level 66-100 in every capture, while `/end` packages were 4-19.
 /// The captures alone hold one Giant's Toe in seven level-60+ rung-70 draws against
 /// four Nightshade, which report #381 calls too much Nightshade.
+///
+/// Rungs 35 and 70, levels 82-95 — three more retail end screens ("INTO THE ABYSS —
+/// REWARDS", players' Discord posts of 2024-10-11 and 2025-02-27, tracker #383):
+///
+/// * level 92, floor 150, 3 kills: Wooden Chest, Transcendent Soul Gem ×4,
+///   **Frost Salts ×6**, and a tile cut off at the right edge whose name starts
+///   "M". It is not encoded: the screenshot does not say what it is.
+/// * level 95, floor 150, 3 kills: Transcendent Soul Gem ×4, **Nightshade ×30**,
+///   **Imp Stool ×6** (the left edge may hide a tile: the rung-50 Wooden Chest).
+/// * level 82, floor 136, 1 kill: Wooden Chest, Transcendent Soul Gem ×4,
+///   **Honeycomb ×5**.
+///
+/// WHICH SLOT EACH TILE IS. An end screen lists every rung the run reached plus the
+/// `/end` package, and `/end` pays ONE stack (16 of 16 paid captures). The Wooden
+/// Chest is rung 50 (tier 1, every capture), so each run also reached rung 35 and
+/// its reward is on the screen. The level-82 screen has three tiles: the chest, the
+/// gems and the Honeycomb. Rung 35 never paid a soul gem (25 captures), so the
+/// Honeycomb ×5 is rung 35 and the Transcendent ×4 is `/end` — see
+/// [`screenshot_end_packages`]. The same holds for the Frost Salts ×6 and Imp Stool ×6,
+/// which are also rung-35 sized (top-band rung 35 paid Fire Salts, Imp Stool, Void
+/// Salts, Honeycomb and Glow Dust ×5-6). Nightshade ×30 is a rung-70 stack (27-35;
+/// `/end` packages were 4-19). The kills agree: a deep-floor kill scores 30, ×2 for
+/// a boss, so one boss reaches rung 50 but not 70 (the level-82 screen: rungs 35 and
+/// 50), and three kills reach 70 but not 95 (the level-92/95 screens: rungs 35, 50
+/// and 70 — so the cut-off "M…" tile is most likely the level-92 run's rung 70).
 fn screenshot_results(rung: u32) -> &'static [LevelledResult] {
+    static RUNG_35: std::sync::OnceLock<Vec<LevelledResult>> = std::sync::OnceLock::new();
     static RUNG_70: std::sync::OnceLock<Vec<LevelledResult>> = std::sync::OnceLock::new();
+    let seen = |level: u64, item: &str, count: u64| LevelledResult { level, reward: one_stack(item, count) };
     match rung {
+        35 => RUNG_35.get_or_init(|| {
+            vec![
+                seen(92, FROST_SALTS, 6), // #383, level 92, floor 150, 3 kills
+                seen(95, IMP_STOOL, 6),   // #383, level 95, floor 150, 3 kills
+                seen(82, HONEYCOMB, 5),   // #383, level 82, floor 136, 1 kill
+            ]
+        }),
         70 => RUNG_70.get_or_init(|| {
-            vec![LevelledResult {
-                level: 63,
-                reward: ObservedReward {
-                    stackable_items: HashMap::from([(
-                        Uuid::parse_str("a4d5e792-5a27-4bb3-851f-e0917c0962db").unwrap(), // Giant's Toe
-                        29,
-                    )]),
-                    items: Vec::new(),
-                },
-            }]
+            vec![
+                seen(63, GIANTS_TOE, 29), // #371, level 63, floor 68
+                seen(95, NIGHTSHADE, 30), // #383, level 95, floor 150, 3 kills
+            ]
         }),
         _ => &[],
     }
 }
+
+/// `/end` packages seen on retail screenshots rather than in a capture: the three
+/// #383 end screens above each paid **Transcendent Soul Gem ×4** at `/end` (levels 92,
+/// 95 and 82). They join the top band's captured packages as three more observations,
+/// so a level-49+ `/end` is drawn from 13 retail packages instead of 10. They are
+/// NOT counted in the pooled capture rate a band without gem packages of its own is
+/// paid gems at (below level 39): that rate is the captures', and these three are
+/// all top-band.
+fn screenshot_end_packages() -> &'static [EndObservation] {
+    static END: std::sync::OnceLock<Vec<EndObservation>> = std::sync::OnceLock::new();
+    END.get_or_init(|| {
+        [92u64, 95, 82]
+            .into_iter()
+            .map(|level| EndObservation { level, package: Some(one_stack(TRANSCENDENT_SOUL_GEM, 4)) })
+            .collect()
+    })
+}
+
+fn one_stack(item: &str, count: u64) -> ObservedReward {
+    ObservedReward {
+        stackable_items: HashMap::from([(Uuid::parse_str(item).unwrap(), count)]),
+        items: Vec::new(),
+    }
+}
+
+const FROST_SALTS: &str = "05b4dd6b-796f-4088-a772-0e33ea3db976";
+const IMP_STOOL: &str = "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1";
+const HONEYCOMB: &str = "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50";
+const NIGHTSHADE: &str = "4d7420db-8042-4946-a43f-e0b3bd9bec81";
+const GIANTS_TOE: &str = "a4d5e792-5a27-4bb3-851f-e0917c0962db";
 
 /// Report #381: "in the Abyss, instead of Pearls, there should be Diamonds and
 /// Atronite". Rungs 190 and 490 were never captured for a level 20-59 character,
@@ -855,8 +927,8 @@ mod tests {
     /// Report #381: "the share of Nightshade is too high, it should alternate more
     /// with Giant's Toe". The captures alone gave a level-60+ character Nightshade
     /// 4 times in 7 and Giant's Toe once; with the level-63 screenshot it is 4 in 8
-    /// and 2 in 8. The level-43 (20-59) pool, which has no Giant's Toe in retail,
-    /// is untouched.
+    /// and 2 in 8, and with #383's level-95 Nightshade ×30 screenshot 5 in 9 and 2 in
+    /// 9. The level-43 (20-59) pool, which has no Giant's Toe in retail, is untouched.
     #[test]
     fn rung_70_alternates_nightshade_with_giants_toe_at_high_level() {
         let draws = 4000i64;
@@ -868,8 +940,8 @@ mod tests {
         };
         let (nightshade, toe) = (share(100, NIGHTSHADE), share(100, GIANTS_TOE));
         println!("rung 70, level 100: Nightshade {nightshade:.3}, Giant's Toe {toe:.3}");
-        assert!((0.44..=0.56).contains(&nightshade), "Nightshade {nightshade}");
-        assert!((0.20..=0.30).contains(&toe), "Giant's Toe {toe}");
+        assert!((0.50..=0.61).contains(&nightshade), "Nightshade {nightshade}, retail 5/9");
+        assert!((0.18..=0.27).contains(&toe), "Giant's Toe {toe}, retail 2/9");
         assert_eq!(share(43, GIANTS_TOE), 0.0, "level 43 keeps its own retail pool");
         assert!((0.20..=0.30).contains(&share(43, NIGHTSHADE)));
     }
@@ -949,9 +1021,10 @@ mod tests {
 
     /// #294: "at the end of a run, randomly up to 7 greater, glorious or
     /// transcendent soul gems, but not every run". Retail, level 60 and up: 5 of 10
-    /// paid packages were a soul-gem stack of 4-6 (Greater, Grand, Elevated,
-    /// Glorious x2). Transcendent (4-7) is the reporter's
-    /// and Discord's account, not a capture — see [`TRANSCENDENT_SOUL_GEM`].
+    /// captured packages were a soul-gem stack of 4-6 (Greater, Grand, Elevated,
+    /// Glorious x2), and #383's three end screens add Transcendent ×4 — 8 gem stacks
+    /// in 13. Transcendent above 4 (up to 7) is the reporter's and Discord's account
+    /// — see [`TRANSCENDENT_SOUL_GEM`].
     #[test]
     fn the_end_soul_gem_roll_matches_retails_frequency_and_range() {
         let paid_kinds = SOUL_GEMS_PAID.map(uuid);
@@ -978,11 +1051,12 @@ mod tests {
             }
         }
         let rate = f64::from(gems) / runs as f64;
-        assert!((0.4..=0.6).contains(&rate), "soul gems on {rate:.3} of level-100 /ends, retail 5/10");
+        assert!((0.57..=0.66).contains(&rate), "soul gems on {rate:.3} of level-100 /ends, retail 8/13");
         assert_eq!(kinds.len(), 5, "the four retail gem kinds and Transcendent come up");
-        // #294's report: transcendent stacks, up to 7. One gem stack in five.
+        // 3 of 8 gem stacks are #383's Transcendent ×4, and one of the other five in
+        // five is upgraded to 4-7 Transcendent: 3/8 + 5/8 × 1/5 = 1/2.
         let upgraded = f64::from(transcendent) / f64::from(gems);
-        assert!((0.17..=0.23).contains(&upgraded), "transcendent on {upgraded:.3} of gem stacks");
+        assert!((0.46..=0.54).contains(&upgraded), "transcendent on {upgraded:.3} of gem stacks");
         assert_eq!(counts, (4..=7).collect(), "4 to 7 transcendent gems");
     }
 
@@ -1177,6 +1251,68 @@ mod tests {
                 assert!(pairs.contains(&(*a, *b)), "{a} is never followed by {b}");
             }
         }
+    }
+
+    /// The share of `/end` packages paid to a character of `level` that are an
+    /// enchanting ingredient ([`crate::util::dungeon::ENCHANTING_INGREDIENTS`]).
+    fn end_enchanting_share(level: u64, runs: i64) -> f64 {
+        let enchanting = (0..runs)
+            .filter(|seed| {
+                let (item, _) = single_stack(&end_package(100.0, level, *seed));
+                crate::util::dungeon::ENCHANTING_INGREDIENTS.contains(&item.as_u128())
+            })
+            .count();
+        enchanting as f64 / runs as f64
+    }
+
+    /// Report #383: from level 49 `/end` is the top band's, and that band pays an
+    /// enchanting ingredient (Glow Dust, Fire Salts, Imp Stool) on 5 of its 13 retail
+    /// packages — the 10 captured, which had 5, plus the three Transcendent ×4 end
+    /// screens. Levels 49, 70 and 100 all draw it.
+    #[test]
+    fn from_level_49_end_sometimes_pays_an_enchanting_ingredient() {
+        for level in [49u64, 59, 70, 100] {
+            let share = end_enchanting_share(level, 20_000);
+            println!("/end enchanting share, level {level}: {share:.4}");
+            assert!((0.35..=0.42).contains(&share), "level {level}: {share}, retail 5/13");
+        }
+    }
+
+    /// The three #383 end screens are each producible, whole, by one run of a
+    /// character of the screenshot's level: the rung-35 stack, the rung-50 Wooden
+    /// Chest at the character's level, the rung-70 Nightshade ×30 where the screen
+    /// shows it, and Transcendent ×4 at `/end`.
+    #[test]
+    fn the_383_end_screens_are_producible_at_their_level() {
+        let transcendent = HashMap::from([(uuid(TRANSCENDENT_SOUL_GEM), 4)]);
+        let screens: [(u64, f64, &str, u64, Option<(&str, u64)>); 3] = [
+            (92, 90.0, FROST_SALTS, 6, None),
+            (95, 90.0, IMP_STOOL, 6, Some((NIGHTSHADE, 30))),
+            (82, 60.0, HONEYCOMB, 5, None),
+        ];
+        for (level, score, item, count, seventy) in screens {
+            let hit = (0..200_000i64).find(|seed| {
+                let rung35 = future_reward_for_rung(35, level, *seed).unwrap();
+                let chest = future_reward_for_rung(50, level, *seed).unwrap();
+                let rung70 = future_reward_for_rung(70, level, *seed).unwrap();
+                rung35.stackable_items == HashMap::from([(uuid(item), count)])
+                    && chest.chests.iter().any(|c| (c.tier, c.level) == (1, level))
+                    && seventy.is_none_or(|(i, n)| rung70.stackable_items == HashMap::from([(uuid(i), n)]))
+                    && end_package(score, level, *seed).stackable_items == transcendent
+            });
+            assert!(hit.is_some(), "level {level}: the retail end screen is never produced");
+        }
+        // Frost Salts is new to rung 35, and like Imp Stool and Honeycomb it is a
+        // top-band result: the level 20-48 band does not draw it.
+        for item in [FROST_SALTS, IMP_STOOL, HONEYCOMB] {
+            let at = |level: u64| {
+                (0..2_000i64).any(|seed| single_stack(&future_reward_for_rung(35, level, seed).unwrap()).0 == uuid(item))
+            };
+            assert!(at(49) && at(100), "{item} unreachable at rung 35 from level 49");
+        }
+        assert!(!(0..2_000i64).any(|seed| {
+            single_stack(&future_reward_for_rung(35, 45, seed).unwrap()).0 == uuid(FROST_SALTS)
+        }));
     }
 
     /// No package below the threshold; the same run always pays the same package.
