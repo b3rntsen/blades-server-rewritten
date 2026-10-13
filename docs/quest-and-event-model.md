@@ -123,9 +123,15 @@ the events' own loc strings: EQ40 *Season of the Witch*, EQ01 *The Spectral
 Forest*, EQ16 *Wrath of the Undying*, EQ21 *The Lich's Tower* and EQ24
 *Death's Shadow*. EQ42 *The Long Night* is midwinter and not in it.
 
-Inside the window, every Nth day's opening is a themed event, where
-N = days / (2 × themed events), at least 1. On each themed day the event with
-the fewest openings so far is chosen, so each one opens at least twice. The other
+Inside the window, every Nth day's opening is a themed event, where N is the
+largest cadence whose ⌈days / N⌉ themed days still give each themed event two
+openings, at least 1 (`theme_cadence_days`): every second day for 21 days of
+the Halloween set, every third for 28. On each themed day the event with the
+fewest openings so far is chosen, so each one opens at least twice. A larger N
+means fewer days taken from the rotation and longer gaps before a themed event
+repeats (`N × themed` days; retail's rotation repeats an event every 39). The
+old `days / (2 × themed)` gave N = 2 for the 28-day 2026 window, so each
+Halloween event came back every 10 days (#382). The other
 days keep the ordinary rotation in its usual order, with the themed events taken
 out. The shape does not change: one opening per UTC day, each open 172 800 s,
 so the feed always has 2 open and 1 upcoming, and no quest is listed twice. A
