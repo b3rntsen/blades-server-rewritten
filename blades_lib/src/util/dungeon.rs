@@ -882,15 +882,30 @@ pub const ABYSS_BONUS_ENCHANTING_SHARE: f64 = 1.0 / 3.0;
 /// has a candidate is used.
 const ABYSS_BONUS_LEVEL_WINDOW: i64 = 2;
 
-/// Frost, Fire and Void Salts, Glow Dust, Imp Stool, Honeycomb, Beehive Husk.
-pub const ENCHANTING_INGREDIENTS: [u128; 7] = [
+/// The previous name of [`EFFECT_INGREDIENTS`]; the same set.
+pub const ENCHANTING_INGREDIENTS: [u128; 7] = EFFECT_INGREDIENTS;
+
+/// The effect (enchanting) ingredients: retail's own Sigil-shop
+/// "EffectIngredients" group -- the seven `SigilShop_EffectIngredients_*`
+/// offers, whose `AllIngredients` bundle is exactly these seven templates
+/// (`deploy/static/global_shop_offer_contents.json`). HauDrauf asked that they be
+/// "these and treated the same" (#383, 2026-10-13), so the Abyss bonus draws them
+/// uniformly ([`effect_ingredient_candidates`]).
+///
+/// `8b7d0044` was labelled "Beehive Husk" here (and still is in
+/// `ingredient_values.json`); the game data names it Deathbell (`parsed.json`
+/// `Items.Name.Deathbell`, and the Sigil shop's Deathbell offer pays it). The
+/// client has a "Beehive Husk" string but no item template, so there is no
+/// eighth ingredient to keep or remove -- pending HauDrauf's answer on #383,
+/// nothing was dropped.
+pub const EFFECT_INGREDIENTS: [u128; 7] = [
     0x05b4dd6b_796f_4088_a772_0e33ea3db976, // Frost Salts
     0xf1c5c03c_5297_48fb_a9d2_5f32bffb467c, // Fire Salts
     0x10c54e43_a2a1_4833_9491_4c19149f43b5, // Void Salts
     0x9687d83c_aa7b_4cf3_a69f_0bba8204fa61, // Glow Dust
     0x07f380dd_f123_4ef7_9b12_8b9fdb03c3e1, // Imp Stool
     0x7116a2a8_ac2d_4cd9_8b7c_b80c397d3f50, // Honeycomb
-    0x8b7d0044_3a38_4ee0_af45_d2892b0f508d, // Beehive Husk
+    0x8b7d0044_3a38_4ee0_af45_d2892b0f508d, // Deathbell
 ];
 
 /// Highest character level the candidate lists are built for; above it, clamps.
@@ -912,6 +927,9 @@ pub fn abyss_bonus_candidates(level: i64, enchanting: bool) -> &'static [BonusCa
 }
 
 fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
+    if enchanting {
+        return effect_ingredient_candidates(level);
+    }
     let Some(bands) = enemy_loot()["tables"]
         .get(Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string())
         .and_then(|t| t["byLevel"].as_array())
@@ -934,7 +952,7 @@ fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
                 if qty == 0 || item.as_u128() == DOOR_KEY_ITEM_ID {
                     continue;
                 }
-                if ENCHANTING_INGREDIENTS.contains(&item.as_u128()) != enchanting {
+                if EFFECT_INGREDIENTS.contains(&item.as_u128()) != enchanting {
                     continue;
                 }
                 match out.iter_mut().find(|c| c.0 == item && c.1 == qty) {
@@ -969,6 +987,76 @@ fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
     let mut found = nearest.into_iter().map(stacks).find(|c| !c.is_empty()).unwrap_or_default();
     found.sort();
     found
+}
+
+/// Each effect ingredient's total weight in the enchanting bonus draw.
+const EFFECT_INGREDIENT_WEIGHT: u64 = 1_000_000;
+
+/// The enchanting half of the bonus at `level` (#383): every one of the
+/// [`EFFECT_INGREDIENTS`] at every level, each with the same total weight
+/// ([`EFFECT_INGREDIENT_WEIGHT`]), so the draw picks one uniformly. A level where
+/// retail's table paid few or none of them still draws all seven. Within one
+/// ingredient, the stack size follows what retail's table (871c2e9b) paid it in
+/// within [`ABYSS_BONUS_LEVEL_WINDOW`] of `level`, weighted by how often; if the
+/// table never paid it near `level`, its nearest band that did.
+fn effect_ingredient_candidates(level: i64) -> Vec<BonusCandidate> {
+    let Some(bands) = enemy_loot()["tables"]
+        .get(Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string())
+        .and_then(|t| t["byLevel"].as_array())
+    else {
+        return Vec::new();
+    };
+    let range = |band: &serde_json::Value| {
+        (
+            band["minEnemyLevel"].as_i64().unwrap_or(i64::MIN),
+            band["maxEnemyLevel"].as_i64().unwrap_or(i64::MAX),
+        )
+    };
+    let distance = |band: &serde_json::Value| {
+        let (min, max) = range(band);
+        if level < min { min - level } else if level > max { level - max } else { 0 }
+    };
+    let mut nearest: Vec<&serde_json::Value> = bands.iter().collect();
+    nearest.sort_by_key(|b| distance(b));
+    let (lo, hi) = (level - ABYSS_BONUS_LEVEL_WINDOW, level + ABYSS_BONUS_LEVEL_WINDOW);
+
+    let mut out: Vec<BonusCandidate> = Vec::new();
+    for id in EFFECT_INGREDIENTS {
+        let item = Uuid::from_u128(id);
+        let key = item.to_string();
+        let mut stacks = effect_stack_sizes(&key, bands.iter().filter(|b| range(b).0 <= hi && range(b).1 >= lo));
+        if stacks.is_empty() {
+            stacks = nearest.iter().map(|b| effect_stack_sizes(&key, [*b])).find(|s| !s.is_empty()).unwrap_or_default();
+        }
+        if stacks.is_empty() {
+            stacks.push((1, 1)); // never paid at all: one at a time
+        }
+        stacks.sort();
+        // Scale this ingredient's observations to EFFECT_INGREDIENT_WEIGHT, the
+        // rounding remainder on its most common size, so every ingredient's total
+        // is exactly the same.
+        let observed: u64 = stacks.iter().map(|s| s.1).sum();
+        let mut weights: Vec<u64> = stacks.iter().map(|s| s.1 * EFFECT_INGREDIENT_WEIGHT / observed).collect();
+        let most = (0..stacks.len()).max_by_key(|i| stacks[*i].1).unwrap_or(0);
+        weights[most] += EFFECT_INGREDIENT_WEIGHT - weights.iter().sum::<u64>();
+        out.extend(stacks.iter().zip(weights).filter(|(_, w)| *w > 0).map(|((qty, _), w)| (item, *qty, w)));
+    }
+    out.sort();
+    out
+}
+
+/// (quantity, times observed) of every stack of `item` retail's table paid in `bands`.
+fn effect_stack_sizes<'a>(item: &str, bands: impl IntoIterator<Item = &'a serde_json::Value>) -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for result in bands.into_iter().flat_map(|band| band["results"].as_array().into_iter().flatten()) {
+        let n = result["n"].as_u64().unwrap_or(0);
+        let Some(qty) = result["loot"]["stackableItems"][item].as_u64().filter(|q| *q > 0 && n > 0) else { continue };
+        match out.iter_mut().find(|s| s.0 == qty) {
+            Some(s) => s.1 += n,
+            None => out.push((qty, n)),
+        }
+    }
+    out
 }
 
 /// The bonus material stack (if any) one Abyss corpse drops on top of retail's
@@ -1970,6 +2058,183 @@ mod variant_owner_tests {
             None,
             "an unknown group must not be attributed to any dungeon"
         );
+    }
+}
+
+#[cfg(test)]
+mod effect_ingredient_tests {
+    //! #383: the enchanting half of the Abyss bonus is the Sigil shop's seven
+    //! effect ingredients, drawn uniformly at every level.
+    use super::*;
+
+    fn static_json(name: &str) -> serde_json::Value {
+        let path = format!("{}/../deploy/static/{name}", env!("CARGO_MANIFEST_DIR"));
+        serde_json::from_str(&std::fs::read_to_string(&path).expect(&path)).expect(name)
+    }
+
+    fn set(ids: impl IntoIterator<Item = Uuid>) -> std::collections::BTreeSet<Uuid> {
+        ids.into_iter().collect()
+    }
+
+    fn effect_ingredients() -> std::collections::BTreeSet<Uuid> {
+        set(EFFECT_INGREDIENTS.iter().map(|id| Uuid::from_u128(*id)))
+    }
+
+    const DEATHBELL: &str = "8b7d0044-3a38-4ee0-af45-d2892b0f508d";
+    const FROST_SALTS: &str = "05b4dd6b-796f-4088-a772-0e33ea3db976";
+
+    /// [`EFFECT_INGREDIENTS`] is retail's own grouping: the Sigil shop's
+    /// `EffectIngredients_AllIngredients` bundle pays exactly these seven, each
+    /// single-ingredient offer pays one of them, and the game data names each one as
+    /// its offer does -- `8b7d0044` is Deathbell, not "Beehive Husk".
+    #[test]
+    fn effect_ingredients_are_the_sigil_shops_group() {
+        let offers = static_json("global_shop_offer_contents.json");
+        let items = static_json("parsed.json");
+        let mut singles = Vec::new();
+        for offer in offers["offers"].as_object().unwrap().values() {
+            let Some(name) = offer["editorName"].as_str().and_then(|n| n.strip_prefix("SigilShop_EffectIngredients_"))
+            else {
+                continue;
+            };
+            let paid = set(offer["contents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|c| Uuid::parse_str(c["itemTemplateId"].as_str().unwrap()).unwrap()));
+            if name == "AllIngredients" {
+                assert_eq!(paid, effect_ingredients(), "the AllIngredients bundle");
+                continue;
+            }
+            assert_eq!(paid.len(), 1, "{name}");
+            let id = *paid.first().unwrap();
+            assert_eq!(items["items_template"][id.to_string()]["name"], format!("Items.Name.{name}"), "{id}");
+            singles.push(id);
+        }
+        assert_eq!(set(singles.iter().copied()), effect_ingredients());
+        assert_eq!(singles.len(), 7);
+        assert!(effect_ingredients().contains(&Uuid::parse_str(DEATHBELL).unwrap()));
+        assert_eq!(items["items_template"][DEATHBELL]["name"], "Items.Name.Deathbell");
+        assert_eq!(ENCHANTING_INGREDIENTS, EFFECT_INGREDIENTS);
+    }
+
+    /// The quantities retail's table paid `item` in, in bands overlapping `lo..=hi`.
+    fn retail_sizes(item: &Uuid, lo: i64, hi: i64) -> std::collections::BTreeSet<u64> {
+        let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+            .as_array()
+            .unwrap();
+        bands
+            .iter()
+            .filter(|b| b["minEnemyLevel"].as_i64().unwrap() <= hi && b["maxEnemyLevel"].as_i64().unwrap() >= lo)
+            .flat_map(|b| b["results"].as_array().unwrap())
+            .filter_map(|r| r["loot"]["stackableItems"][item.to_string()].as_u64())
+            .filter(|q| *q > 0)
+            .collect()
+    }
+
+    /// At every level, all seven are candidates with the same total weight, and
+    /// each one's stack sizes are what retail's table paid it in near the level --
+    /// or, where it never did, at the nearest level it did.
+    #[test]
+    fn every_level_offers_all_seven_with_equal_weight_at_retail_stack_sizes() {
+        for level in 1..=ABYSS_BONUS_MAX_LEVEL {
+            let candidates = abyss_bonus_candidates(level, true);
+            assert_eq!(set(candidates.iter().map(|c| c.0)), effect_ingredients(), "level {level}");
+            for item in effect_ingredients() {
+                let mine: Vec<&BonusCandidate> = candidates.iter().filter(|c| c.0 == item).collect();
+                let weight: u64 = mine.iter().map(|c| c.2).sum();
+                assert_eq!(weight, EFFECT_INGREDIENT_WEIGHT, "level {level}: {item}");
+                let near = retail_sizes(&item, level - ABYSS_BONUS_LEVEL_WINDOW, level + ABYSS_BONUS_LEVEL_WINDOW);
+                // Where retail paid it near the level, exactly those sizes; otherwise
+                // the sizes of the nearest band that paid it (some band within 12).
+                let expected = if near.is_empty() {
+                    (1..=12)
+                        .map(|d| {
+                            let below = retail_sizes(&item, level - d, level - d);
+                            if below.is_empty() { retail_sizes(&item, level + d, level + d) } else { below }
+                        })
+                        .find(|s| !s.is_empty())
+                        .unwrap_or_else(|| panic!("level {level}: {item} never paid within 12 levels"))
+                } else {
+                    near
+                };
+                let drawn: std::collections::BTreeSet<u64> = mine.iter().map(|c| c.1).collect();
+                assert_eq!(drawn.len(), mine.len(), "level {level}: {item} lists a size twice");
+                assert!(drawn.is_subset(&expected), "level {level}: {item} {drawn:?} not in {expected:?}");
+            }
+        }
+        // Control: retail's table never paid Frost Salts above level 88, so level 100
+        // draws it at the 87-88 band's sizes; and the materials half is unchanged in
+        // kind -- no effect ingredient in it.
+        let frost = Uuid::parse_str(FROST_SALTS).unwrap();
+        assert!(retail_sizes(&frost, 98, 100).is_empty());
+        assert!(abyss_bonus_candidates(100, true).iter().any(|c| c.0 == frost));
+        for level in 1..=ABYSS_BONUS_MAX_LEVEL {
+            assert!(abyss_bonus_candidates(level, false).iter().all(|c| !EFFECT_INGREDIENTS.contains(&c.0.as_u128())));
+        }
+    }
+
+    /// Sampled over many corpse identities, each of the seven is 1/7 of the
+    /// enchanting bonus (within 3 points) at levels 7, 20, 45 and 100, Deathbell
+    /// included -- where retail's table weighted them 7-33%.
+    #[test]
+    fn the_enchanting_bonus_draws_each_ingredient_equally() {
+        let names = static_json("parsed.json");
+        let name = |id: &Uuid| names["items_template"][id.to_string()]["name"].as_str().unwrap_or("?").to_string();
+        let dungeon = Uuid::from_u128(0x383e);
+        let deathbell = Uuid::parse_str(DEATHBELL).unwrap();
+        for level in [7i64, 20, 45, 100] {
+            let mut drawn: HashMap<Uuid, usize> = HashMap::new();
+            let mut total = 0usize;
+            for i in 0..150_000usize {
+                let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
+                let run_seed = (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D);
+                let Some((item, qty)) = abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level) else {
+                    continue;
+                };
+                if !EFFECT_INGREDIENTS.contains(&item.as_u128()) {
+                    continue;
+                }
+                assert!(qty > 0);
+                total += 1;
+                *drawn.entry(item).or_default() += 1;
+            }
+            // Retail's table near this level, the weighting before #383's change.
+            let retail: HashMap<Uuid, u64> = effect_ingredients()
+                .into_iter()
+                .map(|item| {
+                    let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+                        .as_array()
+                        .unwrap();
+                    let n = bands
+                        .iter()
+                        .filter(|b| {
+                            b["minEnemyLevel"].as_i64().unwrap() <= level + ABYSS_BONUS_LEVEL_WINDOW
+                                && b["maxEnemyLevel"].as_i64().unwrap() >= level - ABYSS_BONUS_LEVEL_WINDOW
+                        })
+                        .flat_map(|b| b["results"].as_array().unwrap())
+                        .filter(|r| r["loot"]["stackableItems"][item.to_string()].as_u64().is_some_and(|q| q > 0))
+                        .map(|r| r["n"].as_u64().unwrap())
+                        .sum();
+                    (item, n)
+                })
+                .collect();
+            let retail_total: u64 = retail.values().sum();
+            let mut line = Vec::new();
+            for item in effect_ingredients() {
+                let share = drawn.get(&item).copied().unwrap_or(0) as f64 / total as f64;
+                line.push(format!(
+                    "{} {:.1}% (retail {:.1}%)",
+                    name(&item).trim_start_matches("Items.Name."),
+                    100.0 * share,
+                    100.0 * retail[&item] as f64 / retail_total as f64
+                ));
+                assert!((share - 1.0 / 7.0).abs() <= 0.03, "level {level}: {} {share}", name(&item));
+            }
+            println!("level {level}: {total} enchanting draws: {}", line.join(", "));
+            assert!(total >= 3000, "level {level}: {total} draws is too few");
+            assert!(drawn.get(&deathbell).copied().unwrap_or(0) > 0, "level {level}: no Deathbell");
+        }
     }
 }
 
