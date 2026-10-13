@@ -269,7 +269,7 @@ pub async fn start_abyss(
             let gen_data = run
                 .slices
                 .get(run.current_floor_index)
-                .and_then(|slice| build_generated_data(&app_state, slice))
+                .and_then(|slice| floor_generated_data(&app_state.game_data, slice, run.seed))
                 .unwrap_or_else(empty_generated_data);
 
             // Persist run into server_state
@@ -1317,15 +1317,21 @@ fn empty_generated_data() -> DungeonGeneratedData {
     }
 }
 
-fn build_generated_data(
-    app_state: &ServerGlobal,
+/// The generated data of one floor of a run — the ONE place it is built, so the
+/// data served to the client and the corpse loot paid at `/update` agree.
+///
+/// Corpses roll retail's Abyss loot (gold, the odd Atronite; report #381), seeded
+/// by the run so two runs through the same floor do not drop the same things.
+fn floor_generated_data(
+    game_data: &blades_lib::game_data::GameData,
     slice: &AbyssSliceEntry,
+    run_seed: i64,
 ) -> Option<DungeonGeneratedData> {
-    blades_lib::util::dungeon::generate_for_dungeon(
-        &app_state.game_data,
+    blades_lib::util::dungeon::generate_for_abyss_floor(
+        game_data,
         &slice.dungeon_settings_id,
+        run_seed as u64,
         slice.difficulty_level as i64,
-        0,
     )
 }
 
@@ -1335,14 +1341,7 @@ fn active_floor_generated_data(
 ) -> Option<AbyssDungeonGeneratedData> {
     run.slices
         .get(run.current_floor_index)
-        .and_then(|slice| {
-            blades_lib::util::dungeon::generate_for_dungeon(
-                game_data,
-                &slice.dungeon_settings_id,
-                slice.difficulty_level as i64,
-                0,
-            )
-        })
+        .and_then(|slice| floor_generated_data(game_data, slice, run.seed))
         .map(|inner| AbyssDungeonGeneratedData {
             quest_id: Uuid::parse_str(ABYSS_QUEST_ID).unwrap(),
             inner,
@@ -1372,6 +1371,7 @@ fn collect_enemy_loot(
     actions: &[AbyssUpdateAction],
 ) -> Vec<RewardGrant> {
     let mut active_slice = run.current_floor_index;
+    let run_seed = run.seed;
     let mut grants = Vec::new();
     // A request commonly carries `enemy_killed` and `enemy_loot_collected` for
     // the same floor. Generate that floor once, not once per action.
@@ -1384,14 +1384,9 @@ fn collect_enemy_loot(
                     continue;
                 };
                 let floor_index = slice.floor_index;
-                let generated = generated_by_slice.entry(active_slice).or_insert_with(|| {
-                    blades_lib::util::dungeon::generate_for_dungeon(
-                        game_data,
-                        &slice.dungeon_settings_id,
-                        slice.difficulty_level as i64,
-                        0,
-                    )
-                });
+                let generated = generated_by_slice
+                    .entry(active_slice)
+                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed));
                 let Some(generated) = generated.as_ref() else {
                     continue;
                 };
@@ -1431,14 +1426,9 @@ fn collect_enemy_loot(
                     continue;
                 }
 
-                let generated = generated_by_slice.entry(active_slice).or_insert_with(|| {
-                    blades_lib::util::dungeon::generate_for_dungeon(
-                        game_data,
-                        &slice.dungeon_settings_id,
-                        slice.difficulty_level as i64,
-                        0,
-                    )
-                });
+                let generated = generated_by_slice
+                    .entry(active_slice)
+                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed));
                 let Some(generated) = generated.as_ref() else {
                     continue;
                 };
@@ -2940,14 +2930,12 @@ mod tests {
         // Find one deterministic generated enemy that actually pays. This keeps
         // the test tied to the compiled 49,602-observation corpus rather than a
         // hand-authored payout that could disagree with it.
+        let mut run = run_from(&[(1, 40)], 40);
         let mut fixture = None;
         'dungeons: for dungeon_id in gd.dungeons.keys() {
-            let Some(generated) = blades_lib::util::dungeon::generate_for_dungeon(
-                &gd,
-                dungeon_id,
-                40,
-                0,
-            ) else {
+            let mut slice = run.slices[0].clone();
+            slice.dungeon_settings_id = *dungeon_id;
+            let Some(generated) = floor_generated_data(&gd, &slice, run.seed) else {
                 continue;
             };
             for (spawn_group_id, spawners) in &generated.enemy_generated_data {
@@ -2974,7 +2962,6 @@ mod tests {
         let (dungeon_id, spawn_group_id, spawner_index, enemy_index, expected) =
             fixture.expect("the retail-derived corpus must contain a paying enemy");
 
-        let mut run = run_from(&[(1, 40)], 40);
         run.current_floor_index = 0;
         run.slices[0].dungeon_settings_id = dungeon_id;
         run.slices[0].completed = false;
@@ -4432,6 +4419,128 @@ mod tests {
             }
             assert!((20..=44).contains(&gem_ends), "start {start}: {gem_ends}/64 /ends paid soul gems");
         }
+    }
+
+    /// Corpse loot of every floor a run serves, tallied over `seeds` runs: (corpses,
+    /// corpses paying any stackable, count per stackable, mean gold per paying corpse).
+    /// `abyss` picks the Abyss generator; `false` is the dungeon path abyss floors
+    /// used before report #381, kept as the control.
+    fn corpse_loot_tally(
+        level: u32,
+        start: u32,
+        floors: usize,
+        seeds: u64,
+        abyss: bool,
+    ) -> (usize, usize, HashMap<Uuid, usize>, f64) {
+        let gd = game_data();
+        let ipl = initial_player_level(&real_job_pools(), level);
+        let (mut corpses, mut with_stacks, mut gold, mut gold_corpses) = (0, 0, 0u64, 0u64);
+        let mut per_item: HashMap<Uuid, usize> = HashMap::new();
+        for nonce in 0..seeds {
+            let seed = generate_run_seed(Uuid::from_u128(0x381), nonce);
+            let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
+            for slice in slices.iter().take(floors) {
+                let data = if abyss {
+                    floor_generated_data(&gd, slice, seed)
+                } else {
+                    blades_lib::util::dungeon::generate_for_dungeon(
+                        &gd,
+                        &slice.dungeon_settings_id,
+                        slice.difficulty_level as i64,
+                        0,
+                    )
+                };
+                for enemy in data.iter().flat_map(|d| d.enemy_generated_data.values()).flatten().flatten() {
+                    corpses += 1;
+                    let loot = enemy.merged_loot_table();
+                    if !loot.stackable_items.is_empty() {
+                        with_stacks += 1;
+                    }
+                    for id in loot.stackable_items.keys() {
+                        *per_item.entry(*id).or_default() += 1;
+                    }
+                    if let Some(g) = loot.currencies.get(&Uuid::parse_str(GOLD_CURRENCY_UUID).unwrap()) {
+                        gold += g;
+                        gold_corpses += 1;
+                    }
+                }
+            }
+        }
+        (corpses, with_stacks, per_item, gold as f64 / gold_corpses.max(1) as f64)
+    }
+
+    /// Report #381: "in the Abyss there is always only Quicksilver, too much
+    /// Nightshade, Pearls where Diamonds and Atronite belong". Those were corpse
+    /// drops: abyss enemies rolled the general dungeon table (871c2e9b) at the
+    /// floor's level. Retail's abyss enemies roll the Abyss table, which paid gold
+    /// only (189/189), plus Atronite 5 times in 31 on one table: over 284 retail
+    /// abyss corpses 12 paid any stackable (4%), none a Pearl, Garlic, Quicksilver or
+    /// Nightshade.
+    ///
+    /// Driven the three ways the Abyss rule asks for: a level-7 run from floor 1, a
+    /// level-43 run from floor 40 and a level-100 run from floor 149.
+    #[test]
+    fn abyss_corpses_pay_retails_abyss_loot_at_every_depth() {
+        const PEARL: &str = "89ece62c-9ff6-470a-a152-d45ef4e0c222";
+        const GARLIC: &str = "fbf96b07-e9aa-4157-8761-10179fa05138";
+        const QUICKSILVER: &str = "e80bee76-f92c-4005-9eff-20d1e8c64d24";
+        const NIGHTSHADE: &str = "4d7420db-8042-4946-a43f-e0b3bd9bec81";
+        const ATRONITE: &str = "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95";
+        let count = |m: &HashMap<Uuid, usize>, id: &str| *m.get(&Uuid::parse_str(id).unwrap()).unwrap_or(&0);
+        for (level, start, floors, gold_range) in
+            [(7u32, 1u32, 30usize, 50.0..=140.0), (43, 40, 30, 110.0..=190.0), (100, 149, 30, 180.0..=220.0)]
+        {
+            let (before, before_stacks, before_items, _) = corpse_loot_tally(level, start, floors, 16, false);
+            let (corpses, stacks, items, gold) = corpse_loot_tally(level, start, floors, 16, true);
+            let low_tier: usize = [PEARL, GARLIC, QUICKSILVER, NIGHTSHADE].iter().map(|id| count(&items, id)).sum();
+            println!(
+                "L{level} from {start}: before {before_stacks}/{before} corpses paid stackables \
+                 (Pearl {}, Garlic {}, Quicksilver {}, Nightshade {}); after {stacks}/{corpses} \
+                 (Pearl/Garlic/Quicksilver/Nightshade {low_tier}, Atronite {}), mean gold {gold:.0}",
+                count(&before_items, PEARL),
+                count(&before_items, GARLIC),
+                count(&before_items, QUICKSILVER),
+                count(&before_items, NIGHTSHADE),
+                count(&items, ATRONITE),
+            );
+            assert!(corpses > 200, "L{level}: {corpses} corpses is too few to measure");
+            // Control: the old path paid materials on a large share of corpses.
+            assert!(before_stacks * 100 >= before * 20, "L{level}: control {before_stacks}/{before}");
+            // Retail: 12 of 284 (4%). Unseen groups draw the pooled abyss sets.
+            assert!(stacks * 100 <= corpses * 8, "L{level}: {stacks}/{corpses} corpses paid a stackable");
+            assert!(low_tier * 100 <= corpses, "L{level}: {low_tier} Pearl/Garlic/Quicksilver/Nightshade");
+            assert!(gold_range.contains(&gold), "L{level}: mean corpse gold {gold}");
+        }
+    }
+
+    /// A run's corpses are fixed for the run (the client and `/update` must agree)
+    /// but differ between runs, as retail's did.
+    #[test]
+    fn abyss_corpse_loot_is_stable_per_run_and_varies_between_runs() {
+        let gd = game_data();
+        let slices = build_run_slices(&real_static_abyss(), 1, 149, 84, &ALL_QUESTS);
+        // Every corpse's loot, in a canonical order (the maps are unordered).
+        let corpses = |seed: i64| {
+            let mut out = Vec::new();
+            for (floor, slice) in slices.iter().take(20).enumerate() {
+                let data = floor_generated_data(&gd, slice, seed).unwrap();
+                for (group, spawners) in &data.enemy_generated_data {
+                    for (spawner, enemies) in spawners.iter().enumerate() {
+                        for (index, enemy) in enemies.iter().enumerate() {
+                            let loot = enemy.merged_loot_table();
+                            let mut paid: Vec<(Uuid, u64)> =
+                                loot.currencies.into_iter().chain(loot.stackable_items).collect();
+                            paid.sort();
+                            out.push((floor, *group, spawner, index, paid));
+                        }
+                    }
+                }
+            }
+            out.sort();
+            out
+        };
+        assert!(corpses(11) == corpses(11), "same run, same corpses");
+        assert!(corpses(11) != corpses(12), "another run rolls its corpses afresh");
     }
 
     /// `/end` is the floors' gold and XP plus the package. Retail paid the package

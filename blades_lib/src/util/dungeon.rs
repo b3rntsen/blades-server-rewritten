@@ -417,12 +417,15 @@ fn interactable_loot() -> &'static serde_json::Value {
 struct LootSeedContext {
     dungeon_uuid: Uuid,
     run_seed: u64,
+    /// An Abyss floor: its enemies roll the Abyss corpus ([`abyss_enemy_loot`]).
+    abyss: bool,
 }
 
 fn default_seed_context(dungeon_uuid: &Uuid) -> LootSeedContext {
     LootSeedContext {
         dungeon_uuid: *dungeon_uuid,
         run_seed: 0,
+        abyss: false,
     }
 }
 
@@ -430,6 +433,7 @@ fn seeded_context(dungeon_uuid: &Uuid, run_seed: u64) -> LootSeedContext {
     LootSeedContext {
         dungeon_uuid: *dungeon_uuid,
         run_seed,
+        abyss: false,
     }
 }
 
@@ -569,6 +573,29 @@ fn roll_loot_table(
 //                           this the first corpus cannot be addressed at all.
 static ENEMY_LOOT_RAW: &str = include_str!("../enemy_loot.json");
 static ENEMY_GROUP_TABLES_RAW: &str = include_str!("../enemy_group_tables.json");
+
+// Abyss corpses (report #381). The Abyss sends its floors as
+// `abyssDungeonGeneratedData`, which the two corpora above were never mined
+// from, so no abyss spawn group was in `enemy_group_tables.json` and every abyss
+// enemy fell back to the general table 871c2e9b -- Pearl and Garlic on shallow
+// floors, Quicksilver as the only ingot at enemy level 40-44, Nightshade at
+// 46-50, all of it the same for every run of a floor.
+//
+// Retail's abyss enemies are the APK's "... Family Abyss" families, and every one
+// rolls 2d366ee0 (some add 18bafcb5 or 50cd3882), never 871c2e9b
+// (reference/game-defs/enemies.json). Over 80 captured retail abyss floors,
+// 2d366ee0 paid gold and nothing else (189 of 189, ~2 gold per enemy level),
+// 18bafcb5 one Atronite 5 times in 31, and 50cd3882 a Dragon Claw or Scale
+// stack. Built by `script/mine_abyss_enemy_loot.py`.
+static ABYSS_ENEMY_LOOT_RAW: &str = include_str!("../abyss_enemy_loot.json");
+
+fn abyss_enemy_loot() -> &'static serde_json::Value {
+    static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        serde_json::from_str(ABYSS_ENEMY_LOOT_RAW)
+            .unwrap_or_else(|_| serde_json::json!({ "groups": {}, "pooledSets": [], "tables": {} }))
+    })
+}
 
 /// The gold table, and the fallback for a spawn group the corpus never saw.
 ///
@@ -735,8 +762,17 @@ fn roll_enemy_loot_with_context(
     let mut rng = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index);
     let mut out = HashMap::new();
 
-    let group = enemy_group_tables()["groups"].get(spawn_group_id.to_string());
-    let tables: Vec<Uuid> = match group.and_then(|g| g["sets"].as_array()) {
+    let group = if ctx.abyss {
+        // An abyss group retail never showed us rolls what abyss enemies rolled
+        // as a whole -- the abyss gold table, not the general one.
+        abyss_enemy_loot()["groups"]
+            .get(spawn_group_id.to_string())
+            .map(|g| &g["sets"])
+            .or(Some(&abyss_enemy_loot()["pooledSets"]))
+    } else {
+        enemy_group_tables()["groups"].get(spawn_group_id.to_string()).map(|g| &g["sets"])
+    };
+    let tables: Vec<Uuid> = match group.and_then(|sets| sets.as_array()) {
         Some(sets) => draw_weighted(&mut rng, sets)
             .and_then(|s| s["tables"].as_array())
             .map(|ts| ts.iter().filter_map(|t| t.as_str()?.parse().ok()).collect())
@@ -746,7 +782,13 @@ fn roll_enemy_loot_with_context(
     };
 
     for table_id in tables {
-        let results: Option<Vec<&serde_json::Value>> = match enemy_loot()["tables"].get(table_id.to_string()) {
+        let abyss_table = ctx
+            .abyss
+            .then(|| abyss_enemy_loot()["tables"].get(table_id.to_string()))
+            .flatten();
+        let results: Option<Vec<&serde_json::Value>> = match abyss_table
+            .or_else(|| enemy_loot()["tables"].get(table_id.to_string()))
+        {
             Some(entry) => enemy_table_results(entry, enemy_level).map(|r| r.iter().collect()),
             // A table left out of the ENEMY corpus as too thin to model. The
             // floor-loot corpus may still know it: 8858f284 is the DoorKey table,
@@ -1000,6 +1042,23 @@ pub fn generate_for_dungeon_with_seed(
         dungeon_uuid,
         seeded_context(dungeon_uuid, run_seed),
         EnemyLevels::Flat { level: enemy_level, given_xp },
+    )
+}
+
+/// One Abyss floor: [`generate_for_dungeon_with_seed`], but its enemies roll the
+/// retail Abyss corpse loot (gold, the odd Atronite) instead of the dungeon
+/// enemy corpus (report #381), seeded per run so each run's corpses differ.
+pub fn generate_for_abyss_floor(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    enemy_level: i64,
+) -> Option<DungeonGeneratedData> {
+    generate_for_dungeon_inner(
+        game_data,
+        dungeon_uuid,
+        LootSeedContext { abyss: true, ..seeded_context(dungeon_uuid, run_seed) },
+        EnemyLevels::Flat { level: enemy_level, given_xp: 0 },
     )
 }
 
