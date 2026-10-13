@@ -43,6 +43,12 @@ pub struct AbyssRun {
     pub revive_count: u32,
     /// Player level at run start (used for difficulty/XP scaling).
     pub initial_player_level: u32,
+    /// The CHARACTER level at run start: the band the run's bonus corpse
+    /// materials are drawn from (#383). Fixed for the run, so the floor data
+    /// served and the loot paid at `/update` agree. 0 on a run started before
+    /// #383; `/update` fills it in.
+    #[serde(default)]
+    pub character_level: u32,
     /// Pseudo-random seed for client-side generation.
     pub seed: i64,
     /// Cumulative score (enemy kills count toward future reward thresholds).

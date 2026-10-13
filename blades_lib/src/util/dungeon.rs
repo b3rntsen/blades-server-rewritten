@@ -419,6 +419,10 @@ struct LootSeedContext {
     run_seed: u64,
     /// An Abyss floor: its enemies roll the Abyss corpus ([`abyss_enemy_loot`]).
     abyss: bool,
+    /// The character level an Abyss floor's bonus material is banded to
+    /// ([`abyss_bonus_material`], #383). `None`: no bonus (every non-Abyss floor,
+    /// and an Abyss run started before the bonus existed).
+    bonus_level: Option<i64>,
 }
 
 fn default_seed_context(dungeon_uuid: &Uuid) -> LootSeedContext {
@@ -426,6 +430,7 @@ fn default_seed_context(dungeon_uuid: &Uuid) -> LootSeedContext {
         dungeon_uuid: *dungeon_uuid,
         run_seed: 0,
         abyss: false,
+        bonus_level: None,
     }
 }
 
@@ -434,6 +439,7 @@ fn seeded_context(dungeon_uuid: &Uuid, run_seed: u64) -> LootSeedContext {
         dungeon_uuid: *dungeon_uuid,
         run_seed,
         abyss: false,
+        bonus_level: None,
     }
 }
 
@@ -832,7 +838,187 @@ fn roll_enemy_loot_with_context(
         out.insert(table_id, result);
     }
 
+    // #383: the bonus stack, under the table it was drawn from. 871c2e9b is the
+    // key every Abyss corpse carried before #381, so the client already reads it
+    // on an Abyss enemy.
+    if let Some((item, qty)) = roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index) {
+        *out.entry(Uuid::from_u128(GOLD_LOOT_TABLE_ID))
+            .or_default()
+            .stackable_items
+            .entry(item)
+            .or_default() += qty;
+    }
+
     out
+}
+
+// -- Abyss bonus material (#383) ---------------------------------------------
+//
+// NOT RETAIL. An owner-approved deviation (report #383, 2026-10-13), requested by
+// HauDrauf: most players lost their retail characters and restart from scratch,
+// and #381 (fork #509) took the Abyss back to retail's corpse loot -- gold, and a
+// stackable on ~4% of corpses. On top of that retail loot, a share of Abyss
+// corpses now also drop ONE material stack, drawn from the retail dungeon enemy
+// table (871c2e9b) at the CHARACTER's level rather than the floor's, so a
+// level-100 character finds level-100 materials (no Pearl, no Garlic) and a
+// level-20 one level-20 ones. Stackables only: the table's gear results (the
+// dragon weapons and armour HauDrauf asked to keep out) are never read.
+
+/// Share of Abyss corpses that drop a bonus material stack on top of retail's
+/// Abyss loot. Owner-approved deviation from retail (#383, 2026-10-13).
+pub const ABYSS_BONUS_MATERIAL_SHARE: f64 = 0.18;
+
+/// Share of those bonus stacks that are an enchanting ingredient
+/// ([`ENCHANTING_INGREDIENTS`]); the rest are any other material the table pays
+/// at the character's level. The owner also decided to raise enchanting
+/// ingredients -- retail's table pays them in ~13% of its stacks. Owner-approved
+/// deviation from retail (#383, 2026-10-13).
+pub const ABYSS_BONUS_ENCHANTING_SHARE: f64 = 1.0 / 3.0;
+
+/// The bonus draws from the table's level bands within this many levels of the
+/// character's level. A single band is thin (level 85 saw one enchanting
+/// ingredient, so ±0 would always be Fire Salts); ±2 keeps the draw to what
+/// retail paid at that level. With nothing in the window, the nearest band that
+/// has a candidate is used.
+const ABYSS_BONUS_LEVEL_WINDOW: i64 = 2;
+
+/// Frost, Fire and Void Salts, Glow Dust, Imp Stool, Honeycomb, Beehive Husk.
+pub const ENCHANTING_INGREDIENTS: [u128; 7] = [
+    0x05b4dd6b_796f_4088_a772_0e33ea3db976, // Frost Salts
+    0xf1c5c03c_5297_48fb_a9d2_5f32bffb467c, // Fire Salts
+    0x10c54e43_a2a1_4833_9491_4c19149f43b5, // Void Salts
+    0x9687d83c_aa7b_4cf3_a69f_0bba8204fa61, // Glow Dust
+    0x07f380dd_f123_4ef7_9b12_8b9fdb03c3e1, // Imp Stool
+    0x7116a2a8_ac2d_4cd9_8b7c_b80c397d3f50, // Honeycomb
+    0x8b7d0044_3a38_4ee0_af45_d2892b0f508d, // Beehive Husk
+];
+
+/// Highest character level the candidate lists are built for; above it, clamps.
+const ABYSS_BONUS_MAX_LEVEL: i64 = 100;
+
+/// One candidate stack: (item, quantity retail paid it in, times observed).
+type BonusCandidate = (Uuid, u64, u64);
+
+/// The bonus candidates at `level`: `[other materials, enchanting ingredients]`,
+/// each weighted by how often retail's table paid that exact stack.
+pub fn abyss_bonus_candidates(level: i64, enchanting: bool) -> &'static [BonusCandidate] {
+    static BY_LEVEL: std::sync::OnceLock<Vec<[Vec<BonusCandidate>; 2]>> = std::sync::OnceLock::new();
+    let table = BY_LEVEL.get_or_init(|| {
+        (0..=ABYSS_BONUS_MAX_LEVEL)
+            .map(|level| [build_bonus_candidates(level, false), build_bonus_candidates(level, true)])
+            .collect()
+    });
+    &table[level.clamp(1, ABYSS_BONUS_MAX_LEVEL) as usize][usize::from(enchanting)]
+}
+
+fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
+    let Some(bands) = enemy_loot()["tables"]
+        .get(Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string())
+        .and_then(|t| t["byLevel"].as_array())
+    else {
+        return Vec::new();
+    };
+    let range = |band: &serde_json::Value| {
+        (
+            band["minEnemyLevel"].as_i64().unwrap_or(i64::MIN),
+            band["maxEnemyLevel"].as_i64().unwrap_or(i64::MAX),
+        )
+    };
+    let stacks = |band: &serde_json::Value| -> Vec<BonusCandidate> {
+        let mut out: Vec<BonusCandidate> = Vec::new();
+        for result in band["results"].as_array().into_iter().flatten() {
+            let n = result["n"].as_u64().unwrap_or(0);
+            // `stackableItems` only: a result's `items` (gear) is never a candidate.
+            for (id, qty) in result["loot"]["stackableItems"].as_object().into_iter().flatten() {
+                let (Ok(item), Some(qty)) = (Uuid::parse_str(id), qty.as_u64()) else { continue };
+                if qty == 0 || item.as_u128() == DOOR_KEY_ITEM_ID {
+                    continue;
+                }
+                if ENCHANTING_INGREDIENTS.contains(&item.as_u128()) != enchanting {
+                    continue;
+                }
+                match out.iter_mut().find(|c| c.0 == item && c.1 == qty) {
+                    Some(c) => c.2 += n,
+                    None => out.push((item, qty, n)),
+                }
+            }
+        }
+        out
+    };
+    let (lo, hi) = (level - ABYSS_BONUS_LEVEL_WINDOW, level + ABYSS_BONUS_LEVEL_WINDOW);
+    let mut window: Vec<BonusCandidate> = Vec::new();
+    for band in bands.iter().filter(|b| range(b).0 <= hi && range(b).1 >= lo) {
+        for c in stacks(band) {
+            match window.iter_mut().find(|w| w.0 == c.0 && w.1 == c.1) {
+                Some(w) => w.2 += c.2,
+                None => window.push(c),
+            }
+        }
+    }
+    if !window.is_empty() {
+        window.sort();
+        return window;
+    }
+    // Nothing of this kind near the level: the nearest band that has some.
+    let distance = |band: &serde_json::Value| {
+        let (min, max) = range(band);
+        if level < min { min - level } else if level > max { level - max } else { 0 }
+    };
+    let mut nearest: Vec<&serde_json::Value> = bands.iter().collect();
+    nearest.sort_by_key(|b| distance(b));
+    let mut found = nearest.into_iter().map(stacks).find(|c| !c.is_empty()).unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// The bonus material stack (if any) one Abyss corpse drops on top of retail's
+/// loot (#383): `None` for ~82% of corpses. A function of the run seed and the
+/// corpse's identity alone, on its own random stream, so it never moves the
+/// retail draws next to it and a replayed floor drops the same thing.
+pub fn abyss_bonus_material(
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    character_level: i64,
+) -> Option<(Uuid, u64)> {
+    let ctx = LootSeedContext {
+        abyss: true,
+        bonus_level: Some(character_level),
+        ..seeded_context(dungeon_uuid, run_seed)
+    };
+    roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index)
+}
+
+fn roll_abyss_bonus(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+) -> Option<(Uuid, u64)> {
+    let level = ctx.bonus_level.filter(|_| ctx.abyss)?;
+    // Salted, so the stream is independent of the retail draws for this corpse.
+    const SALT: u64 = 0x0383_ab55_b0b5_0383;
+    let mut rng = LootRng(mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ SALT));
+    let unit = |x: u64| (x >> 11) as f64 / (1u64 << 53) as f64;
+    if unit(rng.next()) >= ABYSS_BONUS_MATERIAL_SHARE {
+        return None;
+    }
+    let enchanting = unit(rng.next()) < ABYSS_BONUS_ENCHANTING_SHARE;
+    let candidates = abyss_bonus_candidates(level, enchanting);
+    let total: u64 = candidates.iter().map(|c| c.2).sum();
+    if total == 0 {
+        return None;
+    }
+    let mut pick = rng.next() % total;
+    for (item, qty, n) in candidates {
+        if pick < *n {
+            return Some((*item, *qty));
+        }
+        pick -= n;
+    }
+    None
 }
 
 // -- spawn-group loot -------------------------------------------------------
@@ -1048,16 +1234,24 @@ pub fn generate_for_dungeon_with_seed(
 /// One Abyss floor: [`generate_for_dungeon_with_seed`], but its enemies roll the
 /// retail Abyss corpse loot (gold, the odd Atronite) instead of the dungeon
 /// enemy corpus (report #381), seeded per run so each run's corpses differ.
+///
+/// `character_level` adds the #383 bonus material ([`abyss_bonus_material`]),
+/// banded to that level; `None` serves retail's Abyss loot alone.
 pub fn generate_for_abyss_floor(
     game_data: &GameData,
     dungeon_uuid: &Uuid,
     run_seed: u64,
     enemy_level: i64,
+    character_level: Option<i64>,
 ) -> Option<DungeonGeneratedData> {
     generate_for_dungeon_inner(
         game_data,
         dungeon_uuid,
-        LootSeedContext { abyss: true, ..seeded_context(dungeon_uuid, run_seed) },
+        LootSeedContext {
+            abyss: true,
+            bonus_level: character_level,
+            ..seeded_context(dungeon_uuid, run_seed)
+        },
         EnemyLevels::Flat { level: enemy_level, given_xp: 0 },
     )
 }
@@ -1776,6 +1970,106 @@ mod variant_owner_tests {
             None,
             "an unknown group must not be attributed to any dungeon"
         );
+    }
+}
+
+#[cfg(test)]
+mod abyss_bonus_material_tests {
+    //! #383: the owner-approved bonus material on Abyss corpses.
+    use super::*;
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+    const PEARL: &str = "89ece62c-9ff6-470a-a152-d45ef4e0c222";
+    const GARLIC: &str = "fbf96b07-e9aa-4157-8761-10179fa05138";
+    const DRAGON_SCALE: &str = "34ddfe0e-5119-4e52-8eef-a77b6bc810a7";
+
+    /// The levels retail's general enemy table paid each stack at, read straight
+    /// from the corpus (independent of the candidate builder).
+    fn retail_levels(item: &Uuid) -> (i64, i64) {
+        let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+            .as_array()
+            .unwrap();
+        let (mut lo, mut hi) = (i64::MAX, i64::MIN);
+        for band in bands {
+            let paid = band["results"].as_array().unwrap().iter().any(|r| {
+                r["loot"]["stackableItems"].as_object().is_some_and(|m| m.contains_key(&item.to_string()))
+            });
+            if paid {
+                lo = lo.min(band["minEnemyLevel"].as_i64().unwrap());
+                hi = hi.max(band["maxEnemyLevel"].as_i64().unwrap());
+            }
+        }
+        (lo, hi)
+    }
+
+    #[test]
+    fn every_level_has_both_kinds_and_only_the_right_kind() {
+        for level in 1..=100 {
+            let materials = abyss_bonus_candidates(level, false);
+            let enchanting = abyss_bonus_candidates(level, true);
+            assert!(!materials.is_empty() && !enchanting.is_empty(), "level {level}");
+            assert!(enchanting.iter().all(|c| ENCHANTING_INGREDIENTS.contains(&c.0.as_u128())));
+            assert!(materials.iter().all(|c| !ENCHANTING_INGREDIENTS.contains(&c.0.as_u128())));
+            assert!(materials.iter().chain(enchanting).all(|c| c.1 > 0 && c.2 > 0));
+        }
+    }
+
+    /// Every candidate is something retail's table paid within the window of the
+    /// character's level, so a level-100 character never sees Pearl or Garlic
+    /// (retail: level 1-30) and a level-7 one never Dragon Scale (25+).
+    #[test]
+    fn candidates_are_what_retail_paid_at_the_characters_level() {
+        for level in 1..=100i64 {
+            for c in abyss_bonus_candidates(level, false).iter().chain(abyss_bonus_candidates(level, true)) {
+                let (lo, hi) = retail_levels(&c.0);
+                assert!(
+                    lo <= level + ABYSS_BONUS_LEVEL_WINDOW + 2 && hi + 12 >= level,
+                    "level {level}: {} paid only at {lo}-{hi}",
+                    c.0
+                );
+            }
+        }
+        let at = |level| {
+            abyss_bonus_candidates(level, false).iter().map(|c| c.0).collect::<std::collections::HashSet<_>>()
+        };
+        assert!(!at(100).contains(&uuid(PEARL)) && !at(100).contains(&uuid(GARLIC)));
+        assert!(!at(7).contains(&uuid(DRAGON_SCALE)));
+        // Control: retail did pay Pearl and Garlic at level 7, and dragon parts at 100.
+        assert!(at(7).contains(&uuid(PEARL)) && at(7).contains(&uuid(GARLIC)));
+        assert!(at(100).contains(&uuid(DRAGON_SCALE)));
+    }
+
+    /// Sampled over many corpse identities: ~18% drop a bonus, a third of those an
+    /// enchanting ingredient; stable per identity, absent without a level.
+    #[test]
+    fn the_bonus_share_and_mix_hold_and_are_deterministic() {
+        let dungeon = Uuid::from_u128(0xab133);
+        for level in [7i64, 43, 100] {
+            let (mut bonus, mut enchanting, draws) = (0usize, 0usize, 60_000usize);
+            for i in 0..draws {
+                let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
+                let run_seed = (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D);
+                let drawn = abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level);
+                assert_eq!(drawn, abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level));
+                if let Some((item, _)) = drawn {
+                    bonus += 1;
+                    enchanting += usize::from(ENCHANTING_INGREDIENTS.contains(&item.as_u128()));
+                }
+            }
+            let share = bonus as f64 / draws as f64;
+            let ench = enchanting as f64 / bonus as f64;
+            println!("level {level}: bonus {share:.4}, enchanting {ench:.4}");
+            assert!((share - ABYSS_BONUS_MATERIAL_SHARE).abs() < 0.01, "level {level}: {share}");
+            assert!((ench - ABYSS_BONUS_ENCHANTING_SHARE).abs() < 0.02, "level {level}: {ench}");
+        }
+        // No bonus on a non-Abyss context or without a level.
+        let group = Uuid::from_u128(1);
+        let ctx = seeded_context(&dungeon, 5);
+        assert!((0..2000).all(|i| roll_abyss_bonus(ctx, &group, i, 0).is_none()));
+        let abyss_no_level = LootSeedContext { abyss: true, ..ctx };
+        assert!((0..2000).all(|i| roll_abyss_bonus(abyss_no_level, &group, i, 0).is_none()));
     }
 }
 
