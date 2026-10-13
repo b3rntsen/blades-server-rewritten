@@ -4467,10 +4467,15 @@ mod tests {
         run.0.iter().find(|(r, _)| *r == rung).map(|(_, g)| g)
     }
 
-    /// The level-100 run from floor 149 pays EXACTLY what it paid before #383, rung by
-    /// rung and at `/end`, for the same 64 seeds. The digest was taken on fork/main
-    /// before the change: the commit adding this test precedes the one that moves the
-    /// band, and passes on its own. (An Abyss change once fixed level 9 and broke 100.)
+    /// The level-100 run from floor 149 pays EXACTLY what it paid before #383's band
+    /// move, rung by rung and at `/end`, for the same 64 seeds. The digest was taken on
+    /// fork/main before that change. (An Abyss change once fixed level 9 and broke 100.)
+    ///
+    /// Re-pinned ONCE, on purpose, by #383's retail end screens: they add three
+    /// top-band observations at rung 35, one at rung 70 and three at `/end`, so the
+    /// level-100 pools hold 16, 9 and 13 results and the same seed lands elsewhere.
+    /// What it may land on is pinned by `level_92_and_95_runs_from_floor_149_*` below;
+    /// levels 7 and 45 keep their digests.
     #[test]
     fn a_level_100_run_from_floor_149_is_unchanged_by_383() {
         let runs = payouts(100, 149, 4, DEEP_FLOOR_KILLS);
@@ -4480,7 +4485,7 @@ mod tests {
         }
         assert_eq!(payout_digest(&runs), LEVEL_100_FROM_149_DIGEST);
     }
-    const LEVEL_100_FROM_149_DIGEST: u64 = 0x2c2c_a748_9427_2dd0;
+    const LEVEL_100_FROM_149_DIGEST: u64 = 0xec68_1b36_2fc8_ec94;
 
     /// Level 7 from floor 1: unchanged, rung by rung, for the same seeds.
     #[test]
@@ -4546,6 +4551,63 @@ mod tests {
                 abyss_rewards::end_package(100.0, 100, seed),
                 "/end nonce {nonce}"
             );
+        }
+    }
+
+    /// Report #383's retail end screens — level 92 and 95, floor 150, three kills;
+    /// level 82, floor 136, one kill — paid Transcendent Soul Gem ×4 at `/end` and an
+    /// enchanting ingredient at rung 35 (Frost Salts ×6, Imp Stool ×6, Honeycomb ×5),
+    /// and the level-95 run Nightshade ×30 at rung 70. Driven from floor 149, a
+    /// level-92 or level-95 run (and level 49 and 100, the band's ends) pays every
+    /// rung-35 and `/end` stack from the top band's retail results, and across 64 runs
+    /// `/end` sometimes pays an enchanting ingredient and sometimes Transcendent gems.
+    #[test]
+    fn level_92_and_95_runs_from_floor_149_draw_the_retail_end_screens_pools() {
+        let ids = |list: &[&str]| -> Vec<Uuid> { list.iter().map(|u| Uuid::parse_str(u).unwrap()).collect() };
+        let rung_35 = ids(&[
+            "e7193116-d761-479b-8a20-5633737977f5", // Lumber
+            "fd67bbc6-20f4-44a3-9614-28265ebb8c67", // Limestone
+            "f1c5c03c-5297-48fb-a9d2-5f32bffb467c", // Fire Salts
+            "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", // Imp Stool
+            "10c54e43-a2a1-4833-9491-4c19149f43b5", // Void Salts
+            "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50", // Honeycomb
+            "9687d83c-aa7b-4cf3-a69f-0bba8204fa61", // Glow Dust
+            "05b4dd6b-796f-4088-a772-0e33ea3db976", // Frost Salts (#383)
+        ]);
+        let end_materials = ids(&[
+            "9687d83c-aa7b-4cf3-a69f-0bba8204fa61", // Glow Dust
+            "f1c5c03c-5297-48fb-a9d2-5f32bffb467c", // Fire Salts
+            "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", // Imp Stool
+        ]);
+        let transcendent = Uuid::parse_str(abyss_rewards::TRANSCENDENT_SOUL_GEM).unwrap();
+        let elder_or_lower = ids(&[
+            "a1d41da0-51e0-4a80-ba9a-b8e9046be27e", // Greater
+            "a3351353-f613-4368-bac7-05783f857b07", // Elevated
+            "68d7941e-8c8d-47bf-9f66-becb058f1817", // Grand
+            "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", // Glorious (Elder)
+        ]);
+        for level in [49u32, 92, 95, 100] {
+            let (mut enchanting, mut transcendent_ends) = (0, 0);
+            for run in &payouts(level, 149, 4, DEEP_FLOOR_KILLS) {
+                let rungs: Vec<u32> = run.0.iter().map(|(r, _)| *r).collect();
+                assert!(rungs.starts_with(&[35, 50, 70]), "level {level}: {rungs:?}");
+                let thirty_five = template_of(rung_draw(run, 35).unwrap()).unwrap();
+                assert!(rung_35.contains(&thirty_five), "level {level} rung 35 drew {thirty_five}");
+                let fifty = rung_draw(run, 50).unwrap();
+                assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, u64::from(level)));
+                let package: Vec<Uuid> = run
+                    .1
+                    .stackable_items
+                    .keys()
+                    .copied()
+                    .filter(|t| end_materials.contains(t) || *t == transcendent || elder_or_lower.contains(t))
+                    .collect();
+                assert_eq!(package.len(), 1, "level {level}: one top-band /end package: {:?}", run.1);
+                enchanting += usize::from(end_materials.contains(&package[0]));
+                transcendent_ends += usize::from(package[0] == transcendent);
+            }
+            assert!((12..=40).contains(&enchanting), "level {level}: /end enchanting on {enchanting}/64");
+            assert!(transcendent_ends >= 8, "level {level}: Transcendent on only {transcendent_ends}/64");
         }
     }
 
