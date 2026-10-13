@@ -196,7 +196,7 @@ pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<
 
     let mut grant = RewardGrant {
         currencies: base.reward.currencies.clone(),
-        stackable_items: stacks.reward.stackable_items.clone(),
+        stackable_items: compose_stackables(&near, stacks, mix(seed ^ 0x381_5EED_C4E5_7381)),
         character_xp: base.reward.character_xp,
         town_xp: base.reward.town_xp,
         ..RewardGrant::default()
@@ -211,6 +211,73 @@ pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<
         grant.items.push(draw(&filled, slot_seed).reward.items[slot].clone());
     }
     Some(grant)
+}
+
+/// A material in the sense of [`compose_stackables`]: a crafting ingredient (it
+/// has a gem price) that is not a soul gem.
+fn is_material(id: &Uuid) -> bool {
+    crate::economy::missing_resources::gem_cost_for_ingredient(*id, 1).is_some()
+        && !crate::features::store_bundles::SOUL_GEMS.contains(id)
+}
+
+/// A chest's stackables, composed from the retail openings at its level (#381).
+///
+/// THE BUG. [`compose_loot`] copied the whole stackable set of one opening, so a
+/// level-45 Wooden chest could only ever hold one of the 16 sets retail paid at
+/// 34-45: two chests matched about one time in sixteen (6%), and opening a few
+/// dozen showed the same handful of materials again and again ("Wooden and Silver
+/// chests repeat very often"). Retail's never did: two retail chests of a tier
+/// within a neighbourhood had the same set 0-2% of the time.
+///
+/// THE ROLL. `shape` (one opening) still decides the chest's structure: its soul
+/// gem and its potion are kept whole, so a chest never holds two potions or two
+/// kinds of gem and the soul-gem ladder by level (#368) is untouched, and so is a
+/// material every neighbouring opening paid (Clay, in every Silver and Gold
+/// chest). Each of its other materials is replaced by a material drawn from all
+/// the neighbourhood's materials, entry by entry, a material at most once. The
+/// chance a chest holds any one material — Frost Salts, Pearl — stays retail's at
+/// that level; only the combinations vary.
+fn compose_stackables(
+    near: &[&ChestLootSample],
+    shape: &ChestLootSample,
+    seed: u64,
+) -> std::collections::HashMap<Uuid, u64> {
+    use crate::features::store_bundles::mix;
+
+    let everywhere = |id: &Uuid| near.iter().all(|s| s.reward.stackable_items.contains_key(id));
+    // Sorted, so the draw does not depend on HashMap iteration order.
+    let mut pool: Vec<(Uuid, u64)> = near
+        .iter()
+        .flat_map(|s| s.reward.stackable_items.iter())
+        .filter(|(id, _)| is_material(id) && !everywhere(id))
+        .map(|(id, q)| (*id, *q))
+        .collect();
+    pool.sort_unstable();
+
+    let mut out = std::collections::HashMap::new();
+    let mut slots = 0u64;
+    for (id, q) in &shape.reward.stackable_items {
+        if is_material(id) && !everywhere(id) {
+            slots += 1;
+        } else {
+            out.insert(*id, *q);
+        }
+    }
+    if pool.is_empty() {
+        return shape.reward.stackable_items.clone();
+    }
+    for slot in 0..slots {
+        // A material already in the chest is drawn again rather than stacked.
+        for attempt in 0..16u64 {
+            let roll = mix(seed ^ slot.wrapping_mul(0x9E37_79B9) ^ (attempt << 40));
+            let (id, q) = pool[(roll % pool.len() as u64) as usize];
+            if let std::collections::hash_map::Entry::Vacant(e) = out.entry(id) {
+                e.insert(q);
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Roll the grant for a chest open.
@@ -600,6 +667,142 @@ mod tests {
                     "tier {tier}: median gold fell from {previous} to {ours} at level {level}"
                 );
                 previous = ours;
+            }
+        }
+    }
+
+    // ---- #381: materials vary, at retail's rates ------------------------------
+
+    /// The enchanting ingredients: the non-soul-gem inputs of `enchanting.json`.
+    fn enchanting() -> HashSet<Uuid> {
+        let names = ["Frost Salts", "Fire Salts", "Void Salts", "Glow Dust", "Imp Stool", "Honeycomb", "Beehive Husk"];
+        let raw: serde_json::Value =
+            serde_json::from_str(include_str!("../ingredient_values.json")).unwrap();
+        let ids: HashSet<Uuid> = raw["_meta"]["names"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, v)| names.contains(&v.as_str().unwrap()))
+            .map(|(k, _)| k.parse().unwrap())
+            .collect();
+        assert_eq!(ids.len(), names.len(), "every enchanting ingredient is named");
+        ids
+    }
+
+    fn stack_ids(r: &RewardGrant) -> Vec<Uuid> {
+        let mut ids: Vec<Uuid> = r.stackable_items.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Share of pairs among `sets` that are the same set.
+    fn same_pair_share(sets: &[Vec<Uuid>]) -> f64 {
+        let mut counts: HashMap<&Vec<Uuid>, u64> = HashMap::new();
+        for s in sets {
+            *counts.entry(s).or_default() += 1;
+        }
+        let n = sets.len() as u64;
+        let same: u64 = counts.values().map(|c| c * (c - 1) / 2).sum();
+        same as f64 / (n * (n - 1) / 2) as f64
+    }
+
+    /// Report #381, "Wooden and Silver chests repeat very often". Two chests of one
+    /// tier and level held the same stackables about one time in sixteen (each
+    /// chest copied one of the 12-22 retail sets at its level); two retail chests in
+    /// such a neighbourhood matched 0-2% of the time. Now 1-2%.
+    #[test]
+    fn chest_stackables_do_not_repeat_like_whole_copied_sets() {
+        let t = committed();
+        for tier in 1..=3u64 {
+            for level in [15u64, 30, 45, 70, 90] {
+                let near = neighbourhood(&t.tiers[&tier], level);
+                // The old roll: one of the neighbourhood's sets, uniformly.
+                let old_sets: Vec<Vec<Uuid>> = near.iter().map(|s| stack_ids(&s.reward)).collect();
+                let mut old = 0.0;
+                for a in &old_sets {
+                    old += old_sets.iter().filter(|b| *b == a).count() as f64;
+                }
+                let old = old / (old_sets.len() * old_sets.len()) as f64;
+                let retail = same_pair_share(&old_sets);
+                let ours: Vec<Vec<Uuid>> = (0..400)
+                    .map(|i| {
+                        let key = format!("381:{i}:{tier}:{level}");
+                        stack_ids(&roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap())
+                    })
+                    .collect();
+                let ours = same_pair_share(&ours);
+                println!("tier {tier} L{level}: same-set pairs retail {retail:.3}, old roll {old:.3}, now {ours:.3}");
+                assert!(old >= 0.025, "control: the old roll repeated ({old:.3})");
+                assert!(
+                    ours <= 0.03 && ours * 2.0 <= old,
+                    "tier {tier} L{level}: {ours:.3} of chest pairs hold the same set (old {old:.3})"
+                );
+            }
+        }
+    }
+
+    /// The composition keeps retail's rates. Per material, the share of chests
+    /// holding it stays within a few points of the retail openings at that level —
+    /// enchanting ingredients included: Wooden chests paid one in 41% of openings
+    /// at 1-20, 17% at 21-40 and 56% at 61-80, and Silver chests never (0 of 305).
+    /// Soul gems and potions stay whole: at most one potion, Clay in every Silver
+    /// and Gold chest.
+    #[test]
+    fn composed_stackables_keep_retails_rates() {
+        let t = committed();
+        let enchanting = enchanting();
+        let clay: Uuid = "42d91529-c88b-4c5b-815b-b55508b4e7ef".parse().unwrap();
+        let rolls = 3000;
+        for tier in 1..=3u64 {
+            for level in [15u64, 30, 45, 70, 90] {
+                let near = neighbourhood(&t.tiers[&tier], level);
+                let share = |rewards: &mut dyn Iterator<Item = &RewardGrant>, test: &dyn Fn(&RewardGrant) -> bool| {
+                    let (mut hit, mut n) = (0.0f64, 0.0f64);
+                    for r in rewards {
+                        n += 1.0;
+                        if test(r) {
+                            hit += 1.0;
+                        }
+                    }
+                    hit / n
+                };
+                let ours: Vec<RewardGrant> = (0..rolls)
+                    .map(|i| {
+                        roll_loot(&t, tier as i64, level, &format!("rate:{i}:{tier}:{level}"), &HashSet::new())
+                            .unwrap()
+                    })
+                    .collect();
+                let has_enchanting =
+                    |r: &RewardGrant| r.stackable_items.keys().any(|id| enchanting.contains(id));
+                let retail_e = share(&mut near.iter().map(|s| &s.reward), &has_enchanting);
+                let ours_e = share(&mut ours.iter(), &has_enchanting);
+                println!("tier {tier} L{level}: chests with an enchanting ingredient retail {retail_e:.2}, ours {ours_e:.2}");
+                if retail_e == 0.0 {
+                    assert_eq!(ours_e, 0.0, "tier {tier} L{level}: retail never paid one here");
+                } else {
+                    assert!((ours_e - retail_e).abs() <= 0.08, "tier {tier} L{level}: {ours_e:.2} vs {retail_e:.2}");
+                }
+                let materials: HashSet<Uuid> = near
+                    .iter()
+                    .flat_map(|s| s.reward.stackable_items.keys())
+                    .copied()
+                    .filter(is_material)
+                    .collect();
+                for id in materials {
+                    let has = |r: &RewardGrant| r.stackable_items.contains_key(&id);
+                    let retail = share(&mut near.iter().map(|s| &s.reward), &has);
+                    let ours = share(&mut ours.iter(), &has);
+                    assert!((ours - retail).abs() <= 0.08, "tier {tier} L{level} {id}: {ours:.2} vs retail {retail:.2}");
+                }
+                for r in &ours {
+                    let potions = r.stackable_items.keys().filter(|id| {
+                        crate::economy::missing_resources::gem_cost_for_ingredient(**id, 1).is_none()
+                    });
+                    assert!(potions.count() <= 1, "two potions in one chest");
+                    if tier >= 2 {
+                        assert!(r.stackable_items.contains_key(&clay), "tier {tier}: Clay in every chest");
+                    }
+                }
             }
         }
     }
