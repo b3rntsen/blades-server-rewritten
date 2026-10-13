@@ -4436,6 +4436,101 @@ mod tests {
         }
     }
 
+    // ── Report #383: every Abyss reward reachable by level 49 ────────────────
+
+    const NIGHTSHADE: &str = "4d7420db-8042-4946-a43f-e0b3bd9bec81";
+    const CHAURUS_CHITIN: &str = "8ef9f10c-3c46-492c-9a00-29fd1626d85e";
+    const MALACHITE_INGOT: &str = "85ed5500-3581-4699-8095-4b5ff6514355";
+    const QUICKSILVER_INGOT: &str = "e80bee76-f92c-4005-9eff-20d1e8c64d24";
+
+    type Payout = (Vec<(u32, RewardGrant)>, RewardGrant);
+
+    /// Every rung and the `/end` a run pays, over 64 runs (seeds) of a character of
+    /// `level` started at `start` and cleared floor by floor with `kills`.
+    fn payouts(level: u32, start: u32, count: usize, kills: &'static [&'static str]) -> Vec<Payout> {
+        let ipl = initial_player_level(&real_job_pools(), level);
+        let floors = served_run(ipl, start, count, kills);
+        let id = Uuid::from_u128(0x383);
+        (0..64u64).map(|nonce| drive(level, ipl, generate_run_seed(id, nonce), &floors)).collect()
+    }
+
+    /// FNV-1a over [`payouts`], rung by rung then `/end`. `to_value` sorts every map,
+    /// so the text — and the digest — is canonical: two versions of the reward code
+    /// that pay the same thing for the same seeds hash the same.
+    fn payout_digest(runs: &[Payout]) -> u64 {
+        let text = serde_json::to_value(runs).unwrap().to_string();
+        text.bytes()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+    }
+
+    fn rung_draw(run: &Payout, rung: u32) -> Option<&RewardGrant> {
+        run.0.iter().find(|(r, _)| *r == rung).map(|(_, g)| g)
+    }
+
+    /// The level-100 run from floor 149 pays EXACTLY what it paid before #383, rung by
+    /// rung and at `/end`, for the same 64 seeds. The digest was taken on fork/main
+    /// before the change: the commit adding this test precedes the one that moves the
+    /// band, and passes on its own. (An Abyss change once fixed level 9 and broke 100.)
+    #[test]
+    fn a_level_100_run_from_floor_149_is_unchanged_by_383() {
+        let runs = payouts(100, 149, 4, DEEP_FLOOR_KILLS);
+        for run in &runs {
+            let rungs: Vec<u32> = run.0.iter().map(|(r, _)| *r).collect();
+            assert_eq!(rungs, vec![35, 50, 70, 95, 135, 190, 260, 360], "#471's schedule");
+        }
+        assert_eq!(payout_digest(&runs), LEVEL_100_FROM_149_DIGEST);
+    }
+    const LEVEL_100_FROM_149_DIGEST: u64 = 0x2c2c_a748_9427_2dd0;
+
+    /// Level 7 from floor 1: unchanged, rung by rung, for the same seeds.
+    #[test]
+    fn a_level_7_run_from_floor_1_is_unchanged_by_383() {
+        let runs = payouts(7, 1, 30, MIXED_KILLS);
+        assert!(runs.iter().all(|r| rung_draw(r, 70).is_some()), "every run reaches rung 70");
+        assert_eq!(payout_digest(&runs), LEVEL_7_FROM_1_DIGEST);
+    }
+    const LEVEL_7_FROM_1_DIGEST: u64 = 0x79e9_93c1_52cd_0fbe;
+
+    /// Sephoris, level 45, from floor 149: below 49, so unchanged — rung 70 is still
+    /// the level 34-40 captures' Nightshade, Chaurus Chitin, Quicksilver or Malachite,
+    /// never Giant's Toe. That is what he saw; #383 moves the band from 49, not 45.
+    #[test]
+    fn a_level_45_run_from_floor_149_is_unchanged_by_383() {
+        let runs = payouts(45, 149, 4, DEEP_FLOOR_KILLS);
+        let mid = [NIGHTSHADE, CHAURUS_CHITIN, QUICKSILVER_INGOT, MALACHITE_INGOT]
+            .map(|u| Uuid::parse_str(u).unwrap());
+        for run in &runs {
+            let seventy = template_of(rung_draw(run, 70).expect("reaches rung 70")).unwrap();
+            assert!(mid.contains(&seventy), "level 45 rung 70 drew {seventy}");
+        }
+        assert_eq!(payout_digest(&runs), LEVEL_45_FROM_149_DIGEST);
+    }
+    const LEVEL_45_FROM_149_DIGEST: u64 = 0xa32e_d7f5_fda6_1e5d;
+
+    /// Prints the digests [`payouts`] gives today (`--ignored --nocapture`), to pin
+    /// them: run on the unchanged code, never to paper over a moved level-100 draw.
+    #[test]
+    #[ignore]
+    fn print_383_payout_digests() {
+        for (level, start, count, kills) in [
+            (100u32, 149u32, 4usize, DEEP_FLOOR_KILLS),
+            (7, 1, 30, MIXED_KILLS),
+            (45, 149, 4, DEEP_FLOOR_KILLS),
+            (49, 149, 4, DEEP_FLOOR_KILLS),
+        ] {
+            let runs = payouts(level, start, count, kills);
+            println!("level {level} from {start}: {:#018x}", payout_digest(&runs));
+            for (nonce, run) in runs.iter().enumerate().take(6) {
+                let line: Vec<String> = run
+                    .0
+                    .iter()
+                    .map(|(r, g)| format!("{r}={}", serde_json::to_value(g).unwrap()))
+                    .collect();
+                println!("  n{nonce}: {} | end={}", line.join(" "), serde_json::to_value(&run.1).unwrap());
+            }
+        }
+    }
+
     /// Corpse loot of every floor a run serves, tallied over `seeds` runs: (corpses,
     /// corpses paying any stackable, count per stackable, mean gold per paying corpse).
     /// `abyss` picks the Abyss generator; `false` is the dungeon path abyss floors
