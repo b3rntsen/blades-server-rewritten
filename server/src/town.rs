@@ -2652,7 +2652,11 @@ pub(crate) async fn load_town_economy(
 /// Read `default_town.json`, the town every character without a captured one
 /// sees. A missing or invalid file is a 500, never a panic.
 pub(crate) fn load_default_town(app_state: &ServerGlobal) -> Result<Value, BladeApiError> {
-    let path = app_state.static_data_path.join("default_town.json");
+    default_town_in(&app_state.static_data_path)
+}
+
+fn default_town_in(static_data_path: &std::path::Path) -> Result<Value, BladeApiError> {
+    let path = static_data_path.join("default_town.json");
     let content = std::fs::read_to_string(&path)
         .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
     serde_json::from_str(&content)
@@ -2671,11 +2675,39 @@ pub(crate) fn take_town(
     server_state: &mut blades_lib::server_state::ServerState,
     app_state: &ServerGlobal,
 ) -> Result<Value, BladeApiError> {
+    take_town_with(town_column, server_state, app_state.town_statics())
+}
+
+/// The parts of [`ServerGlobal`] that taking and paying a town reads. A handler
+/// body that runs on a bare connection — `/complete`, `/objectives`, and their
+/// database tests — has these without a whole `ServerGlobal`.
+#[derive(Clone, Copy)]
+pub(crate) struct TownStatics<'a> {
+    pub static_data_path: &'a std::path::Path,
+    pub building_upgrades: &'a Value,
+    pub static_data: &'a blades_lib::static_data::StaticData,
+}
+
+impl ServerGlobal {
+    pub(crate) fn town_statics(&self) -> TownStatics<'_> {
+        TownStatics {
+            static_data_path: &self.static_data_path,
+            building_upgrades: &self.building_upgrades,
+            static_data: &self.static_data,
+        }
+    }
+}
+
+fn take_town_with(
+    town_column: &mut Option<JsonDbWrapper<Value>>,
+    server_state: &mut blades_lib::server_state::ServerState,
+    statics: TownStatics<'_>,
+) -> Result<Value, BladeApiError> {
     let mut town = match town_column.take() {
         Some(JsonDbWrapper(v)) if !v.is_null() => v,
         _ => {
             // No town exists - load from default template
-            let town = load_default_town(app_state)?;
+            let town = default_town_in(statics.static_data_path)?;
 
             // Store it back in the entry so it gets saved
             *town_column = Some(JsonDbWrapper(town.clone()));
@@ -2690,11 +2722,11 @@ pub(crate) fn take_town(
     // Before any mutation is priced: a town built under the old rules must have
     // its sites cleared first, or the next completion would number its site
     // points from zero.
-    backfill_town_sites_once(server_state, &mut town, &app_state.building_upgrades);
+    backfill_town_sites_once(server_state, &mut town, statics.building_upgrades);
     // Before this request's own store purchase is counted, so the backfill
     // cannot pay it a second time (#353).
     backfill_store_town_xp_once(server_state, &mut town, |product| {
-        crate::global_shop::product_town_xp(&app_state.static_data, product)
+        crate::global_shop::product_town_xp(statics.static_data, product)
     });
     Ok(town)
 }
@@ -2770,10 +2802,50 @@ pub(crate) fn credit_town_xp(
     app_state: &ServerGlobal,
     town_xp: u64,
 ) -> Result<Option<Value>, BladeApiError> {
+    credit_town_xp_with(town_column, server_state, app_state.town_statics(), town_xp)
+}
+
+/// [`credit_town_xp`] for a handler whose economy row does not carry the town:
+/// quest `/complete` and `/objectives`, which pay town XP far less often than
+/// they run. The town column is read and written only when there is something
+/// to pay, inside the caller's transaction, which already holds the row lock.
+/// `server_state` is the caller's own copy — it carries the backfill markers
+/// [`take_town`] may set — and the caller writes it back with the rest of its row.
+pub(crate) async fn credit_town_xp_in_tx(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    server_state: &mut blades_lib::server_state::ServerState,
+    statics: TownStatics<'_>,
+    town_xp: u64,
+) -> Result<Option<Value>, BladeApiError> {
     if town_xp == 0 {
         return Ok(None);
     }
-    let mut town = take_town(town_column, server_state, app_state)?;
+    use crate::schema::characters;
+    let mut town_column: Option<JsonDbWrapper<Value>> = characters::table
+        .filter(characters::id.eq(character_id))
+        .select(characters::town)
+        .first(conn)
+        .await?;
+    let wire = credit_town_xp_with(&mut town_column, server_state, statics, town_xp)?;
+    diesel::update(characters::table)
+        .filter(characters::id.eq(character_id))
+        .set(characters::town.eq(town_column))
+        .execute(conn)
+        .await?;
+    Ok(wire)
+}
+
+fn credit_town_xp_with(
+    town_column: &mut Option<JsonDbWrapper<Value>>,
+    server_state: &mut blades_lib::server_state::ServerState,
+    statics: TownStatics<'_>,
+    town_xp: u64,
+) -> Result<Option<Value>, BladeApiError> {
+    if town_xp == 0 {
+        return Ok(None);
+    }
+    let mut town = take_town_with(town_column, server_state, statics)?;
     apply_prestige_and_level_up(&mut town, town_xp);
     let wire = town_xp_wire(&town);
     *town_column = Some(JsonDbWrapper(town));
@@ -5296,7 +5368,8 @@ mod town_name_validation {
         // A building response returns the stored town; if `take_town` did not
         // heal it, the next build would push the stale 0 back to the client.
         let src = include_str!("town.rs");
-        let start = src.find("fn take_town(").expect("take_town exists");
+        // `take_town` delegates to `take_town_with`, which holds the repairs.
+        let start = src.find("fn take_town_with(").expect("take_town_with exists");
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
         assert!(body.contains("mark_named_town_validated(&mut town)"));
     }
@@ -5525,7 +5598,7 @@ mod shop_npcs {
     #[test]
     fn every_load_and_every_mutation_runs_the_repair() {
         let src = include_str!("town.rs");
-        for f in ["fn take_town(", "fn repair_town_on_load("] {
+        for f in ["fn take_town_with(", "fn repair_town_on_load("] {
             let start = src.find(f).expect("exists");
             let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
             assert!(body.contains("assign_generic_shop_npcs("), "{f} must run the #330 repair");
@@ -5651,7 +5724,7 @@ mod report353_decoration_prestige {
     #[test]
     fn every_load_and_every_mutation_runs_the_store_backfill() {
         let src = include_str!("town.rs");
-        for f in ["fn take_town(", "fn repair_town_on_load("] {
+        for f in ["fn take_town_with(", "fn repair_town_on_load("] {
             assert!(body_of(src, f).contains("backfill_store_town_xp_once("), "{f}");
         }
     }

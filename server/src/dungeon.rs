@@ -2343,6 +2343,8 @@ mod event_run_lifecycle_db {
         sd: StaticData,
         gd: GameData,
         events: EventQuestData,
+        dir: std::path::PathBuf,
+        building_upgrades: Value,
     }
 
     fn world() -> &'static World {
@@ -2356,6 +2358,9 @@ mod event_run_lifecycle_db {
                 events: EventQuestData::from_json(
                     &serde_json::from_str(&read("event_quests.json")).expect("event_quests.json"),
                 ),
+                building_upgrades: serde_json::from_str(&read("building_upgrades.json"))
+                    .expect("building_upgrades.json"),
+                dir,
             }
         })
     }
@@ -2511,6 +2516,11 @@ mod event_run_lifecycle_db {
             &world().sd,
             &world().gd,
             &serde_json::json!({}),
+            crate::town::TownStatics {
+                static_data_path: &world().dir,
+                building_upgrades: &world().building_upgrades,
+                static_data: &world().sd,
+            },
             p.user,
             p.character,
             p.instance,
@@ -2946,6 +2956,46 @@ mod event_run_lifecycle_db {
             .await
             .expect_err("event finished");
         assert_eq!(err.status_code().as_u16(), 403);
+    }
+
+    /// An event tier's reward carrying `townXp` pays it into the town and answers
+    /// with the town, as `/complete` does for every quest (#353); a tier without
+    /// it answers with none. Client data only: no shipped event ladder carries
+    /// `townXp`, so the row's tier 0 is given 40 here.
+    #[tokio::test]
+    async fn an_event_tier_paying_town_xp_pays_the_town() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        diesel::sql_query(
+            "UPDATE quests SET info = jsonb_set(info, '{rewards,0,townXp}', '40') WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.instance)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "UPDATE characters SET town = '{\"levelInfo\":{\"level\":1,\"experiencePoints\":525},\"validationFlags\":0,\"districts\":[]}'::jsonb, \
+             server_state = '{\"townSitesBackfilled\":true,\"storeTownXpBackfilled\":true}'::jsonb WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let town_xp = |v: Option<Value>| v.expect("a town")["levelInfo"]["experiencePoints"].clone();
+
+        enter(&mut conn, &p, Some("INSTANCE")).await.expect("tier 0");
+        let first = complete(&mut conn, &p).await;
+        assert_eq!(first["reward"]["townXp"], json!(40));
+        assert_eq!(first["town"]["levelInfo"]["experiencePoints"], json!(565));
+        let sql = "SELECT town AS v FROM characters WHERE id = $1 AND $2 = $2";
+        assert_eq!(town_xp(json_of(&mut conn, sql, p.character, p.character).await), json!(565));
+        exit(&mut conn, &p, false).await;
+
+        enter(&mut conn, &p, Some("INSTANCE")).await.expect("tier 1");
+        let second = complete(&mut conn, &p).await;
+        assert!(second["reward"].get("townXp").is_none(), "tier 1 carries no townXp");
+        assert!(second.get("town").is_none(), "no town without townXp");
+        assert_eq!(town_xp(json_of(&mut conn, sql, p.character, p.character).await), json!(565));
     }
 
     /// The old exit never reset an instance, so rows are sitting on production with

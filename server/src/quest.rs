@@ -2382,6 +2382,10 @@ pub(crate) struct CompleteQuestResponse {
     inventory: CompleteInventoryUpdate,
     wallet: CompleteWallet,
     character: CompleteCharacterWithIdWithoutData,
+    /// The town after the reward's `townXp` was paid into it — present only when
+    /// the reward paid any, after `character` as retail sent it (#353).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    town: Option<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     quests: Vec<QuestWithId>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -2463,6 +2467,7 @@ pub async fn complete_quest(
                 &globals.static_data,
                 &globals.game_data,
                 &globals.job_pools,
+                globals.town_statics(),
                 user_id,
                 character_id,
                 quest_id,
@@ -2489,6 +2494,7 @@ pub(crate) async fn complete_quest_in_tx(
     static_data: &blades_lib::static_data::StaticData,
     game_data: &blades_lib::game_data::GameData,
     job_pools_def: &Value,
+    town_statics: crate::town::TownStatics<'_>,
     user_id: Uuid,
     character_id: Uuid,
     quest_id: Uuid,
@@ -2536,6 +2542,7 @@ pub(crate) async fn complete_quest_in_tx(
                 id: character_id,
                 character: entry.character.0.clone(),
             },
+            town: None,
             quests: Vec::new(),
             jobs: Vec::new(),
             dungeon_generated_data_list: Vec::new(),
@@ -2649,6 +2656,18 @@ pub(crate) async fn complete_quest_in_tx(
         }
         entry.inventory.0.treasury_version += 1;
     }
+    // TOWN PRESTIGE (#353). `apply_reward` has no town to pay `townXp` into, so
+    // it was sent to the client and dropped. Retail paid it with the completion:
+    // 14 of 14 captured completions whose reward carried `townXp` answered with
+    // the town, its experiencePoints up by exactly that (MQ04 +200, capture 6206).
+    let town = crate::town::credit_town_xp_in_tx(
+        conn,
+        character_id,
+        &mut entry.server_state.0,
+        town_statics,
+        reward.town_xp,
+    )
+    .await?;
 
     let inventory = entry.inventory.0.generate_client_update(&tracker);
     let wallet = entry.wallet.0.clone();
@@ -2785,6 +2804,7 @@ pub(crate) async fn complete_quest_in_tx(
             id: character_id,
             character,
         },
+        town,
         quests: response_quests,
         jobs: response_jobs,
         dungeon_generated_data_list: response_generated_data,
@@ -2844,6 +2864,9 @@ struct ObjectivesResponse {
     inventory: Option<CompleteInventoryUpdate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     character: Option<CompleteCharacterWithIdWithoutData>,
+    /// The town after the objective's town XP was paid into it (#353).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    town: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     quest: Option<QuestWithId>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2944,155 +2967,194 @@ pub async fn update_quest_objectives(
     let globals = app_state.get_ref().clone();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    conn.transaction(move |mut conn| {
+    conn.transaction(move |conn| {
         async move {
-            // Load the economy row under a row lock (needed only when a reward is granted,
-            // but we can't know upfront; take it eagerly to keep the transaction simple).
-            let mut entry = {
-                use crate::schema::characters;
-                characters::table
-                    .filter(characters::id.eq(character_id))
-                    .filter(characters::user_id.eq(user_id))
-                    .select(CharacterDbEntryEconomy::as_select())
-                    .for_no_key_update()
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
-            };
-
-            // Load and lock the quest row.
-            let mut quest_entry = {
-                use crate::schema::quests;
-                quests::table
-                    .filter(quests::id.eq(quest_id))
-                    .filter(quests::character_id.eq(character_id))
-                    .select(QuestDbEntry::as_select())
-                    .for_no_key_update()
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20001, 1))?
-            };
-
-            // Merge each objective update in. The client sends absolute progress, and
-            // reports completion as `status: "Completed"` — there is no `completed`
-            // flag on the wire.
-            let mut newly_completed: Vec<Uuid> = Vec::new();
-            for (obj_id, update) in &body.objective_updates {
-                let entry_obj = quest_entry
-                    .info
-                    .0
-                    .objective_statuses
-                    .entry(*obj_id)
-                    .or_insert_with(|| blades_lib::user_data::ObjectiveStatus {
-                        status: blades_lib::user_data::QuestStatus::Active,
-                        progress: 0.0,
-                        completed: false,
-                    });
-                entry_obj.status = update.status;
-                entry_obj.progress = update.progress;
-                let done = matches!(update.status, blades_lib::user_data::QuestStatus::Completed);
-                if done && !entry_obj.completed {
-                    entry_obj.completed = true;
-                    newly_completed.push(*obj_id);
-                }
-            }
-
-            let is_event = matches!(
-                quest_entry.info.0.r#type,
-                blades_lib::user_data::QuestType::GameEvent
-            );
-            // An event quest never pays here — all 363 captured `{gameEventQuest}`
-            // responses are the quest alone, and its milestones are paid at /complete.
-            let reward = if is_event || newly_completed.is_empty() {
-                RewardGrant::default()
-            } else {
-                objective_reward(
-                    &globals.game_data,
-                    &globals.repair_data,
-                    quest_entry.info.0.gld_quest_id,
-                    &newly_completed,
-                )
-            };
-
-            let (opt_inventory, opt_character) = if !reward.is_empty() {
-                let mut tracker = InventoryChangeTracker::default();
-                apply_reward(
-                    &reward,
-                    &mut entry.wallet.0,
-                    &mut entry.inventory.0,
-                    &mut entry.character.0,
-                    &mut tracker,
-                );
-                if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
-                    entry.inventory.0.backpack_version += 1;
-                }
-                if !reward.chests.is_empty() {
-                    for chest in &reward.chests {
-                        grant_chest(
-                            &mut entry.inventory.0,
-                            chest.tier,
-                            chest.level,
-                            &mut tracker,
-                        );
-                    }
-                    entry.inventory.0.treasury_version += 1;
-                }
-                let inv = entry.inventory.0.generate_client_update(&tracker);
-                let ch = entry.character.0.clone();
-                // Write economy back.
-                {
-                    use crate::schema::characters;
-                    diesel::update(characters::table)
-                        .filter(characters::id.eq(entry.id))
-                        .set(entry)
-                        .execute(&mut conn)
-                        .await?;
-                }
-                (
-                    Some(inv),
-                    Some(CompleteCharacterWithIdWithoutData {
-                        id: character_id,
-                        character: ch,
-                    }),
-                )
-            } else {
-                (None, None)
-            };
-
-            let quest_with_id = QuestWithId {
+            update_quest_objectives_in_tx(
+                conn,
+                &globals.game_data,
+                &globals.repair_data,
+                globals.town_statics(),
+                user_id,
+                character_id,
                 quest_id,
-                quest: quest_entry.info.0.clone(),
-            };
-
-            // Persist the updated objective statuses.
-            {
-                use crate::schema::quests;
-                diesel::update(quests::table)
-                    .filter(quests::id.eq(quest_id))
-                    .filter(quests::character_id.eq(character_id))
-                    .set(QuestDbEntryInfo {
-                        info: quest_entry.info,
-                    })
-                    .execute(&mut conn)
-                    .await?;
-            }
-
-            let (quest, game_event_quest) = objectives_wire_slot(is_event, quest_with_id);
-            Ok::<_, BladeApiError>(Json(ObjectivesResponse {
-                reward,
-                inventory: opt_inventory,
-                character: opt_character,
-                quest,
-                game_event_quest,
-            }))
+                body,
+            )
+            .await
+            .map(Json)
         }
         .scope_boxed()
     })
     .await
+}
+
+/// The body of [`update_quest_objectives`], inside its transaction.
+#[allow(clippy::too_many_arguments)]
+async fn update_quest_objectives_in_tx(
+    conn: &mut diesel_async::AsyncPgConnection,
+    game_data: &blades_lib::game_data::GameData,
+    repair_data: &RepairData,
+    town_statics: crate::town::TownStatics<'_>,
+    user_id: Uuid,
+    character_id: Uuid,
+    quest_id: Uuid,
+    body: ObjectivesRequest,
+) -> Result<ObjectivesResponse, BladeApiError> {
+    // Load the economy row under a row lock (needed only when a reward is granted,
+    // but we can't know upfront; take it eagerly to keep the transaction simple).
+    let mut entry = {
+        use crate::schema::characters;
+        characters::table
+            .filter(characters::id.eq(character_id))
+            .filter(characters::user_id.eq(user_id))
+            .select(CharacterDbEntryEconomy::as_select())
+            .for_no_key_update()
+            .load(conn)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+    };
+
+    // Load and lock the quest row.
+    let mut quest_entry = {
+        use crate::schema::quests;
+        quests::table
+            .filter(quests::id.eq(quest_id))
+            .filter(quests::character_id.eq(character_id))
+            .select(QuestDbEntry::as_select())
+            .for_no_key_update()
+            .load(conn)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20001, 1))?
+    };
+
+    // Merge each objective update in. The client sends absolute progress, and
+    // reports completion as `status: "Completed"` — there is no `completed`
+    // flag on the wire.
+    let mut newly_completed: Vec<Uuid> = Vec::new();
+    for (obj_id, update) in &body.objective_updates {
+        let entry_obj = quest_entry
+            .info
+            .0
+            .objective_statuses
+            .entry(*obj_id)
+            .or_insert_with(|| blades_lib::user_data::ObjectiveStatus {
+                status: blades_lib::user_data::QuestStatus::Active,
+                progress: 0.0,
+                completed: false,
+            });
+        entry_obj.status = update.status;
+        entry_obj.progress = update.progress;
+        let done = matches!(update.status, blades_lib::user_data::QuestStatus::Completed);
+        if done && !entry_obj.completed {
+            entry_obj.completed = true;
+            newly_completed.push(*obj_id);
+        }
+    }
+
+    let is_event = matches!(
+        quest_entry.info.0.r#type,
+        blades_lib::user_data::QuestType::GameEvent
+    );
+    // An event quest never pays here — all 363 captured `{gameEventQuest}`
+    // responses are the quest alone, and its milestones are paid at /complete.
+    let reward = if is_event || newly_completed.is_empty() {
+        RewardGrant::default()
+    } else {
+        objective_reward(
+            game_data,
+            repair_data,
+            quest_entry.info.0.gld_quest_id,
+            &newly_completed,
+        )
+    };
+
+    let (opt_inventory, opt_character, town) = if !reward.is_empty() {
+        let mut tracker = InventoryChangeTracker::default();
+        apply_reward(
+            &reward,
+            &mut entry.wallet.0,
+            &mut entry.inventory.0,
+            &mut entry.character.0,
+            &mut tracker,
+        );
+        if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+            entry.inventory.0.backpack_version += 1;
+        }
+        if !reward.chests.is_empty() {
+            for chest in &reward.chests {
+                grant_chest(
+                    &mut entry.inventory.0,
+                    chest.tier,
+                    chest.level,
+                    &mut tracker,
+                );
+            }
+            entry.inventory.0.treasury_version += 1;
+        }
+        // An objective reward's `townPoints` is town XP, as on `/complete` (#353).
+        // No shipped objective carries any (0 of 20 rewards), and no retail
+        // objective response paid it, so this pays only if the data ever does.
+        let town = crate::town::credit_town_xp_in_tx(
+            conn,
+            character_id,
+            &mut entry.server_state.0,
+            town_statics,
+            reward.town_xp,
+        )
+        .await?;
+        let inv = entry.inventory.0.generate_client_update(&tracker);
+        let ch = entry.character.0.clone();
+        // Write economy back.
+        {
+            use crate::schema::characters;
+            diesel::update(characters::table)
+                .filter(characters::id.eq(entry.id))
+                .set(entry)
+                .execute(conn)
+                .await?;
+        }
+        (
+            Some(inv),
+            Some(CompleteCharacterWithIdWithoutData {
+                id: character_id,
+                character: ch,
+            }),
+            town,
+        )
+    } else {
+        (None, None, None)
+    };
+
+    let quest_with_id = QuestWithId {
+        quest_id,
+        quest: quest_entry.info.0.clone(),
+    };
+
+    // Persist the updated objective statuses.
+    {
+        use crate::schema::quests;
+        diesel::update(quests::table)
+            .filter(quests::id.eq(quest_id))
+            .filter(quests::character_id.eq(character_id))
+            .set(QuestDbEntryInfo {
+                info: quest_entry.info,
+            })
+            .execute(conn)
+            .await?;
+    }
+
+    let (quest, game_event_quest) = objectives_wire_slot(is_event, quest_with_id);
+    Ok(ObjectivesResponse {
+        reward,
+        inventory: opt_inventory,
+        character: opt_character,
+        town,
+        quest,
+        game_event_quest,
+    })
 }
 
 // ===========================================================================
@@ -7573,6 +7635,7 @@ mod objectives_wire_tests {
             reward: RewardGrant::default(),
             inventory: None,
             character: None,
+            town: None,
             quest,
             game_event_quest,
         })
@@ -7612,6 +7675,7 @@ mod objectives_wire_tests {
             reward: RewardGrant::default(),
             inventory: None,
             character: None,
+            town: None,
             quest,
             game_event_quest,
         })
@@ -9825,5 +9889,292 @@ mod report365_event_row_heal_tests {
         assert!(!grow_short_item_piles(&mut stored, &fresh));
         assert!(!relevel_event_enemies(&mut stored, &fresh));
         assert_eq!(serde_json::to_value(&stored).unwrap(), before);
+    }
+}
+
+/// Town prestige from quest rewards (#353), through the handlers' own bodies
+/// against a real Postgres. Retail answered every completion whose reward carried
+/// `townXp` with the town, its experiencePoints up by exactly that — 14 of 14 —
+/// and no completion without it carried a town.
+///
+/// They SKIP without TEST_DATABASE_URL (CI provides one) rather than failing.
+#[cfg(test)]
+mod report353_quest_town_xp_db {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+    use std::sync::OnceLock;
+
+    const NOW: i64 = 1_777_852_800;
+    /// MQ04 "Rebuild the Town Hall": retail capture 6206 paid `townXp` 200 and
+    /// answered `town: {levelInfo: {level: 1, experiencePoints: 725},
+    /// validationFlags: 0}` — the town stood at 525 one request earlier (6202).
+    const MQ04: Uuid = Uuid::from_u128(0x3b478dfa_73bb_42df_a420_05cf83d015bc);
+    /// An ordinary quest whose reward is XP only — `townXp` 0.
+    const NO_TOWN_XP: Uuid = Uuid::from_u128(0x061d1d0f_410a_4d0c_bcdf_96ac9e42f9d9);
+    /// A quest whose objective `76b97069…` rewards five `d5ccf370…` and no town XP.
+    const OBJ_QUEST: Uuid = Uuid::from_u128(0x5ad30483_8994_484e_b6dc_a5e9014cc4d5);
+    const OBJ: Uuid = Uuid::from_u128(0x76b97069_67e9_4202_aa93_8bc1dc7fbc65);
+
+    const TABLES: &str = "\
+        CREATE TABLE characters ( \
+            id UUID PRIMARY KEY, user_id UUID NOT NULL, character JSONB NOT NULL, \
+            data JSONB NOT NULL, inventory JSONB NOT NULL, wallet JSONB NOT NULL, \
+            town JSONB, server_state JSONB NOT NULL, source_alt_uuid UUID); \
+        CREATE TABLE quests ( \
+            id UUID NOT NULL, character_id UUID NOT NULL REFERENCES characters(id), \
+            info JSONB NOT NULL, generated_data JSONB NOT NULL, dungeon_state JSONB, \
+            initial_state JSONB, PRIMARY KEY (id, character_id));";
+
+    struct World {
+        dir: std::path::PathBuf,
+        sd: blades_lib::static_data::StaticData,
+        gd: blades_lib::game_data::GameData,
+        building_upgrades: Value,
+        repair: RepairData,
+    }
+
+    fn load_gd(dir: &std::path::Path) -> blades_lib::game_data::GameData {
+        serde_json::from_str(&std::fs::read_to_string(dir.join("parsed.json")).unwrap()).unwrap()
+    }
+
+    fn world() -> &'static World {
+        static WORLD: OnceLock<World> = OnceLock::new();
+        WORLD.get_or_init(|| {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            let read = |f: &str| -> Value {
+                serde_json::from_str(&std::fs::read_to_string(dir.join(f)).expect(f)).expect(f)
+            };
+            World {
+                sd: crate::static_loader::load(&dir),
+                gd: load_gd(&dir),
+                building_upgrades: read("building_upgrades.json"),
+                repair: RepairData::from_json(&read("item_durability.json"), &json!({})),
+                dir,
+            }
+        })
+    }
+
+    fn statics() -> crate::town::TownStatics<'static> {
+        let w = world();
+        crate::town::TownStatics {
+            static_data_path: &w.dir,
+            building_upgrades: &w.building_upgrades,
+            static_data: &w.sd,
+        }
+    }
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"))
+            .await
+            .unwrap();
+        conn.batch_execute(TABLES).await.unwrap();
+        Some(conn)
+    }
+
+    macro_rules! db {
+        () => {
+            match fixture().await {
+                Some(c) => c,
+                None => {
+                    eprintln!("SKIP: TEST_DATABASE_URL unset — quest town XP NOT verified");
+                    return;
+                }
+            }
+        };
+    }
+
+    /// The town retail's MQ04 completion found: level 1, 525 XP, unnamed. Both
+    /// one-time backfills are marked done so the payout is the only movement.
+    const TOWN_BEFORE: &str = r#"{"levelInfo":{"level":1,"experiencePoints":525},"validationFlags":0,"districts":[]}"#;
+
+    /// A character holding one quest row built from `quest`; returns
+    /// `(user, character, quest_id)`.
+    async fn seed(conn: &mut AsyncPgConnection, quest: Value) -> (Uuid, Uuid, Uuid) {
+        let (user, character, quest_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, data, inventory, wallet, town, server_state) \
+             VALUES ($1, $2, $3::jsonb, '{}'::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, \
+                     '{\"townSitesBackfilled\":true,\"storeTownXpBackfilled\":true}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(character)
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .bind::<diesel::sql_types::Text, _>(
+            serde_json::to_string(&blades_lib::user_data::CompleteCharacter::default()).unwrap(),
+        )
+        .bind::<diesel::sql_types::Text, _>(
+            serde_json::to_string(&blades_lib::user_data::CompleteInventory {
+                backpack: blades_lib::user_data::Backpack::default(),
+                loadout: blades_lib::user_data::Loadout::default(),
+                treasury: blades_lib::user_data::Treasury::default(),
+                overflow_treasury: blades_lib::user_data::Treasury::default(),
+                backpack_version: 1,
+                treasury_version: 0,
+            })
+            .unwrap(),
+        )
+        .bind::<diesel::sql_types::Text, _>(
+            serde_json::to_string(&CompleteWallet::default()).unwrap(),
+        )
+        .bind::<diesel::sql_types::Text, _>(TOWN_BEFORE)
+        .execute(conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data) \
+             VALUES ($1, $2, $3::jsonb, 'null'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(quest_id)
+        .bind::<diesel::sql_types::Uuid, _>(character)
+        .bind::<diesel::sql_types::Text, _>(quest.to_string())
+        .execute(conn)
+        .await
+        .unwrap();
+        (user, character, quest_id)
+    }
+
+    fn quest_row(kind: &str, gld: Uuid) -> Value {
+        json!({
+            "version": 1, "type": kind, "objectiveStatuses": {},
+            "difficultyLevel": -1, "seed": 1, "gldQuestId": gld, "completed": false,
+        })
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct TownCol {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+        town: Option<Value>,
+    }
+
+    async fn stored_town(conn: &mut AsyncPgConnection, character: Uuid) -> Value {
+        diesel::sql_query("SELECT town FROM characters WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(character)
+            .get_result::<TownCol>(conn)
+            .await
+            .unwrap()
+            .town
+            .expect("a town")
+    }
+
+    async fn complete(
+        conn: &mut AsyncPgConnection,
+        (user, character, quest): (Uuid, Uuid, Uuid),
+    ) -> Value {
+        let w = world();
+        let out = complete_quest_in_tx(
+            conn, &w.sd, &w.gd, &json!({}), statics(), user, character, quest, NOW,
+        )
+        .await
+        .expect("/complete answers");
+        serde_json::to_value(out).unwrap()
+    }
+
+    /// Retail's own number: MQ04 pays 200 and the town goes 525 -> 725, answered
+    /// with exactly retail's `town` block; a replay pays and answers nothing more.
+    #[tokio::test]
+    async fn a_quest_paying_town_xp_pays_the_town_and_answers_with_it() {
+        let mut conn = db!();
+        assert_eq!(world().sd.quest_rewards[&MQ04].town_xp, 200);
+        let ids = seed(&mut conn, quest_row("NORMAL", MQ04)).await;
+
+        let out = complete(&mut conn, ids).await;
+        assert_eq!(out["reward"]["townXp"], json!(200));
+        assert_eq!(
+            out["town"],
+            json!({"levelInfo": {"level": 1, "experiencePoints": 725}, "validationFlags": 0}),
+            "retail capture 6206's town block"
+        );
+        let town = stored_town(&mut conn, ids.1).await;
+        assert_eq!(town["levelInfo"]["experiencePoints"], json!(725), "paid into the row");
+        assert!(town.get("districts").is_some(), "the stored town keeps its districts");
+
+        let replay = complete(&mut conn, ids).await;
+        assert!(replay.get("town").is_none(), "a replayed /complete pays nothing");
+        assert_eq!(stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"], json!(725));
+    }
+
+    /// Control: a reward with no `townXp` neither touches the town nor answers with it.
+    #[tokio::test]
+    async fn a_quest_without_town_xp_leaves_the_town_alone() {
+        let mut conn = db!();
+        let reward = &world().sd.quest_rewards[&NO_TOWN_XP];
+        assert_eq!(reward.town_xp, 0);
+        assert!(reward.character_xp > 0, "it pays something, so the path runs");
+        let ids = seed(&mut conn, quest_row("NORMAL", NO_TOWN_XP)).await;
+
+        let out = complete(&mut conn, ids).await;
+        assert!(out["reward"]["characterXp"].as_u64().unwrap() > 0);
+        assert!(out.get("town").is_none(), "no town without townXp: {:?}", out.get("town"));
+        assert_eq!(stored_town(&mut conn, ids.1).await, serde_json::from_str::<Value>(TOWN_BEFORE).unwrap());
+    }
+
+    /// A town job pays what its own `jobSetup` reward says, town XP included.
+    /// (Client data only: retail's job rewards carried `townXp` 0.)
+    #[tokio::test]
+    async fn a_job_reward_with_town_xp_pays_the_town() {
+        let mut conn = db!();
+        let mut row = quest_row("JOB", jobs_gen::JOB_SENTINEL_GLD);
+        row["jobReward"] = json!({"characterXp": 10, "townXp": 30});
+        let ids = seed(&mut conn, row).await;
+
+        let out = complete(&mut conn, ids).await;
+        assert_eq!(out["town"]["levelInfo"]["experiencePoints"], json!(555));
+        assert_eq!(stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"], json!(555));
+    }
+
+    async fn objectives(
+        conn: &mut AsyncPgConnection,
+        gd: &blades_lib::game_data::GameData,
+        (user, character, quest): (Uuid, Uuid, Uuid),
+    ) -> Value {
+        let body: ObjectivesRequest = serde_json::from_value(json!({
+            "objectiveUpdates": {OBJ.to_string(): {"status": "Completed", "progress": 1.0}}
+        }))
+        .unwrap();
+        let out = update_quest_objectives_in_tx(
+            conn, gd, &world().repair, statics(), user, character, quest, body,
+        )
+        .await
+        .expect("/objectives answers");
+        serde_json::to_value(out).unwrap()
+    }
+
+    /// An objective reward's `town_points` is paid into the town. No shipped
+    /// objective carries any (client data only), so the data is given some here.
+    #[tokio::test]
+    async fn an_objective_reward_with_town_points_pays_the_town() {
+        let mut conn = db!();
+        let mut gd = load_gd(&world().dir);
+        let rewards = &mut gd
+            .quests
+            .get_mut(&OBJ_QUEST)
+            .and_then(|q| q.dungeon_info.as_mut())
+            .and_then(|d| d.objectives.get_mut(&OBJ))
+            .expect("the objective ships")
+            .rewards;
+        rewards[0].town_points = 25;
+        let ids = seed(&mut conn, quest_row("NORMAL", OBJ_QUEST)).await;
+
+        let out = objectives(&mut conn, &gd, ids).await;
+        assert_eq!(out["reward"]["townXp"], json!(25));
+        assert_eq!(out["town"]["levelInfo"]["experiencePoints"], json!(550));
+        assert_eq!(stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"], json!(550));
+    }
+
+    /// Control: the objective as shipped pays its items and no town.
+    #[tokio::test]
+    async fn an_objective_reward_without_town_points_leaves_the_town_alone() {
+        let mut conn = db!();
+        let ids = seed(&mut conn, quest_row("NORMAL", OBJ_QUEST)).await;
+
+        let out = objectives(&mut conn, &world().gd, ids).await;
+        assert!(out.get("reward").is_some(), "the objective pays, so the path runs: {out}");
+        assert!(out.get("town").is_none(), "no town without town XP");
+        assert_eq!(stored_town(&mut conn, ids.1).await, serde_json::from_str::<Value>(TOWN_BEFORE).unwrap());
     }
 }
