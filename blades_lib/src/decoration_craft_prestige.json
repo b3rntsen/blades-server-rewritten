@@ -1,0 +1,283 @@
+{
+ "_meta": {
+  "description": "DecorationCrafting recipe id -> the town prestige (townXp) retail paid when that craft was collected.",
+  "source": "APK ItemBundleGenerationDataList (reference/game-defs/shop_bundles.json in the capture repo): the Workshop bundle whose single item is the recipe's output template carries `town_xp`; the recipe -> output mapping is recipe_outputs.json. Every Workshop decoration template has exactly one such bundle, each of quantity 1.",
+  "evidence": "Retail capture 17253 (2026-05-15): collecting DecorationCrafting recipe 6d164b3d (Ancient Tree) moved town.levelInfo.experiencePoints 87565 -> 87656, +91 = this bundle's town_xp; the response carried `town`.",
+  "not_here": "The other 102 DecorationCrafting recipes have no Workshop bundle and no prestige value anywhere in the APK data we hold, so they pay nothing rather than an invented number."
+ },
+ "recipes": {
+  "0ba4a489-d9d9-4768-9c46-a319c852a02e": {
+   "outputItemTemplateId": "ad7b7fac-7fb3-494a-8771-6db6cb060fe4",
+   "name": "Gallows",
+   "townXp": 57,
+   "bundleId": "c3380941-d2e6-4031-a2a5-ce4aa06e28a7",
+   "bundle": "Workshop - L Decoration - Gallows"
+  },
+  "174e762c-3154-4541-8e0d-e49b82ecb26c": {
+   "outputItemTemplateId": "703fe90f-e8be-4f11-8029-fc87295b8895",
+   "name": "Small Cedar Tree",
+   "townXp": 9,
+   "bundleId": "83070358-f432-4041-a8da-b5714528be5a",
+   "bundle": "Workshop - S Decoration - Small Tree #2"
+  },
+  "18307326-3422-4393-937c-26c040fb55e2": {
+   "outputItemTemplateId": "88a6343f-12dd-4b01-a936-34fd7b73df95",
+   "name": "Large Cedar Tree",
+   "townXp": 59,
+   "bundleId": "3d8e3f51-ce5b-4d68-aa3d-f3d36d46cdd7",
+   "bundle": "Workshop - L Decoration - Large Tree #2"
+  },
+  "197e7478-2e59-4007-a461-c0fc619e957d": {
+   "outputItemTemplateId": "ea5b4d2c-61cc-49e6-acaa-e41d6dd4adc9",
+   "name": "Large Elm Tree",
+   "townXp": 59,
+   "bundleId": "ff7cab34-8cdf-409c-ab28-2d24210700cd",
+   "bundle": "Workshop - L Decoration - Large Tree #1"
+  },
+  "1cf5fe07-20d5-4ab3-af47-446aec9d7457": {
+   "outputItemTemplateId": "8d17990c-e9ca-49c0-8c46-1742bbfc4316",
+   "name": "Short Shrub",
+   "townXp": 8,
+   "bundleId": "42f859b4-3a9f-42dd-ae33-1606fa2c0dda",
+   "bundle": "Workshop - S Decoration - Flowers #2"
+  },
+  "2417cc28-dd7b-430a-a813-7cd4437545c0": {
+   "outputItemTemplateId": "052459c3-e349-492a-a2c4-71f366780fbf",
+   "name": "Cedar Tree",
+   "townXp": 38,
+   "bundleId": "81be0d03-38dc-4398-ba1a-77a906ba2432",
+   "bundle": "Workshop - M Decoration - Tree #3"
+  },
+  "2c87ca37-71ea-4b61-9b5f-52577a45cd60": {
+   "outputItemTemplateId": "57b2a90b-c963-4c80-88e3-fd94d774c27c",
+   "name": "Mulberry Tree",
+   "townXp": 9,
+   "bundleId": "0f840160-10fd-439f-b831-e96633c32eef",
+   "bundle": "Workshop - S Decoration - Small Tree #1"
+  },
+  "3a2be530-5cc0-4295-8567-dabc8cd9c83c": {
+   "outputItemTemplateId": "023ee5a7-ea62-4214-8749-84da4de5793b",
+   "name": "Ayleid Arch",
+   "townXp": 17,
+   "bundleId": "e0befe41-7409-47a3-8d1f-9926b4900a08",
+   "bundle": "Workshop - M Decoration - Stele #1"
+  },
+  "3ab8a812-9daf-4efb-bc32-47eaeb59ee8a": {
+   "outputItemTemplateId": "3bedef8a-2a4b-4953-81fa-0d38a8b97634",
+   "name": "Beacon",
+   "townXp": 56,
+   "bundleId": "7bbc2711-7ecc-4120-ba42-72811b513fac",
+   "bundle": "Workshop - S Decoration - Beacon"
+  },
+  "507eeb8c-0a7c-4293-927c-60b45d7f47fc": {
+   "outputItemTemplateId": "bebb7325-98f3-452d-b830-d406a6105580",
+   "name": "Wine and Music",
+   "townXp": 32,
+   "bundleId": "e70c9898-a897-473d-bb77-a7b9fa0402d3",
+   "bundle": "Workshop - S Decoration - Candelabra"
+  },
+  "52e273ec-4e7f-4a94-97fc-e7e2c1349258": {
+   "outputItemTemplateId": "ddbfda14-263b-46cd-8baa-866addf222d8",
+   "name": "Gazebo",
+   "townXp": 86,
+   "bundleId": "e5bee57b-6707-4f02-a3ed-73a6d9967f61",
+   "bundle": "Workshop - L Decoration - Gazebo"
+  },
+  "5893c7ba-034d-45c3-83ed-69dc005c05dd": {
+   "outputItemTemplateId": "3e87402f-68ad-4272-8aed-55fe255fe4d9",
+   "name": "Shrubs and Flags",
+   "townXp": 9,
+   "bundleId": "3a2c9f8a-01dd-462d-8c9e-a5098dd99104",
+   "bundle": "Workshop - S Decoration - Flowers #4"
+  },
+  "5b8299f4-85c3-48c3-b4db-0b5a656ec0a2": {
+   "outputItemTemplateId": "3ac8e1a6-3104-488a-93d5-c618ae541fcb",
+   "name": "Keg of Ale",
+   "townXp": 45,
+   "bundleId": "87bc3704-fa15-499a-8fbb-439be8186ac8",
+   "bundle": "Workshop - M Decoration - Keg of Ale"
+  },
+  "664548cc-ab6e-4b8e-8e99-9d4df5b94f14": {
+   "outputItemTemplateId": "0594db3b-8fe3-4ae2-9a3e-8856acc06ccf",
+   "name": "Tall Shrub",
+   "townXp": 9,
+   "bundleId": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
+   "bundle": "Workshop - S Decoration - Flowers #3"
+  },
+  "6b650e68-b544-45c2-b40f-8a3ee59008d4": {
+   "outputItemTemplateId": "0bb2b12e-49f6-4f7d-bcd1-c8b4fd548786",
+   "name": "Tall Aspen Tree",
+   "townXp": 54,
+   "bundleId": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
+   "bundle": "Workshop - M Decoration - Tree #4"
+  },
+  "6d164b3d-6532-4c4b-adcc-b4b8bc75f2dd": {
+   "outputItemTemplateId": "d25c8faa-5943-4ab1-99d2-aab025ecb581",
+   "name": "Ancient Tree",
+   "townXp": 91,
+   "bundleId": "8dcc79c4-1bae-4f7e-81fd-5f08ecb70074",
+   "bundle": "Workshop - L Decoration - Large Creepy Tree"
+  },
+  "7114e097-0b20-45c5-9222-b9d44ac384ad": {
+   "outputItemTemplateId": "606494ef-e0e2-4ec3-bcbb-0c12b79fe7cb",
+   "name": "Torture Cage",
+   "townXp": 168,
+   "bundleId": "9f980fdc-d48a-40ed-b26c-9961fe8c4d67",
+   "bundle": "Workshop - M Decoration - Torture Cage"
+  },
+  "732c0750-c969-43af-bcf9-2391432b1b97": {
+   "outputItemTemplateId": "2cf13c38-bfb1-4668-93a2-1199478854b6",
+   "name": "Ayleid Stele",
+   "townXp": 84,
+   "bundleId": "6ecdb3f0-bbf3-4ec6-ac93-bb6fa8e437a0",
+   "bundle": "Workshop - M Decoration - Stele #2"
+  },
+  "7415c47a-a494-474c-81a7-3dbdd1e0a1da": {
+   "outputItemTemplateId": "ac56f30d-5037-4aab-af9e-081b0886bbcb",
+   "name": "Vegetable Patch",
+   "townXp": 8,
+   "bundleId": "82af7d0e-752f-4242-bcdd-231bcacf3cf1",
+   "bundle": "Workshop - S Decoration - Flowers #1"
+  },
+  "8688c58b-eef2-40d3-952a-9b152fcac5ba": {
+   "outputItemTemplateId": "eba7fa4c-680f-419f-9327-c029eaece391",
+   "name": "Outhouse",
+   "townXp": 21,
+   "bundleId": "839d1afb-5adc-4439-9a9d-61cc99c8b91e",
+   "bundle": "Workshop - M Decoration - Outhouse"
+  },
+  "87802e7f-4eef-4c71-b1e0-549bb3673d66": {
+   "outputItemTemplateId": "939df0a7-d349-4601-943c-29c834bc2280",
+   "name": "Blue Banner",
+   "townXp": 22,
+   "bundleId": "4b8870b5-719b-4bd8-a4a9-a4203dcc50e1",
+   "bundle": "Workshop - S Decoration - Blue Banner"
+  },
+  "8b8e5199-c54a-4f02-9a66-2c31bc4def63": {
+   "outputItemTemplateId": "885f9882-ac5f-44bb-9f0f-6a3c72f375bb",
+   "name": "Stone Cairn",
+   "townXp": 72,
+   "bundleId": "767604e5-fb72-4d71-8323-6451ae22194f",
+   "bundle": "Workshop - M Decoration - Stone cairn"
+  },
+  "a27a5124-3d25-423c-8be8-ab088c6d9212": {
+   "outputItemTemplateId": "d092b411-aaa6-46f8-b935-dd5e41d90de1",
+   "name": "White Banner",
+   "townXp": 22,
+   "bundleId": "45b2150e-d005-4fe9-b925-d310a2eba09d",
+   "bundle": "Workshop - S Decoration - White Banner"
+  },
+  "a3156bed-2ba9-4607-b6d3-6388e2216d0a": {
+   "outputItemTemplateId": "94424df9-f602-433d-bb20-253239ef1a11",
+   "name": "Aspen Tree",
+   "townXp": 28,
+   "bundleId": "9e9bc089-db9a-489e-a3e5-0d141c31faa4",
+   "bundle": "Workshop - M Decoration - Tree #1"
+  },
+  "a4e3e262-ea88-457f-8672-62b20d7f7791": {
+   "outputItemTemplateId": "8c574365-9693-4815-a573-70c1e8b3063e",
+   "name": "Small Torch",
+   "townXp": 5,
+   "bundleId": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
+   "bundle": "Workshop - S Decoration - Torch"
+  },
+  "a66f527b-c469-4c92-a230-9db716f0b3b9": {
+   "outputItemTemplateId": "3852a530-c661-4ecc-b3b3-30ae7932efdf",
+   "name": "Red Banner",
+   "townXp": 19,
+   "bundleId": "deb1eee9-840b-433e-b76c-b7fc1c0c4e8f",
+   "bundle": "Workshop - S Decoration - Red Banner"
+  },
+  "ac30e373-6125-4eee-9117-abdadd8d7d8e": {
+   "outputItemTemplateId": "d13183d0-56e4-4ea6-9514-6270b4097dea",
+   "name": "Fire Pit",
+   "townXp": 15,
+   "bundleId": "94b2b398-bac1-4086-9497-ddcbdab919c2",
+   "bundle": "Workshop - M Decoration - Fire pit"
+  },
+  "af9b3675-b0f3-4615-a129-ac630b432e90": {
+   "outputItemTemplateId": "96972107-278d-4eb0-98bb-25a262602178",
+   "name": "Lamp Post",
+   "townXp": 11,
+   "bundleId": "ef7e10c4-3890-45d2-add8-f798fc471376",
+   "bundle": "Workshop - S Decoration - Lamp post"
+  },
+  "afedd3fd-5515-40b8-8879-22e5cda8f42d": {
+   "outputItemTemplateId": "020a4cb8-7ffc-473c-87b6-cfc1fe5215f8",
+   "name": "Tall Cedar Tree",
+   "townXp": 32,
+   "bundleId": "cb3c5974-a02e-48a6-9de2-028e0bfbd446",
+   "bundle": "Workshop - M Decoration - Tree #2"
+  },
+  "bcd151c7-7341-4c88-8793-f32258dc553b": {
+   "outputItemTemplateId": "aade0180-4604-45ce-b80e-10887c76ea8e",
+   "name": "Pillories",
+   "townXp": 27,
+   "bundleId": "3403bc36-9497-4655-99b8-d8f8908b6ad3",
+   "bundle": "Workshop - M Decoration - Pillories"
+  },
+  "bdcd6faa-ba83-4e4a-bc87-86ca4722c63f": {
+   "outputItemTemplateId": "32e687ba-bcda-4233-ab59-b168137e0e90",
+   "name": "Archery Range",
+   "townXp": 36,
+   "bundleId": "2a2a60a5-7077-45eb-8510-82438c2e93d1",
+   "bundle": "Workshop - M Decoration - Archery Target"
+  },
+  "be92c4fe-51af-4bf4-b65d-2556a8c9e727": {
+   "outputItemTemplateId": "285326c5-f9d2-4f74-b93e-528ae618d1f2",
+   "name": "Imperial Stall",
+   "townXp": 143,
+   "bundleId": "ab0debc1-e4b4-44ab-ab01-00705dfdea99",
+   "bundle": "Workshop - M Decoration - Lectern"
+  },
+  "c29c55cd-5c08-47ac-a6b0-c5b6b071cbb3": {
+   "outputItemTemplateId": "f8c3e8e6-6914-45f5-a872-601f82dcabee",
+   "name": "Potted Plants",
+   "townXp": 17,
+   "bundleId": "f30a903c-0887-4605-910f-fe5ce1b454c3",
+   "bundle": "Workshop - S Decoration - Potted Plant #1"
+  },
+  "c6debb02-11a9-4d74-8ed6-f6263ee93f39": {
+   "outputItemTemplateId": "fa47b31f-3782-4562-800f-b4fe81116ce7",
+   "name": "Black Banner",
+   "townXp": 19,
+   "bundleId": "3cfdb71e-4df1-4648-bdec-076ab0968d2b",
+   "bundle": "Workshop - S Decoration - Black Banner"
+  },
+  "e073f924-565b-438a-880e-053e701b6fcd": {
+   "outputItemTemplateId": "c75d1c08-2857-4ebc-9b60-97acc67d8c19",
+   "name": "Training Dummy",
+   "townXp": 10,
+   "bundleId": "923a552b-c857-499e-b4a3-e5093f6e42b4",
+   "bundle": "Workshop - S Decoration - Training dummy"
+  },
+  "e1209f84-9fa9-43e4-b915-a64a84f4db92": {
+   "outputItemTemplateId": "4ab53f57-d948-42aa-8e34-67fb76e920f8",
+   "name": "Decorative Planters",
+   "townXp": 17,
+   "bundleId": "4303443d-50d7-40b2-8514-338f6683ac24",
+   "bundle": "Workshop - S Decoration - Potted Plant #2"
+  },
+  "f0b33228-453a-4a99-bfbb-3c00c50ceaa6": {
+   "outputItemTemplateId": "3fc190cd-c244-43b9-9a78-fcecb0d6860c",
+   "name": "Fancy Water Fountain",
+   "townXp": 132,
+   "bundleId": "abbdfae7-e94f-4455-afd7-8cf15520307d",
+   "bundle": "Workshop - M Decoration - Fancy water fountain"
+  },
+  "f87610e3-7e49-4cab-ab6e-0fcbe0c8c058": {
+   "outputItemTemplateId": "f3d4bf0d-4776-4d2a-8e1c-2030bde1e16d",
+   "name": "Nirnroot",
+   "townXp": 69,
+   "bundleId": "070cba2c-39ab-4306-be51-4274551b335d",
+   "bundle": "Workshop - S Decoration - Nirnroot"
+  },
+  "fc776f95-d6ad-4537-a1cd-325406366743": {
+   "outputItemTemplateId": "158e2a7f-7687-4f82-86e2-0dc78a09d7c8",
+   "name": "Apiary",
+   "townXp": 121,
+   "bundleId": "ac8e97ce-786a-4cbc-9514-f6e1951b568d",
+   "bundle": "Workshop - M Decoration - Apiary"
+  }
+ }
+}

@@ -566,6 +566,10 @@ struct BuyResponse {
     shop: ShopTxnState,
     inventory: CompleteInventoryUpdate,
     wallet: CompleteWallet,
+    /// The buyer's town after a decoration's prestige was paid into it (#353);
+    /// absent when nothing bought paid any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    town: Option<Value>,
 }
 
 /// What `qty` units of a merchant bundle put in the buyer's backpack.
@@ -659,14 +663,19 @@ fn book_sale(
 /// land in the buyer's backpack, and the sale is booked on `window`. Shared by a
 /// player's own merchants and by a merchant they visit in someone else's town —
 /// the only difference between the two is whose window is passed in.
+///
+/// Returns the town prestige the bought bundles pay (#353): a merchant's
+/// decoration bundle carries its `townXp` per unit, as the store's offers do. The
+/// caller pays it into the buyer's own town.
 fn buy_bundles(
     globals: &ServerGlobal,
     window: &mut MerchantWindow,
     bundles: &[BuyBundle],
     buyer: &mut CharacterDbEntryShop,
     tracker: &mut InventoryChangeTracker,
-) -> Result<bool, BladeApiError> {
+) -> Result<u64, BladeApiError> {
     let mut bought_anything = false;
+    let mut town_xp = 0u64;
     for b in bundles {
         let Some(def) = globals.static_data.shop_bundles.get(&b.id) else {
             // No price/contents for this bundle — skip rather than hand out
@@ -705,12 +714,13 @@ fn buy_bundles(
             &mut buyer.character.0,
             tracker,
         );
+        town_xp = town_xp.saturating_add(grant.town_xp.saturating_mul(qty));
         bought_anything = true;
     }
     if bought_anything {
         buyer.inventory.0.backpack_version += 1;
     }
-    Ok(bought_anything)
+    Ok(town_xp)
 }
 
 /// `POST /shops/{id}/purchase` — buy bundles out of the window's stock.
@@ -749,7 +759,13 @@ pub async fn buy_from_shop(
             );
 
             let mut tracker = InventoryChangeTracker::default();
-            buy_bundles(&globals, &mut window, &bundles, &mut entry, &mut tracker)?;
+            let town_xp = buy_bundles(&globals, &mut window, &bundles, &mut entry, &mut tracker)?;
+            let town = crate::town::credit_town_xp(
+                &mut entry.town,
+                &mut entry.server_state.0,
+                &globals,
+                town_xp,
+            )?;
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
@@ -761,6 +777,7 @@ pub async fn buy_from_shop(
                 shop,
                 inventory,
                 wallet,
+                town,
             }))
         }
         .scope_boxed()
@@ -836,6 +853,9 @@ struct SocialBuyResponse {
     inventory: CompleteInventoryUpdate,
     wallet: CompleteWallet,
     social: SocialBuyInner,
+    /// The buyer's own town, as in [`BuyResponse::town`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    town: Option<Value>,
 }
 
 /// Load another player's character row. Unlike [`load_owned`] the caller is NOT
@@ -1042,7 +1062,15 @@ pub async fn buy_from_social_shop(
                 write_server_state(&mut conn, owner.id, owner.server_state).await?;
             }
             let mut tracker = InventoryChangeTracker::default();
-            buy_bundles(&globals, &mut window, &bundles, &mut visitor, &mut tracker)?;
+            // The prestige is the BUYER's: it goes into the visitor's own town.
+            let town_xp =
+                buy_bundles(&globals, &mut window, &bundles, &mut visitor, &mut tracker)?;
+            let town = crate::town::credit_town_xp(
+                &mut visitor.town,
+                &mut visitor.server_state.0,
+                &globals,
+                town_xp,
+            )?;
 
             let inventory = visitor.inventory.0.generate_client_update(&tracker);
             let wallet = visitor.wallet.0.clone();
@@ -1063,6 +1091,7 @@ pub async fn buy_from_social_shop(
                 inventory,
                 wallet,
                 social: SocialBuyInner { shop },
+                town,
             }))
         }
         .scope_boxed()
@@ -1685,6 +1714,7 @@ mod tests {
             social: SocialBuyInner {
                 shop: txn_state(Uuid::from_u128(1), &MerchantWindow::default()),
             },
+            town: None,
         })
         .unwrap();
 
@@ -2374,5 +2404,42 @@ mod tests {
             assert_eq!(r.items[0].item.grade, Some(1));
             assert_eq!(r.items[0].item.properties.grading, vec![authored.clone()]);
         }
+    }
+}
+
+/// Tracker #353: a merchant's decoration bundle carries its prestige as the
+/// store's offers do — the APK's `VendorItemBundle.TownXP` — and `buy_bundles`
+/// pays it per unit bought.
+#[cfg(test)]
+mod report353_merchant_prestige {
+    fn bundles() -> std::collections::HashMap<uuid::Uuid, blades_lib::static_data::ShopBundle> {
+        // Through the server's own loader, which skips the file's `_meta` key.
+        crate::static_loader::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static"
+        )))
+        .shop_bundles
+    }
+
+    /// "Workshop - S Decoration - Torch" (5) and "Workshop - L Decoration - Gallows"
+    /// (57), both stocked by retail merchants in `shops.json`.
+    #[test]
+    fn merchant_decorations_carry_their_prestige() {
+        let b = bundles();
+        for (id, xp) in [
+            ("fa3f5d6f-8982-4193-b968-3fed2b18e147", 5),
+            ("c3380941-d2e6-4031-a2a5-ce4aa06e28a7", 57),
+        ] {
+            assert_eq!(b[&id.parse().unwrap()].grant.town_xp, xp, "{id}");
+        }
+    }
+
+    /// The payout multiplies by the units bought (the grant's `townXp` is per unit).
+    #[test]
+    fn buy_bundles_pays_per_unit() {
+        let src = include_str!("shop.rs");
+        let start = src.find("fn buy_bundles(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        assert!(body.contains("grant.town_xp.saturating_mul(qty)"));
     }
 }

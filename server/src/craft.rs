@@ -718,6 +718,34 @@ struct FinishCraftResponse {
     reward: RewardGrant,
     wallet: CompleteWallet,
     inventory: CompleteInventoryUpdate,
+    /// The town after a crafted decoration's prestige was paid into it (#353).
+    /// Retail answered capture 17253 (an Ancient Tree, +91) with it; absent when
+    /// the craft paid none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    town: Option<Value>,
+    /// What the collected craft owes the town — paid by [`finish_craft`], which
+    /// holds the server globals the town needs. Never on the wire: retail's
+    /// craft reward carried no `townXp` (capture 17253).
+    #[serde(skip)]
+    town_xp: u64,
+}
+
+/// The town prestige collecting `job` pays: the decoration's Workshop `townXp`
+/// per unit actually collected, 0 for anything that is not a prestige-paying
+/// decoration craft (#353).
+fn craft_town_xp(job: &CraftJob, reward: &RewardGrant) -> u64 {
+    let Some((decoration, per_unit)) =
+        blades_lib::features::decoration_prestige::craft_prestige(&job.recipe_id)
+    else {
+        return 0;
+    };
+    let units = reward.stackable_items.get(&decoration).copied().unwrap_or(0)
+        + reward
+            .items
+            .iter()
+            .filter(|i| i.item.item_template_id == decoration)
+            .count() as u64;
+    per_unit.saturating_mul(units)
 }
 
 /// `POST /crafts/{id}/finish` — collect the results of a completed craft job.
@@ -748,7 +776,7 @@ pub async fn finish_craft(
 
     conn.transaction(move |conn| {
         async move {
-            collect_craft(
+            let mut response = collect_craft(
                 conn,
                 &globals.static_data,
                 &globals.repair_data,
@@ -758,8 +786,26 @@ pub async fn finish_craft(
                 craft_id,
                 speed_up,
             )
-            .await
-            .map(Json)
+            .await?;
+            if response.town_xp > 0 {
+                // Same transaction and row lock as the collect above, re-read after
+                // its write, so nothing it changed is written back stale.
+                let mut entry =
+                    crate::town::load_town_economy(conn, character_id, user_id).await?;
+                response.town = crate::town::credit_town_xp(
+                    &mut entry.town,
+                    &mut entry.server_state.0,
+                    &globals,
+                    response.town_xp,
+                )?;
+                use crate::schema::characters;
+                diesel::update(characters::table)
+                    .filter(characters::id.eq(entry.id))
+                    .set(entry)
+                    .execute(conn)
+                    .await?;
+            }
+            Ok(Json(response))
         }
         .scope_boxed()
     })
@@ -803,6 +849,7 @@ async fn collect_craft(
     let (_, repaired_results) = repaired_craft_fields(&job, static_data, repair_data);
     let mut reward = reward_from_results(&repaired_results);
     remint_colliding_reward_ids(&mut reward, &entry.inventory.0);
+    let town_xp = craft_town_xp(&job, &reward);
 
     let mut tracker = InventoryChangeTracker::default();
     apply_reward(
@@ -829,6 +876,8 @@ async fn collect_craft(
         reward,
         wallet,
         inventory,
+        town: None,
+        town_xp,
     })
 }
 
@@ -5486,6 +5535,67 @@ mod tests {
             assert_eq!(gold_of(&after), gold_of(&before));
             assert_eq!(counts(&after.inventory.0), counts(&before.inventory.0));
             assert!(after.server_state.0.craft_jobs.is_empty());
+        }
+
+        /// Tracker #353, the crafted half: collecting a decoration craft owes the town
+        /// that decoration's prestige. Retail capture 17253 collected an Ancient Tree
+        /// (recipe 6d164b3d) and the town went 87565 -> 87656, +91. Before the fix the
+        /// collect owed nothing at all.
+        #[tokio::test]
+        async fn collecting_a_crafted_decoration_owes_its_town_prestige() {
+            const ANCIENT_TREE_RECIPE: &str = "6d164b3d-6532-4c4b-adcc-b4b8bc75f2dd";
+            const ANCIENT_TREE: &str = "d25c8faa-5943-4ab1-99d2-aab025ecb581";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 100_000).await;
+
+            let started = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                plain_request(ANCIENT_TREE_RECIPE),
+            )
+            .await
+            .expect("the decoration craft starts");
+            let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
+            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
+                .await
+                .expect("finish");
+            assert_eq!(fin.reward.stackable_items.get(&uuid(ANCIENT_TREE)), Some(&1));
+            assert_eq!(fin.town_xp, 91, "retail paid +91 for one Ancient Tree");
+            let wire = serde_json::to_value(&fin).unwrap();
+            assert!(wire["reward"].get("townXp").is_none(), "retail's craft reward has no townXp: {wire}");
+        }
+
+        /// CONTROL: a craft that is not a Workshop decoration owes the town nothing,
+        /// and its response carries no `town`.
+        #[tokio::test]
+        async fn collecting_gear_owes_no_town_prestige() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 100_000).await;
+            let started = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 0),
+            )
+            .await
+            .expect("enchant starts");
+            let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
+            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
+                .await
+                .expect("finish");
+            assert_eq!(fin.town_xp, 0);
+            assert!(serde_json::to_value(&fin).unwrap().get("town").is_none());
         }
     }
 

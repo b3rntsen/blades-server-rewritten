@@ -202,6 +202,12 @@ pub struct ServerState {
     /// once. Rows written before the field load as `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub town_sites_backfilled: bool,
+    /// Set once the town has been paid the prestige its past global-store
+    /// purchases owed (tracker #353): until then a decoration bought from the
+    /// store paid no town XP although its offer carries `townXp`. Rows written
+    /// before the field load as `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub store_town_xp_backfilled: bool,
 }
 
 #[cfg(test)]
