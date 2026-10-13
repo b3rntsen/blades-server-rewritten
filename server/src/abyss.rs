@@ -246,6 +246,7 @@ pub async fn start_abyss(
                 slices,
                 revive_count: 0,
                 initial_player_level: player_level,
+                character_level,
                 seed,
                 score: 0.0,
                 algorithm_version: static_abyss.algorithm_version.max(1),
@@ -269,7 +270,9 @@ pub async fn start_abyss(
             let gen_data = run
                 .slices
                 .get(run.current_floor_index)
-                .and_then(|slice| floor_generated_data(&app_state.game_data, slice, run.seed))
+                .and_then(|slice| {
+                    floor_generated_data(&app_state.game_data, slice, run.seed, run.character_level)
+                })
                 .unwrap_or_else(empty_generated_data);
 
             // Persist run into server_state
@@ -524,8 +527,14 @@ pub async fn update_abyss(
                 load_economy_for_update(&mut conn, &session.session, character_id).await?;
 
             let mut tracker = InventoryChangeTracker::default();
+            let character_level = entry.character.0.level as u32;
 
             if let Some(run) = entry.server_state.0.abyss.as_mut() {
+                // A run started before #383 has no character level; band its
+                // bonus materials to the character's level from here on.
+                if run.character_level == 0 {
+                    run.character_level = character_level;
+                }
                 let enemy_loot = collect_enemy_loot(&app_state.game_data, run, &body.actions);
                 let looted_inventory = enemy_loot
                     .iter()
@@ -1321,17 +1330,21 @@ fn empty_generated_data() -> DungeonGeneratedData {
 /// data served to the client and the corpse loot paid at `/update` agree.
 ///
 /// Corpses roll retail's Abyss loot (gold, the odd Atronite; report #381), seeded
-/// by the run so two runs through the same floor do not drop the same things.
+/// by the run so two runs through the same floor do not drop the same things --
+/// plus, NOT retail, the owner-approved bonus material of #383, banded to
+/// `character_level` (0: none).
 fn floor_generated_data(
     game_data: &blades_lib::game_data::GameData,
     slice: &AbyssSliceEntry,
     run_seed: i64,
+    character_level: u32,
 ) -> Option<DungeonGeneratedData> {
     blades_lib::util::dungeon::generate_for_abyss_floor(
         game_data,
         &slice.dungeon_settings_id,
         run_seed as u64,
         slice.difficulty_level as i64,
+        (character_level > 0).then_some(i64::from(character_level)),
     )
 }
 
@@ -1341,7 +1354,7 @@ fn active_floor_generated_data(
 ) -> Option<AbyssDungeonGeneratedData> {
     run.slices
         .get(run.current_floor_index)
-        .and_then(|slice| floor_generated_data(game_data, slice, run.seed))
+        .and_then(|slice| floor_generated_data(game_data, slice, run.seed, run.character_level))
         .map(|inner| AbyssDungeonGeneratedData {
             quest_id: Uuid::parse_str(ABYSS_QUEST_ID).unwrap(),
             inner,
@@ -1372,6 +1385,7 @@ fn collect_enemy_loot(
 ) -> Vec<RewardGrant> {
     let mut active_slice = run.current_floor_index;
     let run_seed = run.seed;
+    let character_level = run.character_level;
     let mut grants = Vec::new();
     // A request commonly carries `enemy_killed` and `enemy_loot_collected` for
     // the same floor. Generate that floor once, not once per action.
@@ -1386,7 +1400,7 @@ fn collect_enemy_loot(
                 let floor_index = slice.floor_index;
                 let generated = generated_by_slice
                     .entry(active_slice)
-                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed));
+                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed, character_level));
                 let Some(generated) = generated.as_ref() else {
                     continue;
                 };
@@ -1428,7 +1442,7 @@ fn collect_enemy_loot(
 
                 let generated = generated_by_slice
                     .entry(active_slice)
-                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed));
+                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed, character_level));
                 let Some(generated) = generated.as_ref() else {
                     continue;
                 };
@@ -2186,6 +2200,7 @@ mod tests {
             slices,
             revive_count: 0,
             initial_player_level,
+            character_level: 0,
             seed: 1,
             score: 0.0,
             algorithm_version: 1,
@@ -2935,7 +2950,7 @@ mod tests {
         'dungeons: for dungeon_id in gd.dungeons.keys() {
             let mut slice = run.slices[0].clone();
             slice.dungeon_settings_id = *dungeon_id;
-            let Some(generated) = floor_generated_data(&gd, &slice, run.seed) else {
+            let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level) else {
                 continue;
             };
             for (spawn_group_id, spawners) in &generated.enemy_generated_data {
@@ -4431,6 +4446,7 @@ mod tests {
         floors: usize,
         seeds: u64,
         abyss: bool,
+        bonus: bool,
     ) -> (usize, usize, HashMap<Uuid, usize>, f64) {
         let gd = game_data();
         let ipl = initial_player_level(&real_job_pools(), level);
@@ -4441,7 +4457,7 @@ mod tests {
             let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
             for slice in slices.iter().take(floors) {
                 let data = if abyss {
-                    floor_generated_data(&gd, slice, seed)
+                    floor_generated_data(&gd, slice, seed, if bonus { level } else { 0 })
                 } else {
                     blades_lib::util::dungeon::generate_for_dungeon(
                         &gd,
@@ -4490,8 +4506,9 @@ mod tests {
         for (level, start, floors, gold_range) in
             [(7u32, 1u32, 30usize, 50.0..=140.0), (43, 40, 30, 110.0..=190.0), (100, 149, 30, 180.0..=220.0)]
         {
-            let (before, before_stacks, before_items, _) = corpse_loot_tally(level, start, floors, 16, false);
-            let (corpses, stacks, items, gold) = corpse_loot_tally(level, start, floors, 16, true);
+            // Retail's Abyss loot alone; the #383 bonus on top is measured below.
+            let (before, before_stacks, before_items, _) = corpse_loot_tally(level, start, floors, 16, false, false);
+            let (corpses, stacks, items, gold) = corpse_loot_tally(level, start, floors, 16, true, false);
             let low_tier: usize = [PEARL, GARLIC, QUICKSILVER, NIGHTSHADE].iter().map(|id| count(&items, id)).sum();
             println!(
                 "L{level} from {start}: before {before_stacks}/{before} corpses paid stackables \
@@ -4523,7 +4540,7 @@ mod tests {
         let corpses = |seed: i64| {
             let mut out = Vec::new();
             for (floor, slice) in slices.iter().take(20).enumerate() {
-                let data = floor_generated_data(&gd, slice, seed).unwrap();
+                let data = floor_generated_data(&gd, slice, seed, 100).unwrap();
                 for (group, spawners) in &data.enemy_generated_data {
                     for (spawner, enemies) in spawners.iter().enumerate() {
                         for (index, enemy) in enemies.iter().enumerate() {
@@ -4541,6 +4558,173 @@ mod tests {
         };
         assert!(corpses(11) == corpses(11), "same run, same corpses");
         assert!(corpses(11) != corpses(12), "another run rolls its corpses afresh");
+    }
+
+    /// Item names from the APK ingredient table, for readable test output.
+    fn ingredient_names() -> HashMap<Uuid, String> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../blades_lib/src/ingredient_values.json");
+        let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        raw["_meta"]["names"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter_map(|(id, name)| Some((Uuid::parse_str(id).ok()?, name.as_str()?.to_string())))
+            .collect()
+    }
+
+    /// Report #383 (owner-approved deviation from retail, 2026-10-13): on top of
+    /// #381's retail Abyss loot, ~18% of corpses drop ONE material stack from the
+    /// retail dungeon enemy table at the CHARACTER's level, a third of them an
+    /// enchanting ingredient, never gear.
+    ///
+    /// Driven the three ways the Abyss rule asks for -- a level-7 run from floor 1,
+    /// a level-43 run from floor 40 and a level-100 run from floor 149 (the floors
+    /// [`level_100_run_from_149`] serves) -- plus level 20, which #381 found was
+    /// lent level-3/7 rewards. Every corpse is generated twice, without the bonus
+    /// (#509 as live) and with it, so the bonus is measured as exactly the
+    /// difference.
+    #[test]
+    fn abyss_bonus_materials_follow_the_character_level_at_every_depth() {
+        use blades_lib::util::dungeon::{
+            abyss_bonus_candidates, abyss_bonus_material, ENCHANTING_INGREDIENTS,
+        };
+        const PEARL: &str = "89ece62c-9ff6-470a-a152-d45ef4e0c222";
+        const GARLIC: &str = "fbf96b07-e9aa-4157-8761-10179fa05138";
+        let gd = game_data();
+        let names = ingredient_names();
+        let name = |id: &Uuid| names.get(id).cloned().unwrap_or_else(|| id.to_string());
+        let pearl_garlic = [PEARL, GARLIC].map(|id| Uuid::parse_str(id).unwrap());
+        assert_eq!(level_100_run_from_149(84)[0].0, 149, "the deep run starts at floor 149");
+
+        for (level, start) in [(7u32, 1u32), (20, 15), (43, 40), (100, 149)] {
+            let ipl = initial_player_level(&real_job_pools(), level);
+            let (mut corpses, mut before_material, mut after_material) = (0usize, 0usize, 0usize);
+            let (mut bonus, mut enchanting) = (0usize, 0usize);
+            let mut per_item: HashMap<Uuid, usize> = HashMap::new();
+            for nonce in 0..64u64 {
+                let seed = generate_run_seed(Uuid::from_u128(0x383), nonce);
+                let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
+                for slice in slices.iter().take(30) {
+                    let before = floor_generated_data(&gd, slice, seed, 0).unwrap();
+                    let after = floor_generated_data(&gd, slice, seed, level).unwrap();
+                    for (group, spawners) in &after.enemy_generated_data {
+                        for (spawner, enemies) in spawners.iter().enumerate() {
+                            for (index, enemy) in enemies.iter().enumerate() {
+                                corpses += 1;
+                                let was = before.enemy_generated_data[group][spawner][index].merged_loot_table();
+                                let now = enemy.merged_loot_table();
+                                // The retail loot is untouched: same gold, same gear.
+                                assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
+                                let gear = |l: &blades_lib::user_data::LootTableResult| {
+                                    let mut ids: Vec<Uuid> = l.item.0.keys().copied().collect();
+                                    ids.sort();
+                                    ids
+                                };
+                                assert_eq!(gear(&now), gear(&was), "L{level}: the bonus added gear");
+                                before_material += usize::from(!was.stackable_items.is_empty());
+                                after_material += usize::from(!now.stackable_items.is_empty());
+                                // The bonus is exactly what the pure draw says, and nothing else.
+                                let mut added: Vec<(Uuid, u64)> = now
+                                    .stackable_items
+                                    .iter()
+                                    .map(|(id, q)| (*id, q - was.stackable_items.get(id).copied().unwrap_or(0)))
+                                    .filter(|(_, q)| *q > 0)
+                                    .collect();
+                                added.sort();
+                                let drawn = abyss_bonus_material(
+                                    &slice.dungeon_settings_id,
+                                    seed as u64,
+                                    group,
+                                    spawner,
+                                    index,
+                                    i64::from(level),
+                                );
+                                assert_eq!(added, drawn.into_iter().collect::<Vec<_>>(), "L{level}");
+                                let Some((item, qty)) = drawn else { continue };
+                                bonus += 1;
+                                *per_item.entry(item).or_default() += 1;
+                                let is_enchanting = ENCHANTING_INGREDIENTS.contains(&item.as_u128());
+                                enchanting += usize::from(is_enchanting);
+                                assert!(
+                                    abyss_bonus_candidates(i64::from(level), is_enchanting)
+                                        .iter()
+                                        .any(|c| c.0 == item && c.1 == qty),
+                                    "L{level}: {} x{qty} is not in the level's retail band",
+                                    name(&item)
+                                );
+                                if level == 100 {
+                                    assert!(!pearl_garlic.contains(&item), "L100 drew {}", name(&item));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let share = bonus as f64 / corpses as f64;
+            let enchanting_share = enchanting as f64 / bonus.max(1) as f64;
+            let mut top: Vec<(usize, String)> = per_item.iter().map(|(id, n)| (*n, name(id))).collect();
+            top.sort_by(|a, b| b.cmp(a));
+            println!(
+                "L{level} from {start}: {corpses} corpses; with a material before {:.1}% after {:.1}%; \
+                 bonus {:.1}%, enchanting {:.1}% of bonus; top {:?}",
+                100.0 * before_material as f64 / corpses as f64,
+                100.0 * after_material as f64 / corpses as f64,
+                100.0 * share,
+                100.0 * enchanting_share,
+                top.iter().take(10).map(|(n, s)| format!("{s} {n}")).collect::<Vec<_>>(),
+            );
+            assert!(corpses >= 3000, "L{level}: {corpses} corpses is too few to measure");
+            assert!((0.15..=0.21).contains(&share), "L{level}: bonus share {share}");
+            assert!((0.283..=0.383).contains(&enchanting_share), "L{level}: enchanting {enchanting_share}");
+        }
+    }
+
+    /// The bonus is paid with the corpse at `/update`, from the server's own
+    /// generation, banded to the level the run was STARTED at.
+    #[test]
+    fn the_bonus_material_is_paid_with_the_corpse() {
+        let gd = game_data();
+        let mut run = run_from(&[(149, 100)], 84);
+        run.character_level = 100;
+        let mut fixture = None;
+        'dungeons: for dungeon_id in gd.dungeons.keys() {
+            let mut slice = run.slices[0].clone();
+            slice.dungeon_settings_id = *dungeon_id;
+            let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level) else {
+                continue;
+            };
+            for (group, spawners) in &generated.enemy_generated_data {
+                for (spawner, enemies) in spawners.iter().enumerate() {
+                    for index in 0..enemies.len() {
+                        if let Some(bonus) = blades_lib::util::dungeon::abyss_bonus_material(
+                            dungeon_id,
+                            run.seed as u64,
+                            group,
+                            spawner,
+                            index,
+                            100,
+                        ) {
+                            fixture = Some((*dungeon_id, *group, spawner, index, bonus));
+                            break 'dungeons;
+                        }
+                    }
+                }
+            }
+        }
+        let (dungeon_id, group, spawner, index, (item, qty)) =
+            fixture.expect("some corpse carries a bonus");
+        run.current_floor_index = 0;
+        run.slices[0].dungeon_settings_id = dungeon_id;
+        let actions = parse_actions(serde_json::json!([
+            {"type": "enemy_killed", "spawnGroupId": group, "spawnerIndex": spawner,
+             "enemyIndex": index, "xpReward": 1.0, "time": 1},
+            {"type": "enemy_loot_collected", "spawnGroupId": group, "spawnerIndex": spawner,
+             "enemyIndex": index, "loot": {}, "time": 2}
+        ]));
+        let grants = collect_enemy_loot(&gd, &mut run, &actions);
+        assert_eq!(grants.len(), 1);
+        assert!(grants[0].stackable_items.get(&item).is_some_and(|q| *q >= qty), "{grants:?}");
+        assert!(grants[0].items.is_empty(), "the bonus never pays gear");
     }
 
     /// `/end` is the floors' gold and XP plus the package. Retail paid the package
