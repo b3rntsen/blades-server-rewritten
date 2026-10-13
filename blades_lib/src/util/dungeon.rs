@@ -866,7 +866,15 @@ fn roll_enemy_loot_with_context(
 
 /// Share of Abyss corpses that drop a bonus material stack on top of retail's
 /// Abyss loot. Owner-approved deviation from retail (#383, 2026-10-13).
-pub const ABYSS_BONUS_MATERIAL_SHARE: f64 = 0.18;
+///
+/// Tuned to "like in normal quests" (HauDrauf, #383, after 23 runs): our own
+/// generators put a material on 54.4% of normal-quest corpses (town jobs and
+/// story quests, character levels 7/20/45/100: 56.7/54.5/52.8/53.7%), retail's
+/// own table paying a stackable on about half its results at every level.
+/// Retail's Abyss loot already carries a material on 2-5% of corpses (#381's
+/// Atronite), so 54% here puts an Abyss corpse at about 55%, within 3 points of
+/// normal quests at each of those levels. Was 0.18.
+pub const ABYSS_BONUS_MATERIAL_SHARE: f64 = 0.54;
 
 /// Share of those bonus stacks that are an enchanting ingredient
 /// ([`ENCHANTING_INGREDIENTS`]); the rest are any other material the table pays
@@ -1098,7 +1106,7 @@ fn effect_stack_sizes<'a>(item: &str, bands: impl IntoIterator<Item = &'a serde_
 }
 
 /// The bonus material stack (if any) one Abyss corpse drops on top of retail's
-/// loot (#383): `None` for ~82% of corpses. A function of the run seed and the
+/// loot (#383): `None` for ~46% of corpses. A function of the run seed and the
 /// corpse's identity alone, on its own random stream, so it never moves the
 /// retail draws next to it and a replayed floor drops the same thing.
 pub fn abyss_bonus_material(
@@ -2346,7 +2354,7 @@ mod abyss_bonus_material_tests {
         assert!(at(100).contains(&uuid(DRAGON_SCALE)));
     }
 
-    /// Sampled over many corpse identities: ~18% drop a bonus, a third of those an
+    /// Sampled over many corpse identities: ~54% drop a bonus, a third of those an
     /// enchanting ingredient; stable per identity, absent without a level.
     #[test]
     fn the_bonus_share_and_mix_hold_and_are_deterministic() {
