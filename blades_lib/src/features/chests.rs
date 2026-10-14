@@ -310,11 +310,119 @@ pub fn roll_loot(
         .or_else(|| {
             let (pool, _) = tables.pool_for(tier)?;
             let mut grant = compose_loot(pool, level, nonce)?;
+            if tier == 1 {
+                widen_wooden_metals(tables, &mut grant, level, nonce);
+            }
             if tier == 3 {
                 add_gold_chest_artifact(&mut grant, level, nonce, owned);
             }
             Some(grant)
         })
+}
+
+/// The smithing metals: every ingot, plus Iron Bar, Brass, Moonstone Ore and
+/// Dragon Bone (`ingredient_values.json` names).
+pub const METALS: [u128; 13] = [
+    0x55e82826_2d68_469c_8870_753665ca62cd, // Iron Bar
+    0x92b77b2f_bd33_469f_8aad_8a228b9537eb, // Brass
+    0xb81952e0_c3c8_4a5c_92c0_8215d3eb71af, // Steel Ingot
+    0xb74a5c55_a687_4604_aa59_ba3ddfddcd2a, // Silver Ingot
+    0x71bb8562_07ad_4f18_855a_96f9156b8e6b, // Gold Ingot
+    0x74f091b5_fd88_464b_a98a_f60a5e8a0f25, // Orichalcum Ingot
+    0xf11fb90b_b441_4d72_a33f_50d14d3d6778, // Dwarven Ingot
+    0xe80bee76_f92c_4005_9eff_20d1e8c64d24, // Quicksilver Ingot
+    0x4312b0ed_e397_4815_9693_a511ecda71de, // Moonstone Ore
+    0x85ed5500_3581_4699_8095_4b5ff6514355, // Malachite Ingot
+    0x75112030_b248_49b0_9c70_0da8dea150d1, // Ebony Ingot
+    0xba9fe442_2cf8_48a8_9416_6d91c2a00cab, // Stalhrim Ingot
+    0xd523932f_8c7f_4192_9112_5dbd60883c2b, // Dragon Bone
+];
+
+fn is_metal(id: &Uuid) -> bool {
+    METALS.contains(&id.as_u128())
+}
+
+/// How far either side of a chest's level the metal kinds are read from.
+pub const METAL_WINDOW: u64 = 10;
+
+/// Below this many metal stacks in the Wooden openings within [`METAL_WINDOW`],
+/// the Wooden table is too thin to say which metals a Wooden chest pays.
+pub const THIN_WOODEN_METALS: usize = 8;
+
+/// The metal kinds retail's treasury chests of every tier (Wooden, Silver, Gold)
+/// paid within [`METAL_WINDOW`] levels of `level`, sorted.
+pub fn treasury_metals_near(tables: &ChestLootTables, level: u64) -> Vec<Uuid> {
+    let mut kinds: Vec<Uuid> = (1..=3u64)
+        .filter_map(|t| tables.tiers.get(&t))
+        .flatten()
+        .filter(|s| s.chest_level.abs_diff(level) <= METAL_WINDOW)
+        .flat_map(|s| s.reward.stackable_items.keys())
+        .copied()
+        .filter(is_metal)
+        .collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
+}
+
+/// The number of metal stacks the Wooden openings within [`METAL_WINDOW`] of
+/// `level` paid.
+pub fn wooden_metal_stacks_near(tables: &ChestLootTables, level: u64) -> usize {
+    tables
+        .tiers
+        .get(&1)
+        .into_iter()
+        .flatten()
+        .filter(|s| s.chest_level.abs_diff(level) <= METAL_WINDOW)
+        .map(|s| s.reward.stackable_items.keys().filter(|id| is_metal(id)).count())
+        .sum()
+}
+
+/// A Wooden chest's metal, varied where the Wooden table is thin (report #381).
+///
+/// THE COMPLAINT. HauDrauf (#381, Sephoris, level 46): "an excess of ONE kind of
+/// ingot everywhere, in this case Quicksilver, doesn't fit." A level-46 Wooden
+/// chest paid a metal in 31% of openings, as retail's did, but 79% of those were
+/// Quicksilver: the twelve-nearest neighbourhood ([`neighbourhood`]) is the 16
+/// Wooden openings at levels 34-45, and their five metal stacks are four
+/// Quicksilver and one Malachite. Retail captured 4 Wooden openings above level 40
+/// at all, so that is thin data, not a measured retail mix. Retail's Silver and
+/// Gold chests at 36-56 (88 openings) paid Malachite, Ebony, Stalhrim and
+/// Moonstone, and its dungeon enemies and containers at 41-50 paid Quicksilver
+/// beside Moonstone, Malachite, Stalhrim and Ebony.
+///
+/// THE ROLL. Where the Wooden openings within [`METAL_WINDOW`] levels hold fewer
+/// than [`THIN_WOODEN_METALS`] metal stacks (chest level 41 and up), a metal the
+/// composition put in the chest keeps its quantity, but its kind is drawn
+/// uniformly from [`treasury_metals_near`]: every kind any treasury tier paid
+/// within ten levels. Quicksilver stays among them wherever retail paid it. How
+/// often a chest holds a metal, and how many, is unchanged; below 41 nothing
+/// changes.
+fn widen_wooden_metals(tables: &ChestLootTables, grant: &mut RewardGrant, level: u64, nonce: u64) {
+    use crate::features::store_bundles::mix;
+    if wooden_metal_stacks_near(tables, level) >= THIN_WOODEN_METALS {
+        return;
+    }
+    let kinds = treasury_metals_near(tables, level);
+    if kinds.is_empty() {
+        return;
+    }
+    let mut metals: Vec<(Uuid, u64)> = grant
+        .stackable_items
+        .iter()
+        .filter(|(id, _)| is_metal(id))
+        .map(|(id, q)| (*id, *q))
+        .collect();
+    metals.sort_unstable();
+    for (slot, (id, qty)) in metals.into_iter().enumerate() {
+        let roll = mix(nonce ^ 0x0381_4E7A_15D0_0381 ^ (slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let kind = kinds[(roll % kinds.len() as u64) as usize];
+        if kind == id || grant.stackable_items.contains_key(&kind) {
+            continue;
+        }
+        grant.stackable_items.remove(&id);
+        grant.stackable_items.insert(kind, qty);
+    }
 }
 
 /// A Gold chest's rare third item (#378 follow-up): one chest in
@@ -788,7 +896,19 @@ mod tests {
                     .copied()
                     .filter(is_material)
                     .collect();
+                // A Wooden chest's metal KIND is widened where the table is thin
+                // (#381, `widen_wooden_metals`); how often it holds one is not.
+                let widened = tier == 1 && wooden_metal_stacks_near(&t, level) < THIN_WOODEN_METALS;
+                if widened {
+                    let has_metal = |r: &RewardGrant| r.stackable_items.keys().any(is_metal);
+                    let retail = share(&mut near.iter().map(|s| &s.reward), &has_metal);
+                    let ours = share(&mut ours.iter(), &has_metal);
+                    assert!((ours - retail).abs() <= 0.08, "tier {tier} L{level} any metal: {ours:.2} vs retail {retail:.2}");
+                }
                 for id in materials {
+                    if widened && is_metal(&id) {
+                        continue;
+                    }
                     let has = |r: &RewardGrant| r.stackable_items.contains_key(&id);
                     let retail = share(&mut near.iter().map(|s| &s.reward), &has);
                     let ours = share(&mut ours.iter(), &has);
@@ -802,6 +922,83 @@ mod tests {
                     if tier >= 2 {
                         assert!(r.stackable_items.contains_key(&clay), "tier {tier}: Clay in every chest");
                     }
+                }
+            }
+        }
+    }
+
+    /// Report #381, HauDrauf (Sephoris, level 46): "an excess of ONE kind of ingot
+    /// everywhere, in this case Quicksilver, doesn't fit." 79% of a level-46 Wooden
+    /// chest's metal stacks were Quicksilver, from five retail metal stacks at
+    /// 34-45. The kind now comes from every metal retail's treasury chests paid
+    /// within ten levels; Quicksilver stays one of them, and the share of chests
+    /// holding a metal stays retail's. Below level 41 nothing moves.
+    #[test]
+    fn report_381_wooden_chest_metals_vary_where_the_table_is_thin() {
+        let t = committed();
+        let quicksilver = Uuid::from_u128(0xe80bee76_f92c_4005_9eff_20d1e8c64d24);
+        let rolls = 3000;
+        let roll = |level: u64, i: usize| {
+            roll_loot(&t, 1, level, &format!("381-metal:{i}:{level}"), &HashSet::new()).unwrap()
+        };
+        // The unwidened composition, as live before this change: the control.
+        let before = |level: u64, i: usize| {
+            let key = format!("381-metal:{i}:{level}");
+            compose_loot(&t.tiers[&1], level, stable_nonce(&key)).unwrap()
+        };
+        for level in [46u64, 49] {
+            let (mut kinds, mut was_kinds) = (HashMap::<Uuid, usize>::new(), HashMap::<Uuid, usize>::new());
+            let (mut with_metal, mut was_with_metal) = (0usize, 0usize);
+            for i in 0..rolls {
+                let (now, was) = (roll(level, i), before(level, i));
+                let metal = |r: &RewardGrant| r.stackable_items.keys().copied().filter(is_metal).collect::<Vec<_>>();
+                with_metal += usize::from(!metal(&now).is_empty());
+                was_with_metal += usize::from(!metal(&was).is_empty());
+                for id in metal(&now) {
+                    *kinds.entry(id).or_default() += 1;
+                }
+                for id in metal(&was) {
+                    *was_kinds.entry(id).or_default() += 1;
+                }
+                // Quantities are untouched: the same multiset of metal amounts.
+                let amounts = |r: &RewardGrant| {
+                    let mut a: Vec<u64> = r.stackable_items.iter().filter(|(id, _)| is_metal(id)).map(|(_, q)| *q).collect();
+                    a.sort_unstable();
+                    a
+                };
+                assert_eq!(amounts(&now), amounts(&was), "L{level} chest {i}: metal amounts moved");
+            }
+            let total: usize = kinds.values().sum();
+            let was_total: usize = was_kinds.values().sum();
+            let qs = *kinds.get(&quicksilver).unwrap_or(&0) as f64 / total as f64;
+            let was_qs = *was_kinds.get(&quicksilver).unwrap_or(&0) as f64 / was_total.max(1) as f64;
+            println!("L{level}: Quicksilver {was_qs:.2} -> {qs:.2} of metal stacks; kinds {} -> {}; chests with a metal {was_with_metal} -> {with_metal}",
+                was_kinds.len(), kinds.len());
+            assert_eq!(with_metal, was_with_metal, "L{level}: how often a chest pays a metal moved");
+            assert!(kinds.len() >= 4, "L{level}: only {} metal kinds", kinds.len());
+            assert!(qs > 0.10 && qs <= 0.35, "L{level}: Quicksilver is {qs:.2} of metal stacks");
+        }
+        // Control: the level-46 composition alone was mostly Quicksilver.
+        let was: Vec<RewardGrant> = (0..rolls).map(|i| before(46, i)).collect();
+        let (qs, all) = was.iter().flat_map(|r| r.stackable_items.keys().filter(|id| is_metal(id))).fold((0, 0), |(q, a), id| {
+            (q + usize::from(*id == quicksilver), a + 1)
+        });
+        assert!(qs * 100 >= all * 60, "control: Quicksilver was {qs}/{all} of level-46 metal stacks");
+        // Where the Wooden table is rich, nothing changes.
+        for level in [10u64, 20, 30, 40] {
+            assert!(wooden_metal_stacks_near(&t, level) >= THIN_WOODEN_METALS, "L{level} is not thin");
+            for i in 0..300 {
+                assert_eq!(roll(level, i).stackable_items, before(level, i).stackable_items, "L{level} chest {i} moved");
+            }
+        }
+        // Retail's richer tiers are untouched at every level.
+        for tier in [2i64, 3] {
+            for level in [46u64, 100] {
+                for i in 0..200 {
+                    let key = format!("381-metal:{i}:{level}");
+                    let now = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                    let was = compose_loot(&t.tiers[&(tier as u64)], level, stable_nonce(&key)).unwrap();
+                    assert_eq!(now.stackable_items, was.stackable_items, "tier {tier} L{level} chest {i} moved");
                 }
             }
         }
