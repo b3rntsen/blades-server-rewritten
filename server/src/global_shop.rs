@@ -928,8 +928,16 @@ fn roll_arcane_grading(
 /// The per-purchase roll nonce: how many times this character bought the
 /// product before, with the character folded in so two players do not walk the
 /// same sequence of rolls (#386). Store bundles were already seeded this way.
-fn purchase_roll_nonce(bought_before: u64, character_id: Uuid) -> u64 {
-    bought_before ^ (character_id.as_u128() as u64).rotate_left(29)
+///
+/// `alt` is [`crate::alt_roll::for_character`]: two alts share the live row's
+/// id, so a later alt is folded in too, or two alts with the same counts would
+/// walk one sequence (#387). `None` — every original — leaves the nonce as it
+/// always was.
+fn purchase_roll_nonce(bought_before: u64, character_id: Uuid, alt: Option<Uuid>) -> u64 {
+    crate::alt_roll::fold_nonce(
+        bought_before ^ (character_id.as_u128() as u64).rotate_left(29),
+        alt,
+    )
 }
 
 /// Whether this product sells a ring or necklace the server rolls per purchase.
@@ -1299,7 +1307,10 @@ pub async fn purchase_global_shop(
                 .copied()
                 .unwrap_or(0);
 
-            let roll_nonce = purchase_roll_nonce(bought_before, character_id);
+            // Read after the row lock above, so a switch cannot land between it
+            // and the roll.
+            let roll_alt = crate::alt_roll::for_character(&mut conn, character_id).await;
+            let roll_nonce = purchase_roll_nonce(bought_before, character_id, roll_alt);
             let reward = if randomised {
                 RewardGrant::default()
             } else {
@@ -3865,7 +3876,7 @@ mod report_386_captured_jewelry_rolls {
             &repair_data(),
             item_table(),
             product,
-            purchase_roll_nonce(n, character),
+            purchase_roll_nonce(n, character, None),
         )
         .expect("the offer is deliverable");
         assert_eq!(r.items.len(), 1, "{product}: one item");
@@ -4028,7 +4039,7 @@ mod report_386_captured_jewelry_rolls {
                     &repair_data(),
                     item_table(),
                     product,
-                    purchase_roll_nonce(n, CHAR_A),
+                    purchase_roll_nonce(n, CHAR_A, None),
                 )
                 .unwrap();
                 assert_eq!(&paid, captured, "{raw}: the capture must still be paid verbatim");
@@ -4109,7 +4120,7 @@ mod report_387_legendary_chest_sequence {
                 blades_lib::features::store_bundles::roll_bundle_with(
                     &LEGENDARY,
                     level,
-                    purchase_roll_nonce(n, SEPHORIS),
+                    purchase_roll_nonce(n, SEPHORIS, None),
                     &HashSet::new(),
                     None,
                 )
@@ -4164,8 +4175,97 @@ mod report_387_legendary_chest_sequence {
         let read = &body[bought..bought + body[bought..].find(';').unwrap()];
         assert!(read.contains(".global_shop_purchases"), "lifetime count: {read}");
         assert!(!read.contains("window"), "a window count restarts with every offer: {read}");
-        assert!(body.contains("purchase_roll_nonce(bought_before, character_id)"));
-        let nonces: HashSet<u64> = (0..10_000).map(|n| purchase_roll_nonce(n, SEPHORIS)).collect();
+        assert!(body.contains("purchase_roll_nonce(bought_before, character_id, roll_alt)"));
+        let nonces: HashSet<u64> = (0..10_000).map(|n| purchase_roll_nonce(n, SEPHORIS, None)).collect();
         assert_eq!(nonces.len(), 10_000);
+    }
+}
+
+/// Tracker #387, the alt half: a player's alts share ONE live character row, so
+/// a purchase nonce seeded by `character_id` alone walked every alt with the
+/// same counts through the same sequence. A later alt is folded in; the
+/// original's nonce is pinned to the value it has always had.
+#[cfg(test)]
+mod report_387_alts_roll_their_own {
+    use super::*;
+
+    const LEGENDARY: Uuid = Uuid::from_u128(0x11102495_fde7_4e77_b6c4_d13b9303f1f5);
+    const ROW: Uuid = Uuid::from_u128(0xf7817aa6_5892_4794_871e_9b51a475a606);
+    const ALT_A: Uuid = Uuid::from_u128(0x0a17_0000_0000_4000_8000_0000_0000_000a);
+    const ALT_B: Uuid = Uuid::from_u128(0x0a17_0000_0000_4000_8000_0000_0000_000b);
+
+    fn chests(alt: Option<Uuid>, level: u64) -> Vec<String> {
+        (0..50u64)
+            .flat_map(|n| {
+                blades_lib::features::store_bundles::roll_bundle_with(
+                    &LEGENDARY,
+                    level,
+                    purchase_roll_nonce(n, ROW, alt),
+                    &HashSet::new(),
+                    None,
+                )
+                .expect("the Legendary chest rolls")
+                .items
+                .into_iter()
+                .map(|i| {
+                    format!(
+                        "{}|{:?}|{:?}",
+                        i.item.item_template_id, i.item.properties.enchanting, i.item.properties.grading
+                    )
+                })
+            })
+            .collect()
+    }
+
+    /// The original — every row with no later alt live — keeps today's nonce
+    /// bit for bit (values computed from the pre-#387 formula).
+    #[test]
+    fn the_originals_nonce_is_unchanged() {
+        assert_eq!(purchase_roll_nonce(0, ROW, None), 3_787_163_076_896_478_058);
+        assert_eq!(purchase_roll_nonce(1_226, ROW, None), 3_787_163_076_896_479_136);
+        for n in [0u64, 1, 717, 1_226, 99_999] {
+            assert_eq!(
+                purchase_roll_nonce(n, ROW, None),
+                n ^ (ROW.as_u128() as u64).rotate_left(29)
+            );
+        }
+    }
+
+    /// Two alts of one row, same level, same purchase counts: different nonces
+    /// and different chests — and both differ from the original.
+    #[test]
+    fn two_alts_with_identical_counts_and_level_roll_different_sequences() {
+        for n in 0..1_000u64 {
+            let (a, b, o) = (
+                purchase_roll_nonce(n, ROW, Some(ALT_A)),
+                purchase_roll_nonce(n, ROW, Some(ALT_B)),
+                purchase_roll_nonce(n, ROW, None),
+            );
+            assert!(a != b && a != o && b != o, "purchase {n}");
+        }
+        let (a, b, o) = (chests(Some(ALT_A), 47), chests(Some(ALT_B), 47), chests(None, 47));
+        for (name, x, y) in [("A/B", &a, &b), ("A/original", &a, &o), ("B/original", &b, &o)] {
+            let same_place = x.iter().zip(y).filter(|(p, q)| p == q).count();
+            assert!(
+                same_place * 100 <= x.len() * 10,
+                "{name}: {same_place} of {} pieces identical in place",
+                x.len()
+            );
+        }
+    }
+
+    /// The purchase handler reads the alt after locking the row and passes it to
+    /// the nonce; a call without it would silently re-share the sequence.
+    #[test]
+    fn the_purchase_handler_folds_the_live_alt_in() {
+        let src = include_str!("global_shop.rs");
+        let start = src.find("pub async fn purchase_global_shop(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let lock = body.find(".for_no_key_update()").expect("the row is locked");
+        let read = body
+            .find("crate::alt_roll::for_character(&mut conn, character_id)")
+            .expect("the alt is read");
+        assert!(lock < read, "the alt is read after the row lock");
+        assert!(body.contains("purchase_roll_nonce(bought_before, character_id, roll_alt)"));
     }
 }

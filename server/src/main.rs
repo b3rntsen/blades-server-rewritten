@@ -29,6 +29,7 @@ use log::debug;
 const DB_POOL_MAX: u32 = 10;
 
 mod abyss;
+mod alt_roll;
 mod admin;
 mod analytics;
 mod analytics_events;

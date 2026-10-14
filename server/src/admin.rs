@@ -5445,6 +5445,49 @@ mod tests {
             assert_eq!(live(&mut c, cid).await.character["level"], 41);
         }
 
+        /// #387: alts share the live row's id, so a loot or purchase roll
+        /// seeded by it alone dealt two alts one sequence. Only a LATER alt is
+        /// folded into the roll; the original — unstamped at first, then kept
+        /// under the alt it left as — rolls as it always did, before and after
+        /// the round trip.
+        #[tokio::test]
+        async fn only_a_later_alt_rolls_apart_from_the_original() {
+            use crate::alt_roll::for_character;
+            let mut c = db!();
+            let (original, level1) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character(&mut c, "Sephoris", 47, 0).await;
+            add_user_row(&mut c, uid).await;
+            assert_eq!(for_character(&mut c, cid).await, None, "the unstamped original");
+
+            let mut start = new_alt(uid, level1);
+            start.outgoing_alt_uuid = Some(original);
+            apply_new_alt(&mut c, &start, &appearance_cost()).await.unwrap();
+            assert_eq!(for_character(&mut c, cid).await, Some(level1), "the new alt rolls its own");
+            // The original was kept first; make that unambiguous at one-second
+            // resolution before the next snapshot lands.
+            diesel::sql_query("UPDATE character_versions SET saved_at = saved_at - 60 WHERE character_id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .execute(&mut c)
+                .await
+                .unwrap();
+
+            apply_switch_alt(&mut c, &switch(uid, original, None)).await.unwrap();
+            assert_eq!(live_alt(&mut c, cid).await, Some(original));
+            assert_eq!(for_character(&mut c, cid).await, None, "the original, back, rolls as before");
+
+            apply_switch_alt(&mut c, &switch(uid, level1, None)).await.unwrap();
+            assert_eq!(for_character(&mut c, cid).await, Some(level1), "and the alt, back, its own again");
+        }
+
+        /// CONTROL: a row stamped at import (Sephoris on prod) that never set a
+        /// character aside is its own original — its rolls do not move.
+        #[tokio::test]
+        async fn a_stamped_row_with_no_other_alt_rolls_as_before() {
+            let mut c = db!();
+            let (cid, _) = seed_character_on_alt(&mut c, "Sephoris", 47, 0, Some(Uuid::new_v4())).await;
+            assert_eq!(crate::alt_roll::for_character(&mut c, cid).await, None);
+        }
+
         /// Each phone remembers its own choice, and a switch on one must not
         /// rewrite the other's row.
         #[tokio::test]

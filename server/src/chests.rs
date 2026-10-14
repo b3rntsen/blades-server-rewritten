@@ -80,9 +80,15 @@ pub async fn collect_chest(
             // such dungeon chest yield exactly the same bundle (#120). Treasury
             // version is persistent and advances when chests are granted/opened;
             // character/tier/level keep equal generations from collapsing together.
-            let loot_key = format!(
-                "{character_id}:{chest_id}:{chest_tier}:{chest_level}:{}",
-                entry.inventory.0.treasury_version
+            // A later alt shares the live row's id, so it is folded in as well
+            // (#387); the original's key is unchanged.
+            let roll_alt = crate::alt_roll::for_character(&mut conn, character_id).await;
+            let loot_key = crate::alt_roll::fold_key(
+                format!(
+                    "{character_id}:{chest_id}:{chest_tier}:{chest_level}:{}",
+                    entry.inventory.0.treasury_version
+                ),
+                roll_alt,
             );
             // An artifact the character already holds is never handed out again;
             // retail re-rolled it as a Legendary piece instead (#310).
