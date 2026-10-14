@@ -385,8 +385,20 @@ pub fn roll_loot(
             if tier == 3 {
                 add_gold_chest_artifact(&mut grant, level, nonce, owned);
             }
+            fill_jewelry_grading(&mut grant, nonce);
             Some(grant)
         })
+}
+
+/// The GRADING a treasury chest's rings and necklaces lost in the corpus, drawn
+/// from their grade (see [`super::legendary_gear::fill_missing_grading`]).
+/// Deterministic in the chest's nonce, so a retried open pays the same ring.
+fn fill_jewelry_grading(grant: &mut RewardGrant, nonce: u64) {
+    use crate::features::store_bundles::mix;
+    for (slot, item) in grant.items.iter_mut().enumerate() {
+        let seed = mix(nonce ^ 0x6A4F_3D2C_0392_A0D1 ^ (slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        super::legendary_gear::fill_missing_grading(&mut item.item, seed);
+    }
 }
 
 /// The smithing metals: every ingot, plus Iron Bar, Brass, Moonstone Ore and
@@ -1180,5 +1192,64 @@ mod tests {
                 println!("     ours   {}", summarise(&ours));
             }
         }
+    }
+
+    // ---- #392 audit: chest jewellery carries its GRADING ------------------------
+
+    /// The economy audit (#392): 77 of the 100 retail chest jewels — every
+    /// enchanted one — reached the corpus with a grade and no GRADING, so a Silver
+    /// or Gold chest's ring usually had no ability bonuses (`extract_chest_loot.py`
+    /// kept only ENCHANTING). The open now draws them from the grade, by the APK's
+    /// `JewelryGradeData`.
+    #[test]
+    fn treasury_chest_jewellery_carries_the_grading_of_its_grade() {
+        use crate::features::legendary_gear::{JEWELRY_GRADE_BONUSES, kind_of, rule_broken};
+        let t = committed();
+        let is_jewel = |id: &Uuid| matches!(kind_of(id), Some("ring" | "necklace"));
+
+        // Control: the committed corpus really pays graded jewellery without
+        // GRADING, so the assertions below can fail.
+        let bare = t
+            .tiers
+            .values()
+            .flatten()
+            .flat_map(|s| &s.reward.items)
+            .filter(|i| is_jewel(&i.item.item_template_id))
+            .filter(|i| i.item.grade.is_some() && i.item.properties.grading.is_empty())
+            .count();
+        assert!(bare > 50, "control: {bare} bare graded jewels in the corpus");
+
+        let mut jewels = 0;
+        let mut distinct = HashSet::new();
+        for tier in 1..=3i64 {
+            for level in [1u64, 10, 20, 30, 40, 45, 49, 60, 80, 100] {
+                for i in 0..200 {
+                    let key = format!("audit:{i}:{tier}:{level}");
+                    let reward = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                    for item in reward.items.iter().map(|r| &r.item) {
+                        if !is_jewel(&item.item_template_id) {
+                            continue;
+                        }
+                        jewels += 1;
+                        let grade = item.grade.expect("chest jewellery is graded");
+                        let mut tiers: Vec<u64> = item.properties.grading.iter().map(|p| p.tier).collect();
+                        tiers.sort_unstable_by(|a, b| b.cmp(a));
+                        let want = JEWELRY_GRADE_BONUSES.iter().find(|(g, _)| *g == grade).unwrap().1;
+                        assert_eq!(tiers, want, "grade {grade} GRADING tiers");
+                        assert_eq!(rule_broken(item), None, "{item:?}");
+                        distinct.insert(serde_json::to_string(&item.properties.grading).unwrap());
+                        // Deterministic per chest: a retried open pays the same ring.
+                        let again = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                        assert!(again.items.iter().any(|r| r.item == *item));
+                    }
+                }
+            }
+        }
+        assert!(jewels > 500, "only {jewels} jewels sampled");
+        assert!(
+            distinct.len() * 2 > jewels,
+            "{} distinct GRADING sets in {jewels} jewels",
+            distinct.len()
+        );
     }
 }

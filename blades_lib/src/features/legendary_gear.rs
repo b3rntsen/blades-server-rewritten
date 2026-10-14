@@ -237,6 +237,60 @@ fn roll_grading(
         .collect()
 }
 
+/// `JewelryGradeData._jewelryGradeData`'s `_providedBonuses` by grade: the tier of
+/// each GRADING property a ring or necklace of that grade carries, highest first
+/// (APK `gameplaymetadata`; the server's `jewelry_grade::JEWELRY_GRADES` holds the
+/// same rows with their weights, and a test there keeps the two equal).
+pub const JEWELRY_GRADE_BONUSES: [(u64, &[u64]); 6] = [
+    (1, &[1]),
+    (2, &[1, 1]),
+    (3, &[1, 1, 1]),
+    (4, &[2, 1, 1]),
+    (5, &[2, 2, 1]),
+    (6, &[2, 2, 2]),
+];
+
+/// Give a ring or necklace that carries a grade but no GRADING the properties its
+/// grade stands for (#392 audit). `false`, untouched, for anything else.
+///
+/// THE BUG. Most rings and necklaces a Silver or Gold treasury chest paid had a
+/// grade and no GRADING — no ability bonuses at all. The chest corpus lost them:
+/// `script/extract_chest_loot.py` rebuilt `properties` from ENCHANTING alone
+/// whenever an item had any, so 77 of the 100 retail chest jewels — every
+/// enchanted one — lost their GRADING; the 23 unenchanted ones kept it. Retail's
+/// own were complete: of the graded non-arcane retail rings and necklaces the
+/// server checked (`jewelry_grade`, those 23 among them), 1,121 of 1,121 carry
+/// `grade == sum(tiers)` with the tiers of their grade's `_providedBonuses`.
+///
+/// THE RULE is the APK's: the grade fixes the tiers ([`JEWELRY_GRADE_BONUSES`]);
+/// the properties are drawn uniformly and without repeats from the slot's grade
+/// list, as for a Legendary chest's jewellery ([`roll_grading`]). The grade, the
+/// enchantments and everything else stay as retail paid them.
+pub(crate) fn fill_missing_grading(item: &mut Item, seed: u64) -> bool {
+    let Some(t) = pool().table.templates.get(&item.item_template_id) else {
+        return false;
+    };
+    if !is_jewelry(&t.category) || !item.properties.grading.is_empty() {
+        return false;
+    }
+    let Some((_, tiers)) = JEWELRY_GRADE_BONUSES
+        .iter()
+        .find(|(g, _)| Some(*g) == item.grade)
+    else {
+        return false;
+    };
+    let shell: Vec<ItemSingleProperty> = tiers
+        .iter()
+        .map(|&tier| ItemSingleProperty { id: Uuid::nil(), tier })
+        .collect();
+    let grading = roll_grading(&t.category, &shell, seed);
+    if grading.iter().any(|p| p.id.is_nil()) {
+        return false;
+    }
+    item.properties.grading = grading;
+    true
+}
+
 /// `count` enchantments at `tier`: a recipe primary allowed on the template at
 /// that tier, then distinct secondaries from the template's table.
 fn roll_enchanting(
