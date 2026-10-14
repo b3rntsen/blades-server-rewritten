@@ -69,6 +69,8 @@ pub mod schema;
 mod session;
 mod shop;
 mod shop_gen;
+#[cfg(test)]
+mod economy_audit;
 mod social;
 mod static_loader;
 mod status;
