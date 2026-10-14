@@ -910,6 +910,7 @@ pub fn roll_bundle_with(
     let product = corpus_product(product_id)?;
     let is_legendary = product.product_id == LEGENDARY_CHEST_CORPUS_ID;
     let is_elder = product.product_id == ELDER_CHEST_CORPUS_ID;
+    let is_golden = product.product_id == GOLDEN_CHEST_CORPUS_ID;
 
     // The band containing the buyer's level, else the nearest one — a level above
     // or below everything retail was observed at clamps rather than falling back
@@ -951,8 +952,9 @@ pub fn roll_bundle_with(
             None => (draw(band, slot_seed)?.reward.items[slot].clone(), None),
         };
         // The piece is then GENERATED around that retail piece, as retail
-        // generated it (#368, #378); the other chests keep the retail piece.
-        let piece = if is_legendary || is_elder {
+        // generated it (#368, #378; the Golden chest since the #392 audit, see
+        // [`GOLDEN_CHEST_CORPUS_ID`]); the other bundles keep the retail piece.
+        let piece = if is_legendary || is_elder || is_golden {
             let gen_seed = mix(slot_seed ^ 0x4F1B_BCDC_BFA5_3E0B);
             match tier {
                 Some(tier) => super::legendary_gear::generate_at(&shell, tier, gen_seed),
@@ -1040,6 +1042,20 @@ pub fn roll_bundle_with(
 
 /// The corpus the Epic Chest, i.e. the Elder chest, is mined under.
 const ELDER_CHEST_CORPUS_ID: Uuid = Uuid::from_u128(0x9e4dc391_422e_4b25_ba90_faab39e0769f);
+
+/// The corpus the Golden (Rare, 250 gems) chest is mined under.
+///
+/// THE AUDIT (#392). The Golden chest's gear was still the retail piece verbatim,
+/// drawn from its buyer band: 500 purchases at each of ten levels paid 552
+/// distinct pieces, the enchantments and a ring's bonuses frozen as recorded, and
+/// eight of the 34 ring GRADING properties and two of the 15 necklace ones could
+/// never appear. The corpus is the same shape as the Legendary and Elder ones that
+/// are already generated: all 710 of its 355 purchases' pieces are APK loot-pool
+/// members of their tier, and retail repeated a piece at most four times. So its
+/// pieces are generated around the retail piece the same way (tier, tempering,
+/// enchant count and tier, a jewel's grade kept; kind, template, enchantments and
+/// GRADING from the APK tables). The retail piece itself stays reachable.
+const GOLDEN_CHEST_CORPUS_ID: Uuid = Uuid::from_u128(0x11b322d2_1b5e_4e90_bb41_a8d90ca9548b);
 
 /// The ten soul gems, `SoulGem1` to `SoulGem10`. English / German client names
 /// (APK `localization` bundle, `Items.Name.SoulGemN`):
@@ -2817,5 +2833,61 @@ mod tests {
         assert!((0.47..=0.53).contains(&share), "Dragonscale shields {share:.3} of {}", scale + plate);
         let p = fire_cuirass as f64 / chests as f64;
         assert!((0.006..=0.012).contains(&p), "Fire Resistance Dragonscale Armor in {p:.4} of chests");
+    }
+
+    /// The #392 audit: the Golden chest's gear was replayed verbatim from its
+    /// buyer band, so eight ring and two necklace bonuses could never appear and
+    /// the enchantments were frozen. Now generated like the Legendary and Elder
+    /// chests': every piece obeys the APK rules, keeps the band's material tiers,
+    /// and every GRADING property is reachable.
+    #[test]
+    fn golden_chest_gear_is_generated_around_the_retail_piece() {
+        use super::super::legendary_gear::{kind_of, required_level, rule_broken};
+        let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
+        let corpus = corpus_product(&golden).expect("the Golden chest has a corpus");
+        let mut grading: std::collections::HashMap<&str, HashSet<Uuid>> = Default::default();
+        let mut pieces = HashSet::new();
+        let mut items = 0usize;
+        for level in [1u64, 10, 20, 30, 40, 45, 49, 60, 80, 100] {
+            let band = corpus
+                .by_level
+                .iter()
+                .find(|b| level >= b.min_buyer_level && level <= b.max_buyer_level)
+                .or_else(|| {
+                    corpus
+                        .by_level
+                        .iter()
+                        .min_by_key(|b| level_distance(level, b.min_buyer_level, b.max_buyer_level))
+                })
+                .unwrap();
+            let band_tiers: HashSet<Option<u64>> = band
+                .results
+                .iter()
+                .flat_map(|r| &r.reward.items)
+                .map(|i| required_level(&i.item_template_id))
+                .collect();
+            for n in 0..400u64 {
+                let r = roll_bundle(&golden, level, n).unwrap();
+                for item in r.items.iter().map(|i| &i.item) {
+                    items += 1;
+                    assert_eq!(rule_broken(item), None, "L{level}: {item:?}");
+                    assert!(
+                        band_tiers.contains(&required_level(&item.item_template_id)),
+                        "L{level}: a tier the band never paid"
+                    );
+                    if let Some(kind @ ("ring" | "necklace")) = kind_of(&item.item_template_id) {
+                        grading
+                            .entry(kind)
+                            .or_default()
+                            .extend(item.properties.grading.iter().map(|g| g.id));
+                    }
+                    pieces.insert(serde_json::to_string(item).unwrap());
+                }
+            }
+        }
+        assert_eq!(grading["ring"].len(), 34, "every RingGradePropertyList entry");
+        assert_eq!(grading["necklace"].len(), 15, "every NecklaceGradePropertyList entry");
+        // Control: the band draw alone paid 552 distinct pieces in 10,000.
+        assert!(pieces.len() * 2 > items, "{} distinct pieces in {items}", pieces.len());
     }
 }
