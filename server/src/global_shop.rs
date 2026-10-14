@@ -893,14 +893,22 @@ fn grant_from_offer_contents_with_enchanting(
 
 /// The GRADING one purchase of an arcane item with no authored grading gets.
 ///
-/// Jewellery draws only from the retail outcomes its own slot could have had:
-/// graded, and every property from that slot's APK list. The unfiltered corpus
-/// handed an arcane necklace no grade about half the time and a ring's
-/// properties about one time in seven (#386). A tier whose corpus holds no such
-/// outcome (tier 1 holds only ungraded weapons) falls back to the APK grade table
-/// rings and necklaces are always rolled from (`jewelry_grade`). Anything else
-/// draws from the whole corpus, as before. `None` — refuse the sale — only for a
-/// tier retail never showed at all.
+/// Jewellery takes its GRADE — how many properties, at which tiers — from the
+/// retail outcomes its own slot could have had: graded, and every property from
+/// that slot's APK list. The unfiltered corpus handed an arcane necklace no
+/// grade about half the time and a ring's properties about one time in seven
+/// (#386). The PROPERTIES are then drawn afresh, without repeats, from the
+/// slot's whole APK list (`jewelry_grade::fill`): copying the recorded outcome
+/// whole sold a catalogue of 32 tier-2 rings that repeated constantly, and five
+/// of the 34 ring properties — Absorb, Firewall, Ice Spike, Paralyze, Shield
+/// Bash — could never appear (#392). 32 grants say which grades retail rolled,
+/// not which rings it could; every non-arcane retail ring draws from all 34.
+///
+/// A tier whose corpus holds no such outcome (tier 1 holds only ungraded
+/// weapons) falls back to the APK grade table rings and necklaces are always
+/// rolled from (`jewelry_grade::roll`). Anything else draws from the whole
+/// corpus, as before. `None` — refuse the sale — only for a tier retail never
+/// showed at all.
 fn roll_arcane_grading(
     template: Uuid,
     arcane_tier: u64,
@@ -915,14 +923,18 @@ fn roll_arcane_grading(
     if !blades_lib::features::sigil_grades::can_roll(arcane_tier) {
         return None;
     }
-    blades_lib::features::sigil_grades::roll_grading_where(arcane_tier, roll_nonce, |g| {
-        !g.is_empty() && g.iter().all(|p| crate::jewelry_grade::slot_allows(slot, p.id))
-    })
-    .or_else(|| {
-        let mut rng =
-            crate::jewelry_roll::seeded(&[template.as_bytes(), b"arcane-grade"], roll_nonce);
-        crate::jewelry_grade::roll(slot, &mut rng).map(|(_, grading)| grading)
-    })
+    let mut rng = crate::jewelry_roll::seeded(&[template.as_bytes(), b"arcane-grade"], roll_nonce);
+    match blades_lib::features::sigil_grades::roll_grading_where(arcane_tier, roll_nonce, |g| {
+        !g.is_empty()
+            && g.iter()
+                .all(|p| crate::jewelry_grade::slot_allows(slot, p.id))
+    }) {
+        Some(retail) => {
+            let tiers: Vec<u64> = retail.iter().map(|p| p.tier).collect();
+            crate::jewelry_grade::fill(slot, &tiers, &mut rng)
+        }
+        None => crate::jewelry_grade::roll(slot, &mut rng).map(|(_, grading)| grading),
+    }
 }
 
 /// The per-purchase roll nonce: how many times this character bought the
@@ -4083,6 +4095,240 @@ mod report_386_captured_jewelry_rolls {
             }
         }
         assert!(checked >= 10, "fixture: arcane jewellery offers found: {checked}");
+    }
+}
+
+/// Tracker #392: "The rings with two bonus enchantments in the Sigil shop repeat
+/// constantly. I bought about 50 and not a single one a mage could use."
+/// Sephoris bought the Ebony Faerite Ring of Assured Imbuement (`812ea9ef`,
+/// arcane tier 2) 47 times on 2026-10-14; the 51 such rings in her backpack carry
+/// only 30 distinct GRADING sets, the commonest four times.
+///
+/// THE CAUSE. #386 narrowed an arcane ring's GRADING to the retail outcomes for
+/// its own slot, and at tier 2 that is 32 recorded rings — so the shop sold a
+/// catalogue of 32 fixed rings, and five of the APK's 34 ring properties could
+/// never appear: Absorb, Firewall, Ice Spike and Paralyze (all spells) and
+/// Shield Bash. 32 grants are evidence of WHICH GRADES retail rolled at tier 2,
+/// not a list of every ring it could roll — every non-arcane retail ring (1,121
+/// graded pieces) draws from all 34.
+///
+/// THE FIX. The grade and its tiers still come from the retail tier-2 outcomes;
+/// the properties are drawn without repeats from the slot's whole APK list.
+#[cfg(test)]
+mod report_392_arcane_ring_variety {
+    use super::*;
+    use std::collections::{BTreeSet, HashMap, HashSet};
+
+    /// SigilShop_Jewelry_EbonyFaeriteRing_Arcane02.
+    const RING_OFFER: Uuid = Uuid::from_u128(0x812ea9ef_c2af_406b_9b93_1897db4a6879);
+    /// Ebony Faerite Necklace of Assured Imbuement (#386).
+    const NECKLACE_OFFER: Uuid = Uuid::from_u128(0x79995d29_eac2_49a3_bfec_ce9e547b98de);
+    const SEPHORIS: Uuid = Uuid::from_u128(0xf7817aa6_5892_4794_871e_9b51a475a606);
+    const OTHER: Uuid = Uuid::from_u128(0x489620db_7f90_4a03_bb7c_f7e92a9c73cb);
+
+    fn sd() -> &'static blades_lib::static_data::StaticData {
+        static SD: std::sync::OnceLock<blades_lib::static_data::StaticData> =
+            std::sync::OnceLock::new();
+        SD.get_or_init(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            crate::static_loader::load(&dir)
+        })
+    }
+
+    fn buy(product: Uuid, character: Uuid, n: u64) -> blades_lib::user_data::Item {
+        let r = purchase_reward(
+            sd(),
+            &repair_data(),
+            item_table(),
+            product,
+            purchase_roll_nonce(n, character, None),
+        )
+        .expect("the offer is deliverable");
+        assert_eq!(r.items.len(), 1, "{product}: one item");
+        r.items[0].item.clone()
+    }
+
+    /// The GRADING as a set — what a player compares when he says "the same ring".
+    fn grading_set(item: &blades_lib::user_data::Item) -> BTreeSet<(Uuid, u64)> {
+        item.properties
+            .grading
+            .iter()
+            .map(|p| (p.id, p.tier))
+            .collect()
+    }
+
+    fn slot_list(slot: &str) -> HashMap<Uuid, &'static str> {
+        crate::arena::combat::gamedata::GRADE_PROPERTIES
+            .iter()
+            .filter(|g| g.slot == slot)
+            .map(|g| (Uuid::parse_str(g.uuid).unwrap(), g.editor_name))
+            .collect()
+    }
+
+    /// THE DEFECT. 100 purchases came from a catalogue of at most 32 rings.
+    /// Now: one-property rings (13 of the 32 retail tier-2 rings) can only be one
+    /// of 34, so they collide; every multi-property ring is near-unique. 100
+    /// purchases measure 80 and 85 distinct sets for these two characters (at
+    /// most 32 before — the catalogue's size); the floor leaves room for seed
+    /// noise and still sits far above the old ceiling.
+    #[test]
+    fn a_hundred_purchases_are_not_a_catalogue() {
+        for character in [SEPHORIS, OTHER] {
+            let seen: HashSet<_> = (0..100)
+                .map(|n| grading_set(&buy(RING_OFFER, character, n)))
+                .collect();
+            eprintln!(
+                "#392 {character}: {} distinct GRADING sets in 100 purchases",
+                seen.len()
+            );
+            assert!(
+                seen.len() >= 70,
+                "{character}: only {} distinct rings in 100 purchases",
+                seen.len()
+            );
+        }
+    }
+
+    /// Every one of the 34 APK ring properties can be bought — the 17 spells
+    /// included, and the five the 32-ring catalogue could never hand out.
+    #[test]
+    fn every_ring_property_appears() {
+        let ring = slot_list("Ring");
+        assert_eq!(ring.len(), 34, "RingGradePropertyList");
+        let mut seen: HashMap<Uuid, u32> = HashMap::new();
+        for n in 0..2000 {
+            for p in buy(RING_OFFER, SEPHORIS, n).properties.grading {
+                *seen.entry(p.id).or_default() += 1;
+            }
+        }
+        let missing: Vec<_> = ring
+            .iter()
+            .filter(|(id, _)| !seen.contains_key(id))
+            .map(|(_, n)| *n)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "never rolled in 2000 purchases: {missing:?}"
+        );
+        for name in [
+            "AbsorbBonusRanks",
+            "FirewallBonusRanks",
+            "IceSpikeBonusRanks",
+            "ParalyzeBonusRanks",
+            "ShieldBashBonusRanks",
+        ] {
+            let id = ring
+                .iter()
+                .find(|(_, n)| **n == name)
+                .map(|(id, _)| *id)
+                .unwrap();
+            assert!(seen[&id] >= 20, "{name}: only {} times in 2000", seen[&id]);
+        }
+        // Uniform: no property starved or dominant. Retail's tier-2 rings carry
+        // 65 properties per 32 rings, so ~119 each over 2000 purchases.
+        let (lo, hi) = (seen.values().min().unwrap(), seen.values().max().unwrap());
+        assert!(*lo >= 80 && *hi <= 160, "property counts range {lo}..{hi}");
+    }
+
+    /// The grade still follows retail's tier-2 rings, not the APK merchant
+    /// weights: 13 of 32 were grade 1 (APK: 22%), none was grade 6. Every ring
+    /// keeps the tiers its grade implies (`_providedBonuses`), distinct
+    /// properties from its own slot, no enchantments, arcane tier 2.
+    #[test]
+    fn grades_and_tiers_stay_retail() {
+        let ring = slot_list("Ring");
+        let mut by_grade = [0u32; 7];
+        let n = 2000;
+        for i in 0..n {
+            let item = buy(RING_OFFER, SEPHORIS, i);
+            let g = &item.properties.grading;
+            let grade = item.grade.expect("an arcane ring is always graded");
+            assert_eq!(
+                grade,
+                g.iter().map(|p| p.tier).sum::<u64>(),
+                "grade is the tier sum"
+            );
+            let mut tiers: Vec<u64> = g.iter().map(|p| p.tier).collect();
+            tiers.sort_unstable_by(|a, b| b.cmp(a));
+            let provided = crate::jewelry_grade::JEWELRY_GRADES
+                .iter()
+                .find(|j| j.0 == grade)
+                .unwrap()
+                .2;
+            assert_eq!(tiers, provided, "grade {grade}: tiers {tiers:?}");
+            assert!(
+                g.iter().all(|p| ring.contains_key(&p.id)),
+                "a non-ring property"
+            );
+            assert_eq!(grading_set(&item).len(), g.len(), "a property twice");
+            assert!(
+                item.properties.enchanting.is_empty(),
+                "retail's ring arrives un-enchanted"
+            );
+            assert_eq!(item.arcane_tier, Some(2));
+            by_grade[grade as usize] += 1;
+        }
+        assert_eq!(
+            by_grade[6], 0,
+            "retail never sold a grade-6 arcane ring at tier 2"
+        );
+        let g1 = f64::from(by_grade[1]) / f64::from(n as u32);
+        assert!(
+            (0.34..0.48).contains(&g1),
+            "grade-1 share {g1:.2}; retail 13/32 = 0.41"
+        );
+        assert!(
+            by_grade[2..=5].iter().all(|c| *c > 0),
+            "grades seen {by_grade:?}"
+        );
+    }
+
+    /// Necklaces likewise draw from the whole Necklace list, keep their own
+    /// grades (grade 6 does occur on retail tier-2 necklaces) and never carry a
+    /// ring property.
+    #[test]
+    fn necklaces_use_the_full_necklace_list() {
+        let neck = slot_list("Necklace");
+        assert_eq!(neck.len(), 15, "NecklaceGradePropertyList");
+        let mut seen = HashSet::new();
+        let mut sets = HashSet::new();
+        for n in 0..2000 {
+            let item = buy(NECKLACE_OFFER, SEPHORIS, n);
+            for p in &item.properties.grading {
+                assert!(neck.contains_key(&p.id), "a non-necklace property");
+                seen.insert(p.id);
+            }
+            assert_eq!(grading_set(&item).len(), item.properties.grading.len());
+            if n < 100 {
+                sets.insert(grading_set(&item));
+            }
+        }
+        assert_eq!(seen.len(), 15, "necklace properties reached");
+        assert!(
+            sets.len() >= 60,
+            "only {} distinct necklaces in 100",
+            sets.len()
+        );
+    }
+
+    /// The per-character purchase sequence (#386/#387) is untouched: the n-th
+    /// purchase is reproducible, and two characters do not walk one sequence.
+    #[test]
+    fn the_purchase_sequence_is_still_per_character() {
+        assert_eq!(
+            grading_set(&buy(RING_OFFER, SEPHORIS, 7)),
+            grading_set(&buy(RING_OFFER, SEPHORIS, 7))
+        );
+        let same = (0..40)
+            .filter(|n| {
+                grading_set(&buy(RING_OFFER, SEPHORIS, *n))
+                    == grading_set(&buy(RING_OFFER, OTHER, *n))
+            })
+            .count();
+        assert!(
+            same <= 4,
+            "{same}/40 purchases identical between two characters"
+        );
     }
 }
 

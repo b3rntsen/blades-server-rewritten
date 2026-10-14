@@ -30,9 +30,10 @@
 //! 3) cannot separate the two. The weights are the APK's own table, which is the
 //! only authored answer there is.
 //!
-//! Arcane jewellery (the Sigil shop) keeps its own measured roll in
-//! `blades_lib::features::sigil_grades`; this module never touches an item that
-//! already has a grade or GRADING.
+//! Arcane jewellery (the Sigil shop) takes its GRADE from its own measured roll
+//! in `blades_lib::features::sigil_grades` and its properties from [`fill`]
+//! (#392); this module never touches an item that already has a grade or
+//! GRADING.
 
 use blades_lib::game_data::GameDataItem;
 use blades_lib::user_data::{Item, ItemSingleProperty};
@@ -91,7 +92,9 @@ pub fn roll<R: Rng + ?Sized>(
     item_type: u64,
     rng: &mut R,
 ) -> Option<(u64, Vec<ItemSingleProperty>)> {
-    let mut pool = pool(item_type)?;
+    if !matches!(item_type, RING | NECKLACE) {
+        return None;
+    }
     let total: u32 = JEWELRY_GRADES.iter().map(|g| g.1).sum();
     let mut pick = rng.random_range(0..total);
     let (grade, _, tiers) = JEWELRY_GRADES
@@ -106,7 +109,23 @@ pub fn roll<R: Rng + ?Sized>(
         })
         .copied()
         .unwrap_or(JEWELRY_GRADES[0]);
-    // Distinct properties: retail never repeats one on the same item.
+    let grading = fill(item_type, tiers, rng)?;
+    let grade = grading.iter().map(|p| p.tier).sum();
+    Some((grade, grading))
+}
+
+/// GRADING for known `tiers` on a ring or necklace: one property per tier,
+/// drawn uniformly and without repeats (retail never repeats one on the same
+/// item) from the slot's whole APK list.
+///
+/// The arcane Sigil roll takes its grade from retail's outcomes and only its
+/// properties from here (#392). `None` for anything that is not jewellery.
+pub fn fill<R: Rng + ?Sized>(
+    item_type: u64,
+    tiers: &[u64],
+    rng: &mut R,
+) -> Option<Vec<ItemSingleProperty>> {
+    let mut pool = pool(item_type)?;
     let mut grading = Vec::with_capacity(tiers.len());
     for &tier in tiers {
         if pool.is_empty() {
@@ -115,8 +134,7 @@ pub fn roll<R: Rng + ?Sized>(
         let id = pool.swap_remove(rng.random_range(0..pool.len()));
         grading.push(ItemSingleProperty { id, tier });
     }
-    let grade = grading.iter().map(|p| p.tier).sum();
-    Some((grade, grading))
+    Some(grading)
 }
 
 /// Give a freshly minted ring or necklace the grade retail would have.
