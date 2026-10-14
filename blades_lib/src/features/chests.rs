@@ -152,13 +152,19 @@ pub const MIN_NEIGHBOURS: usize = 12;
 /// The retail openings of this tier nearest to `level`: every opening within the
 /// distance of the [`MIN_NEIGHBOURS`]-th nearest one, ties included.
 pub fn neighbourhood(pool: &[ChestLootSample], level: u64) -> Vec<&ChestLootSample> {
-    let mut distances: Vec<u64> = pool.iter().map(|s| s.chest_level.abs_diff(level)).collect();
+    nearest(pool.iter().collect(), level)
+}
+
+/// [`neighbourhood`] over any set of openings.
+fn nearest(samples: Vec<&ChestLootSample>, level: u64) -> Vec<&ChestLootSample> {
+    let mut distances: Vec<u64> = samples.iter().map(|s| s.chest_level.abs_diff(level)).collect();
     if distances.is_empty() {
         return Vec::new();
     }
     distances.sort_unstable();
     let radius = distances[MIN_NEIGHBOURS.min(distances.len()) - 1];
-    pool.iter()
+    samples
+        .into_iter()
         .filter(|s| s.chest_level.abs_diff(level) <= radius)
         .collect()
 }
@@ -194,9 +200,11 @@ pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<
     let base = draw(&near, seed);
     let stacks = draw(&near, mix(seed ^ 0x2545_F491_4F6C_DD1D));
 
+    let mut stackable_items = compose_stackables(&near, stacks, mix(seed ^ 0x381_5EED_C4E5_7381));
+    settle_enchanting(&mut stackable_items, pool, level, mix(seed ^ 0x0E4C_4A47_0381_0381));
     let mut grant = RewardGrant {
         currencies: base.reward.currencies.clone(),
-        stackable_items: compose_stackables(&near, stacks, mix(seed ^ 0x381_5EED_C4E5_7381)),
+        stackable_items,
         character_xp: base.reward.character_xp,
         town_xp: base.reward.town_xp,
         ..RewardGrant::default()
@@ -278,6 +286,67 @@ fn compose_stackables(
         }
     }
     out
+}
+
+/// The enchanting ingredients: the non-soul-gem inputs of `enchanting.json`.
+pub(crate) const ENCHANTING_INGREDIENTS: [Uuid; 7] = [
+    Uuid::from_u128(0x05b4dd6b_796f_4088_a772_0e33ea3db976), // Frost Salts
+    Uuid::from_u128(0xf1c5c03c_5297_48fb_a9d2_5f32bffb467c), // Fire Salts
+    Uuid::from_u128(0x10c54e43_a2a1_4833_9491_4c19149f43b5), // Void Salts
+    Uuid::from_u128(0x9687d83c_aa7b_4cf3_a69f_0bba8204fa61), // Glow Dust
+    Uuid::from_u128(0x07f380dd_f123_4ef7_9b12_8b9fdb03c3e1), // Imp Stool
+    Uuid::from_u128(0x7116a2a8_ac2d_4cd9_8b7c_b80c397d3f50), // Honeycomb
+    Uuid::from_u128(0x8b7d0044_3a38_4ee0_af45_d2892b0f508d), // Beehive Husk
+];
+
+fn holds_enchanting(r: &RewardGrant) -> bool {
+    r.stackable_items.keys().any(|id| ENCHANTING_INGREDIENTS.contains(id))
+}
+
+/// Share of chests holding an enchanting ingredient, for the tiers that paid any
+/// in retail (only Wooden; Silver and Gold paid none and stay at none).
+///
+/// OWNER-APPROVED DEVIATION FROM RETAIL (#381/#383, 2026-10-13): retail's pooled
+/// Wooden rate is 51 of 154 openings (33%); the owner raised it to help new and
+/// returning players who must rebuild their characters. Tune here.
+pub const ENCHANTING_CHEST_SHARE: f64 = 0.50;
+
+/// Whether a chest holds an enchanting ingredient: [`ENCHANTING_CHEST_SHARE`], the
+/// same at every level (#381, HauDrauf: "the quantity varied, but not the
+/// occurrence itself").
+///
+/// Per level band, retail's Wooden chests held one in 41% of openings at 1-20,
+/// 17% at 21-40 and 56% at 61-80, but every opening at 21-60 is one character's
+/// last three days of retail, and a test that keeps each capture session's
+/// openings together does not reject one rate for all levels (p = 0.06; 1-20
+/// against 61-100, where several characters played, 41% vs 55%, p = 0.29). So the
+/// rate is level-independent; retail's pooled rate is 51 of 154 Wooden openings
+/// (33%), raised by the owner to [`ENCHANTING_CHEST_SHARE`]. Silver and Gold paid
+/// none in 575 and stay at none. Which ingredients, how many kinds and how many
+/// of each still come from the retail openings nearest the chest's level that
+/// paid any. Every other stackable is left as [`compose_stackables`] made it.
+fn settle_enchanting(
+    stacks: &mut std::collections::HashMap<Uuid, u64>,
+    pool: &[ChestLootSample],
+    level: u64,
+    seed: u64,
+) {
+    use crate::features::store_bundles::mix;
+
+    let paid: Vec<&ChestLootSample> = pool.iter().filter(|s| holds_enchanting(&s.reward)).collect();
+    if paid.is_empty() {
+        return;
+    }
+    stacks.retain(|id, _| !ENCHANTING_INGREDIENTS.contains(id));
+    if (mix(seed) % 10_000) as f64 >= ENCHANTING_CHEST_SHARE * 10_000.0 {
+        return;
+    }
+    let source = draw(&nearest(paid, level), mix(seed ^ 0x5EED_E4C4_A475_0381));
+    for (id, q) in &source.reward.stackable_items {
+        if ENCHANTING_INGREDIENTS.contains(id) {
+            stacks.insert(*id, *q);
+        }
+    }
 }
 
 /// Roll the grant for a chest open.
@@ -850,15 +919,29 @@ mod tests {
     }
 
     /// The composition keeps retail's rates. Per material, the share of chests
-    /// holding it stays within a few points of the retail openings at that level —
-    /// enchanting ingredients included: Wooden chests paid one in 41% of openings
-    /// at 1-20, 17% at 21-40 and 56% at 61-80, and Silver chests never (0 of 305).
-    /// Soul gems and potions stay whole: at most one potion, Clay in every Silver
-    /// and Gold chest.
+    /// holding it stays within a few points of the retail openings at that level.
+    /// Enchanting ingredients are the exception (#381, HauDrauf): whether a chest
+    /// holds one is [`ENCHANTING_CHEST_SHARE`] at every level for the tiers that
+    /// paid any (owner-raised from retail's pooled Wooden 51 of 154, 33%, where the per-band 41/17/56% at 1-20/21-40/61-80 is
+    /// one character's run at 21-60) — and Silver and Gold never (0 of 575). Which
+    /// ones, and how many, follow the retail openings nearest the level that paid
+    /// any. Soul gems and potions stay whole: at most one potion, Clay in every
+    /// Silver and Gold chest.
     #[test]
     fn composed_stackables_keep_retails_rates() {
         let t = committed();
         let enchanting = enchanting();
+        assert_eq!(
+            enchanting,
+            ENCHANTING_INGREDIENTS.into_iter().collect::<HashSet<Uuid>>(),
+            "ENCHANTING_INGREDIENTS names the enchanting ingredients"
+        );
+        let pooled = |tier: u64| {
+            let pool = &t.tiers[&tier];
+            (pool.iter().filter(|s| holds_enchanting(&s.reward)).count(), pool.len())
+        };
+        assert_eq!(pooled(1), (51, 154), "Wooden: retail's pooled enchanting rate");
+        assert_eq!(pooled(2).0 + pooled(3).0, 0, "Silver and Gold never paid one");
         let clay: Uuid = "42d91529-c88b-4c5b-815b-b55508b4e7ef".parse().unwrap();
         let rolls = 3000;
         for tier in 1..=3u64 {
@@ -884,17 +967,36 @@ mod tests {
                     |r: &RewardGrant| r.stackable_items.keys().any(|id| enchanting.contains(id));
                 let retail_e = share(&mut near.iter().map(|s| &s.reward), &has_enchanting);
                 let ours_e = share(&mut ours.iter(), &has_enchanting);
-                println!("tier {tier} L{level}: chests with an enchanting ingredient retail {retail_e:.2}, ours {ours_e:.2}");
-                if retail_e == 0.0 {
-                    assert_eq!(ours_e, 0.0, "tier {tier} L{level}: retail never paid one here");
+                let (k, n) = pooled(tier);
+                let want = if k == 0 { 0.0 } else { ENCHANTING_CHEST_SHARE };
+                let _ = n;
+                println!(
+                    "tier {tier} L{level}: chests with an enchanting ingredient retail here {retail_e:.2}, \
+                     target {want:.2}, ours {ours_e:.2}"
+                );
+                if k == 0 {
+                    assert_eq!(ours_e, 0.0, "tier {tier} L{level}: retail never paid one");
                 } else {
-                    assert!((ours_e - retail_e).abs() <= 0.08, "tier {tier} L{level}: {ours_e:.2} vs {retail_e:.2}");
+                    assert!((ours_e - want).abs() <= 0.04, "tier {tier} L{level}: {ours_e:.2} vs target {want:.2}");
+                    // Given a chest holds one, which ones follow the nearest retail
+                    // openings that paid any.
+                    let paid = nearest(t.tiers[&tier].iter().filter(|s| holds_enchanting(&s.reward)).collect(), level);
+                    let with: Vec<&RewardGrant> = ours.iter().filter(|r| has_enchanting(r)).collect();
+                    for id in &enchanting {
+                        let has = |r: &RewardGrant| r.stackable_items.contains_key(id);
+                        let retail = share(&mut paid.iter().map(|s| &s.reward), &has);
+                        let ours = share(&mut with.iter().copied(), &has);
+                        assert!(
+                            (ours - retail).abs() <= 0.08,
+                            "tier {tier} L{level} {id} given an enchanting ingredient: {ours:.2} vs retail {retail:.2}"
+                        );
+                    }
                 }
                 let materials: HashSet<Uuid> = near
                     .iter()
                     .flat_map(|s| s.reward.stackable_items.keys())
                     .copied()
-                    .filter(is_material)
+                    .filter(|id| is_material(id) && !enchanting.contains(id))
                     .collect();
                 // A Wooden chest's metal KIND is widened where the table is thin
                 // (#381, `widen_wooden_metals`); how often it holds one is not.
