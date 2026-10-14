@@ -382,12 +382,49 @@ pub fn roll_loot(
             if tier == 1 {
                 widen_wooden_metals(tables, &mut grant, level, nonce);
             }
+            generate_treasury_gear(&mut grant, nonce);
             if tier == 3 {
                 add_gold_chest_artifact(&mut grant, level, nonce, owned);
             }
             fill_jewelry_grading(&mut grant, nonce);
             Some(grant)
         })
+}
+
+/// A Wooden, Silver or Gold chest's gear, generated around the retail piece
+/// [`compose_loot`] picked for each slot, as a Legendary chest's is (#368; #392
+/// audit).
+///
+/// THE BUG. Each item slot copied one retail piece verbatim from the openings
+/// nearest the chest's level. Where few of them paid an item that was one piece
+/// for every chest: a Wooden chest paid an item in 44 of 154 retail openings, so
+/// at level 1 every item was the same Hide Gauntlets, at 49 the same Dwarven Plate
+/// Armor, at 60 the same Stalhrim Gauntlets; over ten levels 1,088 Wooden items
+/// were 26 instances. Silver and Gold jewellery repeated the same way (a Gold
+/// Emerald ring with the same bonuses in over half the rings at 40-49).
+///
+/// THE EVIDENCE that retail generated these too: every one of the 889 items in
+/// the retail treasury openings (44 Wooden, 305 Silver, 540 Gold) is a member of
+/// the APK loot pool for its material tier, and retail repeated an instance at
+/// most three times.
+///
+/// THE ROLL is [`super::legendary_gear::generate`]: the retail piece stays the
+/// shell — its material tier, tempering, enchant count and enchant tier, and a
+/// jewel's grade — and around it the kind, the template of that tier and the
+/// enchantments are drawn from the APK tables. Nothing a chest paid before is out
+/// of reach: the shell's own template and enchantments remain possible, at the
+/// same tier. A piece outside the pool (none today) is paid as before.
+fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
+    use crate::features::store_bundles::{is_artifact, mix};
+    for (slot, reward) in grant.items.iter_mut().enumerate() {
+        if is_artifact(&reward.item.item_template_id) {
+            continue;
+        }
+        let seed = mix(nonce ^ 0x3C79_AC49_2BA7_B653 ^ (slot as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93));
+        if let Some(item) = super::legendary_gear::generate(&reward.item, seed) {
+            reward.item = item;
+        }
+    }
 }
 
 /// The GRADING a treasury chest's rings and necklaces lost in the corpus, drawn
@@ -745,19 +782,22 @@ mod tests {
 
     /// Report #335, "gold chests only contain low-level content". A level-100
     /// Gold chest must pay what retail paid for Gold chests near level 100 — the
-    /// wider pool must not drag it down to mid-level openings. Every item is a
-    /// template retail paid in a Gold chest at level 81+, and the gold sits in the
+    /// wider pool must not drag it down to mid-level openings. Every item is of a
+    /// material tier retail paid in a Gold chest at level 81+ (the template itself
+    /// is generated within its tier since the #392 audit), and the gold sits in the
     /// level 81-100 range (8,069-9,675), far above level 31-40's floor (6,258).
     #[test]
     fn a_level_100_gold_chest_pays_level_100_loot() {
+        use crate::features::legendary_gear::required_level;
         let t = committed();
         let pool = &t.tiers[&3];
         let high: Vec<&ChestLootSample> = pool.iter().filter(|s| s.chest_level >= 81).collect();
-        let high_templates: HashSet<Uuid> = high
+        let high_tiers: HashSet<Option<u64>> = high
             .iter()
             .flat_map(|s| &s.reward.items)
-            .map(|i| i.item.item_template_id)
+            .map(|i| required_level(&i.item.item_template_id))
             .collect();
+        assert!(!high_tiers.contains(&None), "control: every retail piece has a tier");
         let gold_of = |r: &RewardGrant| r.currencies.get(&GOLD).copied().unwrap_or(0);
         let lo = high.iter().map(|s| gold_of(&s.reward)).min().unwrap();
         let hi = high.iter().map(|s| gold_of(&s.reward)).max().unwrap();
@@ -770,8 +810,8 @@ mod tests {
             assert!((lo..=hi).contains(&gold), "level-100 Gold chest paid {gold} gold");
             for item in &r.items[..2] {
                 assert!(
-                    high_templates.contains(&item.item.item_template_id),
-                    "level-100 Gold chest paid {}, which retail paid only below level 81",
+                    high_tiers.contains(&required_level(&item.item.item_template_id)),
+                    "level-100 Gold chest paid {}, a tier retail paid only below level 81",
                     item.item.item_template_id
                 );
             }
@@ -1251,5 +1291,53 @@ mod tests {
             "{} distinct GRADING sets in {jewels} jewels",
             distinct.len()
         );
+    }
+
+    /// The economy audit (#392): treasury chest gear repeated — a level-1 Wooden
+    /// chest paid the same Hide Gauntlets every time, 1,088 Wooden items over ten
+    /// levels were 26 instances. Now generated around the retail piece; every
+    /// piece obeys the APK rules and keeps the retail piece's tier.
+    #[test]
+    fn treasury_chest_gear_is_generated_not_replayed() {
+        use crate::features::legendary_gear::{required_level, rule_broken};
+        let t = committed();
+        for tier in 1..=3i64 {
+            for level in [1u64, 10, 20, 30, 40, 45, 49, 60, 80, 100] {
+                let mut seen: HashMap<String, usize> = HashMap::new();
+                let mut items = 0usize;
+                let mut tiers_paid = HashSet::new();
+                for i in 0..300 {
+                    let key = format!("gear:{i}:{tier}:{level}");
+                    let reward = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                    for item in reward.items.iter().map(|r| &r.item) {
+                        if crate::features::store_bundles::is_artifact(&item.item_template_id) {
+                            continue;
+                        }
+                        items += 1;
+                        assert_eq!(rule_broken(item), None, "tier {tier} L{level}: {item:?}");
+                        tiers_paid.insert(required_level(&item.item_template_id));
+                        *seen.entry(serde_json::to_string(item).unwrap()).or_insert(0) += 1;
+                    }
+                }
+                if items < 20 {
+                    continue;
+                }
+                // The economy audit's variety limit: no piece above a quarter.
+                let top = seen.values().copied().max().unwrap_or(0);
+                assert!(
+                    top * 4 <= items,
+                    "tier {tier} L{level}: one piece is {top} of {items} items"
+                );
+                // The generator keeps the retail piece's material tier: only tiers
+                // the composed retail pieces could have are paid.
+                let (pool, _) = t.pool_for(tier as u64).unwrap();
+                let retail: HashSet<Option<u64>> = neighbourhood(pool, level)
+                    .iter()
+                    .flat_map(|s| &s.reward.items)
+                    .map(|i| required_level(&i.item.item_template_id))
+                    .collect();
+                assert!(tiers_paid.is_subset(&retail), "tier {tier} L{level}: {tiers_paid:?} vs {retail:?}");
+            }
+        }
     }
 }
