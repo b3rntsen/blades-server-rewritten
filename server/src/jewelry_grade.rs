@@ -177,6 +177,16 @@ mod tests {
         JEWELRY_GRADES.iter().find(|g| g.0 == grade).unwrap().2
     }
 
+    /// `blades_lib` fills a treasury chest jewel's GRADING from its grade with its
+    /// own copy of the `_providedBonuses` (#392 audit); the two must not drift.
+    #[test]
+    fn blades_lib_grade_bonuses_are_these() {
+        let ours: Vec<(u64, &[u64])> = JEWELRY_GRADES.iter().map(|g| (g.0, g.2)).collect();
+        let theirs: Vec<(u64, &[u64])> =
+            blades_lib::features::legendary_gear::JEWELRY_GRADE_BONUSES.to_vec();
+        assert_eq!(ours, theirs);
+    }
+
     #[test]
     fn the_pools_are_the_apk_lists() {
         assert_eq!(pool(RING).unwrap().len(), 34, "RingGradePropertyList");

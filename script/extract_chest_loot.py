@@ -269,9 +269,13 @@ def normalise_reward(reward: dict) -> dict:
     for item in reward.get("items") or []:
         copy = dict(item)
         props = copy.get("properties") or {}
-        if props.get("ENCHANTING"):
+        if props.get("ENCHANTING") or props.get("GRADING"):
+            # Keep GRADING too (#392 audit): rebuilding properties from ENCHANTING
+            # alone stripped every chest ring's and necklace's ability bonuses.
             copy["properties"] = {
-                "ENCHANTING": [dict(sorted(e.items())) for e in props["ENCHANTING"]]
+                kind: [dict(sorted(e.items())) for e in props[kind]]
+                for kind in ("ENCHANTING", "GRADING")
+                if props.get(kind)
             }
         items.append(copy)
     if items:
