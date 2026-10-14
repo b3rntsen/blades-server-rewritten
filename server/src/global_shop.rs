@@ -4074,3 +4074,98 @@ mod report_386_captured_jewelry_rolls {
         assert!(checked >= 10, "fixture: arcane jewellery offers found: {checked}");
     }
 }
+
+/// Tracker #387: "Jewellery came out the same as in the last 100 … or it always
+/// starts with chest 1, and if I only open 100 I never get the 200th."
+/// Sephoris (level 46-47) opened 100 Legendary chests on each of two days.
+///
+/// It does not start again. A Legendary chest's roll is seeded by
+/// [`purchase_roll_nonce`] from this character's LIFETIME purchase count of the
+/// product (`globalShopPurchases`, 1,226 for Sephoris on 2026-10-14, 717 on
+/// 10-10), never by the per-window count, which a new offer window resets. On
+/// prod, 251 of the 297 enchanted or graded pieces Sephoris kept since 10-10 are
+/// exactly the piece this roll predicts, and 207 of them match exactly one
+/// purchase, purchases 819 to 1,225. What he saw is the tier: from 45 the pool
+/// has one ring and one necklace (Ebony Faerite) and two shields (Dragonscale
+/// and Dragonplate), as retail's did.
+#[cfg(test)]
+mod report_387_legendary_chest_sequence {
+    use super::*;
+
+    const LEGENDARY: Uuid = Uuid::from_u128(0x11102495_fde7_4e77_b6c4_d13b9303f1f5);
+    const SEPHORIS: Uuid = Uuid::from_u128(0xf7817aa6_5892_4794_871e_9b51a475a606);
+
+    fn key(item: &blades_lib::user_data::Item) -> String {
+        format!(
+            "{}|{:?}|{:?}|{}",
+            item.item_template_id, item.properties.enchanting, item.properties.grading, item.tempering_level
+        )
+    }
+
+    /// The pieces of purchases `from..to`, rolled as `purchase_global_shop` rolls them.
+    fn chests(from: u64, to: u64, level: u64) -> Vec<String> {
+        (from..to)
+            .flat_map(|n| {
+                blades_lib::features::store_bundles::roll_bundle_with(
+                    &LEGENDARY,
+                    level,
+                    purchase_roll_nonce(n, SEPHORIS),
+                    &HashSet::new(),
+                    None,
+                )
+                .expect("the Legendary chest rolls")
+                .items
+                .into_iter()
+                .map(|i| key(&i.item))
+            })
+            .collect()
+    }
+
+    /// The reporter's hypothesis as a test: the second 100 chests must not be the
+    /// first 100 again, neither as a sequence nor as a set.
+    #[test]
+    fn the_second_hundred_chests_do_not_replay_the_first() {
+        for (start, level) in [(0u64, 46u64), (1_026, 46), (1_026, 47)] {
+            let a = chests(start, start + 100, level);
+            let b = chests(start + 100, start + 200, level);
+            let same_place = a.iter().zip(&b).filter(|(x, y)| x == y).count();
+            assert!(same_place <= 2, "from {start} at {level}: {same_place} pieces repeat in place");
+            let first: HashSet<&String> = a.iter().collect();
+            let shared = b.iter().filter(|k| first.contains(k)).count();
+            // Only unenchanted Dragon armour and shields (two templates, one
+            // tempering) can coincide by chance.
+            assert!(
+                shared * 100 <= b.len() * 5,
+                "from {start} at {level}: {shared} of {} pieces of the second hundred were in the first",
+                b.len()
+            );
+        }
+    }
+
+    /// Retail's 307 distinct purchases repeated a slot exactly 1.3-4.2% of the
+    /// time; 200 chests in a row stay in that range.
+    #[test]
+    fn two_hundred_chests_repeat_about_as_rarely_as_retail() {
+        for start in [0u64, 1_026, 5_000, 77_777] {
+            let pieces = chests(start, start + 200, 47);
+            let distinct = pieces.iter().collect::<HashSet<_>>().len();
+            let repeated = (pieces.len() - distinct) as f64 / pieces.len() as f64;
+            assert!(repeated <= 0.06, "from {start}: {:.1}% of pieces repeated", repeated * 100.0);
+        }
+    }
+
+    /// The count the roll is seeded from is the lifetime one, never the window's.
+    #[test]
+    fn the_roll_nonce_counts_every_purchase_ever_made() {
+        let src = include_str!("global_shop.rs");
+        let start = src.find("pub async fn purchase_global_shop(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let bought = body.find("let bought_before = entry").expect("the count is read");
+        let read = &body[bought..bought + body[bought..].find(';').unwrap()];
+        assert!(read.contains(".global_shop_purchases"), "lifetime count: {read}");
+        assert!(!read.contains("window"), "a window count restarts with every offer: {read}");
+        assert!(body.contains("purchase_roll_nonce(bought_before, character_id)"));
+        let nonces: HashSet<u64> = (0..10_000).map(|n| purchase_roll_nonce(n, SEPHORIS)).collect();
+        assert_eq!(nonces.len(), 10_000);
+    }
+}
