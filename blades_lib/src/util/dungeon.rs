@@ -908,14 +908,52 @@ pub const EFFECT_INGREDIENTS: [u128; 7] = [
     0x8b7d0044_3a38_4ee0_af45_d2892b0f508d, // Deathbell
 ];
 
+/// How heavily a town material ([`TOWN_MATERIALS`]) weighs in the bonus draw,
+/// against how often retail's table paid it. Owner-approved tuning (#383,
+/// 2026-10-13): HauDrauf, after 23 runs, "there have been too many building
+/// materials from the start; you can lower them a bit". Retail's table pays
+/// town materials in 63-65% of its non-enchanting stacks at every level; at half
+/// weight they are 46-48% of them (the odds against every other material halve).
+pub const ABYSS_BONUS_TOWN_MATERIAL_WEIGHT: f64 = 0.5;
+
+/// The materials whose only use is the town, as the game data classifies them:
+/// the APK's "Building Material" tag (`Item.TownResource.*`, the inputs of town
+/// building construction) and "Decoration Material" tag
+/// (`Item.DecorationResource.*`, the inputs of decoration crafting and of the
+/// Stone and Castle building styles). None is an input of smithing, tempering,
+/// enchanting or repair. Animal Hide is not one: it is a smithing material.
+pub const TOWN_MATERIALS: [u128; 9] = [
+    0xe7193116_d761_479b_8a20_5633737977f5, // Lumber
+    0xfd67bbc6_20f4_44a3_9614_28265ebb8c67, // Limestone
+    0x42d91529_c88b_4c5b_815b_b55508b4e7ef, // Clay
+    0x61d5e5c7_78b8_4fc3_ba6a_5b7c2a15866d, // Marble
+    0x38d32048_ce01_4390_a4f0_cdb94ef3ce72, // Bronze
+    0xb94c2028_dba7_44bd_b6f9_6f85ab0195b6, // Seed
+    0x8ac9076c_cba9_4cf4_a8a5_d2303aab22b0, // Crystal
+    0x574ab81c_1ba1_4127_a4aa_e9cbba5767ad, // Fabric
+    0x6bd960ca_9af3_4b33_9ec0_5c06d50ad43e, // Dye
+];
+
+/// A candidate's weight in the bonus draw: how often retail paid it, times
+/// [`ABYSS_BONUS_TOWN_MATERIAL_WEIGHT`] for a town material.
+pub fn abyss_bonus_weight(candidate: &BonusCandidate) -> f64 {
+    let scale = if TOWN_MATERIALS.contains(&candidate.0.as_u128()) {
+        ABYSS_BONUS_TOWN_MATERIAL_WEIGHT
+    } else {
+        1.0
+    };
+    candidate.2 as f64 * scale
+}
+
 /// Highest character level the candidate lists are built for; above it, clamps.
 const ABYSS_BONUS_MAX_LEVEL: i64 = 100;
 
 /// One candidate stack: (item, quantity retail paid it in, times observed).
-type BonusCandidate = (Uuid, u64, u64);
+pub type BonusCandidate = (Uuid, u64, u64);
 
 /// The bonus candidates at `level`: `[other materials, enchanting ingredients]`,
-/// each weighted by how often retail's table paid that exact stack.
+/// each with how often retail's table paid that exact stack; the draw weighs
+/// them by [`abyss_bonus_weight`].
 pub fn abyss_bonus_candidates(level: i64, enchanting: bool) -> &'static [BonusCandidate] {
     static BY_LEVEL: std::sync::OnceLock<Vec<[Vec<BonusCandidate>; 2]>> = std::sync::OnceLock::new();
     let table = BY_LEVEL.get_or_init(|| {
@@ -1095,18 +1133,20 @@ fn roll_abyss_bonus(
     }
     let enchanting = unit(rng.next()) < ABYSS_BONUS_ENCHANTING_SHARE;
     let candidates = abyss_bonus_candidates(level, enchanting);
-    let total: u64 = candidates.iter().map(|c| c.2).sum();
-    if total == 0 {
+    let total: f64 = candidates.iter().map(abyss_bonus_weight).sum();
+    if total <= 0.0 {
         return None;
     }
-    let mut pick = rng.next() % total;
-    for (item, qty, n) in candidates {
-        if pick < *n {
-            return Some((*item, *qty));
+    let mut pick = unit(rng.next()) * total;
+    for candidate in candidates {
+        let weight = abyss_bonus_weight(candidate);
+        if pick < weight {
+            return Some((candidate.0, candidate.1));
         }
-        pick -= n;
+        pick -= weight;
     }
-    None
+    // Float rounding left the pick past the end: the last candidate.
+    candidates.last().map(|c| (c.0, c.1))
 }
 
 // -- spawn-group loot -------------------------------------------------------
@@ -2335,6 +2375,136 @@ mod abyss_bonus_material_tests {
         assert!((0..2000).all(|i| roll_abyss_bonus(ctx, &group, i, 0).is_none()));
         let abyss_no_level = LootSeedContext { abyss: true, ..ctx };
         assert!((0..2000).all(|i| roll_abyss_bonus(abyss_no_level, &group, i, 0).is_none()));
+    }
+
+    /// `parsed.json`'s item templates: the client's name key and item type.
+    fn item_templates() -> HashMap<Uuid, crate::game_data::GameDataItem> {
+        #[derive(serde::Deserialize)]
+        struct Items {
+            items_template: HashMap<Uuid, crate::game_data::GameDataItem>,
+        }
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let raw = std::fs::read_to_string(path).expect("read parsed.json");
+        serde_json::from_str::<Items>(&raw).expect("parsed.json items").items_template
+    }
+
+    fn every_candidate() -> std::collections::BTreeSet<Uuid> {
+        (1..=ABYSS_BONUS_MAX_LEVEL)
+            .flat_map(|level| abyss_bonus_candidates(level, false).iter().chain(abyss_bonus_candidates(level, true)))
+            .map(|c| c.0)
+            .collect()
+    }
+
+    /// No gear, ever: every stack the bonus can pay, at every level, is an item
+    /// template of type 8 (material), never a weapon, armour or jewellery.
+    #[test]
+    fn every_candidate_is_a_material_never_gear() {
+        let items = item_templates();
+        for id in every_candidate() {
+            let item = items.get(&id).unwrap_or_else(|| panic!("{id} is not an item template"));
+            assert_eq!(item.r#type, 8, "{id} ({}) is not a material", item.name);
+        }
+        // Control: the table this draws from does pay gear, which is never read.
+        let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+            .as_array()
+            .unwrap();
+        assert!(bands.iter().flat_map(|b| b["results"].as_array().unwrap()).any(|r| r["loot"]["items"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())));
+    }
+
+    /// [`TOWN_MATERIALS`] is the game data's own classification: of everything the
+    /// bonus can pay, exactly the items the client names `Item.TownResource.*` or
+    /// `Item.DecorationResource.*`. None of them is an input of smithing, enchanting,
+    /// tempering or repair, so the town is their only use.
+    #[test]
+    fn town_materials_are_the_town_only_materials_of_the_game_data() {
+        let items = item_templates();
+        let town_named: std::collections::BTreeSet<Uuid> = every_candidate()
+            .into_iter()
+            .filter(|id| {
+                let name = &items[id].name;
+                name.starts_with("Item.TownResource.") || name.starts_with("Item.DecorationResource.")
+            })
+            .collect();
+        let shipped: std::collections::BTreeSet<Uuid> = TOWN_MATERIALS.iter().map(|id| Uuid::from_u128(*id)).collect();
+        assert_eq!(town_named, shipped);
+
+        let file = |name: &str| {
+            std::fs::read_to_string(format!("{}/../deploy/static/{name}", env!("CARGO_MANIFEST_DIR")))
+                .or_else(|_| std::fs::read_to_string(format!("{}/src/{name}", env!("CARGO_MANIFEST_DIR"))))
+                .unwrap_or_else(|e| panic!("{name}: {e}"))
+        };
+        let gear_inputs =
+            ["smithing_inputs.json", "enchanting.json", "item_mod_recipes.json", "repair_costs.json"].map(file);
+        let buildings = file("building_upgrades.json");
+        for id in &shipped {
+            let id = id.to_string();
+            assert!(gear_inputs.iter().all(|f| !f.contains(&id)), "{id} is a gear-crafting input");
+        }
+        // Controls: the building materials really are building inputs (Marble and
+        // Bronze as building styles), and Animal Hide, asked about with them, is a
+        // smithing input -- so it stays at full weight.
+        for id in [0xe7193116_d761_479b_8a20_5633737977f5u128, 0xfd67bbc6_20f4_44a3_9614_28265ebb8c67,
+            0x42d91529_c88b_4c5b_815b_b55508b4e7ef, 0x61d5e5c7_78b8_4fc3_ba6a_5b7c2a15866d,
+            0x38d32048_ce01_4390_a4f0_cdb94ef3ce72]
+        {
+            assert!(buildings.contains(&Uuid::from_u128(id).to_string()), "{id:x} builds nothing");
+        }
+        let animal_hide = uuid("51f7612f-a797-4417-8a92-493b0aae7f45");
+        assert!(every_candidate().contains(&animal_hide));
+        assert_eq!(items[&animal_hide].name, "Items.Name.AnimalHide");
+        assert!(gear_inputs[0].contains(&animal_hide.to_string()), "Animal Hide is a smithing input");
+        assert!(!shipped.contains(&animal_hide));
+    }
+
+    /// #383 tuning: town materials weigh [`ABYSS_BONUS_TOWN_MATERIAL_WEIGHT`] in the
+    /// draw, so against every other material their odds halve at every level, and
+    /// the sampled draw follows.
+    #[test]
+    fn town_materials_weigh_half_in_the_bonus_draw() {
+        let town = |c: &&BonusCandidate| TOWN_MATERIALS.contains(&c.0.as_u128());
+        let share = |level: i64, weight: &dyn Fn(&BonusCandidate) -> f64| {
+            let candidates = abyss_bonus_candidates(level, false);
+            let all: f64 = candidates.iter().map(weight).sum();
+            candidates.iter().filter(town).map(weight).sum::<f64>() / all
+        };
+        let odds = |s: f64| s / (1.0 - s);
+        for level in 1..=ABYSS_BONUS_MAX_LEVEL {
+            let before = share(level, &|c| c.2 as f64);
+            let after = share(level, &abyss_bonus_weight);
+            assert!(before > 0.0 && before < 1.0, "level {level}: {before}");
+            assert!(
+                (odds(after) / odds(before) - ABYSS_BONUS_TOWN_MATERIAL_WEIGHT).abs() < 1e-9,
+                "level {level}: {before} -> {after}"
+            );
+        }
+        // The enchanting draw has no town material, so it is untouched.
+        assert!((1..=ABYSS_BONUS_MAX_LEVEL).all(|l| abyss_bonus_candidates(l, true).iter().all(|c| !town(&c))));
+
+        let dungeon = Uuid::from_u128(0x383b);
+        for level in [7i64, 20, 45, 100] {
+            let (mut materials, mut towns) = (0usize, 0usize);
+            for i in 0..60_000usize {
+                let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
+                let run_seed = (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D);
+                let Some((item, _)) = abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level) else {
+                    continue;
+                };
+                if ENCHANTING_INGREDIENTS.contains(&item.as_u128()) {
+                    continue;
+                }
+                materials += 1;
+                towns += usize::from(TOWN_MATERIALS.contains(&item.as_u128()));
+            }
+            let (before, after) = (share(level, &|c| c.2 as f64), share(level, &abyss_bonus_weight));
+            let measured = towns as f64 / materials as f64;
+            println!(
+                "level {level}: town share of non-enchanting bonus stacks: retail {before:.3}, \
+                 half weight {after:.3}, drawn {measured:.3} ({towns}/{materials})"
+            );
+            assert!((measured - after).abs() < 0.02, "level {level}: drew {measured}, expected {after}");
+        }
     }
 }
 

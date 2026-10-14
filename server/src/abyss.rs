@@ -4771,111 +4771,205 @@ mod tests {
             .collect()
     }
 
-    /// Report #383 (owner-approved deviation from retail, 2026-10-13): on top of
-    /// #381's retail Abyss loot, ~18% of corpses drop ONE material stack from the
-    /// retail dungeon enemy table at the CHARACTER's level, a third of them an
-    /// enchanting ingredient, never gear.
-    ///
-    /// Driven the three ways the Abyss rule asks for -- a level-7 run from floor 1,
-    /// a level-43 run from floor 40 and a level-100 run from floor 149 (the floors
-    /// [`level_100_run_from_149`] serves) -- plus level 20, which #381 found was
-    /// lent level-3/7 rewards. Every corpse is generated twice, without the bonus
-    /// (#509 as live) and with it, so the bonus is measured as exactly the
-    /// difference.
-    #[test]
-    fn abyss_bonus_materials_follow_the_character_level_at_every_depth() {
+    /// What one Abyss run's corpses dropped, with and without the #383 bonus.
+    struct BonusTally {
+        corpses: usize,
+        /// Corpses carrying a material ([`crafting_materials`]), retail's and the bonus.
+        with_material: usize,
+        /// Corpses carrying a bonus stack.
+        bonus: usize,
+        /// Bonus stacks that are an enchanting ingredient.
+        enchanting: usize,
+        /// Bonus stacks that are a town material (`TOWN_MATERIALS`).
+        town: usize,
+        per_item: HashMap<Uuid, usize>,
+    }
+
+    /// The Abyss rule's run for a `level` character from floor `start`: 64 runs of
+    /// 30 floors. Every corpse is generated twice, without the bonus (#509 as live)
+    /// and with it, so the bonus is measured as exactly the difference, and every
+    /// corpse is checked: retail's gold and gear untouched, the bonus exactly the pure
+    /// draw and something retail paid at the character's level, never gear.
+    fn abyss_bonus_tally(level: u32, start: u32) -> BonusTally {
         use blades_lib::util::dungeon::{
-            abyss_bonus_candidates, abyss_bonus_material, ENCHANTING_INGREDIENTS,
+            abyss_bonus_candidates, abyss_bonus_material, ENCHANTING_INGREDIENTS, TOWN_MATERIALS,
         };
         const PEARL: &str = "89ece62c-9ff6-470a-a152-d45ef4e0c222";
         const GARLIC: &str = "fbf96b07-e9aa-4157-8761-10179fa05138";
         let gd = game_data();
         let names = ingredient_names();
+        let materials = crafting_materials();
         let name = |id: &Uuid| names.get(id).cloned().unwrap_or_else(|| id.to_string());
         let pearl_garlic = [PEARL, GARLIC].map(|id| Uuid::parse_str(id).unwrap());
-        assert_eq!(level_100_run_from_149(84)[0].0, 149, "the deep run starts at floor 149");
-
-        for (level, start) in [(7u32, 1u32), (20, 15), (43, 40), (100, 149)] {
-            let ipl = initial_player_level(&real_job_pools(), level);
-            let (mut corpses, mut before_material, mut after_material) = (0usize, 0usize, 0usize);
-            let (mut bonus, mut enchanting) = (0usize, 0usize);
-            let mut per_item: HashMap<Uuid, usize> = HashMap::new();
-            for nonce in 0..64u64 {
-                let seed = generate_run_seed(Uuid::from_u128(0x383), nonce);
-                let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
-                for slice in slices.iter().take(30) {
-                    let before = floor_generated_data(&gd, slice, seed, 0).unwrap();
-                    let after = floor_generated_data(&gd, slice, seed, level).unwrap();
-                    for (group, spawners) in &after.enemy_generated_data {
-                        for (spawner, enemies) in spawners.iter().enumerate() {
-                            for (index, enemy) in enemies.iter().enumerate() {
-                                corpses += 1;
-                                let was = before.enemy_generated_data[group][spawner][index].merged_loot_table();
-                                let now = enemy.merged_loot_table();
-                                // The retail loot is untouched: same gold, same gear.
-                                assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
-                                let gear = |l: &blades_lib::user_data::LootTableResult| {
-                                    let mut ids: Vec<Uuid> = l.item.0.keys().copied().collect();
-                                    ids.sort();
-                                    ids
-                                };
-                                assert_eq!(gear(&now), gear(&was), "L{level}: the bonus added gear");
-                                before_material += usize::from(!was.stackable_items.is_empty());
-                                after_material += usize::from(!now.stackable_items.is_empty());
-                                // The bonus is exactly what the pure draw says, and nothing else.
-                                let mut added: Vec<(Uuid, u64)> = now
-                                    .stackable_items
+        let ipl = initial_player_level(&real_job_pools(), level);
+        let mut t =
+            BonusTally { corpses: 0, with_material: 0, bonus: 0, enchanting: 0, town: 0, per_item: HashMap::new() };
+        for nonce in 0..64u64 {
+            let seed = generate_run_seed(Uuid::from_u128(0x383), nonce);
+            let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
+            assert_eq!(slices[0].floor_index, start, "L{level}: the run starts at floor {start}");
+            for slice in slices.iter().take(30) {
+                let before = floor_generated_data(&gd, slice, seed, 0).unwrap();
+                let after = floor_generated_data(&gd, slice, seed, level).unwrap();
+                for (group, spawners) in &after.enemy_generated_data {
+                    for (spawner, enemies) in spawners.iter().enumerate() {
+                        for (index, enemy) in enemies.iter().enumerate() {
+                            t.corpses += 1;
+                            let was = before.enemy_generated_data[group][spawner][index].merged_loot_table();
+                            let now = enemy.merged_loot_table();
+                            // The retail loot is untouched: same gold, same gear.
+                            assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
+                            let gear = |l: &blades_lib::user_data::LootTableResult| {
+                                let mut ids: Vec<Uuid> = l.item.0.keys().copied().collect();
+                                ids.sort();
+                                ids
+                            };
+                            assert_eq!(gear(&now), gear(&was), "L{level}: the bonus added gear");
+                            // Retail's own stackables (#509's Atronite) are all still there.
+                            for (id, q) in &was.stackable_items {
+                                assert!(now.stackable_items.get(id).is_some_and(|n| n >= q), "L{level}: lost {}", name(id));
+                            }
+                            t.with_material +=
+                                usize::from(now.stackable_items.keys().any(|id| materials.contains(id)));
+                            // The bonus is exactly what the pure draw says, and nothing else.
+                            let mut added: Vec<(Uuid, u64)> = now
+                                .stackable_items
+                                .iter()
+                                .map(|(id, q)| (*id, q - was.stackable_items.get(id).copied().unwrap_or(0)))
+                                .filter(|(_, q)| *q > 0)
+                                .collect();
+                            added.sort();
+                            let drawn = abyss_bonus_material(
+                                &slice.dungeon_settings_id,
+                                seed as u64,
+                                group,
+                                spawner,
+                                index,
+                                i64::from(level),
+                            );
+                            assert_eq!(added, drawn.into_iter().collect::<Vec<_>>(), "L{level}");
+                            let Some((item, qty)) = drawn else { continue };
+                            assert!(materials.contains(&item), "L{level}: the bonus paid a non-material {}", name(&item));
+                            t.bonus += 1;
+                            *t.per_item.entry(item).or_default() += 1;
+                            let is_enchanting = ENCHANTING_INGREDIENTS.contains(&item.as_u128());
+                            t.enchanting += usize::from(is_enchanting);
+                            t.town += usize::from(TOWN_MATERIALS.contains(&item.as_u128()));
+                            assert!(
+                                abyss_bonus_candidates(i64::from(level), is_enchanting)
                                     .iter()
-                                    .map(|(id, q)| (*id, q - was.stackable_items.get(id).copied().unwrap_or(0)))
-                                    .filter(|(_, q)| *q > 0)
-                                    .collect();
-                                added.sort();
-                                let drawn = abyss_bonus_material(
-                                    &slice.dungeon_settings_id,
-                                    seed as u64,
-                                    group,
-                                    spawner,
-                                    index,
-                                    i64::from(level),
-                                );
-                                assert_eq!(added, drawn.into_iter().collect::<Vec<_>>(), "L{level}");
-                                let Some((item, qty)) = drawn else { continue };
-                                bonus += 1;
-                                *per_item.entry(item).or_default() += 1;
-                                let is_enchanting = ENCHANTING_INGREDIENTS.contains(&item.as_u128());
-                                enchanting += usize::from(is_enchanting);
-                                assert!(
-                                    abyss_bonus_candidates(i64::from(level), is_enchanting)
-                                        .iter()
-                                        .any(|c| c.0 == item && c.1 == qty),
-                                    "L{level}: {} x{qty} is not in the level's retail band",
-                                    name(&item)
-                                );
-                                if level == 100 {
-                                    assert!(!pearl_garlic.contains(&item), "L100 drew {}", name(&item));
-                                }
+                                    .any(|c| c.0 == item && c.1 == qty),
+                                "L{level}: {} x{qty} is not in the level's retail band",
+                                name(&item)
+                            );
+                            if level == 100 {
+                                assert!(!pearl_garlic.contains(&item), "L100 drew {}", name(&item));
                             }
                         }
                     }
                 }
             }
-            let share = bonus as f64 / corpses as f64;
-            let enchanting_share = enchanting as f64 / bonus.max(1) as f64;
-            let mut top: Vec<(usize, String)> = per_item.iter().map(|(id, n)| (*n, name(id))).collect();
+        }
+        assert!(t.corpses >= 3000, "L{level}: {} corpses is too few to measure", t.corpses);
+        t
+    }
+
+    /// The Abyss rule's runs: a level-7 run from floor 1, a level-20 run from floor
+    /// 15 (#381 found level 20 lent level-3/7 rewards), a level-43 run from floor 40,
+    /// HauDrauf's level-45 Sephoris on floor 149, and a level-100 run from floor 149
+    /// (the floors [`level_100_run_from_149`] serves).
+    const BONUS_RUNS: [(u32, u32); 5] = [(7, 1), (20, 15), (43, 40), (45, 149), (100, 149)];
+
+    /// Report #383 (owner-approved deviation from retail, 2026-10-13): on top of
+    /// #381's retail Abyss loot, [`ABYSS_BONUS_MATERIAL_SHARE`] of corpses drop ONE
+    /// material stack from the retail dungeon enemy table at the CHARACTER's level,
+    /// a third of them an enchanting ingredient, never gear.
+    ///
+    /// [`ABYSS_BONUS_MATERIAL_SHARE`]: blades_lib::util::dungeon::ABYSS_BONUS_MATERIAL_SHARE
+    #[test]
+    fn abyss_bonus_materials_follow_the_character_level_at_every_depth() {
+        use blades_lib::util::dungeon::{ABYSS_BONUS_ENCHANTING_SHARE, ABYSS_BONUS_MATERIAL_SHARE};
+        let names = ingredient_names();
+        let name = |id: &Uuid| names.get(id).cloned().unwrap_or_else(|| id.to_string());
+        assert_eq!(level_100_run_from_149(84)[0].0, 149, "the deep run starts at floor 149");
+
+        for (level, start) in BONUS_RUNS {
+            let t = abyss_bonus_tally(level, start);
+            let share = t.bonus as f64 / t.corpses as f64;
+            let enchanting_share = t.enchanting as f64 / t.bonus.max(1) as f64;
+            let mut top: Vec<(usize, String)> = t.per_item.iter().map(|(id, n)| (*n, name(id))).collect();
             top.sort_by(|a, b| b.cmp(a));
             println!(
-                "L{level} from {start}: {corpses} corpses; with a material before {:.1}% after {:.1}%; \
-                 bonus {:.1}%, enchanting {:.1}% of bonus; top {:?}",
-                100.0 * before_material as f64 / corpses as f64,
-                100.0 * after_material as f64 / corpses as f64,
+                "L{level} from {start}: {} corpses; with a material {:.1}%; bonus {:.1}%, enchanting {:.1}% \
+                 of bonus; top {:?}",
+                t.corpses,
+                100.0 * t.with_material as f64 / t.corpses as f64,
                 100.0 * share,
                 100.0 * enchanting_share,
                 top.iter().take(10).map(|(n, s)| format!("{s} {n}")).collect::<Vec<_>>(),
             );
-            assert!(corpses >= 3000, "L{level}: {corpses} corpses is too few to measure");
-            assert!((0.15..=0.21).contains(&share), "L{level}: bonus share {share}");
-            assert!((0.283..=0.383).contains(&enchanting_share), "L{level}: enchanting {enchanting_share}");
+            assert!((share - ABYSS_BONUS_MATERIAL_SHARE).abs() <= 0.03, "L{level}: bonus share {share}");
+            assert!(
+                (enchanting_share - ABYSS_BONUS_ENCHANTING_SHARE).abs() <= 0.05,
+                "L{level}: enchanting {enchanting_share}"
+            );
         }
+    }
+
+    /// #383 tuning, HauDrauf: "there have been too many building materials from the
+    /// start; you can lower them a bit". On every Abyss rule run, town materials
+    /// are drawn at [`ABYSS_BONUS_TOWN_MATERIAL_WEIGHT`]: among the bonus's
+    /// non-enchanting stacks their odds against every other material are half
+    /// what retail's table pays, and the enchanting third and the no-gear rule hold.
+    ///
+    /// [`ABYSS_BONUS_TOWN_MATERIAL_WEIGHT`]: blades_lib::util::dungeon::ABYSS_BONUS_TOWN_MATERIAL_WEIGHT
+    #[test]
+    fn abyss_bonus_building_materials_are_halved_at_every_depth() {
+        use blades_lib::util::dungeon::{abyss_bonus_candidates, abyss_bonus_weight, TOWN_MATERIALS};
+        let odds = |s: f64| s / (1.0 - s);
+        for (level, start) in BONUS_RUNS {
+            let candidates = abyss_bonus_candidates(i64::from(level), false);
+            let town_share = |weight: &dyn Fn(&blades_lib::util::dungeon::BonusCandidate) -> f64| {
+                let all: f64 = candidates.iter().map(weight).sum();
+                candidates.iter().filter(|c| TOWN_MATERIALS.contains(&c.0.as_u128())).map(weight).sum::<f64>() / all
+            };
+            let retail = town_share(&|c| c.2 as f64);
+            let t = abyss_bonus_tally(level, start);
+            let measured = t.town as f64 / (t.bonus - t.enchanting) as f64;
+            println!(
+                "L{level} from {start}: town materials {:.1}% of non-enchanting bonus stacks (retail's table \
+                 {:.1}%, expected {:.1}%), {:.1}% of all bonus stacks, on {:.1}% of corpses",
+                100.0 * measured,
+                100.0 * retail,
+                100.0 * town_share(&abyss_bonus_weight),
+                100.0 * t.town as f64 / t.bonus as f64,
+                100.0 * t.town as f64 / t.corpses as f64,
+            );
+            // Three standard errors of the sampled share.
+            let expected = town_share(&abyss_bonus_weight);
+            let n = (t.bonus - t.enchanting) as f64;
+            let tolerance = 3.0 * (expected * (1.0 - expected) / n).sqrt();
+            assert!((measured - expected).abs() <= tolerance, "L{level}: {measured} vs {expected} ±{tolerance}");
+            let ratio = odds(measured) / odds(retail);
+            assert!((0.4..=0.6).contains(&ratio), "L{level}: town odds x{ratio}, not halved");
+        }
+    }
+
+    /// The stackables that count as "a material" on a corpse: every ingredient the
+    /// client prices in `IngredientValueTable`, less gold, gems, the door key and the
+    /// revive scroll. Potions, which normal corpses also drop, are not in it.
+    fn crafting_materials() -> std::collections::HashSet<Uuid> {
+        const NOT_MATERIALS: [&str; 4] = [
+            "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2", // Gold
+            "470c8f58-a8dd-4c07-8c92-843b785e1139", // Gem
+            "faa3aeb3-9284-4d83-8981-1af00e3a6398", // Door Key
+            "05a7d501-f096-41e9-8443-fd6a090d8425", // Revive Scroll
+        ];
+        let not: Vec<Uuid> = NOT_MATERIALS.iter().map(|s| Uuid::parse_str(s).unwrap()).collect();
+        let set: std::collections::HashSet<Uuid> =
+            ingredient_names().into_keys().filter(|id| !not.contains(id)).collect();
+        assert!(set.len() >= 60, "the ingredient table lost its materials: {}", set.len());
+        set
     }
 
     /// The bonus is paid with the corpse at `/update`, from the server's own
