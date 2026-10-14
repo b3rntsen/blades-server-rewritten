@@ -30,10 +30,10 @@
 //! 3) cannot separate the two. The weights are the APK's own table, which is the
 //! only authored answer there is.
 //!
-//! Arcane jewellery (the Sigil shop) takes its GRADE from its own measured roll
-//! in `blades_lib::features::sigil_grades` and its properties from [`fill`]
-//! (#392); this module never touches an item that already has a grade or
-//! GRADING.
+//! Arcane jewellery (the Sigil shop) takes its PROPERTY COUNT from
+//! [`SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`] (#393), its grade within that count
+//! from this table, and its properties from [`fill`] (#392); this module never
+//! touches an item that already has a grade or GRADING.
 
 use blades_lib::game_data::GameDataItem;
 use blades_lib::user_data::{Item, ItemSingleProperty};
@@ -61,6 +61,73 @@ pub const JEWELRY_GRADES: [(u64, u32, &[u64]); 6] = [
     (5, 14, &[2, 2, 1]),
     (6, 10, &[2, 2, 2]),
 ];
+
+/// Percent of Sigil-shop arcane rings and necklaces carrying 1, 2 and 3 GRADING
+/// properties: `(property count, percent)`, summing to 100.
+///
+/// Per HauDrauf #393 ("thousands of rings" bought in retail: one property maybe
+/// 5%, two maybe 10%, the vast majority three). The 113 captured Sigil purchase
+/// outcomes split 23 / 20 / 57 (the APK weights), so HauDrauf proposed a first
+/// step of 75% three (2026-10-14), to be tuned after he tests; the 1 : 2 split of
+/// the rest keeps his ratio (8 / 17 / 75). The
+/// 32 tier-2 ring purchase outcomes we captured were 13 / 5 / 14, which is what
+/// the shop sold until this: 41% single-property rings. The 451 distinct tier-2
+/// arcane rings and necklaces in retail imports agree with HauDrauf (22 / 40 /
+/// 389 = 5% / 9% / 86%), though a kept inventory is not an unfiltered roll.
+///
+/// Within three properties the grade (3-6) is drawn by the APK
+/// [`JEWELRY_GRADES`] weights (18/16/14/10): 65 captured three-property
+/// outcomes, 14 of them rings, cannot be told apart from those weights.
+pub const SIGIL_ARCANE_PROPERTY_COUNT_PERCENT: [(usize, u32); 3] = [(1, 8), (2, 17), (3, 75)];
+
+const _: () = {
+    let mut sum = 0;
+    let mut i = 0;
+    while i < SIGIL_ARCANE_PROPERTY_COUNT_PERCENT.len() {
+        sum += SIGIL_ARCANE_PROPERTY_COUNT_PERCENT[i].1;
+        i += 1;
+    }
+    assert!(sum == 100, "SIGIL_ARCANE_PROPERTY_COUNT_PERCENT must sum to 100");
+};
+
+/// Draw one entry of [`JEWELRY_GRADES`] among those `keep` accepts, by weight.
+fn pick_grade<R: Rng + ?Sized>(
+    rng: &mut R,
+    keep: impl Fn(&(u64, u32, &'static [u64])) -> bool,
+) -> (u64, u32, &'static [u64]) {
+    let kept: Vec<_> = JEWELRY_GRADES.iter().filter(|g| keep(g)).copied().collect();
+    let total: u32 = kept.iter().map(|g| g.1).sum();
+    if total == 0 {
+        return JEWELRY_GRADES[0];
+    }
+    let mut pick = rng.random_range(0..total);
+    for g in &kept {
+        if pick < g.1 {
+            return *g;
+        }
+        pick -= g.1;
+    }
+    JEWELRY_GRADES[0]
+}
+
+/// The GRADING tiers (`_providedBonuses`) of one Sigil-shop arcane ring or
+/// necklace: the property count by [`SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`],
+/// then the grade with that many properties by its APK weight.
+pub fn roll_sigil_arcane_tiers<R: Rng + ?Sized>(rng: &mut R) -> &'static [u64] {
+    let mut pick = rng.random_range(0..100u32);
+    let count = SIGIL_ARCANE_PROPERTY_COUNT_PERCENT
+        .iter()
+        .find(|(_, pct)| {
+            if pick < *pct {
+                true
+            } else {
+                pick -= pct;
+                false
+            }
+        })
+        .map_or(3, |(n, _)| *n);
+    pick_grade(rng, |g| g.2.len() == count).2
+}
 
 /// The GRADING property ids a ring or necklace can carry, or `None` for any
 /// other item type.
@@ -95,20 +162,7 @@ pub fn roll<R: Rng + ?Sized>(
     if !matches!(item_type, RING | NECKLACE) {
         return None;
     }
-    let total: u32 = JEWELRY_GRADES.iter().map(|g| g.1).sum();
-    let mut pick = rng.random_range(0..total);
-    let (grade, _, tiers) = JEWELRY_GRADES
-        .iter()
-        .find(|g| {
-            if pick < g.1 {
-                true
-            } else {
-                pick -= g.1;
-                false
-            }
-        })
-        .copied()
-        .unwrap_or(JEWELRY_GRADES[0]);
+    let (_, _, tiers) = pick_grade(rng, |_| true);
     let grading = fill(item_type, tiers, rng)?;
     let grade = grading.iter().map(|p| p.tier).sum();
     Some((grade, grading))
@@ -118,8 +172,9 @@ pub fn roll<R: Rng + ?Sized>(
 /// drawn uniformly and without repeats (retail never repeats one on the same
 /// item) from the slot's whole APK list.
 ///
-/// The arcane Sigil roll takes its grade from retail's outcomes and only its
-/// properties from here (#392). `None` for anything that is not jewellery.
+/// The arcane Sigil roll takes its tiers from [`roll_sigil_arcane_tiers`] and
+/// its properties from here (#392, #393). `None` for anything that is not
+/// jewellery.
 pub fn fill<R: Rng + ?Sized>(
     item_type: u64,
     tiers: &[u64],
