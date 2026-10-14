@@ -894,7 +894,7 @@ fn grant_from_offer_contents_with_enchanting(
 /// The GRADING one purchase of an arcane item with no authored grading gets.
 ///
 /// Jewellery takes its property COUNT from HauDrauf's retail experience (#393:
-/// 5% one property, 10% two, 85% three -
+/// 8% one property, 17% two, 75% three -
 /// `jewelry_grade::SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`), the grade within that
 /// count from the APK grade table, and its PROPERTIES afresh, without repeats,
 /// from the slot's whole APK list (`jewelry_grade::fill`, #392). The grade used
@@ -4641,8 +4641,8 @@ mod report_393_sigil_jewelry_property_count {
         }
         let share = one as f64 * 100.0 / total as f64;
         assert!(
-            share < 7.5,
-            "{share:.1}% single-property arcane jewels (want ~5%)"
+            share < 10.5,
+            "{share:.1}% single-property arcane jewels (want ~8%)"
         );
     }
 

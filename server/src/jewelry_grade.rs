@@ -66,7 +66,10 @@ pub const JEWELRY_GRADES: [(u64, u32, &[u64]); 6] = [
 /// properties: `(property count, percent)`, summing to 100.
 ///
 /// Per HauDrauf #393 ("thousands of rings" bought in retail: one property maybe
-/// 5%, two maybe 10%, the vast majority three); the retail corpus is thin. The
+/// 5%, two maybe 10%, the vast majority three). The 113 captured Sigil purchase
+/// outcomes split 23 / 20 / 57 (the APK weights), so HauDrauf proposed a first
+/// step of 75% three (2026-10-14), to be tuned after he tests; the 1 : 2 split of
+/// the rest keeps his ratio (8 / 17 / 75). The
 /// 32 tier-2 ring purchase outcomes we captured were 13 / 5 / 14, which is what
 /// the shop sold until this: 41% single-property rings. The 451 distinct tier-2
 /// arcane rings and necklaces in retail imports agree with HauDrauf (22 / 40 /
@@ -75,7 +78,7 @@ pub const JEWELRY_GRADES: [(u64, u32, &[u64]); 6] = [
 /// Within three properties the grade (3-6) is drawn by the APK
 /// [`JEWELRY_GRADES`] weights (18/16/14/10): 65 captured three-property
 /// outcomes, 14 of them rings, cannot be told apart from those weights.
-pub const SIGIL_ARCANE_PROPERTY_COUNT_PERCENT: [(usize, u32); 3] = [(1, 5), (2, 10), (3, 85)];
+pub const SIGIL_ARCANE_PROPERTY_COUNT_PERCENT: [(usize, u32); 3] = [(1, 8), (2, 17), (3, 75)];
 
 const _: () = {
     let mut sum = 0;
