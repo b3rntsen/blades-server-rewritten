@@ -893,22 +893,16 @@ fn grant_from_offer_contents_with_enchanting(
 
 /// The GRADING one purchase of an arcane item with no authored grading gets.
 ///
-/// Jewellery takes its GRADE — how many properties, at which tiers — from the
-/// retail outcomes its own slot could have had: graded, and every property from
-/// that slot's APK list. The unfiltered corpus handed an arcane necklace no
-/// grade about half the time and a ring's properties about one time in seven
-/// (#386). The PROPERTIES are then drawn afresh, without repeats, from the
-/// slot's whole APK list (`jewelry_grade::fill`): copying the recorded outcome
-/// whole sold a catalogue of 32 tier-2 rings that repeated constantly, and five
-/// of the 34 ring properties — Absorb, Firewall, Ice Spike, Paralyze, Shield
-/// Bash — could never appear (#392). 32 grants say which grades retail rolled,
-/// not which rings it could; every non-arcane retail ring draws from all 34.
+/// Jewellery takes its property COUNT from HauDrauf's retail experience (#393:
+/// 5% one property, 10% two, 85% three -
+/// `jewelry_grade::SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`), the grade within that
+/// count from the APK grade table, and its PROPERTIES afresh, without repeats,
+/// from the slot's whole APK list (`jewelry_grade::fill`, #392). The grade used
+/// to be copied from the 32 tier-2 ring outcomes we captured, 13 of them
+/// single-property, so 41% of rings came with one property and none at grade 6.
 ///
-/// A tier whose corpus holds no such outcome (tier 1 holds only ungraded
-/// weapons) falls back to the APK grade table rings and necklaces are always
-/// rolled from (`jewelry_grade::roll`). Anything else draws from the whole
-/// corpus, as before. `None` — refuse the sale — only for a tier retail never
-/// showed at all.
+/// Anything else draws from the retail outcome corpus, as before (#220).
+/// `None` - refuse the sale - only for a tier retail never showed at all.
 fn roll_arcane_grading(
     template: Uuid,
     arcane_tier: u64,
@@ -924,17 +918,8 @@ fn roll_arcane_grading(
         return None;
     }
     let mut rng = crate::jewelry_roll::seeded(&[template.as_bytes(), b"arcane-grade"], roll_nonce);
-    match blades_lib::features::sigil_grades::roll_grading_where(arcane_tier, roll_nonce, |g| {
-        !g.is_empty()
-            && g.iter()
-                .all(|p| crate::jewelry_grade::slot_allows(slot, p.id))
-    }) {
-        Some(retail) => {
-            let tiers: Vec<u64> = retail.iter().map(|p| p.tier).collect();
-            crate::jewelry_grade::fill(slot, &tiers, &mut rng)
-        }
-        None => crate::jewelry_grade::roll(slot, &mut rng).map(|(_, grading)| grading),
-    }
+    let tiers = crate::jewelry_grade::roll_sigil_arcane_tiers(&mut rng);
+    crate::jewelry_grade::fill(slot, tiers, &mut rng)
 }
 
 /// The per-purchase roll nonce: how many times this character bought the
@@ -4112,8 +4097,10 @@ mod report_386_captured_jewelry_rolls {
 /// not a list of every ring it could roll — every non-arcane retail ring (1,121
 /// graded pieces) draws from all 34.
 ///
-/// THE FIX. The grade and its tiers still come from the retail tier-2 outcomes;
-/// the properties are drawn without repeats from the slot's whole APK list.
+/// THE FIX. The properties are drawn without repeats from the slot's whole APK
+/// list. (The grade still came from the retail tier-2 outcomes until #393
+/// replaced it with HauDrauf's property-count shares - see
+/// `report_393_sigil_jewelry_property_count`.)
 #[cfg(test)]
 mod report_392_arcane_ring_variety {
     use super::*;
@@ -4224,16 +4211,15 @@ mod report_392_arcane_ring_variety {
                 .unwrap();
             assert!(seen[&id] >= 20, "{name}: only {} times in 2000", seen[&id]);
         }
-        // Uniform: no property starved or dominant. Retail's tier-2 rings carry
-        // 65 properties per 32 rings, so ~119 each over 2000 purchases.
+        // Uniform: no property starved or dominant. At #393's 5/10/85 a ring
+        // carries 2.8 properties, so ~165 each over 2000 purchases.
         let (lo, hi) = (seen.values().min().unwrap(), seen.values().max().unwrap());
-        assert!(*lo >= 80 && *hi <= 160, "property counts range {lo}..{hi}");
+        assert!(*lo >= 115 && *hi <= 215, "property counts range {lo}..{hi}");
     }
 
-    /// The grade still follows retail's tier-2 rings, not the APK merchant
-    /// weights: 13 of 32 were grade 1 (APK: 22%), none was grade 6. Every ring
-    /// keeps the tiers its grade implies (`_providedBonuses`), distinct
-    /// properties from its own slot, no enchantments, arcane tier 2.
+    /// Every ring keeps the tiers its grade implies (`_providedBonuses`),
+    /// distinct properties from its own slot, no enchantments, arcane tier 2.
+    /// The grade SHARES are #393's (`report_393_sigil_jewelry_property_count`).
     #[test]
     fn grades_and_tiers_stay_retail() {
         let ring = slot_list("Ring");
@@ -4268,18 +4254,9 @@ mod report_392_arcane_ring_variety {
             assert_eq!(item.arcane_tier, Some(2));
             by_grade[grade as usize] += 1;
         }
-        assert_eq!(
-            by_grade[6], 0,
-            "retail never sold a grade-6 arcane ring at tier 2"
-        );
-        let g1 = f64::from(by_grade[1]) / f64::from(n as u32);
         assert!(
-            (0.34..0.48).contains(&g1),
-            "grade-1 share {g1:.2}; retail 13/32 = 0.41"
-        );
-        assert!(
-            by_grade[2..=5].iter().all(|c| *c > 0),
-            "grades seen {by_grade:?}"
+            by_grade[1..=6].iter().all(|c| *c > 0),
+            "every grade 1-6 must be reachable: {by_grade:?}"
         );
     }
 
@@ -4513,5 +4490,176 @@ mod report_387_alts_roll_their_own {
             .expect("the alt is read");
         assert!(lock < read, "the alt is read after the row lock");
         assert!(body.contains("purchase_roll_nonce(bought_before, character_id, roll_alt)"));
+    }
+}
+
+/// Tracker #393 (HauDrauf): "I bought 100 rings and almost half have only one
+/// ability, then many with two. I've bought thousands of rings and never saw
+/// this. The vast majority must have 3 abilities. Only one ability maybe 5%,
+/// two maybe 10%." Necklaces likewise had too many with one.
+///
+/// THE CAUSE. The grade of an arcane ring was copied from the 32 tier-2 ring
+/// outcomes we captured, and 13 of those had one property: 41% one / 16% two /
+/// 44% three. Sephoris's 107 Ebony Faerite rings on prod measured 46% / 19% /
+/// 36%, and her 45 necklaces 18% / 18% / 64% (corpus: 25% / 20% / 55%).
+///
+/// THE FIX. Every Sigil-shop arcane ring and necklace draws its property count
+/// from HauDrauf's shares (`jewelry_grade::SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`)
+/// and, within three properties, its grade by the APK weights.
+#[cfg(test)]
+mod report_393_sigil_jewelry_property_count {
+    use super::*;
+    use crate::jewelry_grade::{
+        JEWELRY_GRADES, NECKLACE, RING, SIGIL_ARCANE_PROPERTY_COUNT_PERCENT,
+    };
+
+    /// SigilShop_Jewelry_EbonyFaeriteRing_Arcane02 - the reporter's ring.
+    const RING_OFFER: Uuid = Uuid::from_u128(0x812ea9ef_c2af_406b_9b93_1897db4a6879);
+    /// SigilShop_Jewelry_EbonyFaeriteNecklace_Arcane02.
+    const NECKLACE_OFFER: Uuid = Uuid::from_u128(0x79995d29_eac2_49a3_bfec_ce9e547b98de);
+    const PURCHASES: u64 = 4000;
+
+    fn sd() -> &'static blades_lib::static_data::StaticData {
+        static SD: std::sync::OnceLock<blades_lib::static_data::StaticData> =
+            std::sync::OnceLock::new();
+        SD.get_or_init(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            crate::static_loader::load(&dir)
+        })
+    }
+
+    /// Purchase `i` across 40 buyers, 100 purchases each - how a population of
+    /// players walks the per-character nonce.
+    fn buy(product: Uuid, i: u64) -> blades_lib::user_data::Item {
+        let buyer = Uuid::from_u128(0x3930_0000_0000_4000_8000_0000_0000_0000 + u128::from(i % 40));
+        let r = purchase_reward(
+            sd(),
+            &repair_data(),
+            item_table(),
+            product,
+            purchase_roll_nonce(i / 40, buyer, None),
+        )
+        .expect("the offer is deliverable");
+        assert_eq!(r.items.len(), 1, "{product}: one item");
+        r.items[0].item.clone()
+    }
+
+    /// Asserts the retail shape and returns the property count.
+    fn check(item: &blades_lib::user_data::Item, slot: u64) -> usize {
+        let g = &item.properties.grading;
+        let grade = item.grade.expect("arcane jewellery is always graded");
+        assert_eq!(grade, g.iter().map(|p| p.tier).sum::<u64>(), "grade = sum of tiers");
+        let tiers: Vec<u64> = g.iter().map(|p| p.tier).collect();
+        let provided = JEWELRY_GRADES
+            .iter()
+            .find(|j| j.0 == grade)
+            .unwrap_or_else(|| panic!("grade {grade} is not an APK grade"))
+            .2;
+        assert_eq!(tiers, provided, "grade {grade}: tiers {tiers:?}");
+        assert!(g.iter().all(|p| crate::jewelry_grade::slot_allows(slot, p.id)));
+        let distinct: std::collections::HashSet<_> = g.iter().map(|p| p.id).collect();
+        assert_eq!(distinct.len(), g.len(), "a property twice");
+        g.len()
+    }
+
+    /// THE DEFECT, measured the way the reporter did: abilities per item.
+    /// Failed before the fix (rings 41% / 16% / 44%).
+    #[test]
+    fn property_counts_follow_haudrauf() {
+        for (product, slot, name) in [
+            (RING_OFFER, RING, "ring"),
+            (NECKLACE_OFFER, NECKLACE, "necklace"),
+        ] {
+            let mut count = [0u64; 4];
+            let mut by_grade = [0u64; 7];
+            for i in 0..PURCHASES {
+                let item = buy(product, i);
+                count[check(&item, slot)] += 1;
+                by_grade[item.grade.unwrap() as usize] += 1;
+            }
+            let share = |n: u64| n as f64 * 100.0 / PURCHASES as f64;
+            eprintln!(
+                "#393 {name}: 1={:.1}% 2={:.1}% 3={:.1}%  grades {by_grade:?}",
+                share(count[1]),
+                share(count[2]),
+                share(count[3])
+            );
+            for (props, pct) in SIGIL_ARCANE_PROPERTY_COUNT_PERCENT {
+                let got = share(count[props]);
+                assert!(
+                    (got - f64::from(pct)).abs() <= 2.5,
+                    "{name}: {props} properties {got:.1}% (want {pct}% +/- 2.5)"
+                );
+            }
+            // Within three properties, grades 3-6 by the APK weights 18/16/14/10.
+            let three: u64 = by_grade[3..=6].iter().sum();
+            for (grade, weight, _) in JEWELRY_GRADES.iter().filter(|g| g.2.len() == 3) {
+                let got = by_grade[*grade as usize] as f64 / three as f64;
+                let want = f64::from(*weight) / 58.0;
+                assert!(
+                    (got - want).abs() <= 0.04,
+                    "{name}: grade {grade} is {got:.3} of three-property items (want {want:.3})"
+                );
+            }
+        }
+    }
+
+    /// Every arcane ring and necklace the Sigil shop sells (tier 1 and 2,
+    /// needs-roll and unclassified offers alike) is deliverable and rolls the
+    /// same way.
+    #[test]
+    fn every_arcane_sigil_jewel_rolls_the_same_way() {
+        let sd = sd();
+        let items = item_table();
+        let mut products = Vec::new();
+        for (id, c) in &sd.global_shop_offer_contents {
+            let jewel = c.contents.iter().find_map(|e| {
+                let t = items.get(&e.item_template_id)?.r#type;
+                (matches!(t, RING | NECKLACE)
+                    && e.arcane_tier > 0
+                    && e.grading.is_empty()
+                    && !crate::fixed_templates::has_mandatory_properties(e.item_template_id))
+                .then_some(t)
+            });
+            if let Some(t) = jewel {
+                products.push((*id, t));
+            }
+        }
+        assert!(
+            products.len() >= 27,
+            "only {} arcane Sigil jewels found",
+            products.len()
+        );
+        let (mut one, mut total) = (0u64, 0u64);
+        for (product, slot) in products {
+            for i in 0..200 {
+                if check(&buy(product, i), slot) == 1 {
+                    one += 1;
+                }
+                total += 1;
+            }
+        }
+        let share = one as f64 * 100.0 / total as f64;
+        assert!(
+            share < 7.5,
+            "{share:.1}% single-property arcane jewels (want ~5%)"
+        );
+    }
+
+    /// CONTROL: the merchant / crafted roll (`jewelry_grade::roll`) is untouched
+    /// and still gives ~22% single-property jewellery by the APK weights.
+    #[test]
+    fn the_merchant_roll_is_unchanged() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(393);
+        let n = 20_000;
+        let one = (0..n)
+            .filter(|_| crate::jewelry_grade::roll(RING, &mut rng).unwrap().1.len() == 1)
+            .count();
+        let share = one as f64 / n as f64;
+        assert!(
+            (share - 0.22).abs() < 0.015,
+            "merchant grade-1 share {share:.3}"
+        );
     }
 }
