@@ -355,7 +355,7 @@ fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
 /// without one, the collapsed catalogue shifted), then admin-authored windows on
 /// top. Every reader of "what is on sale" goes through here so the price check,
 /// the caps and `GET /catalogoverrides/globalshop` can never disagree.
-fn current_catalog(static_data: &blades_lib::static_data::StaticData, now: i64) -> Value {
+pub(crate) fn current_catalog(static_data: &blades_lib::static_data::StaticData, now: i64) -> Value {
     let replayed = replay_calendar(&static_data.global_shop_windows, now)
         .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
     apply_authored(replayed, &static_data.global_shop_authored)
@@ -945,7 +945,7 @@ fn roll_arcane_grading(
 /// id, so a later alt is folded in too, or two alts with the same counts would
 /// walk one sequence (#387). `None` — every original — leaves the nonce as it
 /// always was.
-fn purchase_roll_nonce(bought_before: u64, character_id: Uuid, alt: Option<Uuid>) -> u64 {
+pub(crate) fn purchase_roll_nonce(bought_before: u64, character_id: Uuid, alt: Option<Uuid>) -> u64 {
     crate::alt_roll::fold_nonce(
         bought_before ^ (character_id.as_u128() as u64).rotate_left(29),
         alt,
@@ -958,7 +958,7 @@ fn purchase_roll_nonce(bought_before: u64, character_id: Uuid, alt: Option<Uuid>
 /// every buyer the identical necklace for ever (#386, the #170 class). A
 /// fixed-template ring (the Ultimate rings, #8) is never rolled, so it does not
 /// count.
-fn rolls_jewelry_per_purchase(
+pub(crate) fn rolls_jewelry_per_purchase(
     static_data: &blades_lib::static_data::StaticData,
     items: &std::collections::HashMap<Uuid, blades_lib::game_data::GameDataItem>,
     product_id: Uuid,
@@ -981,7 +981,7 @@ fn rolls_jewelry_per_purchase(
 /// and all — EXCEPT for products that sell rolled jewellery, which roll from the
 /// APK contents every time. Should that roll be impossible the capture is still
 /// paid rather than the sale refused.
-fn purchase_reward(
+pub(crate) fn purchase_reward(
     static_data: &blades_lib::static_data::StaticData,
     repair_data: &blades_lib::features::repair::RepairData,
     items: &std::collections::HashMap<Uuid, blades_lib::game_data::GameDataItem>,

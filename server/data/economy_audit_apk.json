@@ -1,0 +1,6132 @@
+{
+ "_meta": {
+  "description": "APK facts for the economy audit: gear requiredLevel and global-shop level gates.",
+  "source": "APK sha256 fd6e55f5...; items via blades-capture reference/game-defs/items.json, gates via GlobalShopProductsCatalog._templateList",
+  "generator": "script/extract_economy_audit_apk.py",
+  "gateSemantics": "min/max 0/0 = no gate; otherwise the client lists the offer only for min <= level <= max"
+ },
+ "itemRequiredLevel": {
+  "0014d5ed-2980-4dad-8da6-8cad7c2cc17c": 45,
+  "008cb6b7-e534-4922-81b8-02aa33515071": 45,
+  "00aae6fe-458a-42e9-b0c4-2ad1e7ee914d": 0,
+  "00ba1e1f-b24b-4a41-a2a8-e4cbdfb60d1b": 18,
+  "0140c7f3-c4b0-4804-add2-17f13376d57e": 45,
+  "01d19d80-cd29-4afc-80d1-0d8ff4a0219f": 45,
+  "01f4a08e-ffd7-45eb-8a65-0a4ca6d0b7fd": 45,
+  "023bbfbb-d156-46ce-8eb9-2cad079142fd": 39,
+  "02503c3a-52f4-4d1a-b05c-75a76272966b": 45,
+  "02e24de3-8a40-483c-a404-eee6a0016ed0": 28,
+  "03507d71-e1dd-4963-85d8-a2152c5f94bc": 39,
+  "03863f12-5202-4d44-aeaa-e1bf4ed118cb": 45,
+  "039b26ec-53eb-4fbb-81f9-3a1343d876cb": 45,
+  "03b1e366-3d2a-48b8-99f2-f06be005e207": 45,
+  "040c9078-6c7d-4bd8-b834-f8974e573146": 8,
+  "046053f6-21a8-46ec-8fa6-6eb8e520ac48": 45,
+  "054d7e97-0111-462c-8c3b-a5461d7d1c2a": 45,
+  "05862206-b6db-4cd4-9f7a-ed2e03fc90af": 13,
+  "05ac826b-fb7f-4c5d-b17c-648ca1d6ee1d": 45,
+  "0631caaf-28a6-43a3-8ac3-763a5dd95614": 45,
+  "069654c7-32a6-4391-a944-3f1f97efa11c": 28,
+  "071f4b42-5356-49ca-b2f4-6df2056db241": 45,
+  "074dc210-2cd0-4c9a-8c43-48b481d010c3": 23,
+  "0781c33a-d73c-4d61-894f-2fbc103b0a32": 0,
+  "084b9f5b-a5e3-4000-8fa3-28e7f0e87cc0": 45,
+  "0874712e-81e6-418f-8a86-ed0bfa6529d5": 45,
+  "08a302c9-fc5b-4a03-bd6c-e7974a81009f": 45,
+  "08b25643-7449-4012-9591-611fc6228f9a": 23,
+  "0970b90d-9b35-4d13-aecf-57ea97e7df2a": 8,
+  "09f736c8-528e-4a4c-bf42-189e2b06543e": 0,
+  "0a354320-1b3a-4349-bf5c-da6178523e09": 30,
+  "0a407b83-d146-438b-bfe5-1ad95b7f2bf7": 39,
+  "0a7a1e8b-29ae-4053-9cbb-b1584386fe78": 39,
+  "0aac930a-f25c-445f-878f-dbd6a3573730": 40,
+  "0b9263a4-e482-4bc7-a183-ba0aeda1eb22": 0,
+  "0bb745aa-9a4a-483f-a23f-e8c773391321": 33,
+  "0c2869fb-3a95-45c6-8dcc-706d43f0fab0": 45,
+  "0c39d0f3-79c8-4e58-b435-3622a42e4d3d": 45,
+  "0d138dcb-cdd0-4a04-b540-ee3db46f19e9": 28,
+  "0d491a77-762d-4c31-85ad-5baf39eb90a7": 45,
+  "0e24274c-1f9f-4a75-b724-59237776a6f5": 39,
+  "0e67f3fc-8988-473f-ad7b-b49abbb89b88": 45,
+  "0e74f0ae-d58a-41aa-976f-014426a7d7f5": 45,
+  "0f2f990b-99fd-4ac8-9fbb-2d45abcabe6a": 18,
+  "1063c3f9-1bbf-4962-b80d-fb9832075c1c": 45,
+  "11565fed-66a0-40a4-ac8d-65c7161c3283": 1,
+  "11f62e71-c013-4b78-8d12-bf225bc73b4f": 45,
+  "1201033d-4d70-405b-95a1-1e0cb827e180": 28,
+  "12ab9076-3c03-4e62-8f89-f36fbe08bd0c": 39,
+  "12b5c065-2094-43f3-b7cc-260745bff3f0": 45,
+  "12bc6bad-15df-4fa1-8335-22fbb4eb8d9f": 1,
+  "12c4920e-a9e0-4498-b134-3ce66fb9558f": 6,
+  "132cb9e8-49c7-4b29-b61b-9541d24a0671": 30,
+  "13694c03-9b48-4980-be36-408c1c5aa9d4": 13,
+  "14333bde-b5ea-4f3e-9347-69f76cc7390e": 33,
+  "14b4262e-3490-493e-8b24-6e870fe1bfc3": 45,
+  "15459a64-96b7-473d-b4d8-9434891410a6": 28,
+  "156ee6fd-0bd6-42b8-98ef-e51e248c7eae": 13,
+  "15f9963e-059c-464c-86ad-3a7eaa7cea9d": 45,
+  "161e8270-c07e-4d31-b952-bcddb8144ca9": 45,
+  "167a5a42-9c76-4396-a02e-479ecaa15928": 39,
+  "167ce4ec-a043-48ae-bd9c-037ad90f15b4": 45,
+  "16eeaee8-8a04-460b-9b98-42468b390969": 45,
+  "172d5f1c-839a-4949-888d-9fdf80993001": 13,
+  "172fed3b-0f68-4858-a9b3-169782010b6f": 45,
+  "174b6bec-9795-42cb-a4ac-a6312601e577": 0,
+  "17760bf8-03a8-44a0-b2a8-73732fe60c3f": 1,
+  "179231f0-af9c-4d1d-8d8b-9d2d310d7116": 13,
+  "17f9a8d1-8b89-4efe-bd1c-2bbe3da84f22": 40,
+  "182da96a-01e4-4668-9e67-0abe80254233": 45,
+  "1923fd01-e399-4f3d-865e-bcc1ac1694e8": 45,
+  "19bf17ce-784c-4ab6-b1a4-e517f0e5f2b7": 1,
+  "19dced7a-6fc2-41e4-961f-0ec6ec8faa0c": 0,
+  "19f7c6e0-dabd-48bd-abe9-51d9153fb3a9": 45,
+  "1a6a2b2e-ec3d-479e-886d-725f496c5804": 45,
+  "1a8bd31f-3538-41c6-8db5-76e31b4ce6d1": 45,
+  "1a8c007c-5fbb-421d-bc6e-d0144c19e0dc": 45,
+  "1ac5f725-b6e2-4bfa-b4bf-1b5787e7eaa5": 18,
+  "1acd0bf2-db47-4fdd-ba0e-aa89d312f3f5": 1,
+  "1b1d7a8e-a37b-4baf-9339-f6832cba81e6": 18,
+  "1baaa5a1-ed9d-4817-8c39-c47b807aac0f": 45,
+  "1c6fe3b5-def5-45d8-9b34-4962765f5431": 45,
+  "1ca43e6a-be5b-4161-9377-d626eab14740": 45,
+  "1ca7737c-1eef-462a-b85d-922dfb5eb5b6": 39,
+  "1d248608-7347-4122-8b42-840b6304c203": 45,
+  "1d473c61-d4b3-4cea-9779-e76f30ae8736": 18,
+  "1d672027-b5b2-4229-97f9-44579981341e": 45,
+  "1d6c0fb1-50e2-401f-939e-b8860d9fe026": 45,
+  "1da31a6c-e872-47a1-b880-5a95b9a38b70": 28,
+  "1de04edd-0089-4516-8b60-434e781771d6": 33,
+  "1f174bab-d765-4f9c-917a-69d4c1abcd82": 45,
+  "1f763acc-0aee-4e69-beb3-28a672aa62d5": 18,
+  "1fc67296-aa50-4de8-b23e-11c80cee9361": 45,
+  "207acfa0-2d32-4db6-8778-216dbe3a0e8e": 45,
+  "208d05ed-74bf-4fef-b5e1-ed407d52432f": 8,
+  "21218dd7-596a-401c-a079-a30907a2fa66": 30,
+  "21a977f0-1382-4956-a7ce-afe9bb8f0fe7": 45,
+  "21e0b402-b1be-4bdc-822b-033d41bf9e84": 45,
+  "21ed2758-5cf5-4b7d-9047-59bbdbd61820": 50,
+  "21f8b677-c1a9-4d5f-87ef-294fc6ba4ba5": 33,
+  "21f9f03f-250c-4f37-b725-b96733183e4c": 45,
+  "220a74e3-f4c8-474d-adfa-3ecac4ca4187": 13,
+  "228f2ef9-c63e-4f26-8616-274e3e3456c8": 45,
+  "22e7d97c-cb89-4bb4-8051-0673cdc20a3e": 39,
+  "23607f09-a103-4ed3-a0de-33e0498f8018": 44,
+  "239453b0-6b7d-4a8b-bccc-50563d51ccfb": 1,
+  "240eb001-fe3e-4899-b0cc-dd87cb8a72b6": 45,
+  "244ab654-adfd-4b63-acdd-80793d9bb8e7": 23,
+  "24c5f3a7-d89a-4582-8d06-d6c59b2b34d3": 23,
+  "2571f818-6ae4-4355-b89a-4a6253089e6c": 1,
+  "25f94085-72b7-4b84-852d-679a50b31675": 13,
+  "2648b379-d118-48c0-a893-57bba6f85d5f": 0,
+  "26e46ca5-cee6-45a4-9f46-41fb9364b0ec": 23,
+  "2772e3de-814d-4b00-9ad1-a030e1d85f25": 33,
+  "27ee19f6-0b60-4059-9c89-99d72429d29c": 18,
+  "28000fc8-4208-4036-90d4-5e698b680d96": 30,
+  "295cbc17-a845-4788-8950-3f841b5fc57b": 1,
+  "29a02cb7-048b-4dc7-96f3-f684e3707c99": 45,
+  "29c8803f-3db9-4949-bd69-d32efde9f714": 1,
+  "2aedce5f-fe36-423d-a1d1-67704d232760": 45,
+  "2af57d1b-2674-4dd5-b981-c3e7baca84bf": 45,
+  "2b4c67f8-da25-4d80-9c8f-e08532f3bd54": 30,
+  "2c9ac3da-4a90-4fcb-bb59-4202fdecffe0": 45,
+  "2d870d4b-e242-4267-8d0f-b1bce775a0dc": 45,
+  "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b": 45,
+  "2f2ca094-8e82-49ba-8fa0-c8dc9f3138d0": 39,
+  "2f49aa6b-dc14-4e07-887e-9068a752ce5f": 45,
+  "2f62ac95-a300-4bab-b39b-f2574224279a": 45,
+  "2f74d8bd-69a3-42d9-a58e-1e52c3b7b1ad": 45,
+  "2fee3aa3-7ce8-4f28-85fc-bc03bf467bea": 45,
+  "309029c8-4c16-49f3-8947-ff643540af4c": 45,
+  "30e1e024-6336-4395-ba7a-caf86977e313": 10,
+  "3152a7c9-bdbc-46c8-b661-b99c58ce0a01": 1,
+  "31e8ee1f-076b-46d9-b8ff-8d4f87faa244": 45,
+  "32794b6c-eba7-4535-967c-69f89bbb6599": 45,
+  "32b04409-536c-4ac1-9a5f-b19419e13811": 45,
+  "32b64e57-98c4-4b28-a654-9b7539da490a": 1,
+  "3339d589-7ace-4aee-b011-6eebe6557b74": 45,
+  "333d367c-d490-45be-b9ed-0429eed8e491": 45,
+  "33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6": 45,
+  "342335b4-064e-4856-9585-4500e2e13dc2": 45,
+  "342620e5-31fc-4dd3-8f78-50a8f6d2a446": 28,
+  "347d1331-f81c-468d-a6cd-cc412e72f87a": 28,
+  "35552ecd-f584-43bf-be8c-50fe5474022c": 45,
+  "3567538a-18ea-4101-9380-8997b36cb65e": 45,
+  "36839916-9d47-4d9e-bace-d45acd184cbf": 45,
+  "36c43eae-867b-44e6-a45e-5065c4f86002": 23,
+  "373d4247-0b86-4353-ab0a-27f884461d19": 18,
+  "37d25e27-ce74-4a40-96c7-6f042ce9eb9a": 13,
+  "3833ad47-86c6-427a-b30e-8d3e1f27b1d7": 30,
+  "386a558b-1530-4839-a58d-1b68744fc316": 13,
+  "38825725-21f4-4ab5-be4e-7ad615472d63": 45,
+  "388dd1da-b5c2-4484-840b-56c7adace1d9": 30,
+  "38d48d68-684e-4394-996b-e0922b2a7f8a": 45,
+  "394380ed-00cb-4b7d-b868-b2b012ef2420": 0,
+  "3ae6d46a-bbc7-497c-8c1b-10d1f51a4453": 45,
+  "3b3a73cb-50c6-4ef4-8c0a-549ad3b7151a": 45,
+  "3bde9d20-14c7-4b15-b881-d593d7f0cd21": 45,
+  "3c1de8ab-474f-4a68-a3a8-55cdf5efaea1": 45,
+  "3c974366-7f94-4d29-b0d2-8bc7b8b74e64": 45,
+  "3d1a4db9-6a16-4c56-af55-7a612ceb2dc3": 1,
+  "3d9627f1-81db-496e-8769-6e545d779fa3": 45,
+  "3e09e1ea-8763-4b3b-b994-49e03107f5ee": 45,
+  "3f0f41ec-6e92-40c4-9aab-9b58ab02f41b": 45,
+  "4079609b-9692-4742-aab7-6701d9b34d97": 45,
+  "40ab6f8f-ef43-417a-a8e6-182837f4c10f": 33,
+  "40d31be2-28c6-41dd-9e36-1e6e0b6487db": 18,
+  "40e8b7f7-17fd-49bf-8305-d0c27a758b2e": 33,
+  "412eeed6-da52-4e20-a03f-ca8459f7792c": 39,
+  "41b54ee3-0e05-4dfd-bcf0-44f70460b519": 45,
+  "42b6fad8-5ac9-4215-aeff-133715c4c22e": 1,
+  "43243245-e75a-4501-a31f-7d92cede29ed": 23,
+  "4345a3ab-1582-48e4-845e-6aa2ba5dd766": 45,
+  "43cdb462-23ed-4045-9e78-19aabb7ace1e": 45,
+  "43df600e-8db3-49a5-9e5a-6e679390925e": 45,
+  "43ec840f-f24f-4e84-8201-6c70885c14f6": 1,
+  "451dc092-2df6-4299-81cc-4d38b6780c1d": 45,
+  "4535a4bf-490a-46d5-b49c-a9bc0cc81fe6": 33,
+  "45984297-ee47-4ed5-b7be-810e7b04c958": 13,
+  "46b6c709-3409-4ecf-8bd4-5646fbb38e55": 13,
+  "474165c0-7657-48ee-ab54-aa443f5c009e": 0,
+  "476f7ffd-130b-45c4-be06-9a1563af9aa1": 13,
+  "477e7add-c76a-4692-8424-6a52aceef75b": 45,
+  "478547d5-2fef-469d-a287-9425a0729e46": 0,
+  "48500816-3dd2-4e51-8ea9-e92064668197": 8,
+  "48879d04-5675-4f64-8198-1cdef1e96c8a": 45,
+  "48cf4bad-4f19-48e4-9f16-9c8c8cbf268d": 33,
+  "48d1c9cc-2468-458d-9656-8da4a0ac6145": 45,
+  "49698526-0c8f-4cd7-bab4-f5c802cbf6ad": 45,
+  "4a0ee1ba-7e61-485b-9ed0-3a5eaabcadab": 45,
+  "4a9fd901-aaf8-40bd-941e-971febf4daf8": 1,
+  "4add8afb-bfb4-4022-8681-c226ec05c0de": 45,
+  "4b59cdbe-f857-4673-9e40-741ca06aa5d0": 23,
+  "4b7b59bb-b3e9-4d24-b551-9885550dbde8": 45,
+  "4c52cf55-7d88-4506-91ce-648a7855de84": 45,
+  "4ca123c5-4891-4e78-9d48-5ecda6b6a797": 39,
+  "4ca4837e-dbff-423a-8372-8c0a160c2e02": 45,
+  "4cf81431-7cb5-41cd-9eea-608b7a112dff": 28,
+  "4d1d2403-b721-4c84-b5ac-e331f1e11dcc": 0,
+  "4db5dc10-0283-4a54-8bb8-313a9c911016": 45,
+  "4ddd62b3-7f85-4bf1-b5f0-bba529343eb7": 0,
+  "4e173739-f52c-4223-bdb5-b46b294fd609": 45,
+  "4e52fca7-2961-49b7-bafc-9d3c1cac86cd": 45,
+  "4e622931-ebfc-4a78-872c-5b52a8722212": 13,
+  "4e841f5e-c5d7-47cd-899a-116846dbbfc0": 6,
+  "4edb65be-0ebc-4698-bb97-2a012656c238": 45,
+  "4fdf0640-c109-4f6c-ad1d-37c332d01180": 39,
+  "512e8401-0d2a-4be6-b317-8793e11989f4": 45,
+  "515450b1-ab21-4cbf-a8ed-c4e0e51df4c0": 33,
+  "51774ac1-69a5-4d60-8d2a-3ecb285fee34": 45,
+  "523f8b2a-b5ff-40e9-8ced-3306c8036a93": 39,
+  "5250abf2-e4cb-419d-b18b-0edcca3b1c3e": 45,
+  "525c267a-1891-462e-a833-5465f9ce20c8": 45,
+  "52739560-b5f0-4a33-82ef-907ee227ba73": 23,
+  "52c5e882-a66d-422d-a074-5153142d511c": 45,
+  "52d083b1-0770-4fd6-9e00-ed67b91c2b71": 45,
+  "52db2806-124d-405e-b246-e74c758bb8dd": 45,
+  "52dc6085-3c3c-4a2e-96a2-2078f647272a": 45,
+  "52ed3c48-5bc9-4236-baa2-983e3d5b3ea8": 45,
+  "53167599-9ccc-4cf9-b275-40e1f2babc70": 45,
+  "537af13c-8038-4e00-aece-20df3365aa71": 45,
+  "54890366-e54e-4e87-9dd3-8984d7324926": 45,
+  "54a7fc91-93e7-4908-a29a-0667d0b07179": 45,
+  "54f92dc7-7b26-4b07-bcb4-6c14732ca3ba": 33,
+  "55853c6c-f62e-457e-9ee9-48fc453e7832": 39,
+  "55a5ccb3-445e-4cd6-abd3-f66bd44a302e": 45,
+  "56057258-58d7-4b4e-86ea-9ca47b04a14a": 45,
+  "56499845-e596-4f31-8ba4-a1fc2a9a3898": 0,
+  "570c2405-ca30-4cdb-89f1-cca98a2f772c": 39,
+  "575aa9f3-d127-4dfa-8634-12969a7e146b": 45,
+  "58a0170b-5037-4487-8be4-04a2bc6cc22b": 45,
+  "591fad86-0cef-4e8e-aed1-990f8eaa8571": 30,
+  "59333672-07ad-4def-a2ee-0d90568768e9": 39,
+  "59640134-520a-4a55-bd41-99704de3a044": 45,
+  "59c720fb-d761-4ad1-b14c-2aa8c1a4d554": 18,
+  "5a47b50c-76f3-4880-a560-5a35806bbc4e": 45,
+  "5a67da20-ddaa-4468-9b93-a4e60320f95c": 45,
+  "5a6c2eb7-b430-4574-aad9-72f0657fc694": 18,
+  "5b1893b0-32d2-49e5-bd64-f270e4d28561": 33,
+  "5c175b79-dfbf-411d-90ab-fc57335df4e6": 45,
+  "5c1d2998-2544-4969-be3e-38171ebdb093": 45,
+  "5d64e438-2af7-4554-adcf-f46d2cb99930": 45,
+  "5d967276-7ac0-423e-a032-44c369beb469": 45,
+  "5dbdf6ab-71ce-44ce-8d31-a8522291f43d": 28,
+  "5e44502e-35cd-40b8-9a55-51fda3d2d7e7": 45,
+  "5f5dd00d-7d88-46b9-81b6-0b6665e805da": 45,
+  "606c8bf6-9dc7-4c5f-b44b-36eb02306c96": 1,
+  "60994d55-022c-4918-a524-ce90e84b5922": 13,
+  "616b64ef-4184-4efb-af55-1a3f122431dc": 45,
+  "61718d60-46a5-4a86-bbe2-ffb1fc35599a": 8,
+  "6225ea23-85e3-4d74-ac54-f91e77b36867": 23,
+  "622d1317-bb1a-4e0a-a0b6-cf85c6fc94b1": 28,
+  "6291cd12-cda1-438a-ad40-30175e02dd60": 45,
+  "62d86cb2-54a2-4106-83b7-b8f4d11e276c": 39,
+  "63130cda-c55b-4dac-b0f7-580c4da34cfc": 45,
+  "631ffc41-7385-4e3c-b571-76dc9a621922": 18,
+  "634b184a-b80c-4a57-9351-aaccb4d5c13a": 45,
+  "6359f8fd-0ff1-4579-bffa-a4e1ef72f56d": 45,
+  "6362ecf3-42d9-4d8d-af30-2b9fc2deb92a": 45,
+  "64b537a3-83c7-4bc7-bf9b-285b54045e1f": 45,
+  "652a5ecf-56f5-4782-b1be-f70622fa1a52": 45,
+  "653a04ec-462c-4e58-9a2f-626d0efc53e2": 0,
+  "6542bb21-a7d7-4581-ae3d-95fd44533a19": 45,
+  "657f9abf-11bf-4278-938d-2cc3e1573ef1": 30,
+  "659dd496-f71e-4cf8-aaee-8f0c4723410e": 45,
+  "65cc3763-4f65-4565-887f-5cfedc236f10": 1,
+  "667b42ba-190b-4600-a289-feaee6af2af8": 1,
+  "673fed3d-5d6b-40a4-a032-5848942914e2": 1,
+  "67b78223-916e-440b-8ec6-fc14b83e1150": 33,
+  "68022d5a-21ff-4bce-b1f8-148ef1788ff5": 0,
+  "68577fab-83f5-4bd1-983c-f396963ac14b": 45,
+  "69448727-ce84-4942-bc04-47b26f67d1ef": 0,
+  "6a307853-3bc7-4cbc-a5bf-41b93110df8f": 33,
+  "6a970282-7c77-4ea6-858a-4243dbae300a": 18,
+  "6ab76008-dd08-461f-bdcc-6373799ea489": 18,
+  "6acaf2f5-3c5a-4529-9392-9a6dfba09e3e": 45,
+  "6ae0f33c-edb4-4fbd-9cbc-ffede890ed12": 45,
+  "6ae666e4-875c-4c65-80d9-44ec626d0fda": 45,
+  "6bee2ed3-5e33-4dbb-922f-ea1d9e2d6168": 45,
+  "6cac9081-a5ca-4429-bccc-af745d8f98ab": 39,
+  "6d0224b0-28ad-4802-84ea-48044570c419": 1,
+  "6d140514-aa61-4532-8d84-f9c9cda5c7d1": 45,
+  "6d4fd4bc-c439-4fcd-9004-85d9aa0c7bf4": 23,
+  "6dcd49db-7b92-4f34-9d29-e2c535bede2b": 45,
+  "6ddb56a9-0635-453d-bc76-43988bef433f": 13,
+  "6e0441a2-7577-4a9e-950e-e56449637a3c": 45,
+  "6edb4102-9986-4bbb-80bf-283cb4a7aa53": 8,
+  "6f2ccd71-c9f2-437d-a07e-e32c9fda0c56": 45,
+  "6f4d3002-37f8-4396-9caf-33143f464911": 33,
+  "6f543736-441b-4068-bb51-d0829abc0cac": 45,
+  "6f6ed8a2-cb2a-42c9-af2c-31b8310d4b48": 0,
+  "6f9a61b5-e79f-4f71-8e74-230c266139b2": 0,
+  "6fa7a0a0-e5fe-4cfb-9387-2f566949762f": 39,
+  "6fe63664-4252-4269-9f51-8546b5f138da": 1,
+  "7073b48c-fa9a-4451-ba34-55b4c66d0664": 45,
+  "71deea44-d1c7-4109-b5c9-90c912a75475": 0,
+  "72310406-876a-415b-b50e-88d797accfa8": 45,
+  "72402010-1a8c-4cae-a5e4-a2fe98614564": 45,
+  "726d5855-c0ad-429f-9317-c2d561b2b761": 8,
+  "7278524f-02b2-4f10-a277-a6378e1909c7": 28,
+  "727ea9a4-0c59-4ea7-ab23-6400ad32030e": 18,
+  "7381c72d-b8a9-4de0-bbb2-c542b76fdaa9": 0,
+  "73a2e3d8-a64e-42ab-b0d7-f6680b40a635": 8,
+  "73b6d6e6-4bdb-434d-b2ac-d07a9fd1a9a5": 45,
+  "73c9bef2-2c2d-4a49-843c-a973fb7c3ee6": 45,
+  "74450631-90d1-4ac4-a3f2-6b42aaf1890f": 18,
+  "745244a6-0ac0-44e5-b728-5563df61e1e6": 45,
+  "747e4b70-45ef-4081-ac7d-f688fdfc15e0": 45,
+  "74876a6b-9e51-41d3-b44b-7b36381e5339": 45,
+  "75146589-f9dc-4ffc-85ba-b741ee5117fe": 45,
+  "7515e595-fcbc-48d6-a453-81bc54bb2aef": 45,
+  "751a1afa-a053-4ed2-a4ba-236a15787d39": 45,
+  "7542b407-43bf-4ff9-b0d1-e8280b630a25": 45,
+  "7561328c-0f17-4fe5-b67d-da8dc9d34e4c": 23,
+  "7643bed4-801b-4b13-bbb1-4b276deb5631": 45,
+  "767b01b9-42e3-4a9a-a263-f71799b8f6b9": 39,
+  "767e0dde-f70c-4c27-b896-ac70ad6c8aed": 28,
+  "768a8194-cda8-4a1a-b802-64b9b2e59901": 45,
+  "769fdae8-2341-494f-931e-40d8a4468286": 45,
+  "77017cae-e2c1-4de7-9f12-414b4c83b764": 45,
+  "7721c775-6728-47d0-8215-a1fad880aa63": 45,
+  "7755f120-33da-4c9b-b4e0-d41a52650082": 45,
+  "77895df0-be70-4bfd-b369-eae67763dfdb": 0,
+  "7790f1c0-54b5-483d-940a-169a9bbd73ce": 45,
+  "780cc7c6-a472-43ec-abdc-02419d0c0ade": 39,
+  "785f023c-f9b5-4ad2-a874-b16458daf4ef": 45,
+  "78f0e3a6-a538-4060-92e0-b0a5b5dfaf14": 45,
+  "7964666b-e189-4aeb-99d7-ef3118769beb": 45,
+  "7a1bb403-519e-4974-8ff3-7172f2b38ee9": 28,
+  "7a7d8acf-c3fb-4952-abc2-209c0e1965d2": 39,
+  "7a8b3af3-c936-4e44-b81b-2b5157eddfb1": 45,
+  "7a9154d7-8e28-49df-868c-531f45f5c4fb": 45,
+  "7bd71afd-f831-4be2-a086-2898ee17c30b": 45,
+  "7bf2ddab-fa1e-45d5-a41c-e85de16b0597": 1,
+  "7c291ca0-d86c-411e-b3d5-fdd8855c7e88": 45,
+  "7c59c041-36f0-400b-afc2-93f4f9a044b0": 0,
+  "7d2dfa88-e7ca-4fd6-a173-862cfb077c04": 44,
+  "7d2fd594-cae2-48c9-80da-9370a543f0da": 45,
+  "7d4743aa-7c81-438d-b11f-f23d54d53662": 45,
+  "7d7fe9d2-3965-416f-839a-42f30663b78e": 33,
+  "7db7e798-5765-4241-8dc0-b225846122d4": 18,
+  "7dc650cf-4a9c-4650-b9fb-f1dcdb7192b9": 30,
+  "7e354002-2d94-4296-a4a5-592f81ba04e3": 23,
+  "7f0fbb92-1535-42a0-b34e-b6babd467a64": 33,
+  "7f495ddd-f2ca-44d8-aeba-df09e25deda5": 45,
+  "80344fa2-2c4a-4ef3-a5e3-7533b712a740": 45,
+  "80af12db-32e9-47b5-aa04-14a3d610e426": 45,
+  "8140c378-f532-4845-a320-42fd16235db6": 45,
+  "81d242e6-de85-4960-9ce9-8bfa75b85730": 45,
+  "82ed9c7a-bda4-446d-a83f-586d239e2fb9": 28,
+  "840be317-ad69-411b-8018-8e4e4988c1e4": 45,
+  "85234482-0baf-4ac2-8dee-5e086368f7dc": 18,
+  "8535e31c-a154-40e2-96af-cd5258a5ba8d": 18,
+  "8579ebe1-204f-4735-b764-e4b891f27d78": 39,
+  "85c44edf-2fc6-4b4d-b8a9-3340f127f9f0": 45,
+  "85f117e7-5476-4938-aaf4-d700f044b90f": 39,
+  "863dd538-f520-40c5-886c-6e54539c1d23": 30,
+  "86518ee9-45d5-4807-b27a-4629162c0d60": 45,
+  "869bf6f4-f7fb-43cf-b264-02b84f9a5425": 1,
+  "86a4ad9d-e2e8-49cd-9642-b553475b6580": 18,
+  "875aa16e-9d26-46a0-934e-6ba5b2a5299f": 33,
+  "87fd054f-e38d-4d0d-8927-e59523b24312": 13,
+  "881e91f3-a5bb-4c71-ab42-39614cc4dc33": 13,
+  "8851a883-40d2-4b04-9cce-8943a0ba9ac3": 30,
+  "887cbbef-19df-47e2-a226-4d5776e06e37": 8,
+  "88abfa20-6657-4bd0-a515-99111ec0b081": 0,
+  "893142cb-42fe-432a-a363-bd92601d00e6": 18,
+  "894a8d94-9ee7-49d7-a78e-102026a06f80": 12,
+  "89833d3d-bdea-4ed1-8604-d7b51851c7c8": 0,
+  "899b63a7-6eb7-4689-a450-8c6b507763c6": 13,
+  "89a955a3-2a9f-4f08-9d9a-68f13a5eb374": 8,
+  "89b885bf-cbd4-405a-a19b-3bb945955e7c": 39,
+  "8a1e3519-ecca-4116-9261-1eff11a7d865": 45,
+  "8a69bdb2-d179-4f2d-984a-322f9397aedf": 28,
+  "8b0e69bc-f25a-46d9-9bc2-60becb25cb2e": 1,
+  "8c6be63c-65e7-4855-b7f5-eb4e9fbdcb8d": 45,
+  "8d5a227b-9660-4f6a-b3b7-c9e8cb76651a": 1,
+  "8d7eb505-5531-4d57-9279-51fdbff6d211": 45,
+  "8def746b-3102-457e-92fd-42cef6feb97b": 28,
+  "8e4e4847-b204-4d92-b19d-9239063da50d": 45,
+  "8f5d77e5-6db7-44ae-b7d4-a5b17d49bc1f": 45,
+  "900b34ad-61c9-4f97-adac-4ff0f099de04": 23,
+  "90381284-f800-4239-baa7-eef0f53daf21": 45,
+  "905ee635-200e-445a-89de-db5ecbb17989": 45,
+  "9094f0d1-20c8-4013-ab38-77177a009a78": 23,
+  "909a4028-12df-4ac9-b333-102817c788e1": 1,
+  "9107fb63-f88b-45fa-bca9-7fe2f9bceb2c": 50,
+  "912cd6ac-d0ec-480e-8565-f721baf41c95": 45,
+  "9141509a-54aa-4d43-8f03-350e67578a3d": 33,
+  "919009b4-e38c-408b-a972-b873831204bf": 45,
+  "91cc0563-6717-4275-abf5-a97eeee84847": 18,
+  "9226cc62-0dbb-40b4-b547-e292542d53e6": 1,
+  "92874598-06e2-40da-83e9-fe0c2f2ec76b": 45,
+  "9348934d-c966-48f8-9780-112874cbeec5": 45,
+  "94a36621-f4dd-46b6-9475-ea25d314d537": 1,
+  "95559755-dc57-4b0f-b71c-c37b73a06bdb": 45,
+  "9586ac2b-5ee1-4377-ae08-04bb61edfba7": 45,
+  "95bed312-dd25-4907-b7c5-80f3e462251e": 39,
+  "95fa311e-e025-46c7-8277-b4e880fa6544": 8,
+  "965a1b6c-ac12-45c6-b4a5-25c3d7aec594": 45,
+  "96a1a962-e2ab-4d0d-a0af-63978e67e818": 33,
+  "96e38a04-6687-4e7d-8ec4-b9c2d1621068": 39,
+  "96f64bbd-97fc-46c3-ac42-9116f64fc9da": 0,
+  "97193263-c9b7-4946-a86d-91250776e56c": 8,
+  "975509a9-196f-41c9-8df4-6f0e2d1f02ce": 50,
+  "980c823b-8edc-463f-a6b0-f901a1db1dc5": 23,
+  "9814bcf0-a984-49e2-84f6-a8b0f3695f84": 1,
+  "982a2fe2-c5d1-4aaf-ab43-bf80c90b669a": 28,
+  "9837e077-7dd4-4a93-97d8-d8348a17d0a0": 23,
+  "99007305-7e07-42ae-a1b2-aa5f3fa08fd7": 23,
+  "9903bcc8-4565-418c-9bfe-e1898a3f08ee": 45,
+  "9935f4e7-74aa-4223-80c4-97fcfa4ee7f5": 45,
+  "99525bb7-84d4-4520-877d-2f21f6b059ec": 45,
+  "995a487c-3221-4622-bfd3-67f8a7d08919": 18,
+  "99c42ddf-815f-467a-9c1d-5b1dbceb61ba": 45,
+  "9a22b59a-cdbc-4987-bf4a-0cc812428aeb": 38,
+  "9a7e526e-00c3-4ed5-8df4-b774bcc0c873": 45,
+  "9a808759-3e96-4fc1-be3f-c22def38e886": 45,
+  "9a92d6dc-4167-4f65-9541-37abdcdccaa3": 10,
+  "9af187a5-a7b9-4999-b4b4-1f07c34c0212": 45,
+  "9b1492a9-1085-4081-a691-b6199a201c75": 0,
+  "9b491b7f-d278-45ca-a353-9079f51f55e6": 0,
+  "9bdcdbd1-2713-406a-ac6c-245b6964010a": 45,
+  "9bef0d75-3ad0-49fd-aeb1-4c1f212e67a0": 45,
+  "9c2cfaa9-0f28-4ac2-8d10-b9b6cf2b6270": 33,
+  "9c61729e-2117-4291-9e2b-fc4789fe0444": 1,
+  "9cdda3f8-eea5-40fd-9e36-bd7137392552": 45,
+  "9ce6b55d-3661-47b4-8d27-b3040550533a": 33,
+  "9d0fb326-bf7f-4380-bb91-3d7aa16ec4a5": 45,
+  "9d13d24d-f4df-4653-871a-1f0401802025": 45,
+  "9d269f59-e9c2-46ae-8b19-b68e13365387": 23,
+  "9d70a58c-75dc-4724-82e3-33a70ea2f803": 39,
+  "9d95e5d8-0534-4c80-8edc-69277f3355c5": 45,
+  "9dd7847c-47c5-41ec-9348-cadbbfe9eb3d": 23,
+  "9dff48fb-39f9-47f1-a4d2-175744ea7da3": 39,
+  "9e0714d7-2a10-406d-a3eb-9b8ca95e14ad": 28,
+  "9e0f3889-90c4-40a2-b4e1-427bef12baa7": 0,
+  "9e59290b-4276-48dc-81bb-8314f65a872e": 0,
+  "9eff3765-6849-4f46-8cfb-afd43aae4b32": 18,
+  "9f47f292-0e97-4234-ae50-c15399aea627": 45,
+  "9f62e950-87ac-4b18-bfd1-8f958f0f3f70": 45,
+  "9fdc4010-f23d-4d60-93db-e580158aac98": 28,
+  "a0058769-7d47-43da-8aaa-5d2c60ca6de6": 28,
+  "a04c6261-f0bb-48fb-84e4-51517bc04b7c": 8,
+  "a0c419d0-613c-44fe-91a3-6e48f88e01cc": 45,
+  "a0d7dd5e-692e-4fbb-bbf2-19c6a874f3f5": 33,
+  "a1865b9a-4582-479d-ae33-c914c7aac8a2": 39,
+  "a1cda4eb-7b4a-47c9-a8c8-627a2b931ddc": 45,
+  "a2c629d2-65a9-445d-9594-ca992aed624b": 23,
+  "a34681fc-31ee-4327-ba48-6fb7c30cdf52": 1,
+  "a3afdc1f-dbb1-4f37-b8e9-2c7d1fb31db3": 39,
+  "a5566f9d-a3df-42f6-85ce-5670d1a40fa5": 45,
+  "a56f9a46-85d3-4d11-8da3-f8073a2eb064": 1,
+  "a5e6aed0-427e-452e-a7f7-20735e2eed9e": 0,
+  "a61b7342-50dc-43ea-aeca-fd7eb4200cc0": 45,
+  "a6698394-a03a-4ae8-96c9-a71f26bfb181": 45,
+  "a6966f6a-bc99-44d2-a188-b1586e12132a": 45,
+  "a6d3d7dd-2193-462b-b28e-1a4b1e902df1": 1,
+  "a6e4698f-2828-4dd6-ad03-7e1ae7499128": 45,
+  "a7630f30-40c4-4485-afee-eeeb95fb397d": 45,
+  "a7a6660c-e46a-479b-bcfc-cdd09752328e": 45,
+  "a8308cf2-8206-4b3a-9ebb-e3747ea131bb": 1,
+  "a8a1bcd3-59fa-4545-ab71-29bcee1378f9": 39,
+  "a8bfebbd-e525-47d2-93d2-0f9c978a4185": 45,
+  "a948c18d-9895-44fe-afd7-0dcb8789d41e": 40,
+  "a94fd137-a4f6-4018-b457-b5097ee11812": 45,
+  "a9a0800e-4363-41a0-ae4c-465f2d1c0089": 18,
+  "a9f2aefa-2e20-4293-afd1-a5779cfce68d": 45,
+  "aa13c5c7-864d-4b77-9d1d-2909b7cd4d92": 45,
+  "aa34efff-d04f-464e-9a75-1267d4c98eae": 23,
+  "aa4ffedf-ad74-4aa1-bd82-18a041100f79": 45,
+  "aa7337ca-52dd-44ac-9ca4-2c8102a29f0e": 18,
+  "aa96f1a4-9324-4dc6-83a0-5b24dc1b438a": 45,
+  "aaae854b-7afd-4a96-b39e-409144a2aa9e": 28,
+  "aadb81ec-bcca-422d-ac3e-0519b83ab022": 45,
+  "aadb8911-d7bb-4ea9-a7f4-6aeb99ad8ed3": 1,
+  "ab52dd8d-9292-4055-be5e-368b3c62db5f": 45,
+  "abb5db28-a599-450c-b3d4-315e60bde6e1": 33,
+  "adc4c390-3352-44e6-8d86-90f2d6d872a1": 28,
+  "ade3e935-3882-44bc-9c3f-583c6da7c5fb": 23,
+  "ae6586c4-47df-4ff3-bf2e-adb37577015a": 45,
+  "ae6d3eea-d5a0-4948-9ad4-8202a4a59de8": 39,
+  "aea22654-f535-41ac-b772-b236edff94cd": 23,
+  "af7759d9-f38e-4384-bf36-1de0c3d150a7": 28,
+  "afc82c9e-2620-4144-bc71-0ee0414a046d": 45,
+  "b0af182d-d15f-4fed-8be5-b09a3ee02eb2": 45,
+  "b0e1d1b5-fbe5-484f-aa05-b2d7fe592783": 13,
+  "b162ebdc-5133-44b6-875f-b0394aaa492e": 45,
+  "b17c79b5-3c4b-4f22-b8f8-149c393218d2": 45,
+  "b1941146-f63a-4f96-9add-5a2be06117de": 8,
+  "b1b8aa27-152c-42f2-b3a1-90ba6fcf4bf6": 45,
+  "b20d466a-1720-4040-a8ed-941a53f7e3eb": 18,
+  "b3990bd6-4784-41ca-9e05-e53e77cdef73": 45,
+  "b3ba11cd-21c6-46de-9e63-7564f437363c": 1,
+  "b4426e19-d9f6-4387-a23e-41c79247d886": 0,
+  "b46c9671-73ef-4c27-9151-cec622812f40": 33,
+  "b5710964-6ec9-48bd-8401-90282747136e": 45,
+  "b57d9da7-fb5b-411b-ab0b-70bf2932b80a": 0,
+  "b59ec6b4-88ee-4424-8ca8-e86ce59b8bca": 44,
+  "b655af3b-c24f-4751-ac87-44ffe8d0a466": 1,
+  "b6f82704-790b-4623-aed2-439189724b4c": 45,
+  "b73fa9ab-fdd0-49a0-8b16-de3b8a8961fd": 33,
+  "b755f9a5-8017-4224-8835-7b6c82604b58": 45,
+  "b7720f92-6838-4b9d-ab4a-37c5fd0ce724": 45,
+  "b7fa73f6-4a8b-40d6-b66f-5cd1b2b52b53": 45,
+  "b8326c8d-9537-4507-ad10-bfda780ab540": 33,
+  "b88a7da6-2acc-496b-a422-3691abbafdb0": 45,
+  "b89474fa-ed6e-4006-91b3-8b7b455b978d": 13,
+  "b8d7291b-f1d6-4037-9b91-b9da693aa0e6": 13,
+  "b9404aa2-ec6d-430d-90f4-e17411221bc7": 45,
+  "b9420781-e34e-414e-a5af-3c0c0d1d6c14": 44,
+  "b9a0c308-48b7-48f3-91f3-d9f6af177406": 45,
+  "bab5c847-7b2f-4b79-9b93-d96b2fa10b80": 1,
+  "bacb3089-2378-45d2-b717-2dd3f01e5939": 45,
+  "bad8c999-7ec2-4e12-b64a-ca232b88e7f3": 30,
+  "bb037815-a606-4dea-9ad9-7792b83b127b": 1,
+  "bb45d4a9-e29d-43c2-9e0d-90c5fd06dc62": 45,
+  "bbff5eeb-43bf-41c1-83a9-f4b59bdb0fad": 39,
+  "bcaf39a9-d543-41a8-bd2a-f996d1da2941": 13,
+  "bd2776db-a5a9-49cd-b1ac-244a3b36a995": 1,
+  "bdc7b6f4-d304-477e-b058-fb97d9acec1f": 45,
+  "bdcc2e6c-e464-483e-a5e9-5f380ea5c192": 45,
+  "be1484e6-c156-47db-bdab-3cf5b75096a0": 23,
+  "be35f7a9-32b9-4055-9c0b-a1689b395ddd": 45,
+  "be5b7eed-c53f-4dca-8853-eeda797804f8": 45,
+  "beb26169-965e-4b77-9baa-f3d6a3a0980b": 45,
+  "c02f3a45-52b3-49db-aeac-03da41e41158": 1,
+  "c0384643-5f94-419e-9ada-b498a17cfa21": 13,
+  "c10f8e7f-146d-432f-b8d3-5d7c39cc64b2": 45,
+  "c12d107b-5dc7-4cb3-8166-23644e94d03a": 8,
+  "c16518e9-065c-4d96-b866-f718ab4287ba": 8,
+  "c1d682a7-d07d-43c9-b022-c3a033a6976d": 23,
+  "c27073f5-a144-4c3a-a950-ad207e6ba94b": 23,
+  "c29abcdd-505d-4ffd-a6d7-b094e842d449": 45,
+  "c3370503-4601-427d-8dc2-6855d58bc327": 0,
+  "c34f8b76-0b45-4702-a37f-e363e6e59cf6": 8,
+  "c3699344-ac25-463c-bfc8-f0dc3ded1c8b": 0,
+  "c3ef8fda-5698-468e-9553-7a84f8cd9418": 23,
+  "c451f484-bde1-47d9-87af-137688216c35": 39,
+  "c4539fa0-ef1f-43de-8372-c339ab52b063": 45,
+  "c469682f-6fb5-4323-b06e-b20c21d0ad44": 1,
+  "c4b0634d-7f3a-4afd-9724-dfd4adf427b3": 45,
+  "c4d6db09-6aec-4447-bec3-65aefeb79823": 45,
+  "c4e077d7-2a55-4b4d-a5b8-bcec9121d3d6": 45,
+  "c5a677d0-5451-45cd-a290-85dfa629d76e": 18,
+  "c64765ec-85fb-4265-b77d-ad9d8bb22298": 45,
+  "c6f7fab4-eadc-4e8c-bf7f-e0ea095a3acf": 1,
+  "c74b89cb-19cc-4529-9c7e-ec6b53bcac17": 33,
+  "c756bb4f-3717-4e18-a003-23f1fa0b3f32": 33,
+  "c7eceb24-878e-49b9-b5a6-5ed2a65a4bd7": 45,
+  "c83447e1-740b-4db8-accf-276e3e35623d": 45,
+  "c83e2044-6c37-470a-8c5e-a6d09f9f858c": 39,
+  "c85ff78a-8e4f-469c-8b76-94df3b3f4cbb": 45,
+  "c8702c49-aced-4255-9f74-45a12352b751": 45,
+  "c98fad5d-37a2-4aa7-aad5-2e3ac7bef5ce": 0,
+  "c9bf803f-e850-4aef-bade-0837bf90037a": 45,
+  "ca1e2d0f-b902-4c82-b8d6-e82b83dcc9e0": 38,
+  "ca6ca2b2-5152-4b3a-822e-2293790b7454": 45,
+  "caba5e87-aac0-4745-b941-3b039fc19822": 1,
+  "cadac95d-bf21-4c62-9d6a-23cafccfb292": 13,
+  "cb942551-5e93-493d-ab61-0d8ccfd9fe85": 39,
+  "cbd15ed5-9a32-447c-8fa5-ee547f1f685c": 28,
+  "cbe1b160-74c9-433b-aa7a-aa8c339f3087": 45,
+  "cc3de495-c8d3-497d-9d1e-f9c4e014f54f": 23,
+  "ccdd863b-ef2a-425f-a391-c524e2b42b48": 33,
+  "cdbabba6-a6a2-46ed-a086-93d77acc274a": 1,
+  "ce0c2c25-98d6-48c9-a4db-80f85506d191": 8,
+  "ce7acc15-5ab3-4c33-b349-da03d7222c5f": 45,
+  "cf218589-5e95-4dcf-a91a-e91406c74ba7": 45,
+  "cf3e7430-ef8d-4d57-95be-773373540f99": 28,
+  "cfa0d17e-401f-45a8-8ca3-872a8f486b79": 45,
+  "cfa5b02b-ae0c-486a-babb-d6dc76fb1a73": 45,
+  "cff74dd7-9cc0-4e90-9186-693928a40ced": 13,
+  "d00c04af-562d-48d8-b38d-10621e55dadd": 45,
+  "d02538d2-5bba-4dbc-87b0-2347274d3b4f": 39,
+  "d028c583-84bf-4cde-a0be-a648a5efa563": 18,
+  "d0386ef9-9e0f-47a8-b091-976def4d63b2": 1,
+  "d0da3047-a813-412a-a16f-d42585110828": 23,
+  "d0e0885e-85cc-407f-b8c2-27836551435c": 45,
+  "d11338a1-c5f2-4a80-b326-f9c47c12d642": 45,
+  "d124bb0d-4653-40fc-be7c-076811540157": 45,
+  "d21205fe-0009-4208-bffd-6c5ca42938ad": 45,
+  "d244dfe8-1ae0-43a7-8146-2b2cef44521c": 45,
+  "d257c893-cbaf-4abd-bf73-5a680fcfe018": 45,
+  "d25e2ddd-854a-4e36-b970-d00c1f893bd4": 23,
+  "d2c97cf1-60ed-461e-8c58-06841df84dd7": 45,
+  "d317fe01-641f-4a96-931d-0f0e10f10702": 39,
+  "d3182227-5ec3-487c-a94d-8df708de76f5": 8,
+  "d366c29f-5e4c-46c9-ba0d-e243e3df2849": 45,
+  "d3851100-d3ee-4b24-b2b1-2d46a907bd56": 45,
+  "d3ce5d9d-c75b-4926-b08a-0ee1d01da819": 45,
+  "d408a912-3a4f-4b2a-bf4d-a55b78910f08": 28,
+  "d454df43-e765-449f-9a4d-8e807c36d023": 45,
+  "d4e55349-36b7-4adf-b16f-19b35368a7cd": 13,
+  "d501df03-0366-4ee7-9808-5626d1b5f58a": 39,
+  "d55700e0-16c5-4e92-9b6a-2d5f38f0ea75": 45,
+  "d6923896-4d90-4545-9faa-956e43771ce9": 13,
+  "d7c9caba-4133-436e-b7bb-6d96f2283dcf": 13,
+  "d7fbfbff-3a86-4f20-8301-fe9f28133584": 18,
+  "d85462ed-fa08-4d38-9718-db7c975edba1": 13,
+  "d86ca585-68b4-4133-9773-90dc7a2ebae8": 28,
+  "d8e5cc8b-eebe-4ab6-bc0c-4360bcbcb4f5": 1,
+  "d9530f4c-5a93-4491-9116-2b49805f93f7": 0,
+  "d9712b22-a50b-4ee9-b59e-b99edd2278ef": 45,
+  "d9f8bb82-0e42-4061-aa5a-fc4be083693a": 45,
+  "da0cf5aa-6d37-48da-8b18-3f4e914145d3": 50,
+  "da35b882-dde4-44ce-ad03-8d472c20b91b": 18,
+  "dad106ff-62e9-4d23-b7a7-e897b554bd5d": 45,
+  "dae84e5b-6345-480d-af80-6d96eb90637c": 45,
+  "db210664-0021-4bac-a5ac-86310ed6fd29": 1,
+  "db48367e-772a-4d55-90c9-5ba9d7a3ed10": 45,
+  "db5a2e9e-be6a-49f0-8158-03669791bd91": 45,
+  "dc2c3bd9-fb5a-4203-ad29-30c9d1724b75": 45,
+  "dc733e9f-d69e-4fb6-bcc3-4ba4cbfaf527": 45,
+  "dc8f205f-577a-4239-a0f7-4625230aa145": 33,
+  "dcaaade2-7eb6-4175-876b-f40a35a36919": 1,
+  "ddce8d9f-154f-4cb3-8376-e12159eaf634": 45,
+  "dddadcb6-81a1-4e16-88e0-c141e6c87e0d": 18,
+  "ded7cfb8-5e4c-419a-8acb-792fb5b6c646": 45,
+  "def810af-e9f5-4e23-9247-1edf391d82e1": 28,
+  "df4ca132-ba7a-4a9e-8b4d-6f5c5088202f": 45,
+  "dfa6be04-f10e-46ff-8ba8-8d7b4bb0ce3b": 1,
+  "dfbf0135-2b27-4467-9e2b-3e88538f1d59": 18,
+  "e06bc02b-f460-4f05-bcd9-b5f57e03b317": 45,
+  "e0869da6-abbc-48af-ac18-7e365709fa46": 0,
+  "e1fe3011-731e-402f-8fbf-e63d702616fe": 30,
+  "e225e0bf-1fbb-432a-a118-e94a70507203": 23,
+  "e26330b3-fcba-41b2-8bd5-bd3b42f7e453": 45,
+  "e271e240-480b-4d3d-b55d-bdf5b2695d61": 39,
+  "e2f58428-334e-446d-a2b4-9a34935b3e23": 0,
+  "e301a86f-ca52-4f21-bfcc-6810a45a0b6c": 45,
+  "e3e4b409-60c6-4ba9-aa5d-5fbdc5621cb0": 28,
+  "e3f20220-391e-4548-a791-8798430651b8": 0,
+  "e41154c6-dcfd-48af-b808-24bb2d259aee": 45,
+  "e4a25391-9c8f-4353-9d48-4e30c4367312": 45,
+  "e5766843-04ef-49bb-91f7-eead31de26c8": 45,
+  "e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada": 45,
+  "e5f4f10d-2607-49ff-955c-43d4e2b260d5": 23,
+  "e69b8df8-ecde-4c00-b2c5-884dca4740c4": 0,
+  "e7389711-4911-413e-b156-d439e73c9e14": 45,
+  "e7b0e118-86d2-4251-8bd0-2fc8958cec59": 39,
+  "e7be6731-5db2-48d7-8072-8bfbf923b25f": 45,
+  "e8579306-4543-4bc8-8a03-1999ffe60204": 28,
+  "e86a6f9a-4e40-40d6-a9dd-1036b4190caa": 13,
+  "e8ed4e66-2957-431e-a0a5-810ad443a88c": 45,
+  "e9dd4127-cbe7-4701-a1b5-e31649091a9c": 39,
+  "ea66242a-82a2-42da-a3f0-ea37f33bc407": 45,
+  "ea727af8-8f45-412e-9cba-8b269412046f": 45,
+  "ebcdf42d-c7d1-4bdf-9f25-15200fa5ddf2": 45,
+  "ebea463a-8084-400c-b583-6fab3fab0258": 45,
+  "ec9f3927-6a79-4ac0-a0a5-0babe46892ba": 28,
+  "ecb35ffc-02fc-426a-b6b6-6150f4f09a49": 1,
+  "ecbca865-c722-4e8d-9046-86407e226f8f": 45,
+  "edb7414d-1672-4f34-aa23-a5f5e5b9dd94": 45,
+  "ee1ff934-d84c-4c1b-a2b0-974d8a8a8501": 39,
+  "ef2d3e37-5703-4091-ac44-f94367098bef": 45,
+  "ef2e3d2d-b42e-4538-b8c5-5867dd2ba88d": 45,
+  "ef55a000-ff34-41b0-a12a-b439c2d47b06": 1,
+  "ef6f6965-f75d-4443-a992-630709262c0f": 1,
+  "efb049d6-d787-49d2-b94e-c23cfda0d297": 45,
+  "efb6d38f-ecc9-47bd-bde2-397cd35d888b": 45,
+  "f0135579-e4af-413e-81b5-a0eb6fcb3371": 45,
+  "f07efbab-f73a-4a36-870a-b41635db4a57": 45,
+  "f083d578-b181-4f82-9cf2-f0c8def9272c": 28,
+  "f11986c2-dc3c-4810-a5b8-7a5bd015013c": 45,
+  "f12c0c70-4d13-4028-aefd-18008a356808": 8,
+  "f16bf157-d02f-40ae-b271-9cc06a50b9cc": 13,
+  "f25cd627-34ef-4b00-930f-e797e1d893db": 45,
+  "f263a284-00cb-4c2c-9012-6455df1e8ee3": 8,
+  "f2d95dae-92b4-4f84-ab6d-bba4469031da": 45,
+  "f32e5b28-afa4-41a5-a40d-1a3d430d08d2": 13,
+  "f3cb91ab-6ee6-4f49-aed1-3946145dccd8": 45,
+  "f3ee5b67-5aca-48fc-97de-834dbe9a0059": 39,
+  "f40cc035-f2d6-43b9-8be8-66ce483ce71e": 45,
+  "f42c7165-635f-4430-9490-7cf0799ffb32": 39,
+  "f49b1546-8d71-4d68-98e8-9ec706a11b2a": 33,
+  "f4f65a35-7fee-4ee8-9fcc-7d792001ab7d": 45,
+  "f5159522-601a-4d4c-82d4-d059427c0c25": 45,
+  "f5a6289a-ecdf-4d8d-9f17-eb695231bdf1": 1,
+  "f644872a-3723-4fe5-b0a0-edfdefdba28c": 45,
+  "f6d699a7-a90b-4038-90a0-262f35ac79fa": 39,
+  "f7475d9a-7a3a-426e-b604-05afa46a2b05": 1,
+  "f7e25d17-1fef-4cca-a18e-0d4faaaa6eda": 45,
+  "f9176e04-09bd-4785-a473-0110d7129b99": 1,
+  "f9a87486-39c1-49f8-9024-0c08ee090165": 1,
+  "fa103f99-0c36-40d7-8839-db9426880904": 45,
+  "fa1a3a6e-6752-4157-b7a6-f8ec19c12e7e": 45,
+  "fa92876c-1840-4610-88ea-e5fa9d7b1639": 39,
+  "fafd68b5-1f3f-481d-a5b6-862e640af6e8": 45,
+  "fb0f0f5c-2814-446c-9ca5-166062e091c5": 45,
+  "fb4cd249-fb01-4604-8cf3-5bc3e4c9a4d8": 1,
+  "fbf92b28-883a-4e59-b253-62cd42f7a865": 0,
+  "fc2d457f-8c4f-4af1-8de0-628814fb7834": 45,
+  "fc55da04-2c41-4035-a824-bcab760416ed": 39,
+  "fc5ef036-e045-4920-b95f-b32067b00163": 39,
+  "fce28f7f-f2f7-4098-b823-87ef526bb1e5": 13,
+  "fd3bd675-feb7-4656-a66c-a27fe15232c2": 39,
+  "fdc258c6-91c6-4a59-a35b-0f9bea15f0d5": 28,
+  "fe39aece-fab8-4447-a7db-e5827a793044": 45,
+  "fe3c91b1-ffbf-4fe4-938b-8b7568244d6e": 45,
+  "fe4599df-d7a4-4f7e-aaf5-9a9cfa917303": 45,
+  "fe798cb9-b5bf-4c19-bf7f-15ba4207a70d": 45,
+  "fe9afa7b-3805-474c-9b6a-0a73561942e5": 33,
+  "fea76505-2356-4040-9d5a-feaadb5efaea": 45,
+  "febbfefd-ba1d-4e42-9d93-9ecff222a012": 45,
+  "ff0589e4-03c4-46dd-b943-60641b080a73": 45,
+  "ff0728f4-1fab-43a7-a411-088d787a3dfa": 45,
+  "ff1f3743-5092-49cc-8e10-39c524cea07c": 23,
+  "ff4fb7d5-4365-4af6-9704-120c47578b83": 45,
+  "ffe89dce-b3c8-4904-9cfc-17c64bcc01b3": 39
+ },
+ "offerLevelGates": {
+  "0022ec40-b7cd-47a6-9522-210ac04b3e2b": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-08-25 00:00_2019-08-28 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "003ed442-f6d1-4a78-94e7-1f82cb92b547": {
+   "editorName": "SigilShop_DivineIronLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "005036e6-2f69-46ab-8eea-5b72379f2aa4": {
+   "editorName": "DecoOffer_S_Stele3_2019-09-28 00:00_2019-10-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "006dc512-0a0c-4f53-90bc-aeca4c110236": {
+   "editorName": "PlayerLvlOffer_02_ Lvl42",
+   "min": 0,
+   "max": 0
+  },
+  "0096b533-7ac0-46be-ba47-e17dafe2a5cc": {
+   "editorName": "SigilShop_Shield_DaedricLightShield_Temp08_NoEnch",
+   "min": 40,
+   "max": 100
+  },
+  "00a7ea9f-d096-414e-a904-49db79bb9eb6": {
+   "editorName": "SigilShop_Ultimate_Witsplinter",
+   "min": 35,
+   "max": 100
+  },
+  "00af571f-d8d0-45c7-bc63-86f58585d2c8": {
+   "editorName": "DecoOffer50%_M_Lectern_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "0127f73e-e611-4e05-a24b-fd921bd617b1": {
+   "editorName": "PlayerLvlOffer_02_ Lvl68",
+   "min": 0,
+   "max": 0
+  },
+  "012d329b-0f5f-4401-8a44-6df8ad4560f1": {
+   "editorName": "Player Level Up offer - Level 38",
+   "min": 0,
+   "max": 0
+  },
+  "019cbe82-c0b2-402a-b854-ffa42d10e101": {
+   "editorName": "GemPack03_b_JourneyManArchitect",
+   "min": 10,
+   "max": 30
+  },
+  "01b0466e-f11d-4f41-91be-93b5e904b0dd": {
+   "editorName": "SigilShop_EffectIngredients_GlowDust",
+   "min": 1,
+   "max": 100
+  },
+  "01fb3fd9-49aa-42d5-9aaa-ec68748103ff": {
+   "editorName": "PlayerLvlOffer_03_ Lvl62",
+   "min": 0,
+   "max": 0
+  },
+  "021df5b4-a198-4b01-a268-3f42c2dd3f36": {
+   "editorName": "Player Level Up offer - Level 30",
+   "min": 0,
+   "max": 0
+  },
+  "024e3b3a-31dc-46b5-bce1-e5bd79081eed": {
+   "editorName": "SigilShop_DivineEbonyDagger",
+   "min": 45,
+   "max": 100
+  },
+  "02733806-2a68-49e1-905f-a42e0bb478b9": {
+   "editorName": "SigilShop_DivineStalhrimArmor",
+   "min": 45,
+   "max": 100
+  },
+  "027abcce-5c25-4791-b650-38d9b6db5e3c": {
+   "editorName": "SigilShop_Armor_EbonyHelmet_Temp06_NoEnch",
+   "min": 35,
+   "max": 49
+  },
+  "02d67a59-d4de-42ac-94a3-cc01488ad6d8": {
+   "editorName": "SigilShop_Weapon_DwarvenMace_Temp08_MgcDmg",
+   "min": 20,
+   "max": 29
+  },
+  "0344282e-134e-4b17-a396-72d2c86a542d": {
+   "editorName": "SigilShop_DivineSteelArmor",
+   "min": 45,
+   "max": 100
+  },
+  "03c18b66-fce3-4351-8e58-134061f0e83e": {
+   "editorName": "SigilShop_Weapon_ChaurusHandAxe",
+   "min": 28,
+   "max": 32
+  },
+  "03eee296-d862-4936-9ff3-e3525ba5e68e": {
+   "editorName": "SigilShop_DivineDwarvenPlateArmor",
+   "min": 45,
+   "max": 100
+  },
+  "041378b9-2f81-4718-a036-332bea4bebfc": {
+   "editorName": "DecoOffer50%_M_Abyss2_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "0443305b-1a09-4cfa-b0b7-05ce5d068573": {
+   "editorName": "SigilShop_Armor_DwarvenMailGauntlets_Temp04_NoEnch",
+   "min": 20,
+   "max": 29
+  },
+  "045f6c28-2298-46bd-9b89-4b4bd88ef99b": {
+   "editorName": "SigilShop_Weapon_DwarvenBattleaxe_Temp04_NoEnch",
+   "min": 20,
+   "max": 29
+  },
+  "04a832d3-088d-4e78-a8ec-810ee1dd13e2": {
+   "editorName": "PlayerLvlOffer_02_ Lvl34",
+   "min": 0,
+   "max": 0
+  },
+  "0516f0d4-7b2e-45ea-8739-9b614ced447c": {
+   "editorName": "SigilShop_DivineEbonyGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "0585e81b-95be-4d8d-be9d-0e866b1f84a9": {
+   "editorName": "SigilShop_Jewelry_GoldRubyRing_PowerAttackQuickStrikes_NoEnch",
+   "min": 20,
+   "max": 24
+  },
+  "061e71e1-c9a3-41a2-9a98-6ea0f392cdc3": {
+   "editorName": "PlayerLvlOffer_03_ Lvl67",
+   "min": 0,
+   "max": 0
+  },
+  "06214ad1-4c62-4b89-bf8e-b92c946defc6": {
+   "editorName": "SigilShop_Shield_DaedricLightShield_Arcane01",
+   "min": 40,
+   "max": 100
+  },
+  "064e9725-248f-448d-a8f0-60fa28099e68": {
+   "editorName": "SigilShop_Armor_ChitinGauntlets_Arcane02",
+   "min": 1,
+   "max": 14
+  },
+  "065266b0-c0ef-4291-8048-e69a588866e4": {
+   "editorName": "SigilShop_DivineQuicksilverHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "06715994-caae-4c86-9e89-d5e95f9a2c9a": {
+   "editorName": "DecoOffer_M_Abyss3_2020-07-28 00:00_2020-07-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "06992f6a-1a42-4f77-a035-9a0589785b34": {
+   "editorName": "SigilShop_DivineSilverBoots",
+   "min": 45,
+   "max": 100
+  },
+  "06c0d19c-38ce-472b-8ab0-145ec16eacb1": {
+   "editorName": "GemPack02_b",
+   "min": 20,
+   "max": 45
+  },
+  "07071610-126d-4516-a844-c173778d3f91": {
+   "editorName": "SigilShop_Weapon_ElvenMace_Temp04_NoEnch",
+   "min": 25,
+   "max": 34
+  },
+  "070f96c8-4818-4421-bf12-6c8171b923bb": {
+   "editorName": "DecoOffer50%_S_Nirnroot_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "07eb2282-33d2-425f-ac53-100512634695": {
+   "editorName": "Player Level Up offer - Level 50",
+   "min": 0,
+   "max": 0
+  },
+  "086b359d-f6a3-4e04-9baf-cd22e6f112ec": {
+   "editorName": "PlayerLvlOffer_03_ Lvl10",
+   "min": 0,
+   "max": 0
+  },
+  "0878b33c-f3c9-4587-be4e-8d69729f0b60": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2019-12-16 00:00_2019-12-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "08bcf933-c798-4f04-8e5f-6367dafddfed": {
+   "editorName": "SigilShop_DivineOrcishScaleHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "08f22ade-079d-449a-bd00-a456428dc051": {
+   "editorName": "SigilShop_Shield_QuicksilverShield_Arcane02",
+   "min": 25,
+   "max": 34
+  },
+  "0955f420-a190-4f34-a2a5-f0c8e1d13dc1": {
+   "editorName": "PlayerLvlOffer_03_ Lvl83",
+   "min": 0,
+   "max": 0
+  },
+  "096020c8-2a95-4bcd-ab19-839985c5910b": {
+   "editorName": "SigilShop_Weapon_DragonboneDagger_Temp04_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "0976aa48-84d3-43f9-ad33-fe9508a7a6e5": {
+   "editorName": "Player Level Up offer - Level 39",
+   "min": 0,
+   "max": 0
+  },
+  "09afb09a-bf5a-4be7-8f63-4bf84c2777c8": {
+   "editorName": "SigilShop_DivineEbonyLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "09bf4e66-42d7-4258-a563-9412f5f9a304": {
+   "editorName": "SigilShop_DivineGlassArmor",
+   "min": 45,
+   "max": 100
+  },
+  "09eb252f-a2e3-4020-aa8e-828298428eea": {
+   "editorName": "SigilShop_Weapon_DwarvenWarhammer_Arcane01",
+   "min": 20,
+   "max": 29
+  },
+  "09fb8cd9-4dac-4b4d-802e-3ceac55097d3": {
+   "editorName": "SigilShop_Weapon_AmberWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "09ff5a0f-18a1-4ae6-bce1-05906aa95cd3": {
+   "editorName": "DecoOffer_S_ThePainfulLesson_2019-10-19 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0a17b317-0a78-4711-9166-7850c1f472ef": {
+   "editorName": "IAP_HealingPack_04",
+   "min": 50,
+   "max": 100
+  },
+  "0a2a58e0-e26f-47e3-8170-c0806a577414": {
+   "editorName": "SigilShop_LTUltimate_DefensiveSpellsRing",
+   "min": 25,
+   "max": 55
+  },
+  "0a2f4c8d-2bd2-4078-aeff-3148a85dd289": {
+   "editorName": "SigilShop_DivineNordicSteelBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "0a3209f0-15a7-4f41-803b-7acfe6c66e1b": {
+   "editorName": "PlayerLvlOffer_03_ Lvl61",
+   "min": 0,
+   "max": 0
+  },
+  "0a483ead-7f07-49a9-8063-13ca864acc67": {
+   "editorName": "SigilShop_Ultimate_FireWarhammer",
+   "min": 35,
+   "max": 100
+  },
+  "0a5578a6-67ba-448d-aa02-0eececb3ddd0": {
+   "editorName": "SigilShop_Weapon_DwarvenGreatsword_Temp04_PhyBlockPiercing",
+   "min": 20,
+   "max": 29
+  },
+  "0a6dba62-644d-485a-b133-ea860dafdea3": {
+   "editorName": "SigilShop_DivineGlassGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "0ac2182d-5d5c-4699-bcbb-9da19e40feff": {
+   "editorName": "DecoOffer_M_Abyss3_2019-08-29 00:00_2019-09-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0b07afb3-3e61-49c5-ab02-a33cbf9445d6": {
+   "editorName": "SigilShop_Weapon_SilverLightHammer_Arcane01",
+   "min": 1,
+   "max": 14
+  },
+  "0b685d94-3bd2-45a5-ab5b-3c0fd6bfd9c1": {
+   "editorName": "SigilShop_Weapon_DragonboneHandAxe_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "0b8ed872-2aca-4869-b691-fa2c5a130d71": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondRing_FireballConsumingInfernoWallOfFire_NoEnch",
+   "min": 35,
+   "max": 39
+  },
+  "0baeafe8-185c-41ca-b31e-c109e1f298a6": {
+   "editorName": "PlayerLvlOffer_02_ Lvl90",
+   "min": 0,
+   "max": 0
+  },
+  "0bda770b-ea4b-47b6-8181-bf2a9bd2315b": {
+   "editorName": "SigilShop_DivineDwarvenHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "0be1de9b-19a8-4793-bf89-d060c9b7528e": {
+   "editorName": "DecoOffer_M_Bones_2019-07-01 00:00_2019-07-03 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0beccb4b-4052-49e2-86e6-7713ebfb9b04": {
+   "editorName": "DecoOffer25%_M_FighterTrophy_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "0c146beb-df90-4023-b5f7-596c4e2da29e": {
+   "editorName": "DecoOffer_S_Candelabra_2020-08-05 00:00_2020-08-08 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0c4ac6db-9c0c-435c-aebf-420042835fbf": {
+   "editorName": "SigilShop_Armor_QuicksilverHelmet_Arcane02",
+   "min": 25,
+   "max": 34
+  },
+  "0ca5c2bf-b968-4ec7-8322-c995a9c2b542": {
+   "editorName": "DecoOffer50%_S_Bundle_BannerMarkath_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "0cb40ff5-ddb2-4eaa-bb5a-9f43e56e93d9": {
+   "editorName": "SigilShop_Armor_ChaurusGauntlets_Temp04_NoEnch",
+   "min": 30,
+   "max": 39
+  },
+  "0ccaf37b-a829-404f-8b8d-e0de711b4f2c": {
+   "editorName": "SigilShop_EffectIngredients_Deathbell",
+   "min": 1,
+   "max": 100
+  },
+  "0d23db55-2247-45b7-80c2-580157c1038d": {
+   "editorName": "DecoOffer_S_BundleBannerMarkath_2019-05-05 00:00_2019-05-08 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0d4188d6-7184-4d60-86bc-f6e15621a8b3": {
+   "editorName": "SigilShop_DivineSilverArmor",
+   "min": 45,
+   "max": 100
+  },
+  "0d451253-0bda-4fe5-9e67-85643d22ad59": {
+   "editorName": "Player Level Up offer - Level 44",
+   "min": 0,
+   "max": 0
+  },
+  "0d63100b-d17c-41d7-b91a-794e64ff7272": {
+   "editorName": "DecoOffer_M_FighterTrophy_2019-12-24 00:00_2019-12-28 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0db1411b-f1b6-4422-9dfc-1d1c4decdb99": {
+   "editorName": "DecoOffer_M_FighterTrophy_2019-06-17 00:00_2019-06-23 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0dbc88a3-bd06-4bf2-847a-6e5deb79df28": {
+   "editorName": "DecoOffer_S_IceUnicorn_2019-12-21 00:00_2019-12-23 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0dbf81e2-09ed-46cb-8b38-f67be7fd91f0": {
+   "editorName": "SigilShop_DivineGoldenSaintDagger",
+   "min": 45,
+   "max": 100
+  },
+  "0e120d6f-94cc-4889-9421-fc94fe4a75ab": {
+   "editorName": "DecoOffer25%_S_Crystal_Shrine_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "0e15462b-ec51-430b-8c13-a0c86e0d1570": {
+   "editorName": "DecoOffer_S_Stele3_2020-06-02 00:00_2020-06-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0e224ca0-1506-490f-884a-8871ffe6399b": {
+   "editorName": "Rare Chest",
+   "min": 0,
+   "max": 0
+  },
+  "0e273d66-d745-4845-a4d7-007f74785733": {
+   "editorName": "Player Level Up offer - Level 34",
+   "min": 0,
+   "max": 0
+  },
+  "0e67cbb2-090f-4880-937a-d348314d33cb": {
+   "editorName": "SigilShop_Armor_QuicksilverGauntlets_Arcane01",
+   "min": 25,
+   "max": 34
+  },
+  "0e8e6b60-0a65-431b-9723-cf1f09ed7339": {
+   "editorName": "PlayerLvlOffer_03_ Lvl75",
+   "min": 0,
+   "max": 0
+  },
+  "0e9a3ba7-8523-4dcb-8917-cd631fa0de65": {
+   "editorName": "PlayerLvlOffer_03_ Lvl81",
+   "min": 0,
+   "max": 0
+  },
+  "0ec90748-3038-4eed-a38f-82e6979ada22": {
+   "editorName": "EmoteOffer_Salute_2019-12-05 00:00_2019-12-08 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0ef7fcb4-174e-43c8-a2ae-96b6dd729aae": {
+   "editorName": "DecoOffer_M_Abyss3_2019-11-06 00:00_2019-11-10 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "0fb021e6-72fa-4427-bf41-b689a51ce687": {
+   "editorName": "SigilShop_Weapon_EbonyMace_Temp08_Haste",
+   "min": 35,
+   "max": 49
+  },
+  "0ff1d152-6dd0-4091-93bd-2fcbc0c7b238": {
+   "editorName": "SigilShop_Weapon_DaedricGreatsword_Temp06_NoEnch",
+   "min": 40,
+   "max": 100
+  },
+  "10f746b4-f726-4999-b36a-93d66125a693": {
+   "editorName": "SigilShop_Weapon_AmberLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "10f94b58-b1e7-4014-9b3f-fd83aa6b21e8": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteRing_Arcane02",
+   "min": 40,
+   "max": 49
+  },
+  "1185efd6-bb85-44d3-ae0d-e14272b2f8eb": {
+   "editorName": "Town Level Up Offer - Level 8",
+   "min": 0,
+   "max": 0
+  },
+  "1193de20-ff4f-4d31-ac1c-97ada006fd7c": {
+   "editorName": "SigilShop_Smithing_T2-T5",
+   "min": 15,
+   "max": 35
+  },
+  "119bab2e-9b73-4193-a599-d43500e17530": {
+   "editorName": "SigilShop_TownMaterials_Limestone_x50",
+   "min": 15,
+   "max": 100
+  },
+  "11a7809b-6fef-4ddf-b14f-be80322dd5d2": {
+   "editorName": "SigilShop_Weapon_SilverMace_Temp04_NoEnch",
+   "min": 1,
+   "max": 14
+  },
+  "11ab91e9-d38a-4fca-850f-a1d807a0894a": {
+   "editorName": "DecoOffer50%_S_Stele3_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "123e0a45-c949-491d-b720-997fb53cdfdb": {
+   "editorName": "DecoOffer_M_Stele1_2019-03-18 00:00_2019-03-21 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "12518f77-fa72-4b7f-9ea8-9eacd47c482a": {
+   "editorName": "Player Level Up offer - Level 16",
+   "min": 0,
+   "max": 0
+  },
+  "1275d959-bbe5-460d-8f6a-1c31106a8eb2": {
+   "editorName": "Legendary Chest",
+   "min": 0,
+   "max": 0
+  },
+  "1332219e-2521-4432-aa0a-4cc0b0f62898": {
+   "editorName": "SigilShop_Armor_StalhrimGauntlets_Arcane01",
+   "min": 35,
+   "max": 49
+  },
+  "133edf20-c827-49fa-b4a3-cecafd63248e": {
+   "editorName": "SigilShop_Weapon_EbonyWarhammer_Arcane02",
+   "min": 35,
+   "max": 49
+  },
+  "1345f742-849d-4044-9115-4abbc75ab371": {
+   "editorName": "DecoOffer33%_S_Nirnroot_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "1357b560-832d-422c-a083-04e30ad42eb2": {
+   "editorName": "DecoOffer_S_BundleBannerMarkarth_2019-10-02 00:00_2019-10-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "138dfc7a-57ce-4b43-a28d-0cf5de35369b": {
+   "editorName": "SigilShop_Weapon_DragonboneMace_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "13a78344-6702-447e-bb19-d1d56e5ca7d0": {
+   "editorName": "SigilShop_Weapon_ChaurusBattleaxe",
+   "min": 28,
+   "max": 32
+  },
+  "13c1bda8-ae2c-4ace-bfa7-88e8c666a452": {
+   "editorName": "SigilShop_DivineStalhrimBoots",
+   "min": 45,
+   "max": 100
+  },
+  "13da6fd3-b50c-4425-be92-2d6a78d6a1fa": {
+   "editorName": "DecoOffer_M_Stele1_2020-07-24 00:00_2020-07-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "14d13edb-a013-45eb-998b-4a24d0a731ec": {
+   "editorName": "SigilShop_Weapon_DarkSeducerWarhammer",
+   "min": 39,
+   "max": 44
+  },
+  "14d908d9-20bc-4465-b05a-46f28fbe738t": {
+   "editorName": "DecoOffer_M_Stele1_2019-05-01 00:00_2019-05-04 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "14e50c0b-51ba-42d0-9260-6fa217b1cdea": {
+   "editorName": "SigilShop_DivineDaedricHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "150e67b4-664d-4ce0-b42a-6e6f5d38536c": {
+   "editorName": "SigilShop_DivineStalhrimLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "15486ea8-553f-4df7-8762-72d81e68c046": {
+   "editorName": "SigilShop_Unique_CrimsonKiss",
+   "min": 1,
+   "max": 100
+  },
+  "15bc8cf6-563c-4b6b-aec0-741b64df2333": {
+   "editorName": "SigilShop_Shield_OrcishScaledShield_Temp08_PowBlock",
+   "min": 15,
+   "max": 24
+  },
+  "161a8d21-0214-47fe-8aa6-23ed8a03de43": {
+   "editorName": "SigilShop_DivineElvenBoots",
+   "min": 45,
+   "max": 100
+  },
+  "161f82c8-f3b2-4b56-9335-69305967ce73": {
+   "editorName": "DecoOffer_S_BundleBannerMorthal_2020-04-11 00:00_2020-04-14 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "16d100ba-e553-496f-b938-9e75e2a39a7c": {
+   "editorName": "PlayerLvlOffer_03_ Lvl06",
+   "min": 0,
+   "max": 0
+  },
+  "16da4554-e7ce-4118-9f35-c8cbd2b0b9cb": {
+   "editorName": "SigilShop_Armor_DwarvenMailArmor_Temp08_FortStm",
+   "min": 20,
+   "max": 29
+  },
+  "1788a175-ff20-482a-b0b0-c5c4d96bae8b": {
+   "editorName": "SigilShop_Weapon_StalhrimWarAxe",
+   "min": 33,
+   "max": 38
+  },
+  "179353db-1b7d-4c35-884c-155d4cd76755": {
+   "editorName": "DecoOffer33%_M_Imperial_Bath_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "179e5c5e-2497-4245-814f-584747cae76c": {
+   "editorName": "SigilShop_Armor_DwarvenPlateArmor_Arcane01",
+   "min": 20,
+   "max": 29
+  },
+  "17d77d2e-6421-42c5-9204-bd84dab9824a": {
+   "editorName": "SigilShop_Weapon_DarkSeducerMace",
+   "min": 39,
+   "max": 44
+  },
+  "17f6e2b1-439a-41c1-add0-b700a165a93c": {
+   "editorName": "SigilShop_Armor_DwarvenPlateHelmet_Temp04_FortHp",
+   "min": 20,
+   "max": 29
+  },
+  "1846ccc9-7ef4-449d-92fb-d7c943c6f091": {
+   "editorName": "SigilShop_DivineGoldenSaintLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "1857677a-77ad-4e7e-9777-185ceca50835": {
+   "editorName": "SigilShop_Ultimate_HealthHelmet",
+   "min": 35,
+   "max": 100
+  },
+  "186bc27a-0699-4fe0-9ae6-571f8b24a8b2": {
+   "editorName": "SigilShop_DivineGlassWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "192e579e-8091-4358-819c-5f37a37f6685": {
+   "editorName": "SigilShop_Weapon_OrcishHandAxe_Arcane02",
+   "min": 15,
+   "max": 24
+  },
+  "196264ef-e204-4973-80f2-1e79dd9bad98": {
+   "editorName": "SigilShop_DivineSilverBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "19c01680-6c88-409f-b9b6-e3a5ca025699": {
+   "editorName": "SigilShop_DivineEbonyWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "19c9c142-461b-410f-9c32-f894a4feea11": {
+   "editorName": "SigilShop_Jewelry_GoldRubyNecklace_Arcane02",
+   "min": 20,
+   "max": 24
+  },
+  "19cf4bfe-685f-4582-b0a8-d692c6f35ca4": {
+   "editorName": "SigilShop_DivineDwarvenPlateGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "19f22d6a-9dc8-4098-94fa-580c698c4166": {
+   "editorName": "PlayerLvlOffer_03_ Lvl76",
+   "min": 0,
+   "max": 0
+  },
+  "19f44920-e5bd-4cc5-b1d0-e476ab62af04": {
+   "editorName": "SigilShop_Armor_DragonplateBoots_Temp08_FortStm",
+   "min": 45,
+   "max": 100
+  },
+  "1a061742-da9c-4b28-9c95-a874091d5a0b": {
+   "editorName": "SigilShop_DivineLeatherHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "1a0ef699-a192-483b-b01a-18313c16b79f": {
+   "editorName": "SigilShop_Armor_DivineDarkSeducerBoots",
+   "min": 45,
+   "max": 100
+  },
+  "1a1d81fb-e491-433c-9453-a81cc8b1c561": {
+   "editorName": "SigilShop_Weapon_MadnessBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "1abe4563-d0c0-4093-a869-d6307bf90d04": {
+   "editorName": "SigilShop_Shield_GlassShield_Arcane01",
+   "min": 30,
+   "max": 39
+  },
+  "1b283fa9-0f33-42c4-b682-5a48692d79e5": {
+   "editorName": "SigilShop_DivineForswornGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "1b802dda-3c10-41c6-91e1-c75147c205bf": {
+   "editorName": "SigilShop_Weapon_ElvenWarhammer_Temp06_MgcDmg",
+   "min": 25,
+   "max": 34
+  },
+  "1bd66cdf-f9bc-41f9-a7a2-0281cdb0e2ef": {
+   "editorName": "SigilShop_DivineDaedricShield",
+   "min": 45,
+   "max": 100
+  },
+  "1bfef92a-8a95-4ce5-847d-d4a1f614eb56": {
+   "editorName": "DecoOffer_L_UnicornFountain_2019-08-30 00:00_2019-09-03 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "1c2739ef-2b9c-4de3-a110-ae4bf4a648e8": {
+   "editorName": "DecoOffer_L_UnicornFountain_2019-06-10 00:00_2019-06-16 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "1c3b9b05-9113-4697-aca2-c7e155624bbt": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-03-30 00:00_2019-04-02 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "1c66660d-13bb-4455-ad44-36162b084132": {
+   "editorName": "SigilShop_Weapon_NordicSteelHandAxe",
+   "min": 23,
+   "max": 27
+  },
+  "1c8c47b6-0d96-4fd9-8295-b0be2afcc122": {
+   "editorName": "EmoteOffer_Salute_2019-12-30 00:00_2020-01-03 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "1cba4bd7-31bd-4be2-ad4a-8105f9c95465": {
+   "editorName": "SigilShop_Weapon_SilverBattleaxe_Arcane01",
+   "min": 1,
+   "max": 14
+  },
+  "1cc4fe2f-3965-4dd2-a5e3-a81f2f5c0d1a": {
+   "editorName": "SigilShop_Weapon_MadnessLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "1cd89393-1ed6-42be-a21d-e673b1b854e3": {
+   "editorName": "Player Level Up offer - Level 31",
+   "min": 0,
+   "max": 0
+  },
+  "1ce8fc58-38b2-47a7-9652-548127cd2b7a": {
+   "editorName": "SigilShop_Weapon_MadnessMace",
+   "min": 45,
+   "max": 100
+  },
+  "1e170253-4c26-4c22-8d9f-10622a2b1e4a": {
+   "editorName": "PlayerLvlOffer_03_ Lvl42",
+   "min": 0,
+   "max": 0
+  },
+  "1e851099-f231-47bb-acdc-af47ee81b520": {
+   "editorName": "DecoOffer_M_FullSpire_2019-09-20 00:00_2019-09-23 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "1e989d81-5673-4e3b-aa48-391b1f910ca6": {
+   "editorName": "DecoOffer_L_FancyFountain_2019-06-01 00:00_2019-06-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "1f01436e-9c63-4955-a347-6b15e4be966e": {
+   "editorName": "PlayerLvlOffer_02_ Lvl50",
+   "min": 0,
+   "max": 0
+  },
+  "1f14876c-b7d7-4db9-a9c2-91cd9ea607fc": {
+   "editorName": "SigilShop_Armor_DivineDarkSeducerGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "203a27b3-a816-4a61-b0a8-158b29173546": {
+   "editorName": "SigilShop_DivineAncientNordicLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "203fb1cc-7b27-4165-82d4-02dfd495442c": {
+   "editorName": "IAP_HealingPack_01",
+   "min": 10,
+   "max": 19
+  },
+  "20557ef7-3403-4628-83db-b1f40e378173": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireRing_FrostbiteIceSpike_NoEnch",
+   "min": 25,
+   "max": 29
+  },
+  "20b1715c-7d89-499e-b128-96cd79c96322": {
+   "editorName": "SigilShop_Weapon_StalhrimHandAxe",
+   "min": 33,
+   "max": 38
+  },
+  "20b48dd2-775e-4d54-bb22-1a51bbfcc845": {
+   "editorName": "SigilShop_Jewel_Atronite",
+   "min": 40,
+   "max": 100
+  },
+  "20f2be5e-f9d8-44fa-9ec2-c104a5020816": {
+   "editorName": "SigilShop_SoulGem_Grand",
+   "min": 45,
+   "max": 100
+  },
+  "215ad9bb-e277-4aac-a61f-8bd8ffceec54": {
+   "editorName": "SigilShop_DivineChaurusWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "21c4b532-0d42-4875-9229-2127c1f5d6a5": {
+   "editorName": "DecoOffer33%_S_Stele3_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "21d03d38-5839-4ffa-81c0-d1529cebb0d3": {
+   "editorName": "PlayerLvlOffer_02_ Lvl26",
+   "min": 0,
+   "max": 0
+  },
+  "221f2c4b-ec2a-4973-9231-6e1ed0bff9a8": {
+   "editorName": "PlayerLvlOffer_03_ Lvl30",
+   "min": 0,
+   "max": 0
+  },
+  "222d3acf-2e7c-4f87-a7fc-b2c2ff6d5270": {
+   "editorName": "SigilShop_LTUltimate_PoisonLongsword",
+   "min": 25,
+   "max": 55
+  },
+  "224df607-b5aa-4c7d-aeaf-7536b12b322c": {
+   "editorName": "PlayerLvlOffer_02_ Lvl44",
+   "min": 0,
+   "max": 0
+  },
+  "225d8f0d-ef17-43bd-975d-18d8577aff7b": {
+   "editorName": "SigilShop_Armor_DaedricMailGauntlets_Temp06_NoEnch",
+   "min": 40,
+   "max": 100
+  },
+  "22afa283-b524-491f-9ef1-37cfab2b083d": {
+   "editorName": "SigilShop_DivineStalhrimMace",
+   "min": 45,
+   "max": 100
+  },
+  "22ec6379-b309-47bc-a2f1-db1ab1ac2984": {
+   "editorName": "DecoOffer_M_Stele1_2019-02-10 00:00_2019-02-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "22fc3846-6688-45ac-975d-67593f081632": {
+   "editorName": "SigilShop_Weapon_DragonboneGreatsword_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "230072f4-bcb5-4dde-91a1-cbdeb76a8b82": {
+   "editorName": "SigilShop_Ultimate_MagickaGauntlets",
+   "min": 35,
+   "max": 100
+  },
+  "2316e5c3-1596-4d37-8cb2-47b1687415a9": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm",
+   "min": 35,
+   "max": 39
+  },
+  "2320f21a-6ea2-4ee3-9568-74006c1d974a": {
+   "editorName": "SigilShop_Weapon_DragonboneBattleaxe_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "23931dab-b680-4eb4-900e-1e0e5180bc55": {
+   "editorName": "EmoteOffer_Guffaw_2019-12-14 00:00_2019-12-15 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "23f97b02-8d83-4d8e-a91d-825deaa10f33": {
+   "editorName": "DecoOffer50%_S_Crystal_Shrine_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "240e3b6e-639d-4264-8716-cf793c98f07d": {
+   "editorName": "PlayerLvlOffer_03_ Lvl78",
+   "min": 0,
+   "max": 0
+  },
+  "243a42ad-fbf9-4cfd-934a-9b325a41d14c": {
+   "editorName": "SigilShop_DivineNordicSteelLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "248f7e62-971c-4e5a-a522-961e4a3f2a2e": {
+   "editorName": "SigilShop_Weapon_GoldenSaintMace",
+   "min": 39,
+   "max": 44
+  },
+  "24cc5ddd-8e86-4ab0-9973-167ba5a1c53e": {
+   "editorName": "SigilShop_Weapon_DaedricMace_Temp04_NoEnch",
+   "min": 40,
+   "max": 100
+  },
+  "24f192b3-91c8-404b-94c5-4a650bfa5e6f": {
+   "editorName": "SigilShop_DivineQuicksilverGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "24f8421e-5fa4-4ef8-b29c-a5db807dda78": {
+   "editorName": "SigilShop_SoulGem_Transcendent",
+   "min": 45,
+   "max": 100
+  },
+  "25b71c79-c28b-4353-86c0-de0af3dcc088": {
+   "editorName": "SigilShop_DivineElvenDagger",
+   "min": 45,
+   "max": 100
+  },
+  "26c80a7c-929a-4640-966c-f5d27e90ba2e": {
+   "editorName": "SigilShop_DivineElvenHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "26d38c52-5c2b-40ee-b8be-cd09aae0011d": {
+   "editorName": "SigilShop_Weapon_MadnessWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "270790b7-74ac-470e-9f5f-fb49128bbea6": {
+   "editorName": "EmoteOffer_FistFight_2019-12-05 00:00_2019-12-08 23:57",
+   "min": 0,
+   "max": 0
+  },
+  "2728ce5e-1d8d-430e-a711-2ec903e513f9": {
+   "editorName": "SigilShop_DivineDaedricDagger",
+   "min": 45,
+   "max": 100
+  },
+  "2744c3fd-69b9-49ee-8ead-344a05ca0eb5": {
+   "editorName": "SigilShop_DivineOrcishWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "2784c96f-4138-4dec-ab66-bd51cd3e5b0d": {
+   "editorName": "SigilShop_DivineGlassShield",
+   "min": 45,
+   "max": 100
+  },
+  "27f4380e-7fdb-4e4b-b648-dcf3857f3064": {
+   "editorName": "EmoteOffer_YouAreNext_2019-12-09 00:00_2019-12-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "27fe41d8-d482-4b60-b644-5b41adde0cc7": {
+   "editorName": "DecoOffer25%_M_Stele1_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "28376591-ed59-455c-91e8-43ffe560cb01": {
+   "editorName": "DecoOffer_S_Nirnroot_2020-05-09 00:00_2020-05-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "28768608-dafd-404d-9684-1824335b11bc": {
+   "editorName": "SigilShop_Shield_EbonyShield_Temp04_NoEnch",
+   "min": 35,
+   "max": 49
+  },
+  "287d2960-212b-4d6f-9ace-137df68cb2f9": {
+   "editorName": "SigilShop_Armor_OrcishScaleHelmet_Arcane02",
+   "min": 15,
+   "max": 24
+  },
+  "28884ea8-85fc-46d2-a31c-e409e5b091a8": {
+   "editorName": "SigilShop_DivineStalhrimGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "28b73aea-fd34-4a92-b83b-62cf840a6720": {
+   "editorName": "SigilShop_DivineElvenMace",
+   "min": 45,
+   "max": 100
+  },
+  "2900c56e-7212-4954-9658-0803a2f72a45": {
+   "editorName": "SigilShop_Shield_DragonplateShield_Temp06_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "29747457-bd61-4b08-a985-14511ea1df49": {
+   "editorName": "PlayerLvlOffer_03_ Lvl68",
+   "min": 0,
+   "max": 0
+  },
+  "298cd391-f853-4a9e-ab52-9f2e19679e2b": {
+   "editorName": "SigilShop_DivineDwarvenDagger",
+   "min": 45,
+   "max": 100
+  },
+  "29e8fbcd-1dba-4b36-a866-527961f51b20": {
+   "editorName": "PlayerLvlOffer_03_ Lvl63",
+   "min": 0,
+   "max": 0
+  },
+  "2a1db5c1-7e6c-443a-8b9a-4568cd66b4b0": {
+   "editorName": "SigilShop_DivineForswornHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "2a9974c5-2600-4ed1-8103-3251d977d13f": {
+   "editorName": "SigilShop_Armor_SilverHelmet_Arcane01",
+   "min": 1,
+   "max": 14
+  },
+  "2adfbb46-2a10-41cb-97a9-96119ef9abb7": {
+   "editorName": "SigilShop_Weapon_DaedricWarAxe_Temp04_MgcDmg",
+   "min": 40,
+   "max": 100
+  },
+  "2ba0d105-c87a-4549-a284-2a3004a3f0d6": {
+   "editorName": "SigilShop_Armor_ElvenBoots_Arcane01",
+   "min": 25,
+   "max": 34
+  },
+  "2beb340f-6a38-4fda-a4e3-2732d893c981": {
+   "editorName": "SigilShop_Weapon_DarkSeducerWarAxe",
+   "min": 39,
+   "max": 44
+  },
+  "2c2fc333-5180-4dca-abe7-2e02e588ec89": {
+   "editorName": "SigilShop_Shield_EbonyShield_Arcane02",
+   "min": 35,
+   "max": 49
+  },
+  "2c84d98f-7c47-4fa4-b39c-4d8f26c8e018": {
+   "editorName": "SigilShop_DivineLeatherBoots",
+   "min": 45,
+   "max": 100
+  },
+  "2d0f9450-81f3-46a2-a6e2-b240f4a86fd1": {
+   "editorName": "SigilShop_Jewel_Diamond",
+   "min": 30,
+   "max": 100
+  },
+  "2d5f8bea-2143-4416-942a-44de6494db7c": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireRing_Arcane02",
+   "min": 25,
+   "max": 29
+  },
+  "2d6c4bf9-91fe-45ca-a536-0cd1400ccfcc": {
+   "editorName": "SigilShop_DivineOrcishScaleBoots",
+   "min": 45,
+   "max": 100
+  },
+  "2df5f11b-86e5-41b2-a4b8-9eadbbe0af42": {
+   "editorName": "SigilShop_DivineSilverGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "2e404653-99d2-4802-9f8f-fa315e5236d1": {
+   "editorName": "SigilShop_DivineDaedricPlateBoots",
+   "min": 45,
+   "max": 100
+  },
+  "2e469ca2-89f2-420e-9a47-f3767dcfb5a9": {
+   "editorName": "SigilShop_DivineChaurusShield",
+   "min": 45,
+   "max": 100
+  },
+  "2e7c35c6-6e24-4720-b15a-456e719f2d3b": {
+   "editorName": "SigilShop_Weapon_AmberMace",
+   "min": 45,
+   "max": 100
+  },
+  "2e8f809b-d5a0-4f26-b989-512add381075": {
+   "editorName": "SigilShop_Shield_DarkSeducerShield",
+   "min": 39,
+   "max": 100
+  },
+  "30c14a61-cc5d-4004-bf91-6c873cb8e652": {
+   "editorName": "SigilShop_DivineSilverWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "30f17c5e-8119-4b3a-a5d0-a7e76bd89f09": {
+   "editorName": "DecoOffer_M_Abyss2_2019-02-01 00:00_2019-02-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "30fbc9fb-6a39-4c65-a7c1-ce43702de1de": {
+   "editorName": "PlayerLvlOffer_03_ Lvl40",
+   "min": 0,
+   "max": 0
+  },
+  "312cfafa-657b-41d0-9fff-c70b47e5908d": {
+   "editorName": "SigilShop_Jewelry_GoldRubyRing_LightningBoltDelayedLightningBolt_AbsMgc",
+   "min": 20,
+   "max": 24
+  },
+  "3144bc87-815b-42af-8148-05650ab0d69e": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteRing_Arcane01",
+   "min": 40,
+   "max": 49
+  },
+  "31ba95d6-cff4-4895-b82e-83c89bfdd2a0": {
+   "editorName": "SigilShop_DivineIronBoots",
+   "min": 45,
+   "max": 100
+  },
+  "31fdbd40-89f7-4aac-a9de-1949717a5fe8": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-03-06 00:00_2020-03-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "3258eebb-62f6-4f49-b39c-00a80d6d9d74": {
+   "editorName": "SigilShop_Shield_DragonscaleShield_Temp08_PowBlock",
+   "min": 45,
+   "max": 100
+  },
+  "3319ca3b-a486-4ecd-b059-864ea24e3bc3": {
+   "editorName": "SigilShop_DivineGoldenSaintGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "33ba4101-addb-4e4e-8db6-d4bd3d52e0b0": {
+   "editorName": "SigilShop_Weapon_MadnessGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "33c85b34-c3ed-4e79-a5b3-f83fe91872a3": {
+   "editorName": "SigilShop_Weapon_ForswornLongsword",
+   "min": 18,
+   "max": 22
+  },
+  "33e6493e-2f1f-44cd-8092-f245657520be": {
+   "editorName": "SigilShop_DivineAncientNordicHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "354689f2-7fc2-486c-8294-789f5202e476": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondNecklace_Arcane02",
+   "min": 35,
+   "max": 39
+  },
+  "36155bce-895b-4010-be40-4945467a1ef0": {
+   "editorName": "SigilShop_Weapon_OrcishBattleaxe_Temp08_StmDmg",
+   "min": 15,
+   "max": 24
+  },
+  "362a3264-e31b-4043-b0f6-91f7103e2392": {
+   "editorName": "SigilShop_DivineDaedricMailHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "362df611-75dc-444a-a0d6-11abb59045d0": {
+   "editorName": "DecoOffer_M_Abyss3_2020-04-15 00:00_2020-04-18 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "36826b15-8f1a-4428-b5d5-e37c660d86b6": {
+   "editorName": "SigilShop_DivineElvenGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "36d1592d-ffda-48f3-a34b-c753e4d03941": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteRing_ShieldBashDodgingStrikeQuickStrikes_NoEnch",
+   "min": 40,
+   "max": 49
+  },
+  "3714979d-20ec-4478-919b-ab7eddf60a17": {
+   "editorName": "SigilShop_Jewel_Topaz",
+   "min": 1,
+   "max": 19
+  },
+  "371b8e75-8d06-4b23-8e6c-ef3c47dcf8a5": {
+   "editorName": "SigilShop_Weapon_AncientNordicMace",
+   "min": 13,
+   "max": 17
+  },
+  "374048ae-304f-4d87-9ed3-5c4b60272aef": {
+   "editorName": "SigilShop_Weapon_ForswornLightHammer",
+   "min": 18,
+   "max": 22
+  },
+  "37899980-7814-46f1-8bc8-87847cb04ef8": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystNecklace_Arcane02",
+   "min": 1,
+   "max": 19
+  },
+  "3799a536-b4f4-4315-b529-28483b089955": {
+   "editorName": "SigilShop_DivineIronHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "37c44bdb-90d4-4363-a0c0-4009bd222425": {
+   "editorName": "SigilShop_Weapon_OrcishWarhammer_Temp08_NoEnch",
+   "min": 15,
+   "max": 24
+  },
+  "38024bfd-c524-46bf-baee-512128660e1f": {
+   "editorName": "SigilShop_Smithing_T6-T7",
+   "min": 20,
+   "max": 100
+  },
+  "3846da68-35ee-439b-b74f-f107faf5a51e": {
+   "editorName": "SigilShop_Armor_DaedricMailHelmet_Arcane01",
+   "min": 40,
+   "max": 100
+  },
+  "385994ee-d0cd-44d9-840e-8726f01c5751": {
+   "editorName": "PlayerLvlOffer_02_ Lvl38",
+   "min": 0,
+   "max": 0
+  },
+  "38679c86-0b98-4180-a736-95a86b4238bf": {
+   "editorName": "SigilShop_Weapon_ForswornBattleaxe",
+   "min": 18,
+   "max": 22
+  },
+  "38a6be8b-745e-4b4f-b22a-bf6ec815717b": {
+   "editorName": "EmoteOffer_YouAreNext_2020-01-06 00:00_2020-01-10 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "3935dacc-c458-4c21-bdde-9bdda3b64e0f": {
+   "editorName": "SigilShop_Weapon_GoldenSaintWarAxe",
+   "min": 39,
+   "max": 44
+  },
+  "393a3347-0de4-44ef-a21b-70bf8f821f45": {
+   "editorName": "DecoOffer25%_M_Abyss3_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "396bc276-508f-4c01-a2d5-69b29519c6ce": {
+   "editorName": "SigilShop_EffectIngredients_AllIngredients",
+   "min": 1,
+   "max": 100
+  },
+  "39a341b6-2f79-4206-a6d5-36a122bf17e7": {
+   "editorName": "SigilShop_DivineChitinHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "39d8e67e-c517-4400-81ad-c77a496081b1": {
+   "editorName": "PlayerLvlOffer_03_ Lvl34",
+   "min": 0,
+   "max": 0
+  },
+  "3a5439a8-32a8-43ee-b065-852517962b87": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireNecklace_Barbarian_FortStmRegen",
+   "min": 25,
+   "max": 29
+  },
+  "3be06240-5d96-4efa-bcd6-d71babbd6715": {
+   "editorName": "SigilShop_DivineOrcishScaledShield",
+   "min": 45,
+   "max": 100
+  },
+  "3be5a324-6ca7-4b57-8469-47d13b8071c0": {
+   "editorName": "SigilShop_Weapon_StalhrimDagger",
+   "min": 33,
+   "max": 38
+  },
+  "3c23a70f-40ec-4d84-a05b-d9e02e683d5a": {
+   "editorName": "SigilShop_Weapon_DragonboneDagger_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "3c30e387-0b42-421b-a547-84e93c10edc6": {
+   "editorName": "DecoOffer_M_Abyss2_2020-04-01 00:00_2020-04-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "3cb3c2ee-35e4-43b7-bf1d-03c45d65d9c1": {
+   "editorName": "SigilShop_EffectIngredients_FrostSalts",
+   "min": 1,
+   "max": 100
+  },
+  "3d02f5ad-b145-4c36-8fec-70ea55fe9d2a": {
+   "editorName": "SigilShop_Weapon_StalhrimWarhammer",
+   "min": 33,
+   "max": 38
+  },
+  "3d2c7436-2815-4bb3-af6c-ae2e7fd44a35": {
+   "editorName": "SigilShop_DivineGlassHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "3d5c84e4-8258-4dbc-bd9a-15199336f0b7": {
+   "editorName": "SigilShop_Weapon_SilverLongsword_Arcane02",
+   "min": 1,
+   "max": 14
+  },
+  "3daa1e31-9f79-447a-83c0-0d7c03acb788": {
+   "editorName": "DecoOffer50%_S_FullSpire_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "3dbefdb6-46c7-4325-82fc-6851cdc77561": {
+   "editorName": "SigilShop_Weapon_EbonyWarAxe_Arcane01",
+   "min": 35,
+   "max": 49
+  },
+  "3dc3bced-e583-4fc6-b79c-17ec3cd9ae5b": {
+   "editorName": "SigilShop_Ultimate_Serpentstrike",
+   "min": 35,
+   "max": 100
+  },
+  "3e200b1c-8dd2-42ff-87f2-59686e363384": {
+   "editorName": "SigilShop_DivineNordicSteelMace",
+   "min": 45,
+   "max": 100
+  },
+  "3e509439-6816-403a-ad1a-e071e0d7f95t": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-04-11 00:00_2019-04-14 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "3f5ddd5b-2aab-4e52-80e2-25b1d58e722e": {
+   "editorName": "PlayerLvlOffer_02_ Lvl64",
+   "min": 0,
+   "max": 0
+  },
+  "3f928cb3-eacf-4178-a149-98acbf2e0947": {
+   "editorName": "PlayerLvlOffer_03_ Lvl18",
+   "min": 0,
+   "max": 0
+  },
+  "3f9b4624-5c74-4a35-a53d-7c1fa482db44": {
+   "editorName": "SigilShop_DivineDaedricLightShield",
+   "min": 45,
+   "max": 100
+  },
+  "3fb70c9a-1582-414a-87f4-b37cbe2d3f36": {
+   "editorName": "Player Level Up offer - Level 23",
+   "min": 0,
+   "max": 0
+  },
+  "400b0585-0e3f-4878-8366-cbbae3d2e134": {
+   "editorName": "SigilShop_Weapon_EbonyGreatsword_Temp04_StmDmg",
+   "min": 35,
+   "max": 49
+  },
+  "4054b67c-4ea5-4157-a644-f99f529e1e57": {
+   "editorName": "SigilShop_Ultimate_OffensiveSpellsRing",
+   "min": 35,
+   "max": 100
+  },
+  "407129e7-66c1-4716-a1c3-5191d4b3b33f": {
+   "editorName": "SigilShop_Shield_DaedricShield_Temp04_PowBlock",
+   "min": 40,
+   "max": 100
+  },
+  "40ba610e-b926-4793-8593-af35ed87d9cd": {
+   "editorName": "SigilShop_Weapon_ForswornHandAxe",
+   "min": 18,
+   "max": 22
+  },
+  "40e137fa-79d2-41bf-b366-bd19ee69f5a9": {
+   "editorName": "SigilShop_DivineSilverLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "40e23e8b-637f-4d85-9816-bd0a5f95f2f7": {
+   "editorName": "SigilShop_LTUltimate_FireHelmet",
+   "min": 25,
+   "max": 55
+  },
+  "4124f829-68b3-4918-889d-128e37c113f6": {
+   "editorName": "SigilShop_DivineDwarvenLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "41d17356-68fc-483c-a850-9ec3d27e2b5c": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2020-03-14 00:00_2020-03-17 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "4292c0ab-dbe8-456c-9254-f4ed9f7bdfdb": {
+   "editorName": "SigilShop_Weapon_NordicSteelBattleaxe",
+   "min": 23,
+   "max": 27
+  },
+  "42f89e83-2771-4503-bcbf-b78be6def4ba": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldNecklace_Arcane02",
+   "min": 30,
+   "max": 34
+  },
+  "4301506b-d23d-4c51-90fe-e9ec71f9337c": {
+   "editorName": "SigilShop_DivineNordicSteelWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "441d15a4-ff49-46c9-8c35-5499869c7596": {
+   "editorName": "PlayerLvlOffer_03_ Lvl48",
+   "min": 0,
+   "max": 0
+  },
+  "44433b7d-d4bf-47fb-ad30-1897471b2310": {
+   "editorName": "PlayerLvlOffer_03_ Lvl80",
+   "min": 0,
+   "max": 0
+  },
+  "44899606-da43-4fbe-b8a7-a604ec5dcdd8": {
+   "editorName": "SigilShop_DivineQuicksilverArmor",
+   "min": 45,
+   "max": 100
+  },
+  "44901ea7-d331-4b42-8b97-85fe9097f381": {
+   "editorName": "DecoOffer_S_Stele3_2019-04-15 00:00_2019-04-18 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "44dbe20a-4848-4f79-90f8-1cc670bc3642": {
+   "editorName": "DecoOffer_S_BundleBannerMarkarth_2019-11-20 00:00_2019-11-23 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "451e834d-1869-44e9-bf53-00ef8af97741": {
+   "editorName": "SigilShop_DivineDwarvenMailBoots",
+   "min": 45,
+   "max": 100
+  },
+  "459f2bb8-dd55-43a7-b07d-1b38a6285fca": {
+   "editorName": "PlayerLvlOffer_03_ Lvl56",
+   "min": 0,
+   "max": 0
+  },
+  "46022eb3-156b-4b89-8336-19b0d1660b14": {
+   "editorName": "DecoOffer_S_BundleBannerMorthal_2019-07-21 00:00_2019-07-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "463b1ebf-bb69-4350-a4dd-73107b583db7": {
+   "editorName": "SigilShop_Ultimate_FrostWarAxe",
+   "min": 35,
+   "max": 100
+  },
+  "46834f86-1db8-479b-96f0-446525f966c9": {
+   "editorName": "SigilShop_DivineDaedricWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "4695c897-35f8-4262-94c6-cdc99689a5b0": {
+   "editorName": "SigilShop_DivineDarkSeducerWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "469d1c29-8051-4966-a326-e35893e7ecc6": {
+   "editorName": "Player Level Up offer - Level 37",
+   "min": 0,
+   "max": 0
+  },
+  "4758b07b-9bdf-4ace-8fa1-d014173ed669": {
+   "editorName": "SigilShop_LTUltimate_HealthArmor",
+   "min": 25,
+   "max": 55
+  },
+  "4761c366-b6ba-4e47-bdc8-eac098f7fa63": {
+   "editorName": "SigilShop_DivineSteelDagger",
+   "min": 45,
+   "max": 100
+  },
+  "479f94d6-bd3f-4208-aa47-0f36fafaf515": {
+   "editorName": "SigilShop_DivineElvenArmor",
+   "min": 45,
+   "max": 100
+  },
+  "47ab54ba-0924-46e8-9f4e-e58279f59198": {
+   "editorName": "DecoOffer_S_Candelabra_2019-09-15 00:00_2019-09-19 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "47b84132-7e80-44b6-8b04-e88bd223c16b": {
+   "editorName": "SigilShop_Ultimate_CaptainKordansSaber",
+   "min": 35,
+   "max": 100
+  },
+  "47c7512e-75d4-4dbc-9289-ebe1518855fa": {
+   "editorName": "SigilShop_DivineSilverLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "47da93ba-99e8-4e3b-9f8f-3595c24e479f": {
+   "editorName": "SigilShop_DivineStalhrimHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "47f89147-694c-47b8-ba87-3b5e9e272762": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystRing_Arcane02",
+   "min": 1,
+   "max": 19
+  },
+  "485f25d7-5505-4b3e-8e5a-ba5d21d4e1a4": {
+   "editorName": "DecoOffer_L_UnicornFountain_2019-11-29 00:00_2019-12-02 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "48896ee4-3f13-4225-b2b9-23e3a49f8963": {
+   "editorName": "DecoOffer33%_L_UnicornFountain_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "489a4832-3a94-4718-ab45-d9883a4fdda7": {
+   "editorName": "PlayerLvlOffer_03_ Lvl59",
+   "min": 0,
+   "max": 0
+  },
+  "48aba164-76c2-443a-8cd5-b37beb88c979": {
+   "editorName": "SigilShop_Weapon_AncientNordicHandAxe",
+   "min": 13,
+   "max": 17
+  },
+  "48f13818-d8a9-4769-b297-1c4cef457cbb": {
+   "editorName": "DecoOffer_S_CostlyThrone_2019-10-23 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "497437eb-71c1-40eb-adbc-293a8dfabbf7": {
+   "editorName": "SigilShop_SoulGem_Glorious",
+   "min": 45,
+   "max": 100
+  },
+  "49851469-ac9c-42fe-9784-b2486fa5eb91": {
+   "editorName": "SigilShop_Shield_ChaurusShield_Temp08_PowBlock",
+   "min": 30,
+   "max": 39
+  },
+  "49941411-5350-4e2e-836e-4b4d81f5fbb5": {
+   "editorName": "SigilShop_Armor_DarkSeducerBoots",
+   "min": 39,
+   "max": 100
+  },
+  "49ebc41c-cd04-4f0c-abfa-3eab670a57cf": {
+   "editorName": "SigilShop_Armor_ChaurusHelmet_Arcane01",
+   "min": 30,
+   "max": 39
+  },
+  "4a03be57-3f3c-4a1a-b6bc-07c57180c602": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondRing_Arcane01",
+   "min": 35,
+   "max": 39
+  },
+  "4a3070fc-539c-4d97-98c5-374beea87ccd": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-07-25 00:00_2019-07-28 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "4ac913f7-d43e-4bff-8aa9-ce1db8b0a6e9": {
+   "editorName": "SigilShop_DivineHideArmor",
+   "min": 45,
+   "max": 100
+  },
+  "4ad5cdf0-b585-405b-9b89-45d89c346d2c": {
+   "editorName": "SigilShop_Weapon_AmberHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "4ba7308c-796e-4771-a88a-b6a13a192e1a": {
+   "editorName": "SigilShop_DivineGlassBoots",
+   "min": 45,
+   "max": 100
+  },
+  "4be4bb6c-46a6-438c-9f71-b848108c9c15": {
+   "editorName": "SigilShop_DivineStalhrimGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "4cc7fa9d-83e4-4a00-bc8c-742ca37d6d48": {
+   "editorName": "DecoOffer_M_Stele1_2019-09-10 00:00_2019-09-14 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "4ccb75d0-89b8-421b-85c8-4259d7bcf517": {
+   "editorName": "SigilShop_DivineElvenLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "4ccebdc4-668d-4b2f-8a4b-3e28e69904de": {
+   "editorName": "DecoOffer_S_Stele3_2019-11-15 00:00_2019-11-19 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "4ce049ed-2274-4836-aed6-8185e53b3a5b": {
+   "editorName": "SigilShop_Ultimate_PoisonBattleaxe",
+   "min": 35,
+   "max": 100
+  },
+  "4cffb0c3-e76d-421d-9258-9e06174d1253": {
+   "editorName": "DecoOffer33%_S_FullSpire_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "4dbaddc5-2d18-43ad-a224-c4160b4afb05": {
+   "editorName": "SigilShop_DivineOrcishMace",
+   "min": 45,
+   "max": 100
+  },
+  "4dc44e4e-cd4f-4c81-aaf0-87a0300f72b1": {
+   "editorName": "SigilShop_DivineIronMace",
+   "min": 45,
+   "max": 100
+  },
+  "4dd48763-db3e-43bc-851b-8374719f66a9": {
+   "editorName": "SigilShop_DivineSteelWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "4de7b916-77b2-44bb-ac11-6a0082ca69af": {
+   "editorName": "PlayerLvlOffer_03_ Lvl22",
+   "min": 0,
+   "max": 0
+  },
+  "4de8824c-e921-4107-9a41-70be9d08f1ad": {
+   "editorName": "PlayerLvlOffer_03_ Lvl90",
+   "min": 0,
+   "max": 0
+  },
+  "4e2659ae-3212-4052-be9a-6a09db1a823a": {
+   "editorName": "GemPack02_d",
+   "min": 0,
+   "max": 0
+  },
+  "4e6911fa-a662-4c3d-8800-e2a6ebfd580b": {
+   "editorName": "SigilShop_Weapon_ForswornGreatsword",
+   "min": 18,
+   "max": 22
+  },
+  "4ec29628-1b5b-4ead-82bd-a6c6104e76df": {
+   "editorName": "SigilShop_Armor_EbonyGauntlets_Temp04_AbsHp",
+   "min": 35,
+   "max": 49
+  },
+  "4eca9b3e-37ac-4f86-ace9-2aaef5e41802": {
+   "editorName": "SigilShop_Weapon_AmberDagger",
+   "min": 45,
+   "max": 100
+  },
+  "4f68fb73-c2fc-43f2-95c2-0ebb4ce091f4": {
+   "editorName": "SigilShop_DivineStalhrimShield",
+   "min": 45,
+   "max": 100
+  },
+  "4f7b557a-375d-4751-aa19-16812db690a9": {
+   "editorName": "PlayerLvlOffer_03_ Lvl28",
+   "min": 0,
+   "max": 0
+  },
+  "4f967fcd-37c8-433b-83dd-d34e17d6ce70": {
+   "editorName": "PlayerLvlOffer_03_ Lvl24",
+   "min": 0,
+   "max": 0
+  },
+  "4fc8a3e0-1adb-46bd-a41f-a31169c1bb27": {
+   "editorName": "DecoOffer_M_Bones_2020-06-14 00:00_2020-06-17 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "4ff00a51-010e-4429-bbe4-45ed5919c892": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldRing_Arcane02",
+   "min": 30,
+   "max": 34
+  },
+  "50485c9c-f4fe-4197-8e20-a1a0cc4837cc": {
+   "editorName": "SigilShop_DivineEbonyBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "509e149c-0443-4092-ac41-e6df332aacd0": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2019-09-02 00:00_2019-09-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "51284db5-29b9-44c8-b0e3-352b8b82ba9f": {
+   "editorName": "SigilShop_DivineSilverHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "51a6fd30-d3ac-4b56-ae6d-321ba8937804": {
+   "editorName": "SigilShop_DivineSteelShield",
+   "min": 45,
+   "max": 100
+  },
+  "51dd7e59-4aa4-47d2-8058-a497956cb22b": {
+   "editorName": "SigilShop_Weapon_ChaurusGreatsword",
+   "min": 28,
+   "max": 32
+  },
+  "522a71be-6f47-4d5c-9608-518cb0c6dab5": {
+   "editorName": "GemPack04_d_HeroicBlacksmith",
+   "min": 35,
+   "max": 100
+  },
+  "522a9e2b-8449-4afa-9510-110641d2f4d4": {
+   "editorName": "PlayerLvlOffer_02_ Lvl78",
+   "min": 0,
+   "max": 0
+  },
+  "528d275d-b3bb-438f-8519-a5b133967931": {
+   "editorName": "Test not offer global shop item",
+   "min": 0,
+   "max": 0
+  },
+  "52b48e83-480a-458c-9a78-911396052car": {
+   "editorName": "DecoOffer_M_Bones_2019-04-07 00:00_2019-04-10 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "53c6f124-3603-4100-ba9a-e2fe23969f7p": {
+   "editorName": "DecoOffer_S_Candelabra_2019-02-14 00:00_2019-02-17 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "53f03844-70c9-4145-b004-7d0c680cc018": {
+   "editorName": "DecoOffer_M_FullSpire_2020-06-22 00:00_2020-06-25 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "553008d8-4365-489d-9afd-5f7f544c0792": {
+   "editorName": "IAP_ElementalPack_03",
+   "min": 28,
+   "max": 49
+  },
+  "557cff04-8683-4358-8267-bb53fbbce115": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-06-18 00:00_2020-06-21 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "564a4faf-c2ea-47bb-a346-0a53d03647e1": {
+   "editorName": "SigilShop_Weapon_NordicSteelWarAxe",
+   "min": 23,
+   "max": 27
+  },
+  "5687eeff-1e10-4776-858e-3d80dab355d1": {
+   "editorName": "SigilShop_DivineStalhrimDagger",
+   "min": 45,
+   "max": 100
+  },
+  "5699647f-2bc7-4a72-8e57-b5a545c443c3": {
+   "editorName": "SigilShop_DivineSteelHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "57108a6b-7b10-4828-a783-d52f5dcd62cd": {
+   "editorName": "SigilShop_Weapon_ForswornMace",
+   "min": 18,
+   "max": 22
+  },
+  "57199098-235e-4057-9b0e-5389b797e14h": {
+   "editorName": "DecoOffer_S_Candelabra_2019-04-27 00:00_2019-04-30 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5744643d-1b6f-44ee-90ca-814703dcedaf": {
+   "editorName": "EmoteOffer_FistFight_2020-01-20 00:00_2020-01-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "579141c5-4960-4280-9b29-98b8a88f9dfe": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm",
+   "min": 45,
+   "max": 100
+  },
+  "581cbf3c-0d18-48b4-964f-de4239aec329": {
+   "editorName": "SigilShop_DivineChaurusGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "58ea5487-a8e4-4ee6-a51f-e3184f6241ee": {
+   "editorName": "SigilShop_Jewel_Faerite",
+   "min": 40,
+   "max": 100
+  },
+  "58ec4017-04b0-41af-bb68-4441eebad971": {
+   "editorName": "Player Level Up offer - Level 32",
+   "min": 0,
+   "max": 0
+  },
+  "58fb0bc7-6eb5-4f5c-b495-90ad1019d9fc": {
+   "editorName": "SigilShop_Shield_OrcishShield_Arcane02",
+   "min": 15,
+   "max": 24
+  },
+  "5919c561-e2bb-46c1-ad94-bd0e46ebdd28": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteNecklace_Barbarian_FortStmRegen",
+   "min": 40,
+   "max": 49
+  },
+  "59675eed-3514-42c1-a161-6869b158b9c3": {
+   "editorName": "DecoOffer33%_M_Bones_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "59ab5828-2eea-4b7b-bd67-e2beee64e098": {
+   "editorName": "SigilShop_Armor_OrcishPlateArmor_Arcane02",
+   "min": 15,
+   "max": 24
+  },
+  "59b31d50-34e8-4b3e-8084-f54d3c8c6c4d": {
+   "editorName": "SigilShop_Gold_30k",
+   "min": 1,
+   "max": 100
+  },
+  "59bb8164-daa2-4b69-90ab-2d3ec094f843": {
+   "editorName": "DecoOffer25%_S_FullSpire_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "59cb0624-f8ea-421b-8b39-ec440985196e": {
+   "editorName": "SigilShop_DivineSilverHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "59d19949-1a7a-4e06-bd78-6197829e45a5": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireRing_Arcane01",
+   "min": 25,
+   "max": 29
+  },
+  "59df4b8c-e418-451e-8eab-a9c3e2dbb74c": {
+   "editorName": "PlayerLvlOffer_02_ Lvl40",
+   "min": 0,
+   "max": 0
+  },
+  "5a5e9fc1-429e-4b15-b4fb-433e1bae5e1b": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteRing_LightningBoltDelayedLightningBoltThunderstorm_AbsMgc",
+   "min": 40,
+   "max": 49
+  },
+  "5a64724b-60cf-4b7d-98de-751e298e98cd": {
+   "editorName": "SigilShop_DivineOrcishGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "5a7f4221-7492-4e51-8b5a-96558694e556": {
+   "editorName": "DecoOffer_M_Abyss2_2019-10-04 00:00_2019-10-08 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5b1fc014-5c07-4cf3-83f6-1ceed5cd0086": {
+   "editorName": "SigilShop_DivineAncientNordicWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "5b417350-8e3d-4e06-a0e2-4cb4931346c5": {
+   "editorName": "SigilShop_Weapon_NordicSteelLightHammer",
+   "min": 23,
+   "max": 27
+  },
+  "5b7a02fe-20b5-4a51-b6bb-9410a105df9d": {
+   "editorName": "SigilShop_DivineOrcishWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "5bae2c86-99b5-4021-ab5d-b8dd70e1ac10": {
+   "editorName": "DecoOffer_M_FullSpire_2019-06-22 00:00_2019-06-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5be33ce0-48c7-454f-8551-4329f99f55ca": {
+   "editorName": "SigilShop_Jewel_Garnet",
+   "min": 1,
+   "max": 19
+  },
+  "5be5762a-2c7c-4a4a-b1a5-4af8a93dbf71": {
+   "editorName": "DecoOffer33%_S_Bundle_BannerMarkath_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "5bf64569-dca5-45d3-86d5-35238351156e": {
+   "editorName": "PlayerLvlOffer_03_ Lvl72",
+   "min": 0,
+   "max": 0
+  },
+  "5c167492-14ce-4578-8ec3-79e258f4bc5e": {
+   "editorName": "DecoOffer_M_Bones_2019-12-03 00:00_2019-12-06 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5c29e759-6768-4a68-a125-12341d14ce49": {
+   "editorName": "SigilShop_Weapon_GlassGreatsword_Arcane01",
+   "min": 30,
+   "max": 39
+  },
+  "5c9b5ab4-30e9-42c5-815e-0c7cbe284f8c": {
+   "editorName": "SigilShop_Weapon_DarkSeducerGreatsword",
+   "min": 39,
+   "max": 44
+  },
+  "5c9d1ddb-b6fa-4d77-8537-a0b07c5414d1": {
+   "editorName": "SigilShop_TownMaterials_Copper_x40",
+   "min": 15,
+   "max": 100
+  },
+  "5caf2574-c68b-409b-a33a-841664998396": {
+   "editorName": "DecoOffer25%_L_ScaryTree_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "5cb83711-f4ad-4734-bf39-6caffe8ad6f9": {
+   "editorName": "DecoOffer25%_S_Bundle_BannerMarkath_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "5d4a230c-43c8-498f-9534-659fe9389476": {
+   "editorName": "SigilShop_EffectIngredients_FireSalts",
+   "min": 1,
+   "max": 100
+  },
+  "5dff1d25-ae5f-4b21-bb2a-6a733d2b5f26": {
+   "editorName": "PlayerLvlOffer_02_ Lvl52",
+   "min": 0,
+   "max": 0
+  },
+  "5e35d31c-8ef1-482b-a704-1cfb903a04ac": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-02-22 00:00_2019-02-25 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5e3d267a-bfb3-4534-80ec-5a1615b78086": {
+   "editorName": "SigilShop_Armor_DwarvenPlateBoots_Temp06_NoEnch",
+   "min": 20,
+   "max": 29
+  },
+  "5e40760a-4d88-44fb-b0b5-2f07b2dd8443": {
+   "editorName": "SigilShop_Weapon_DragonboneLightHammer_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "5e6003b0-5c8d-4198-8271-4746d0d322b6": {
+   "editorName": "SigilShop_DivineChitinShield",
+   "min": 45,
+   "max": 100
+  },
+  "5e6c4733-f5d8-40d6-96d1-09c3338f3cbe": {
+   "editorName": "Player Level Up offer - Level 49",
+   "min": 0,
+   "max": 0
+  },
+  "5e77bc66-a80b-4f9b-b272-e738635cf2fd": {
+   "editorName": "SigilShop_Ultimate_RingOfShock",
+   "min": 35,
+   "max": 100
+  },
+  "5e899b93-5ec3-43d6-bee7-4ec9e6e452fe": {
+   "editorName": "SigilShop_DivineElvenWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "5e9f79e2-4798-4346-839a-11877690884d": {
+   "editorName": "DecoOffer33%_M_GoldenHorse_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "5f21f87f-f186-4640-8bc9-04e97299cd19": {
+   "editorName": "DecoOffer_S_BundleBannerMarkarth_2019-08-13 00:00_2019-08-16 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5f3a03b7-a3f0-4978-b888-6cc1b86c8376": {
+   "editorName": "SigilShop_Weapon_DarkSeducerHandAxe",
+   "min": 39,
+   "max": 44
+  },
+  "5f757564-92a8-475f-939e-9736b6a503e7": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-02-18 00:00_2020-02-21 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "5f8f1ab0-232a-4528-94f4-33c8e22872dd": {
+   "editorName": "SigilShop_DivineDwarvenLightShield",
+   "min": 45,
+   "max": 100
+  },
+  "5fcef81c-b91d-4e93-a033-593bdda81d12": {
+   "editorName": "SigilShop_DivineGlassHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "6046f6ef-ca9d-4618-a1f9-fd3662a7b74c": {
+   "editorName": "SigilShop_Armor_GlassBoots_Temp08_NoEnch",
+   "min": 30,
+   "max": 39
+  },
+  "607f3a93-7898-4da2-9583-f1119db0080c": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-05-13 00:00_2019-05-16 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "60d9ae18-2a16-4f73-9335-397f5cf5d5d1": {
+   "editorName": "SigilShop_DivineGlassDagger",
+   "min": 45,
+   "max": 100
+  },
+  "60e3cd33-136f-42d6-9add-a50663ad6e02": {
+   "editorName": "PlayerLvlOffer_03_ Lvl89",
+   "min": 0,
+   "max": 0
+  },
+  "6135f729-1402-424c-b6c6-efcbc4e59955": {
+   "editorName": "EmoteFree_Basic_2019-09-24 00:00_2029-09-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "614b4d74-b76a-4352-8b64-752c44594121": {
+   "editorName": "DecoOffer_L_FancyFountain_2020-03-01 00:00_2020-03-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6153e5c9-2782-4794-801b-1be67f93089f": {
+   "editorName": "SigilShop_DivineOrcishShield",
+   "min": 45,
+   "max": 100
+  },
+  "61aeed1a-fc9c-41d2-a884-37f67ade4b02": {
+   "editorName": "PlayerLvlOffer_02_ Lvl18",
+   "min": 0,
+   "max": 0
+  },
+  "61d667c1-c246-437d-8297-c5a0b3da64ca": {
+   "editorName": "SigilShop_Weapon_NordicSteelLongsword",
+   "min": 23,
+   "max": 27
+  },
+  "62708549-939e-41ba-a78a-76322de2c7e2": {
+   "editorName": "SigilShop_Weapon_DwarvenLongsword_Temp08_NoEnch",
+   "min": 20,
+   "max": 29
+  },
+  "62dd9600-1d5a-4491-90b6-8622b1dcc306": {
+   "editorName": "SigilShop_Jewelry_GoldRubyNecklace_Arcane01",
+   "min": 20,
+   "max": 24
+  },
+  "630d740a-666a-4da9-843d-27dc6ec66017": {
+   "editorName": "DecoOffer_M_Abyss3_2020-06-26 00:00_2020-06-29 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6324182a-c722-4059-89d0-040ba500b4f8": {
+   "editorName": "Town Level Up Offer - Level 5",
+   "min": 0,
+   "max": 0
+  },
+  "63858755-3df3-4acd-ac3d-a76bc43c1a38": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldNecklace_Armsman_NoEnch",
+   "min": 30,
+   "max": 34
+  },
+  "638be504-99a8-4f86-ac28-5fbc12fc4614": {
+   "editorName": "SigilShop_DivineIronGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "638f65fb-0c19-4271-90c7-dba06cf47e1a": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2019-06-16 00:00_2019-06-18 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "63d5db64-8efd-4fe1-ab08-814efd86d052": {
+   "editorName": "SigilShop_Armor_OrcishScaleBoots_Temp06_FortMgc",
+   "min": 15,
+   "max": 24
+  },
+  "64060ef4-1648-41c9-90bc-34781080797d": {
+   "editorName": "SigilShop_Weapon_AmberLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "642fd337-db71-4fcb-9834-36bda66dace9": {
+   "editorName": "PlayerLvlOffer_03_ Lvl73",
+   "min": 0,
+   "max": 0
+  },
+  "643d35e8-5d17-402c-b32b-2e53deca8269": {
+   "editorName": "SigilShop_DivineSteelWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "6466695d-93d1-4ed0-9dc3-cb18a3087eca": {
+   "editorName": "SigilShop_Weapon_SilverWarAxe_Temp04_StmDmg",
+   "min": 1,
+   "max": 14
+  },
+  "6598f187-75d6-4832-963e-a02c0a03ab55": {
+   "editorName": "SigilShop_DivineForswornDagger",
+   "min": 45,
+   "max": 100
+  },
+  "65c60d67-a5fb-45e3-9ab1-50112c903c31": {
+   "editorName": "SigilShop_DivineEbonyShield",
+   "min": 45,
+   "max": 100
+  },
+  "6603ca56-9ef9-474c-b5cc-ae13a8d8add8": {
+   "editorName": "SigilShop_Armor_GlassArmor_Arcane01",
+   "min": 30,
+   "max": 39
+  },
+  "66086f40-cfa2-4a1d-bef7-b752a5b57bbf": {
+   "editorName": "SigilShop_Armor_DragonscaleBoots_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "66624125-a3e8-44b7-8544-513f8993ba04": {
+   "editorName": "SigilShop_Weapon_NordicSteelMace",
+   "min": 23,
+   "max": 27
+  },
+  "66749582-05be-4366-b35a-f083282c8ba1": {
+   "editorName": "DecoOffer50%_S_Candelabra_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "66bac2f0-64cf-495d-974f-491b13b7d5fq": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-03-26 00:00_2019-03-29 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6736d2de-92ee-4ca9-b97f-9a4393fcd151": {
+   "editorName": "SigilShop_Weapon_GlassMace_Arcane02",
+   "min": 30,
+   "max": 39
+  },
+  "6761c667-5b52-4265-aba8-92412ac5a3c6": {
+   "editorName": "SigilShop_Armor_DivineGoldenSaintArmor",
+   "min": 45,
+   "max": 100
+  },
+  "679e3213-74a9-407b-bee5-c4fbdc6dfaac": {
+   "editorName": "SigilShop_Weapon_ChaurusWarhammer",
+   "min": 28,
+   "max": 32
+  },
+  "67b7a1eb-05fb-417d-b013-1e5fc037acc0": {
+   "editorName": "Town Level Up Offer - Level 3",
+   "min": 0,
+   "max": 0
+  },
+  "681d1f42-4b25-47df-b3e9-0e30ab7fec73": {
+   "editorName": "DecoOffer_S_Stele3_2019-07-07 00:00_2019-07-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6869fb70-dddb-42b6-a433-2cc1597db5e2": {
+   "editorName": "SigilShop_Armor_DaedricPlateArmor_Arcane01",
+   "min": 40,
+   "max": 100
+  },
+  "68c616fb-5d19-4aaa-9757-132d76534db3": {
+   "editorName": "SigilShop_DivineForswornWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "68d782da-fd54-4db6-b3a9-9472f0b7a7ec": {
+   "editorName": "PlayerLvlOffer_03_ Lvl50",
+   "min": 0,
+   "max": 0
+  },
+  "68e780ac-229c-411f-9d2f-18732fdc704a": {
+   "editorName": "DecoOffer_S_Nirnroot_2020-03-10 00:00_2020-03-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "68ed9887-23fe-4892-8835-d9aa471c3ca7": {
+   "editorName": "SigilShop_DivineChitinBoots",
+   "min": 45,
+   "max": 100
+  },
+  "693b8d04-9ce9-4541-935d-ac6a39355cdc": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteNecklace_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "693f4205-5c27-4f96-b149-590ea31a60d5": {
+   "editorName": "DecoOffer33%_L_FancyFountain_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "69a0d8c9-8948-44f6-a922-099581c22949": {
+   "editorName": "DecoOffer50%_M_Bones_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "69ab6e05-8968-41a2-b45e-997c8534e166": {
+   "editorName": "GemPack05_c_ExpertEnchanter",
+   "min": 31,
+   "max": 60
+  },
+  "69d798ca-ae45-440f-9f87-b1daad041838": {
+   "editorName": "PlayerLvlOffer_02_ Lvl32",
+   "min": 0,
+   "max": 0
+  },
+  "69f38e76-b995-4941-83f8-6ea925cf90b6": {
+   "editorName": "SigilShop_Ultimate_ShockResistBoots",
+   "min": 35,
+   "max": 100
+  },
+  "6a028797-476e-4d25-8524-5d07e1d67286": {
+   "editorName": "DecoOffer_S_Stele3_2020-03-26 00:00_2020-03-29 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6a2a7a53-18c7-44d2-b1fe-57cbe4a5027e": {
+   "editorName": "DecoOffer_S_BundleBannerMorthal_2019-06-28 00:00_2019-06-30 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6a4367ac-f4c8-4d1a-8754-8e44db495365": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2020-05-29 00:00_2020-06-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6afb75b4-b08b-4699-9a34-7d380fe13b5c": {
+   "editorName": "SigilShop_DivineStalhrimHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "6b321e4b-5b74-44f0-b7b2-6982d08be2b2": {
+   "editorName": "SigilShop_Armor_GoldenSaintBoots",
+   "min": 39,
+   "max": 100
+  },
+  "6c625e94-8660-4f68-be54-464094e778a2": {
+   "editorName": "SigilShop_LTUltimate_FireRing",
+   "min": 25,
+   "max": 55
+  },
+  "6c7bcf8c-ab89-486c-982f-b90c6cc55a8b": {
+   "editorName": "SigilShop_TownMaterials_MarbleBronze_x50",
+   "min": 25,
+   "max": 100
+  },
+  "6c92b325-fd92-4f33-9978-e91148ca6cd8": {
+   "editorName": "SigilShop_LTUltimate_ShockBoots",
+   "min": 25,
+   "max": 55
+  },
+  "6d196e55-f282-4111-bb10-cdca84dec67b": {
+   "editorName": "SigilShop_DivineDaedricGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "6d47da01-cd56-4ac7-a388-d42f89fa7d46": {
+   "editorName": "DecoOffer33%_S_Bundle_BannerMorthal_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "6d707af9-781f-4dde-8bea-46d13ca1c92e": {
+   "editorName": "SigilShop_DivineDwarvenLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "6d8a9e59-c577-497d-9232-b5f7bf5deddc": {
+   "editorName": "SigilShop_Armor_DaedricPlateHelmet_Temp06_FortMgc",
+   "min": 40,
+   "max": 100
+  },
+  "6dac1b5c-33a0-46d2-95a4-b3f8c24a843c": {
+   "editorName": "DecoOffer_L_UnicornFountain_2020-08-01 00:00_2020-08-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6df838c5-87d8-4f64-8802-bd5e3e88c61b": {
+   "editorName": "SigilShop_Armor_DragonplateGauntlets_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "6e594f46-79a7-4860-8c9b-5bf20ca4a153": {
+   "editorName": "SigilShop_DivineDwarvenMailGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "6eb9d4f0-aa9d-4a7b-891b-2d7cca8cbbfc": {
+   "editorName": "SigilShop_Weapon_GoldenSaintLongsword",
+   "min": 39,
+   "max": 44
+  },
+  "6ec8f67f-2cef-41aa-a7fc-f46237ae809c": {
+   "editorName": "GemPack05_d_HeroicEnchanter",
+   "min": 46,
+   "max": 100
+  },
+  "6f160591-af5c-4a85-8daf-4b2dd56fdfba": {
+   "editorName": "PlayerLvlOffer_02_ Lvl06",
+   "min": 0,
+   "max": 0
+  },
+  "6fa6031b-f78b-41be-b8b4-c4b53977fa5e": {
+   "editorName": "PlayerLvlOffer_02_ Lvl70",
+   "min": 0,
+   "max": 0
+  },
+  "6fa62f36-1eb2-40c1-bfd5-d16ad9e5f4fb": {
+   "editorName": "PlayerLvlOffer_03_ Lvl46",
+   "min": 0,
+   "max": 0
+  },
+  "6facace0-6389-40ce-a191-2af5a25304db": {
+   "editorName": "SigilShop_Unique_GrandChampionHelmet",
+   "min": 50,
+   "max": 100
+  },
+  "6ff2e3b9-7d64-4097-9ec3-0d8c70dc4bf5": {
+   "editorName": "DecoOffer_S_Candelabra_2019-12-12 00:00_2019-12-15 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "6ffc71a2-c11e-49e2-99b2-577c9aabbf18": {
+   "editorName": "DecoOffer50%_M_Imperial_Bath_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "7072209f-7571-4891-b7c0-9fca95f9375d": {
+   "editorName": "PlayerLvlOffer_02_ Lvl74",
+   "min": 0,
+   "max": 0
+  },
+  "70b0052f-00a9-41ef-a788-4df52368b247": {
+   "editorName": "DecoOffer_M_Abyss3_2019-04-19 00:00_2019-04-22 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "70b9c571-94b0-4b28-88aa-1642212b9f79": {
+   "editorName": "SigilShop_DivineIronWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "70fdfb88-9ca1-4890-9934-b7891a3fd26b": {
+   "editorName": "SigilShop_Weapon_AncientNordicDagger",
+   "min": 13,
+   "max": 17
+  },
+  "710a6cef-5c2f-43d4-9882-0340eb94e72d": {
+   "editorName": "SigilShop_Weapon_GlassLongsword_Temp06_StmDmg",
+   "min": 30,
+   "max": 39
+  },
+  "716fadfc-808c-4e63-b322-0b452c3753db": {
+   "editorName": "DecoOffer_S_Nirnroot_2020-01-08 00:00_2020-01-10 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "717b9869-9690-4763-9ef2-1b0d03258ea8": {
+   "editorName": "DecoOffer_L_SnowTree02_2019-12-01 00:00_2019-12-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7220da6d-d03a-4e2d-94c9-25fda3f69e01": {
+   "editorName": "SigilShop_Weapon_DwarvenDagger_Arcane01",
+   "min": 20,
+   "max": 29
+  },
+  "723c6b1c-e029-461d-8531-0637875c8c49": {
+   "editorName": "GemPack01_c",
+   "min": 21,
+   "max": 45
+  },
+  "7289a879-1a5f-43db-af70-946ddf5f53fa": {
+   "editorName": "SigilShop_SoulGem_Bundle_Glorious",
+   "min": 45,
+   "max": 100
+  },
+  "7296a3d5-0395-4c55-95dc-0904c937cfb2": {
+   "editorName": "SigilShop_SoulGem_Bundle_Grand",
+   "min": 40,
+   "max": 100
+  },
+  "72a4f08c-5075-4e86-a992-9a194445a778": {
+   "editorName": "DecoOffer_S_GarnetBeacon_2019-12-24 00:00_2019-12-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "73b1b726-4651-4474-be43-92fa25edbe44": {
+   "editorName": "SigilShop_Armor_DwarvenMailHelmet_Arcane01",
+   "min": 20,
+   "max": 29
+  },
+  "73cf9144-9d0d-481b-9c9b-6cd3d20e4adb": {
+   "editorName": "SigilShop_DivineSilverWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "73f07803-f68f-4a83-abf1-679baf367964": {
+   "editorName": "SigilShop_Armor_StalhrimArmor_Temp04_NoEnch",
+   "min": 35,
+   "max": 49
+  },
+  "74381b84-bbd8-4aaa-88ff-0da34f658e4d": {
+   "editorName": "EmoteOffer_Boo_2019-09-24 00:00_2029-09-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "747daeae-129f-4a2c-95b8-0df476a07573": {
+   "editorName": "SigilShop_SoulGem_Bundle_Middling",
+   "min": 20,
+   "max": 100
+  },
+  "7485b924-2210-44b2-b358-a0967dcc015e": {
+   "editorName": "SigilShop_DivineGoldenSaintWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "74ccbfef-a956-498a-ad8c-1ec4a581f144": {
+   "editorName": "SigilShop_DivineIronBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "74f84fff-d2c1-44ec-b04c-e51118ed8757": {
+   "editorName": "PlayerLvlOffer_03_ Lvl92",
+   "min": 0,
+   "max": 0
+  },
+  "75102a90-80d6-4fee-8c51-7ddb4b43370d": {
+   "editorName": "SigilShop_Weapon_GlassWarhammer_Temp08_NoEnch",
+   "min": 30,
+   "max": 39
+  },
+  "7550f5f9-851a-4042-82f5-0f54c0d8b671": {
+   "editorName": "DecoOffer50%_S_Bundle_BannerRiften_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "7556cf90-bd1f-4e74-8114-59cfd6e2182a": {
+   "editorName": "SigilShop_DivineDaedricPlateGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "757d3098-4e05-4c07-b49d-e69d8b22e640": {
+   "editorName": "GemPack04_a_ApprenticeBlacksmith",
+   "min": 2,
+   "max": 20
+  },
+  "75abfa7e-2fa6-4c1c-a61d-de8c5f14fba8": {
+   "editorName": "PlayerLvlOffer_03_ Lvl100",
+   "min": 0,
+   "max": 0
+  },
+  "75d40600-cf49-4d0a-b1ac-4a56a13e16f7": {
+   "editorName": "PlayerLvlOffer_02_ Lvl28",
+   "min": 0,
+   "max": 0
+  },
+  "766cc1f7-e68a-4110-ab66-fbd1707e8e80": {
+   "editorName": "EmoteOffer_Arrow_2019-12-28 00:00_2019-12-29 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "767c7266-f6f4-4a38-a57b-24b06f914dd0": {
+   "editorName": "SigilShop_DivineChaurusDagger",
+   "min": 45,
+   "max": 100
+  },
+  "76ceb32c-770d-40b9-b763-6f78966e5a43": {
+   "editorName": "SigilShop_Ultimate_PurifiersCocoon",
+   "min": 35,
+   "max": 100
+  },
+  "76e8550b-d441-4014-8b47-c7397531c30b": {
+   "editorName": "SigilShop_Weapon_GlassLightHammer_Temp04_Combo",
+   "min": 30,
+   "max": 39
+  },
+  "7760614b-8f31-4638-bca4-9170e0ee4e95": {
+   "editorName": "GemPack03_a_ApprenticeArchitect",
+   "min": 2,
+   "max": 20
+  },
+  "77a79241-64c7-4de9-80e1-9c87d83ce02a": {
+   "editorName": "DecoOffer33%_L_ScaryTree_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "77ac7cd6-3d15-45a6-84f4-507b6bf155e3": {
+   "editorName": "SigilShop_Weapon_ChaurusLightHammer",
+   "min": 28,
+   "max": 32
+  },
+  "77adebb0-5a64-4ec0-a976-7a5778254629": {
+   "editorName": "SigilShop_DivineIronArmor",
+   "min": 45,
+   "max": 100
+  },
+  "77bb656a-a271-4131-8708-c76e510663a5": {
+   "editorName": "DecoOffer_M_Stele1_2019-07-04 00:00_2019-07-06 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "781b0b7b-2a15-4bb5-9929-628157e26513": {
+   "editorName": "DecoOffer_M_FighterTrophy_2020-01-04 00:00_2020-01-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "78584cd4-9eec-49a0-8cde-296288037ad7": {
+   "editorName": "SigilShop_Armor_DarkSeducerArmor",
+   "min": 39,
+   "max": 100
+  },
+  "78833ce5-b3e0-44a4-9940-b942629a88db": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-07-12 00:00_2020-07-15 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7892e5ec-71e1-4fa7-b5af-c1ead4b595dc": {
+   "editorName": "SigilShop_Weapon_MadnessHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "78cf0641-ee7b-420d-b95d-35058b977ac6": {
+   "editorName": "SigilShop_Weapon_DaedricWarhammer_Temp06_PhyBlockPiercing",
+   "min": 40,
+   "max": 100
+  },
+  "79313eb2-5e5b-4032-bbb5-c163857a16b4": {
+   "editorName": "DecoOffer_M_Bones_2019-05-09 00:00_2019-05-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7969c5b0-a699-4a6a-b3fb-83773a5eb5de": {
+   "editorName": "EmoteOffer_FireBall_2020-01-13 00:00_2020-01-17 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "79995d29-eac2-49a3-bfec-ce9e547b98de": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteNecklace_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "79dadcf6-6b73-4643-8ebb-c4e18e5fe01b": {
+   "editorName": "SigilShop_DivineGlassLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "79f59df1-e7a5-4c16-a127-e2a71dfe9f21": {
+   "editorName": "Player Level Up offer - Level 27",
+   "min": 0,
+   "max": 0
+  },
+  "7a4a92f9-6ace-4cc6-a10c-056f0c108fc3": {
+   "editorName": "EmoteOffer_FireBall_2019-12-23 00:00_2019-12-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7a4ba3a2-6d71-49a5-9ddd-6720a7cea1fb": {
+   "editorName": "SigilShop_Ultimate_HealthArmor",
+   "min": 35,
+   "max": 100
+  },
+  "7a8a2e3b-5ee1-4acb-babc-6fd5be5fad15": {
+   "editorName": "SigilShop_DivineOrcishPlateBoots",
+   "min": 45,
+   "max": 100
+  },
+  "7ab0ad68-1e80-4287-aeb4-ddb72a701afe": {
+   "editorName": "PlayerLvlOffer_02_ Lvl62",
+   "min": 0,
+   "max": 0
+  },
+  "7b7727c9-216f-4a73-9e98-eb1f9d9ac62d": {
+   "editorName": "DecoOffer_S_PeridotBeacon_2019-12-31 00:00_2020-01-03 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7bdf504a-6489-4a51-8736-bd20b8b5edb1": {
+   "editorName": "SigilShop_DivineDarkSeducerDagger",
+   "min": 45,
+   "max": 100
+  },
+  "7bf00a9c-6a08-4b55-a60d-53915baa38a3": {
+   "editorName": "Epic Chest",
+   "min": 0,
+   "max": 0
+  },
+  "7bfbb4d3-a6cb-4b26-a53c-09869facff3d": {
+   "editorName": "GemPack01_b",
+   "min": 10,
+   "max": 40
+  },
+  "7c346487-6419-484f-bbc7-68e39bc834e5": {
+   "editorName": "SigilShop_Weapon_DragonboneLightHammer_Temp04_StmDmg",
+   "min": 45,
+   "max": 100
+  },
+  "7c3e4e60-6c72-49fc-aadf-cc6ad8819268": {
+   "editorName": "SigilShop_DivineForswornLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "7c486d26-130e-4ca9-8f8f-2fcac22cba3f": {
+   "editorName": "DecoOffer50%_L_FancyFountain_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "7c4e536c-49ff-4daa-9499-22a38678d6df": {
+   "editorName": "SigilShop_Weapon_ElvenDagger_Temp08_StmDmg",
+   "min": 25,
+   "max": 34
+  },
+  "7cd1d51d-77e9-406d-b7b8-8e20ff50c588": {
+   "editorName": "SigilShop_Weapon_ElvenHandAxe_Temp08_NoEnch",
+   "min": 25,
+   "max": 34
+  },
+  "7cf6fac2-a654-4c6f-bf12-6dfb4305f1fb": {
+   "editorName": "SigilShop_LTUltimate_AkaviriKatana",
+   "min": 25,
+   "max": 55
+  },
+  "7d103d6e-cfff-4f9c-af51-d4885e9a3aa8": {
+   "editorName": "SigilShop_TownMaterials_Lumber_x120",
+   "min": 30,
+   "max": 100
+  },
+  "7d40761c-d5d5-4792-a43d-c8b7f00ace40": {
+   "editorName": "DecoOffer33%_S_Candelabra_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "7d5c957e-0721-4db1-b804-a4e87b2569dd": {
+   "editorName": "PlayerLvlOffer_03_ Lvl65",
+   "min": 0,
+   "max": 0
+  },
+  "7d7badf6-e8ad-4a96-8ec1-c7e52da3507e": {
+   "editorName": "PlayerLvlOffer_03_ Lvl94",
+   "min": 0,
+   "max": 0
+  },
+  "7d80272f-c92c-4fa4-a2e2-5c9b6cd42efc": {
+   "editorName": "DecoOffer_S_BundleBannerMorthal_2019-11-02 00:00_2019-11-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7dc38110-588a-46bb-af20-4f5eadf83461": {
+   "editorName": "SigilShop_DivineLeatherArmor",
+   "min": 45,
+   "max": 100
+  },
+  "7e96a3f8-971c-4dca-a5d7-825d90246796": {
+   "editorName": "SigilShop_SoulGem_Bundle_Elevated",
+   "min": 40,
+   "max": 100
+  },
+  "7e9a8fa6-707d-4496-b393-7787ede2ee48": {
+   "editorName": "SigilShop_DivineNordicSteelDagger",
+   "min": 45,
+   "max": 100
+  },
+  "7e9f6c38-392a-4762-9b4e-27f379648fdt": {
+   "editorName": "DecoOffer_M_Abyss3_2019-03-14 00:00_2019-03-17 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7ed82a12-ba09-4b99-a3ce-8f7c3707ebf4": {
+   "editorName": "SigilShop_DivineChaurusLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "7ef80048-528b-4a2c-a2f8-c9dde919109a": {
+   "editorName": "SigilShop_Weapon_AmberBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "7f09689d-56fd-4db3-9c44-4558fe06aa8e": {
+   "editorName": "SigilShop_DivineChaurusGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "7f0a1904-ecdc-42f1-bf1b-e434b0791e0b": {
+   "editorName": "SigilShop_Armor_DragonscaleGauntlets_Temp06_AbsMgc",
+   "min": 45,
+   "max": 100
+  },
+  "7f67b458-28ac-494d-b78e-79e213a6b820": {
+   "editorName": "SigilShop_Weapon_AncientNordicGreatsword",
+   "min": 13,
+   "max": 17
+  },
+  "7fa8f2a8-3457-426e-aaa4-1a62f7658de0": {
+   "editorName": "DecoOffer_M_Stele1_2020-06-30 00:00_2020-07-03 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7fb2d1d3-3165-4e9a-af68-185bad427858": {
+   "editorName": "DecoOffer_S_NecromancersPool_2019-10-16 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "7fce9e51-4639-47e7-a124-58e9b40eba73": {
+   "editorName": "DecoOffer_M_Abyss3_2019-06-25 00:00_2019-06-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "802477ea-532a-4d1c-a6ca-0571a17c3b76": {
+   "editorName": "SigilShop_TownMaterials_Copper_x160",
+   "min": 45,
+   "max": 100
+  },
+  "80875587-2995-497a-98fa-0e3a54cd164b": {
+   "editorName": "SigilShop_Unique_HeadmansCleaver",
+   "min": 35,
+   "max": 100
+  },
+  "8096da5f-a7a7-4374-b6d2-f40213754593": {
+   "editorName": "SigilShop_DivineNordicSteelLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "80b9fc58-0e8c-4801-87d8-ea9287e9c845": {
+   "editorName": "SigilShop_Weapon_AmberWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "812ea9ef-c2af-406b-9b93-1897db4a6879": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteRing_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "8195d9ea-e813-4455-90bd-9846149ed7f8": {
+   "editorName": "DecoOffer_S_Candelabra_2019-03-02 00:00_2019-03-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "81ad183d-0d0f-43e5-bae4-1db71221a2e9": {
+   "editorName": "SigilShop_DivineSteelBoots",
+   "min": 45,
+   "max": 100
+  },
+  "81d8f2b0-227a-4d91-9836-c6556f2948df": {
+   "editorName": "SigilShop_Shield_DwarvenLightShield_Temp04_NoEnch",
+   "min": 20,
+   "max": 29
+  },
+  "81f7927b-48e4-47ee-a1b2-214f1e9ffdee": {
+   "editorName": "SigilShop_TownMaterials_Lumber_x60",
+   "min": 15,
+   "max": 100
+  },
+  "82645195-0480-48d8-beed-e054cbbde17f": {
+   "editorName": "SigilShop_Weapon_GoldenSaintDagger",
+   "min": 39,
+   "max": 44
+  },
+  "827d230c-26a3-4764-9ce7-461c4ce5f77d": {
+   "editorName": "SigilShop_DivineDaedricLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "82abea9d-8dd9-4cd2-90c2-69a7868c8686": {
+   "editorName": "SigilShop_DivineChaurusLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "83656a25-8eeb-460e-b54b-5a347b8521f6": {
+   "editorName": "SigilShop_DivineNordicSteelGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "83657df3-f090-4847-b869-eb8fdf386443": {
+   "editorName": "SigilShop_Armor_DivineGoldenSaintBoots",
+   "min": 45,
+   "max": 100
+  },
+  "83b82f4c-fc8a-4076-841a-46a345587e0f": {
+   "editorName": "SigilShop_Armor_DivineDarkSeducerArmor",
+   "min": 45,
+   "max": 100
+  },
+  "83f3bf57-11b7-4aa1-b317-85b5529fe3af": {
+   "editorName": "SigilShop_Weapon_GlassWarAxe_Temp06_NoEnch",
+   "min": 30,
+   "max": 39
+  },
+  "84164daa-cb22-45f4-a3d1-5bcff31c948b": {
+   "editorName": "SigilShop_SoulGem_Bundle_Greater",
+   "min": 30,
+   "max": 100
+  },
+  "8424476c-5b3a-496a-93f8-ade2f70443fb": {
+   "editorName": "SigilShop_DivineForswornWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "843aa3eb-cf93-4d66-b616-97cb3f3dd92b": {
+   "editorName": "DecoOffer25%_L_FancyFountain_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "845cf4ca-c5d1-41a9-b367-d7f90aff27e6": {
+   "editorName": "SigilShop_DivineGoldenSaintLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "851a4a89-d901-4c32-a659-49cb7de41a50": {
+   "editorName": "SigilShop_Armor_DivineDarkSeducerHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "851ca0fb-5d1a-4154-aaeb-852f22cd5ed9": {
+   "editorName": "SigilShop_Jewel_Sapphire",
+   "min": 20,
+   "max": 100
+  },
+  "8520e75a-b8d9-4d9e-a3d9-f4762589161e": {
+   "editorName": "SigilShop_Weapon_ChaurusLongsword",
+   "min": 28,
+   "max": 32
+  },
+  "853f7413-5ab0-419d-bf18-e5e488ce5d1e": {
+   "editorName": "SigilShop_DivineAncientNordicBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "85880356-aa31-473b-941d-c8c777053692": {
+   "editorName": "SigilShop_LTUltimate_MagickaArmor",
+   "min": 25,
+   "max": 55
+  },
+  "85c415ce-737f-4d61-89c6-3f4d3901524a": {
+   "editorName": "DecoOffer25%_M_Imperial_Bath_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "85c4df4a-c6f9-41ee-a4df-5e90413a2ef8": {
+   "editorName": "SigilShop_Weapon_OrcishGreatsword_Arcane02",
+   "min": 15,
+   "max": 24
+  },
+  "85e71f6f-c1f3-4da3-bd78-6024f11e88bd": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2019-07-13 00:00_2019-07-16 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "864e1916-847d-4389-9e0b-60776a293657": {
+   "editorName": "DecoOffer_S_BundleBannerMorthal_2019-06-10 00:00_2019-06-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "86ae03fa-f15e-4091-a2cc-2d8e102557a3": {
+   "editorName": "SigilShop_Weapon_DwarvenHandAxe_Temp06_Combo",
+   "min": 20,
+   "max": 29
+  },
+  "86b9e1fa-d803-4f32-9725-2f094178dd9c": {
+   "editorName": "PlayerLvlOffer_03_ Lvl82",
+   "min": 0,
+   "max": 0
+  },
+  "86becadb-91ca-42ed-be1f-5d5a9aa7e5d0": {
+   "editorName": "SigilShop_DivineIronShield",
+   "min": 45,
+   "max": 100
+  },
+  "86f59b26-bf4e-4257-9be9-637005750658": {
+   "editorName": "SigilShop_DivineDwarvenWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "87054b67-53f9-417a-9d41-9c1c2df044dc": {
+   "editorName": "SigilShop_Weapon_DarkSeducerLightHammer",
+   "min": 39,
+   "max": 44
+  },
+  "872d2416-8604-4459-9e97-dca0eee68f3d": {
+   "editorName": "PlayerLvlOffer_03_ Lvl58",
+   "min": 0,
+   "max": 0
+  },
+  "876f2448-ae22-432a-862f-be898ba48c26": {
+   "editorName": "SigilShop_DivineElvenGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "87736d41-72ce-4021-be5f-2512a12fe808": {
+   "editorName": "DecoOffer_S_Crystal_Shrine_2019-08-17 00:00_2019-08-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "87893ce0-3440-4d5a-9030-0285d0a86dd9": {
+   "editorName": "SigilShop_DivineElvenHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "87e2166c-ec32-4a5c-aae3-70067020c488": {
+   "editorName": "DecoOffer_S_IceGoat_2019-12-14 00:00_2019-12-16 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "87e6552c-305f-4c3e-bb47-b58a52cdebf1": {
+   "editorName": "SigilShop_Weapon_GlassHandAxe_Arcane01",
+   "min": 30,
+   "max": 39
+  },
+  "880bcd5d-8d6f-4567-953a-60b35c2e79bd": {
+   "editorName": "DecoOffer_M_Bones_2020-07-04 00:00_2020-07-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "880e7305-3ed6-4be2-9551-4e77b9862385": {
+   "editorName": "SigilShop_Shield_StalhrimShield_Arcane01",
+   "min": 35,
+   "max": 49
+  },
+  "89245f4f-b8b8-42c2-97e8-95aed7c7d54d": {
+   "editorName": "DecoOffer_M_FountOfTheVictor_2019-10-30 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "893bec22-7975-4478-99fa-d79db61580f1": {
+   "editorName": "PlayerLvlOffer_03_ Lvl85",
+   "min": 0,
+   "max": 0
+  },
+  "894b6eb8-9115-4008-ae9a-1fc6f12cdff8": {
+   "editorName": "SigilShop_Armor_DarkSeducerGauntlets",
+   "min": 39,
+   "max": 100
+  },
+  "8964a9f0-10e3-4df6-bc70-67a3664972f3": {
+   "editorName": "SigilShop_Armor_GlassGauntlets_Arcane02",
+   "min": 30,
+   "max": 39
+  },
+  "897686a3-9c03-4dd7-8cc1-7d499a561693": {
+   "editorName": "DecoOffer_S_Candelabra_2020-06-10 00:00_2020-06-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "898d2c56-47ed-4e10-ad0b-fe69e3826472": {
+   "editorName": "SigilShop_Shield_DwarvenShield_Arcane02",
+   "min": 20,
+   "max": 29
+  },
+  "8995d73c-e4cb-48ff-9ab4-ada062dc0c64": {
+   "editorName": "SigilShop_DivineDarkSeducerMace",
+   "min": 45,
+   "max": 100
+  },
+  "8997b1f6-2497-450b-bb77-104ffeba190e": {
+   "editorName": "SigilShop_DivineEbonyLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "89bb614f-df03-45db-97cd-478a605387f7": {
+   "editorName": "DecoOffer_M_Abyss3_2020-02-22 00:00_2020-02-25 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "89e836b5-c368-4757-8534-3d5d39df36e7": {
+   "editorName": "SigilShop_DivineOrcishDagger",
+   "min": 45,
+   "max": 100
+  },
+  "89f6eb3e-d858-4ccd-b36e-f88a7542ae63": {
+   "editorName": "SigilShop_Weapon_ChaurusMace",
+   "min": 28,
+   "max": 32
+  },
+  "8ab0997a-22eb-47cd-a42f-f88fa957d284": {
+   "editorName": "SigilShop_DivineOrcishPlateArmor",
+   "min": 45,
+   "max": 100
+  },
+  "8ad881eb-82f5-470c-8be5-280bc204eb0c": {
+   "editorName": "SigilShop_Weapon_ElvenLightHammer_Arcane02",
+   "min": 25,
+   "max": 34
+  },
+  "8b2efb2f-5b72-43ee-9c17-bddf7515640a": {
+   "editorName": "SigilShop_DivineGlassMace",
+   "min": 45,
+   "max": 100
+  },
+  "8c19f5d4-079e-42a7-ac6a-5e710fe98305": {
+   "editorName": "SigilShop_Armor_GoldenSaintArmor",
+   "min": 39,
+   "max": 100
+  },
+  "8c884849-1888-43af-884a-a2f62684e0ea": {
+   "editorName": "SigilShop_DivineHideGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "8cd72dab-a237-4716-a418-9328fba1bff1": {
+   "editorName": "SigilShop_SoulGem_Bundle_Common",
+   "min": 20,
+   "max": 100
+  },
+  "8d0f597d-ac6e-4164-8288-cd284b4ed0b8": {
+   "editorName": "DecoOffer_M_Abyss2_2019-06-24 00:00_2019-06-30 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "8d10e536-13bc-407e-9097-c47da9efc2ce": {
+   "editorName": "SigilShop_DivineOrcishLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "8d378b93-d738-42b5-8eef-14bd36e1f7b4": {
+   "editorName": "SigilShop_Armor_SilverBoots_Arcane02",
+   "min": 1,
+   "max": 14
+  },
+  "8d69d2c2-11b9-4bbe-b046-1225655fc623": {
+   "editorName": "SigilShop_Weapon_DragonboneWarhammer_Temp08_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "8ded5c4c-89d0-4b4f-8cc8-d6cac5cffcac": {
+   "editorName": "SigilShop_DivineEbonyBoots",
+   "min": 45,
+   "max": 100
+  },
+  "8e10e13d-9273-4b64-a65e-c3f347b7e913": {
+   "editorName": "SigilShop_DivineGoldenSaintWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "8e2ebf29-ef95-4d93-b49f-4bc483ee46d8": {
+   "editorName": "GemPack02_a",
+   "min": 10,
+   "max": 25
+  },
+  "8e35aa43-0e1c-4abd-9db2-3a908f851669": {
+   "editorName": "Town Level Up Offer - Level 9",
+   "min": 0,
+   "max": 0
+  },
+  "8e78f74e-0985-40f8-a03b-6cb3b084669a": {
+   "editorName": "DecoOffer_M_Stele1_2020-02-26 00:00_2020-03-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "8e816cd0-e5c8-4b2f-bbff-6fa2f10ed06b": {
+   "editorName": "SigilShop_Shield_ChitinShield_Temp08_NoEnch",
+   "min": 1,
+   "max": 14
+  },
+  "8eaeeb93-1bd0-4544-88c8-d074095fbe55": {
+   "editorName": "DecoOffer25%_L_UnicornFountain_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "8ee4fbb4-435b-4271-bc93-bc036efb2a72": {
+   "editorName": "SigilShop_Jewel_Pearl",
+   "min": 1,
+   "max": 19
+  },
+  "8ee521f8-db1e-4314-a254-54c4bd8a8a08": {
+   "editorName": "SigilShop_Armor_DragonplateArmor_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "8ee67a1d-ee9b-4374-b6f4-8eb9bcce699d": {
+   "editorName": "SigilShop_DivineAncientNordicGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "8fa1cc21-4b85-40fc-9642-199886b36375": {
+   "editorName": "DecoOffer25%_S_Bundle_BannerRiften_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "8fa5f969-643c-41cd-b376-5066cfe0f4cc": {
+   "editorName": "PlayerLvlOffer_02_ Lvl82",
+   "min": 0,
+   "max": 0
+  },
+  "8fa8ab77-0b57-4c74-92a5-c16661e0fe8p": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-03-06 00:00_2019-03-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "8fbf3b8a-6516-42a5-8d8d-6451f28e8d27": {
+   "editorName": "SigilShop_TownMaterials_Limestone_x100",
+   "min": 30,
+   "max": 100
+  },
+  "8fc556fb-cd90-4c5a-a37e-9fbadba4d908": {
+   "editorName": "GemPack03_c_ExpertArchitect",
+   "min": 21,
+   "max": 45
+  },
+  "907cb671-76f6-4337-b027-3a8dd5966985": {
+   "editorName": "IAP_ElementalPack_01",
+   "min": 10,
+   "max": 19
+  },
+  "90d3f41e-3144-4add-b42c-8d1d6ce62871": {
+   "editorName": "DecoOffer_M_Stele1_2019-04-23 00:00_2019-04-26 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "90ee9e91-75ff-4636-9ab4-4f9e556b3cae": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystNecklace_Armsman_FortMgcRegen",
+   "min": 1,
+   "max": 19
+  },
+  "91093622-4fed-49c2-be78-2bd8a07c8337": {
+   "editorName": "SigilShop_DivineGoldenSaintHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "911bd32a-7806-44ed-a051-1a62c487b0a0": {
+   "editorName": "SigilShop_DivineGlassWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "9140814f-312c-46d8-b16f-3aaeeded0aaf": {
+   "editorName": "PlayerLvlOffer_03_ Lvl69",
+   "min": 0,
+   "max": 0
+  },
+  "915f8476-f191-4486-81e8-f9d9fb8ae9c0": {
+   "editorName": "SigilShop_SoulGem_Bundle_Transcendent",
+   "min": 45,
+   "max": 100
+  },
+  "91c24932-2829-4b91-923b-1f92ba1faa70": {
+   "editorName": "DecoOffer_M_Bones_2019-09-24 00:00_2019-09-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "92405a05-ac97-4547-90f1-3c963efca6df": {
+   "editorName": "SigilShop_TownMaterials_Limestone_x200",
+   "min": 45,
+   "max": 100
+  },
+  "92eba3d9-10b3-40b0-9145-3189c971073e": {
+   "editorName": "SigilShop_Smithing_T10",
+   "min": 40,
+   "max": 100
+  },
+  "930cfea3-6493-40ab-8a2c-313d16e2a2a3": {
+   "editorName": "SigilShop_DivineGlassBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "936dc14d-cc03-476a-a2c6-405116467bf1": {
+   "editorName": "SigilShop_DivineSteelLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "9388e5af-2d02-4807-9cc8-c0de549c210b": {
+   "editorName": "SigilShop_DivineChaurusHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "942cdfd1-ac90-4f8d-b08d-0bb1239067e0": {
+   "editorName": "SigilShop_Shield_QuicksilverShield_Temp08_NoEnch",
+   "min": 25,
+   "max": 34
+  },
+  "951d4718-3507-43db-8e87-7c0f5551f72d": {
+   "editorName": "SigilShop_Jewel_Emerald",
+   "min": 30,
+   "max": 100
+  },
+  "957e1b14-90c4-440e-bb5b-8475edca034c": {
+   "editorName": "DecoOffer_M_Stele1_2020-05-21 00:00_2020-05-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "95ad60a2-e74c-4c53-8155-cf8958faeafd": {
+   "editorName": "DecoOffer_M_Stele1_2020-04-03 00:00_2020-04-06 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "95d63a46-ed55-469a-8662-1861c896f0be": {
+   "editorName": "Player Level Up offer - Level 43",
+   "min": 0,
+   "max": 0
+  },
+  "95e94f52-9bb6-40d4-805e-be8e1cdbadb3": {
+   "editorName": "SigilShop_DivineIronHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "95f175b1-6a21-43ae-8cb7-e55616f113c7": {
+   "editorName": "SigilShop_DivineForswornMace",
+   "min": 45,
+   "max": 100
+  },
+  "96854665-ea01-4022-8f9e-0d39ca2f2c5d": {
+   "editorName": "SigilShop_Weapon_AncientNordicBattleaxe",
+   "min": 13,
+   "max": 17
+  },
+  "96a9ce7b-df1f-4f82-98f9-e7b67245d204": {
+   "editorName": "DecoOffer_S_WitchesCauldron_2019-10-12 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "96e898b8-89c5-42cb-bafd-ead7d3fc0a0d": {
+   "editorName": "Playtest_Chest",
+   "min": 0,
+   "max": 100
+  },
+  "973dac5a-0896-4b6c-97eb-777c3c765a48": {
+   "editorName": "PlayerLvlOffer_03_ Lvl99",
+   "min": 0,
+   "max": 0
+  },
+  "97670a52-851d-4818-97ae-39ac63fac590": {
+   "editorName": "SigilShop_Ultimate_FireResistHelmet",
+   "min": 35,
+   "max": 100
+  },
+  "9776d676-9c5a-4af2-9c10-ae14a07b2fa4": {
+   "editorName": "SigilShop_Armor_DragonscaleGauntlets_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "9808467a-85bb-426c-bf95-0fc0203d979b": {
+   "editorName": "SigilShop_Weapon_DragonboneWarhammer_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "9843ee75-b608-4a0b-a3d7-20b43b3d99a8": {
+   "editorName": "DecoOffer_S_Candelabra_2019-07-10 00:00_2019-07-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "9899f6bf-6a2b-4708-b26b-0ee5e841dd34": {
+   "editorName": "DecoOffer_S_Stele3_2019-08-09 00:00_2019-08-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "99271706-1c09-4adf-8d52-b69945afd8af": {
+   "editorName": "PlayerLvlOffer_02_ Lvl86",
+   "min": 0,
+   "max": 0
+  },
+  "99302e95-4f32-4396-90c0-4501bc7d03ed": {
+   "editorName": "SigilShop_Armor_OrcishScaleArmor_Temp08_NoEnch",
+   "min": 15,
+   "max": 24
+  },
+  "99cb7dcc-317b-4c00-9ba4-9a04420a1170": {
+   "editorName": "SigilShop_Ultimate_ShieldOfChorrol",
+   "min": 35,
+   "max": 100
+  },
+  "99d36b6c-ddc1-458e-88b8-8417e03f3ec3": {
+   "editorName": "SigilShop_Jewel_Amethyst",
+   "min": 20,
+   "max": 100
+  },
+  "9a145799-d8df-464a-80ec-a2408e4e0d3b": {
+   "editorName": "PlayerLvlOffer_03_ Lvl97",
+   "min": 0,
+   "max": 0
+  },
+  "9a8b7017-699d-42ef-bac5-1eaf197fd70a": {
+   "editorName": "SigilShop_Armor_DaedricPlateGauntlets_Arcane02",
+   "min": 40,
+   "max": 100
+  },
+  "9a91bb8d-643c-45a3-b42c-7c9137f848a4": {
+   "editorName": "SigilShop_Armor_DragonscaleHelmet_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "9aa5f781-3182-4a38-97a1-ef671f821acd": {
+   "editorName": "SigilShop_LTUltimate_ShockMace",
+   "min": 25,
+   "max": 55
+  },
+  "9ace5fbf-60e5-44cf-bba1-43ff2d17bf1c": {
+   "editorName": "PlayerLvlOffer_02_ Lvl56",
+   "min": 0,
+   "max": 0
+  },
+  "9ad6b288-67d6-4370-8ec8-2bea75d72f91": {
+   "editorName": "SigilShop_Shield_OrcishShield_Temp06_NoEnch",
+   "min": 15,
+   "max": 24
+  },
+  "9b03691e-a6c9-445a-86fb-51a97bb3650a": {
+   "editorName": "SigilShop_Weapon_StalhrimMace",
+   "min": 33,
+   "max": 38
+  },
+  "9b7143cd-6f90-487c-9941-118d1e79c136": {
+   "editorName": "Player Level Up offer - Level 25",
+   "min": 0,
+   "max": 0
+  },
+  "9bf01e17-4a8c-45f7-bfb5-611424517e51": {
+   "editorName": "DecoOffer_M_Bones_2019-08-01 00:00_2019-08-04 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "9bf9bc37-04a5-4aae-89b4-a8cbfbfe1de1": {
+   "editorName": "SigilShop_Shield_GlassShield_Temp06_NoEnch",
+   "min": 30,
+   "max": 39
+  },
+  "9c34d018-e46b-4d2e-b575-5a3e7c77b0a8": {
+   "editorName": "DecoOffer50%_M_GoldenHorse_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "9c9ce2da-7bf1-4e49-b0af-cc10f9db2c2e": {
+   "editorName": "SigilShop_Armor_ChitinHelmet_Temp04_FortHp",
+   "min": 1,
+   "max": 14
+  },
+  "9cb4a7cd-ad60-4378-83ac-beed0eaeee9a": {
+   "editorName": "SigilShop_Weapon_ElvenWarAxe_Temp04_Haste",
+   "min": 25,
+   "max": 34
+  },
+  "9cdb9da8-79b2-4a3f-bddf-953e5d4bfdce": {
+   "editorName": "SigilShop_DivineDaedricPlateHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "9cf1fbd7-3994-41bf-b6db-390d80955957": {
+   "editorName": "Player Level Up offer - Level 45",
+   "min": 0,
+   "max": 0
+  },
+  "9d0fa2b7-b0c8-4438-958c-c030f3de0684": {
+   "editorName": "DecoOffer_S_AFoolsRespite_2019-10-26 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "9d1af91f-1e09-4bbd-8fff-c1f63b70ba72": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-02-02 00:00_2019-02-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "9d30fb6d-435d-442f-92cf-f1ecb8bde773": {
+   "editorName": "DecoOffer25%_M_Lectern_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "9d7e5f0c-31f5-4f23-82ca-15e29c9847e0": {
+   "editorName": "SigilShop_DivineAncientNordicWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "9df39f8a-9a50-48e4-9135-c0c8892db27b": {
+   "editorName": "SigilShop_LTUltimate_FireLongsword",
+   "min": 25,
+   "max": 55
+  },
+  "9e1f5ec9-da30-499d-97ee-9a7a70d649a3": {
+   "editorName": "SigilShop_DivineDaedricMailArmor",
+   "min": 45,
+   "max": 100
+  },
+  "9e30f0ae-d250-4cab-bf65-eac38f87b2cf": {
+   "editorName": "SigilShop_Weapon_OrcishDagger_Temp04_NoEnch",
+   "min": 15,
+   "max": 24
+  },
+  "9e35d31c-8ef1-482b-a704-1cfb903a04a7": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-03-10 00:00_2019-03-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "9e59995b-4f1e-4d0b-86fd-d3a2383ceb62": {
+   "editorName": "EmoteOffer_Boo_2019-09-24 00:00_2029-09-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "9e670728-fe42-4918-a5a2-056295fd2663": {
+   "editorName": "SigilShop_Unique_GrandChampionSword",
+   "min": 50,
+   "max": 100
+  },
+  "9e9667ff-1f5a-4030-8394-12702081c8e2": {
+   "editorName": "SigilShop_Weapon_StalhrimBattleaxe",
+   "min": 33,
+   "max": 38
+  },
+  "9f5f6be0-0071-4ba6-a91e-973b300ec87f": {
+   "editorName": "DecoOffer25%_M_GoldenHorse_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "9f790811-d82f-4a42-8798-e22339c2bff0": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteNecklace_Arcane02",
+   "min": 40,
+   "max": 49
+  },
+  "9fab0c07-53a4-48fb-a2c4-c6268932c111": {
+   "editorName": "DecoOffer33%_M_FighterTrophy_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "9fb362c4-898b-42c6-9452-f4cf6aa907b1": {
+   "editorName": "PlayerLvlOffer_03_ Lvl93",
+   "min": 0,
+   "max": 0
+  },
+  "9fe91c76-2cb4-4b83-9306-d7d29cd16b75": {
+   "editorName": "SigilShop_Gold_20k",
+   "min": 1,
+   "max": 100
+  },
+  "9ffdf15b-0135-4c21-9327-0a04d68d97f3": {
+   "editorName": "SigilShop_Weapon_StalhrimLongsword",
+   "min": 33,
+   "max": 38
+  },
+  "a08332ec-bbae-4c02-9a68-f07ffe488321": {
+   "editorName": "SigilShop_DivineIronLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "a08ecd27-5837-4481-853f-70aa88f02f47": {
+   "editorName": "SigilShop_TownMaterials_Limestone_x25",
+   "min": 1,
+   "max": 100
+  },
+  "a0da8907-378e-4c15-8f22-79dc48032af5": {
+   "editorName": "SigilShop_DivineAncientNordicLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "a0e0207b-5738-423d-95bb-7da33b256d65": {
+   "editorName": "SigilShop_Shield_DragonscaleShield_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "a0ecfefb-5a4d-4d48-b517-db2eea07ff39": {
+   "editorName": "SigilShop_DivineElvenLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "a0ff201e-ca14-4602-8fe4-193dbcd57c29": {
+   "editorName": "SigilShop_DivineSteelGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "a1072615-f012-45fe-8bfb-23fca6d1b12b": {
+   "editorName": "PlayerLvlOffer_03_ Lvl84",
+   "min": 0,
+   "max": 0
+  },
+  "a10fee74-6b71-48db-96db-2a4eeb24b47b": {
+   "editorName": "SigilShop_Shield_SilverShield_Arcane02",
+   "min": 1,
+   "max": 15
+  },
+  "a142048e-18b0-4f31-9457-fb772bf79075": {
+   "editorName": "SigilShop_DivineDwarvenBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "a14d6da8-4cc1-4eb6-98bf-dd4f9a92614d": {
+   "editorName": "SigilShop_Weapon_GoldenSaintBattleaxe",
+   "min": 39,
+   "max": 44
+  },
+  "a16004f1-ab7b-4cca-b2eb-26f5e3710839": {
+   "editorName": "SigilShop_DivineDarkSeducerGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "a1e27e51-3eb1-48a7-8523-3bf4f1d6ed68": {
+   "editorName": "DecoOffer_M_Lectern_2019-11-11 00:00_2019-11-14 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a201cf69-112b-4e2f-bc23-99e274a14298": {
+   "editorName": "SigilShop_Shield_ElvenShield_Temp04_PowBlock",
+   "min": 25,
+   "max": 34
+  },
+  "a26596e0-07ae-4a73-8796-799aa29cce54": {
+   "editorName": "PlayerLvlOffer_03_ Lvl51",
+   "min": 0,
+   "max": 0
+  },
+  "a2a42fc9-0312-456e-88fe-a7851064e489": {
+   "editorName": "SigilShop_DivineDarkSeducerBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "a2e2c512-426e-4ee7-9143-bf6f30fdcc57": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-05-29 00:00_2019-06-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a2fe4c81-6b8c-42a2-9b63-671710cd6b54": {
+   "editorName": "SigilShop_Armor_DaedricMailBoots_Arcane02",
+   "min": 40,
+   "max": 100
+  },
+  "a307ac57-612d-426b-a2f7-0de77dfffdbd": {
+   "editorName": "DecoOffer50%_L_UnicornFountain_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "a3cc94ba-fbb3-488a-8b08-f6c4eaff95ac": {
+   "editorName": "DecoOffer_M_Abyss3_2020-05-17 00:00_2020-05-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a4b06d95-c1b6-43cb-8e99-e25d68d39a0a": {
+   "editorName": "SigilShop_Armor_ElvenGauntlets_Temp04_AbsHp",
+   "min": 25,
+   "max": 34
+  },
+  "a4b595ef-efc7-44c4-9f19-53fe12a51ca8": {
+   "editorName": "SigilShop_DivineDaedricMailGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "a4be466a-ac6c-45d0-b7eb-7dd6eaa17165": {
+   "editorName": "SigilShop_Ultimate_RingOfCinders",
+   "min": 35,
+   "max": 100
+  },
+  "a4d2adbd-3fd2-4782-9c60-54b33e1672d3": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldRing_Arcane01",
+   "min": 30,
+   "max": 34
+  },
+  "a4ef9442-defa-4926-b739-ae34decc4ac2": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-11-29 00:00_2019-12-02 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a51b4736-d602-4c40-9914-4c8c76083a19": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireNecklace_Arcane01",
+   "min": 25,
+   "max": 29
+  },
+  "a59e5ba0-9b98-46ef-b61e-d380f19368f0": {
+   "editorName": "PlayerLvlOffer_03_ Lvl91",
+   "min": 0,
+   "max": 0
+  },
+  "a6393c57-b9be-43c8-a6ee-7a9d2bd471fb": {
+   "editorName": "SigilShop_Weapon_ForswornDagger",
+   "min": 18,
+   "max": 22
+  },
+  "a641bd5f-7965-4945-b818-650aadd93f3t": {
+   "editorName": "DecoOffer_M_Abyss2_2019-04-01 00:00_2019-04-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a64495fd-9d61-4965-88a0-6d5b397caf3a": {
+   "editorName": "DecoOffer_M_Imperial_Bath_2019-12-21 00:00_2019-12-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a645a886-26e2-44cf-8535-777909bfa909": {
+   "editorName": "SigilShop_DivineLeatherShield",
+   "min": 45,
+   "max": 100
+  },
+  "a66c27d2-6fc1-47f9-9c9c-419d1fa98855": {
+   "editorName": "SigilShop_LTUltimate_OffensiveSpellsRing",
+   "min": 25,
+   "max": 55
+  },
+  "a6ef15ac-7fb1-4aa4-be2d-3f5c0583d59a": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-04-23 00:00_2020-04-26 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a77ad38c-9a77-43c8-b139-7db044f7b8d7": {
+   "editorName": "PlayerLvlOffer_02_ Lvl80",
+   "min": 0,
+   "max": 0
+  },
+  "a7d0660a-45ec-45bf-ab5d-602f8ab64014": {
+   "editorName": "SigilShop_Weapon_StalhrimGreatsword",
+   "min": 33,
+   "max": 38
+  },
+  "a80560c7-ad2f-463c-aa00-05c8e3526fa3": {
+   "editorName": "SigilShop_DivineChaurusHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "a83bf730-2681-4218-a6f5-63076a709817": {
+   "editorName": "SigilShop_TownMaterials_Lumber_x240",
+   "min": 45,
+   "max": 100
+  },
+  "a869a5e6-0b6d-43dc-aa17-e5645ddcd038": {
+   "editorName": "DecoOffer33%_M_Lectern_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "a8786302-1e03-4051-ae7c-45a4992d0452": {
+   "editorName": "PlayerLvlOffer_02_ Lvl92",
+   "min": 0,
+   "max": 0
+  },
+  "a8a10792-78bd-4d05-ab53-2870ad070ce9": {
+   "editorName": "DecoOffer_M_FullSpire_2019-07-29 00:00_2019-07-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "a9408b50-3d30-4254-ae0e-f81b5e873fcc": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystRing_PowerAttackDodgingStrike_AbsStm",
+   "min": 1,
+   "max": 19
+  },
+  "a9e33c4d-6b61-42d1-8c10-ef8249a53a5c": {
+   "editorName": "DecoOffer_M_FighterTrophy_2019-08-02 00:00_2019-08-06 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "aa6370e6-c8a6-4ac2-8a22-219cc441fe24": {
+   "editorName": "DecoOffer_S_Nirnroot_2020-05-01 00:00_2020-05-04 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "aa804f09-6a84-4573-860b-5876098c8b86": {
+   "editorName": "SigilShop_Unique_RedoranWatcherHelmet",
+   "min": 1,
+   "max": 100
+  },
+  "aacef7d8-42b4-49c3-9f43-34335a73c5b5": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-06-13 00:00_2019-06-15 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "aafd82cc-787e-4a5d-a849-e4f107c4c527": {
+   "editorName": "SigilShop_Weapon_ChaurusDagger",
+   "min": 28,
+   "max": 32
+  },
+  "ab450954-29f1-47bf-b5e2-16365376d5d3": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldRing_PoisonCloudBlind_AbsMgc",
+   "min": 30,
+   "max": 34
+  },
+  "ab5aae2a-57f7-4001-bbe4-dcb9dfd4d793": {
+   "editorName": "PlayerLvlOffer_02_ Lvl98",
+   "min": 0,
+   "max": 0
+  },
+  "ab6d83fb-3e5f-4ed8-9d37-a725bb208a82": {
+   "editorName": "SigilShop_Gold_55k",
+   "min": 1,
+   "max": 100
+  },
+  "ab94a2e0-9770-4fee-9f7f-8d9a34946750": {
+   "editorName": "Town Level Up Offer - Level 6",
+   "min": 0,
+   "max": 0
+  },
+  "aba39588-778e-4752-bb82-d3f734b8afb7": {
+   "editorName": "PlayerLvlOffer_02_ Lvl10",
+   "min": 0,
+   "max": 0
+  },
+  "ac0d2fe4-bce7-497a-9eaf-73aa13617371": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-06-19 00:00_2019-06-21 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "ac5fd3c2-574d-4d6b-9add-42190fd213a4": {
+   "editorName": "SigilShop_TownMaterials_Lumber_x30",
+   "min": 1,
+   "max": 100
+  },
+  "acdf9e79-20e6-4784-a1c8-c394e8a20de0": {
+   "editorName": "SigilShop_DivineOrcishScaleGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "ace561d4-be10-4604-a0d1-a15dd5b9f258": {
+   "editorName": "DecoOffer_M_Imperial_Bath_2019-09-06 00:00_2019-09-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "acf5ab2a-4868-43f8-8682-8b877003d57c": {
+   "editorName": "SigilShop_Shield_DragonplateShield_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "ad51e47d-b22d-42b3-83c2-774144c3dd07": {
+   "editorName": "DecoOffer_M_Bones_2020-03-18 00:00_2020-03-21 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "ad8c23c1-f4fd-4a35-bd7b-4902ab1c3bb1": {
+   "editorName": "SigilShop_Armor_ChaurusBoots_Arcane02",
+   "min": 30,
+   "max": 39
+  },
+  "add4a728-2ba8-42f9-bf3b-a1cdf63e9ff2": {
+   "editorName": "SigilShop_Unique_Cascadia",
+   "min": 1,
+   "max": 100
+  },
+  "ae3d091f-a1d3-44cd-94f7-09af4d5de5ee": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondNecklace_Arcane01",
+   "min": 35,
+   "max": 39
+  },
+  "ae74d419-ab6f-436c-8123-8863d16b460e": {
+   "editorName": "SigilShop_Weapon_ElvenGreatsword_Temp06_NoEnch",
+   "min": 25,
+   "max": 34
+  },
+  "ae9343df-51f8-4404-b6fd-453a51b3cc3a": {
+   "editorName": "SigilShop_DivineOrcishLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "aeabefda-7e34-4a22-b614-1f62c1861f0e": {
+   "editorName": "SigilShop_Jewel_FirebreathOpal",
+   "min": 40,
+   "max": 100
+  },
+  "af1c0389-cf07-4b6c-b304-00be673c652a": {
+   "editorName": "SigilShop_Unique_Boneshaver",
+   "min": 35,
+   "max": 100
+  },
+  "af75b409-0e20-4ea7-ba64-feaa78ca1de0": {
+   "editorName": "PlayerLvlOffer_03_ Lvl57",
+   "min": 0,
+   "max": 0
+  },
+  "afc71167-0544-4112-ad28-7cd1b2ea95d1": {
+   "editorName": "DecoOffer_L_UnicornFountain_2019-05-01 00:00_2019-05-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "afea8be7-c3c5-440d-bdf4-38bba030a327": {
+   "editorName": "DecoOffer_M_Abyss2_2020-07-01 00:00_2020-07-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b0742d50-c803-4476-b152-2f434ddff994": {
+   "editorName": "SigilShop_Armor_GoldenSaintGauntlets",
+   "min": 39,
+   "max": 100
+  },
+  "b077c186-5593-4be4-9115-e91b104517ba": {
+   "editorName": "SigilShop_DivineEbonyHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "b0b7ab6f-5da1-4d76-a010-b80dcd07afa3": {
+   "editorName": "SigilShop_Gold_45k",
+   "min": 1,
+   "max": 100
+  },
+  "b0f21b19-2172-4943-a4d4-edc1d51f1ccb": {
+   "editorName": "SigilShop_Weapon_EbonyLightHammer_Temp06_NoEnch",
+   "min": 35,
+   "max": 49
+  },
+  "b0fcde56-ebbb-4dfa-9adb-a21f650ad37b": {
+   "editorName": "SigilShop_Jewelry_GoldRubyNecklace_Scout_NoEnch",
+   "min": 20,
+   "max": 24
+  },
+  "b1327f7c-8c9c-4ef7-9fad-334768430406": {
+   "editorName": "SigilShop_DivineEbonyWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "b177f8ad-eb7a-41d7-acd2-577d62751ec7": {
+   "editorName": "SigilShop_DivineSteelMace",
+   "min": 45,
+   "max": 100
+  },
+  "b182331c-03b0-46af-aadd-75b60708daba": {
+   "editorName": "SigilShop_DivineIronDagger",
+   "min": 45,
+   "max": 100
+  },
+  "b186af0b-685a-4ef4-a507-435d5cb78a54": {
+   "editorName": "GemPack01_a",
+   "min": 2,
+   "max": 20
+  },
+  "b1a1d7f8-662f-4600-b0a4-036aae910c32": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-07-17 00:00_2019-07-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b1aedc4e-0e45-461d-82d0-38281cc12dea": {
+   "editorName": "SigilShop_DivineAncientNordicMace",
+   "min": 45,
+   "max": 100
+  },
+  "b1d32e4f-f45e-4da4-9dba-3288c1500711": {
+   "editorName": "SigilShop_Weapon_AncientNordicLightHammer",
+   "min": 13,
+   "max": 17
+  },
+  "b1fa097f-e2a6-445d-9aa3-694752833513": {
+   "editorName": "EmoteOffer_NirnRoot_2019-12-21 00:00_2019-12-22 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b214d868-edf0-4835-a966-9df5dd942cc6": {
+   "editorName": "PlayerLvlOffer_02_ Lvl96",
+   "min": 0,
+   "max": 0
+  },
+  "b227b320-a287-47ff-81fd-faaf469f289b": {
+   "editorName": "SigilShop_DivineSilverGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "b22f1245-956e-4358-99c8-1ec711745996": {
+   "editorName": "DecoOffer_S_AmethystBeacon_2019-12-17 00:00_2019-12-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b23c5564-c82e-4ae7-b832-09a970e9729a": {
+   "editorName": "Player Level Up offer - Level 21",
+   "min": 0,
+   "max": 0
+  },
+  "b2417fe0-fe48-4c4f-b981-ad77d5dcea49": {
+   "editorName": "SigilShop_Weapon_AmberGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "b2a9a606-3c19-4aa3-b258-be3ffbcfd522": {
+   "editorName": "SigilShop_DivineDaedricLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "b2c9c695-f875-4128-b9a0-6cb69b22f84f": {
+   "editorName": "SigilShop_Weapon_GoldenSaintWarhammer",
+   "min": 39,
+   "max": 44
+  },
+  "b2e38c18-f14f-435f-9f2b-30995f6a786b": {
+   "editorName": "SigilShop_Jewelry_GoldRubyRing_Arcane01",
+   "min": 20,
+   "max": 24
+  },
+  "b332c13d-402f-41cc-acbd-1dc1e409e416": {
+   "editorName": "SigilShop_Ultimate_AkaviriSunderblade",
+   "min": 35,
+   "max": 100
+  },
+  "b35db6c8-e37f-4dd5-b339-703996553066": {
+   "editorName": "DecoOffer25%_S_Stele3_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "b4007a7e-1375-4250-90a1-0247abff6794": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondNecklace_Scout_FortMgcRegen",
+   "min": 35,
+   "max": 39
+  },
+  "b4f44310-a777-4647-9494-fa431051c581": {
+   "editorName": "DecoOffer_M_FullSpire_2019-05-17 00:00_2019-05-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b53b508b-689b-4c18-84ab-8e35e3d4d32c": {
+   "editorName": "PlayerLvlOffer_03_ Lvl60",
+   "min": 0,
+   "max": 0
+  },
+  "b5748a1d-e0f5-4b73-b213-80c5f85d0854": {
+   "editorName": "SigilShop_Armor_DarkSeducerHelmet",
+   "min": 39,
+   "max": 100
+  },
+  "b579ca24-28be-41c0-a205-35f8d08d1bfa": {
+   "editorName": "SigilShop_Ultimate_RingOfFrost",
+   "min": 35,
+   "max": 100
+  },
+  "b5bbf6ad-6d70-416f-bc22-006e003aa5b1": {
+   "editorName": "SigilShop_Ultimate_StaminaShield",
+   "min": 35,
+   "max": 100
+  },
+  "b5c14380-e364-40bb-87db-ac8153dd7042": {
+   "editorName": "DecoOffer_S_Candelabra_2020-04-07 00:00_2020-04-10 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b5e340bb-6774-4932-ad4b-18e265c655c3": {
+   "editorName": "SigilShop_Armor_DaedricMailArmor_Temp04_FortHp",
+   "min": 40,
+   "max": 100
+  },
+  "b657125e-08ab-4510-8d34-6a8f8b17ae4d": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2020-07-20 00:00_2020-07-23 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b6a13f99-da06-45e5-ab95-5bfcbe125d38": {
+   "editorName": "Player Level Up offer - Level 7",
+   "min": 0,
+   "max": 0
+  },
+  "b6b96877-ef29-4276-8e7c-ba4012d60a6a": {
+   "editorName": "SigilShop_Weapon_EbonyLongsword_Temp08_NoEnch",
+   "min": 35,
+   "max": 49
+  },
+  "b6f7adb6-e373-4684-9564-a5722fb99eee": {
+   "editorName": "DecoOffer_M_Bones_2019-02-18 00:00_2019-02-21 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b6f87783-a863-441e-bf2c-1ae647e2ae7f": {
+   "editorName": "Player Level Up offer - Level 41",
+   "min": 0,
+   "max": 0
+  },
+  "b70a4c3c-4a31-4658-9fd7-d24b846dc030": {
+   "editorName": "SigilShop_Jewelry_EbonyAtroniteNecklace_Arcane01",
+   "min": 40,
+   "max": 49
+  },
+  "b7179c14-3c8b-462e-a7ce-f11904adfa0f": {
+   "editorName": "DecoOffer_S_TrophyHunter_2019-10-26 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b77ed0a4-b347-4d20-82d1-75ad32b90dfb": {
+   "editorName": "SigilShop_EffectIngredients_Honeycomb",
+   "min": 1,
+   "max": 100
+  },
+  "b790518d-9614-4dcf-ab54-6d8d749bff2b": {
+   "editorName": "GemPack05_a_ApprenticeEnchanter",
+   "min": 10,
+   "max": 30
+  },
+  "b8bc5f3c-864e-436f-baa7-80ae006ab155": {
+   "editorName": "DecoOffer_S_Scarecrow_2019-10-09 00:00_2019-11-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "b8d93c30-93eb-47fa-b6df-23359f97d5d0": {
+   "editorName": "SigilShop_DivineDwarvenShield",
+   "min": 45,
+   "max": 100
+  },
+  "b91d92e6-3b83-482f-9c6d-858607ae45c3": {
+   "editorName": "PlayerLvlOffer_03_ Lvl36",
+   "min": 0,
+   "max": 0
+  },
+  "b93e4161-9bff-4e25-aad5-0da075abfdd3": {
+   "editorName": "SigilShop_SoulGem_Bundle_Exceptional",
+   "min": 30,
+   "max": 100
+  },
+  "ba7afdeb-1727-4f6c-89e9-6ac4c22582d7": {
+   "editorName": "SigilShop_Armor_DivineGoldenSaintGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "bb5631a5-e68d-4455-a01e-bc3080bcf054": {
+   "editorName": "Town Level Up Offer - Level 10",
+   "min": 0,
+   "max": 0
+  },
+  "bbba9d7e-4eb7-4323-af41-c2f331d13a55": {
+   "editorName": "SigilShop_Armor_EbonyBoots_Arcane01",
+   "min": 35,
+   "max": 49
+  },
+  "bbd9a563-34a1-4d5d-8673-deaa73c97aed": {
+   "editorName": "DecoOffer50%_M_Abyss3_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "bc30bab2-6872-4851-a6ac-dce1688796f1": {
+   "editorName": "SigilShop_Armor_DwarvenPlateGauntlets_Arcane02",
+   "min": 20,
+   "max": 29
+  },
+  "bc4af25c-e8bc-4517-b4ec-8a65fba09814": {
+   "editorName": "DecoOffer_M_Abyss3_2019-06-06 00:00_2019-06-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "bc4ba54d-53a9-4bec-9f14-7bb329d4d3b8": {
+   "editorName": "SigilShop_Weapon_SilverHandAxe_Temp08_NoEnch",
+   "min": 1,
+   "max": 14
+  },
+  "bc4d3b94-e1c6-4207-9308-9b19dd10ab32": {
+   "editorName": "DecoOffer25%_S_Candelabra_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "bc94a6d9-e0cd-4496-81f0-34ace67a4351": {
+   "editorName": "SigilShop_Armor_StalhrimBoots_Temp08_FortStm",
+   "min": 35,
+   "max": 49
+  },
+  "bca0548b-7f59-4d48-8bc2-486236362bba": {
+   "editorName": "DecoOffer_S_Stele3_2020-04-27 00:00_2020-04-30 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "bca6f900-321a-44e4-b0bb-f0d8ca7e8fcb": {
+   "editorName": "DecoOffer_L_ScaryTree_2019-12-07 00:00_2019-12-11 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "bcbbdeab-e9ba-43b5-b714-e236bf8295ac": {
+   "editorName": "GemPack03_d_HeroicAchitect",
+   "min": 41,
+   "max": 100
+  },
+  "bcc83fac-5a47-4ba9-8627-3b10d4eece9c": {
+   "editorName": "SigilShop_LTUltimate_StaminaShield",
+   "min": 25,
+   "max": 55
+  },
+  "bd25d08d-a752-44ea-b3f4-7681c4d8806e": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystRing_Arcane01",
+   "min": 1,
+   "max": 19
+  },
+  "bd421834-6cce-4449-b7cc-bbe498cf241b": {
+   "editorName": "DecoOffer50%_M_FighterTrophy_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "bd510ca7-dd05-48ea-8d41-f713541d59df": {
+   "editorName": "SigilShop_Jewelry_EbonyDiamondRing_Arcane02",
+   "min": 35,
+   "max": 39
+  },
+  "bdcff539-c415-4e66-b65a-748b86591c1e": {
+   "editorName": "DecoOffer33%_S_Bundle_BannerRiften_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "bdeebc9f-5174-48cd-804c-6545274d26f2": {
+   "editorName": "SigilShop_Shield_DaedricShield_Arcane02",
+   "min": 40,
+   "max": 100
+  },
+  "be085c79-a3be-4955-99bd-90575ec06499": {
+   "editorName": "SigilShop_Weapon_EbonyDagger_Arcane02",
+   "min": 35,
+   "max": 49
+  },
+  "be1b23bd-1f30-4e35-8cc9-264f6548218d": {
+   "editorName": "SigilShop_Weapon_DarkSeducerLongsword",
+   "min": 39,
+   "max": 44
+  },
+  "be6a03a0-9b92-445d-9842-724334a89476": {
+   "editorName": "SigilShop_Weapon_DragonboneBattleaxe_Temp08_MgcDmg",
+   "min": 45,
+   "max": 100
+  },
+  "be930d83-9a35-4d88-8560-65bbb4c3e38e": {
+   "editorName": "PlayerLvlOffer_03_ Lvl55",
+   "min": 0,
+   "max": 0
+  },
+  "bf389986-faf9-4bdf-a7fe-c2a311f0d8fd": {
+   "editorName": "EmoteOffer_Heart_2020-01-01 00:00_2020-02-17 14:00",
+   "min": 0,
+   "max": 0
+  },
+  "bf528cf7-3499-48b9-84de-d3fcad55cdaa": {
+   "editorName": "SigilShop_TownMaterials_Copper_x80",
+   "min": 30,
+   "max": 100
+  },
+  "bf58c3b2-a413-4348-8804-0783818667e6": {
+   "editorName": "SigilShop_DivineElvenWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "bf77c0cd-723e-4167-8557-6255eee966e7": {
+   "editorName": "DecoOffer_L_SnowTree01_2019-12-01 00:00_2019-12-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "bf8cb4f4-cb09-423a-96c5-05a92bef3f76": {
+   "editorName": "SigilShop_Weapon_EbonyBattleaxe_Temp04_NoEnch",
+   "min": 35,
+   "max": 49
+  },
+  "c0083cb3-a633-4a67-9f68-545a0b82e510": {
+   "editorName": "SigilShop_Ultimate_StaminaGauntlets",
+   "min": 35,
+   "max": 100
+  },
+  "c03ea4c6-ed36-4170-9b88-ec24c6519985": {
+   "editorName": "SigilShop_DivineHideHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "c05dfce1-b221-4906-a67d-84c4e13b0172": {
+   "editorName": "SigilShop_Ultimate_ShockMace",
+   "min": 35,
+   "max": 100
+  },
+  "c0801e9f-f834-402a-80e3-801d84270b16": {
+   "editorName": "SigilShop_DivineQuicksilverBoots",
+   "min": 45,
+   "max": 100
+  },
+  "c08777c6-0028-4233-b31c-ea4b1567760d": {
+   "editorName": "DecoOffer_L_UnicornFountain_2020-05-01 00:00_2020-05-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "c08ae2cc-079d-4ba1-ba97-ffd4826632e9": {
+   "editorName": "SigilShop_DivineElvenShield",
+   "min": 45,
+   "max": 100
+  },
+  "c0bf397b-5e15-4084-a0f7-b81a6a90c1de": {
+   "editorName": "SigilShop_Weapon_DragonboneWarAxe_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "c0c6dee7-5740-4a23-8c10-75734a08a9af": {
+   "editorName": "SigilShop_Armor_ChitinBoots_Temp06_NoEnch",
+   "min": 1,
+   "max": 14
+  },
+  "c12c5917-0cc2-4a41-8e4c-092eeb14cd65": {
+   "editorName": "DecoOffer_S_Crystal_Shrine_2019-10-06 00:00_2019-10-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "c1372a4e-06b2-468a-b0b7-fda2a9fb68cb": {
+   "editorName": "SigilShop_DivineGlassGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "c18127a3-57f0-4b5f-aa7d-54b3095e97ff": {
+   "editorName": "GemPack02_c",
+   "min": 40,
+   "max": 100
+  },
+  "c22eee6a-2cd9-4bd8-a4ad-1519a9ca43dc": {
+   "editorName": "SigilShop_Shield_SilverShield_Temp04_PowBlock",
+   "min": 1,
+   "max": 14
+  },
+  "c271e47f-579d-42e0-ab53-c19c68e19a37": {
+   "editorName": "PlayerLvlOffer_03_ Lvl88",
+   "min": 0,
+   "max": 0
+  },
+  "c2e43209-b093-43c4-a141-9c286ae8c745": {
+   "editorName": "SigilShop_DivineDarkSeducerWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "c30e66a9-8d99-4236-84d1-fc2f2c7571df": {
+   "editorName": "SigilShop_DivineDwarvenMace",
+   "min": 45,
+   "max": 100
+  },
+  "c398f784-ea22-42eb-a5f5-de04c5c6b8a7": {
+   "editorName": "SigilShop_DivineChaurusBoots",
+   "min": 45,
+   "max": 100
+  },
+  "c3bfc108-ce0c-47b8-93e4-3cdc03f91691": {
+   "editorName": "PlayerLvlOffer_02_ Lvl54",
+   "min": 0,
+   "max": 0
+  },
+  "c3e6017f-d0ad-453d-bdea-61000ede2978": {
+   "editorName": "PlayerLvlOffer_03_ Lvl26",
+   "min": 0,
+   "max": 0
+  },
+  "c3fe6807-54a3-435e-9dda-3f678e02dc7a": {
+   "editorName": "SigilShop_DivineOrcishPlateGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "c41477c2-157b-470d-99c0-17dd9ab50194": {
+   "editorName": "SigilShop_Shield_ElvenShield_Arcane01",
+   "min": 25,
+   "max": 34
+  },
+  "c4196412-86b2-476b-be65-63eeb29fc4bb": {
+   "editorName": "SigilShop_Weapon_MadnessLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "c4313479-53b0-42d4-935d-f34bb0a18a25": {
+   "editorName": "SigilShop_Ultimate_Breathtaker",
+   "min": 35,
+   "max": 100
+  },
+  "c432eb86-85d5-4589-b24c-bc6c5daa89e7": {
+   "editorName": "SigilShop_DivineSilverMace",
+   "min": 45,
+   "max": 100
+  },
+  "c43b9106-9c78-4b34-87c8-f357ee6d2e7f": {
+   "editorName": "SigilShop_Ultimate_FireLongsword",
+   "min": 35,
+   "max": 100
+  },
+  "c4514960-e116-4f21-b4fd-a470d8c1c441": {
+   "editorName": "GemPack01_d",
+   "min": 41,
+   "max": 100
+  },
+  "c4f433b9-8083-4bee-84b6-0d69ffa92842": {
+   "editorName": "SigilShop_Weapon_DaedricHandAxe_Temp08_NoEnch",
+   "min": 40,
+   "max": 100
+  },
+  "c54f6e79-d856-4ee3-8244-884986c0f327": {
+   "editorName": "PlayerLvlOffer_03_ Lvl14",
+   "min": 0,
+   "max": 0
+  },
+  "c553baee-4930-4adf-bbac-c32021758f12": {
+   "editorName": "SigilShop_Armor_DragonplateArmor_Temp04_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "c59e149b-dec5-45f0-8625-e92dcb17e848": {
+   "editorName": "DecoOffer25%_M_Abyss2_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "c5ed32de-fac7-4d42-bded-898b55ba3d41": {
+   "editorName": "PlayerLvlOffer_02_ Lvl88",
+   "min": 0,
+   "max": 0
+  },
+  "c611d017-813c-4926-a724-6b0c3e3eede7": {
+   "editorName": "SigilShop_DivineOrcishBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "c64bd806-75f9-450a-a25d-cb87c7c15e34": {
+   "editorName": "SigilShop_Armor_OrcishPlateGauntlets_Temp08_AbsStm",
+   "min": 15,
+   "max": 24
+  },
+  "c65b3f39-2307-4c22-877b-b6bb8d4147be": {
+   "editorName": "SigilShop_DivineDwarvenWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "c6846b71-5c8d-4378-92cf-9f11e5d56bbf": {
+   "editorName": "DecoOffer_M_FullSpire_2019-12-30 00:00_2019-12-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "c693e2c2-7c90-4423-94ed-47308a4970be": {
+   "editorName": "PlayerLvlOffer_03_ Lvl66",
+   "min": 0,
+   "max": 0
+  },
+  "c6db7ca7-fcf5-4d64-86d6-0cd28a4011ba": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldNecklace_Arcane01",
+   "min": 30,
+   "max": 34
+  },
+  "c758f8f7-bc01-4168-ba1a-ef898b89e2cc": {
+   "editorName": "DecoOffer33%_M_Abyss3_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "c7800a1a-5b05-474c-8f8a-837745328a2c": {
+   "editorName": "SigilShop_DivineNordicSteelHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "c7ec11bf-4e1c-4094-9771-c027d60faaf0": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-03-22 00:00_2020-03-25 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "c7fba3ea-6f3d-40cd-a1e8-ee5399ae38db": {
+   "editorName": "SigilShop_Armor_StalhrimHelmet_Arcane02",
+   "min": 35,
+   "max": 49
+  },
+  "c820b311-5b84-4bd6-be6c-a76cf0a5c57b": {
+   "editorName": "Town Level Up Offer - Level 7",
+   "min": 0,
+   "max": 0
+  },
+  "c89e9c8e-2d1c-4f63-a99b-c116550b71e5": {
+   "editorName": "PlayerLvlOffer_03_ Lvl87",
+   "min": 0,
+   "max": 0
+  },
+  "c8a56b86-b12e-4170-a5b0-f4bfc51c383d": {
+   "editorName": "SigilShop_DivineDwarvenGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "c8fd00fd-e87c-44f3-bc4e-ce8bbaa5295f": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystRing_FireballConsumingInferno_NoEnch",
+   "min": 1,
+   "max": 19
+  },
+  "c9c1bd81-ce3d-4d43-b54a-0db3f5882376": {
+   "editorName": "PlayerLvlOffer_03_ Lvl79",
+   "min": 0,
+   "max": 0
+  },
+  "ca15eb22-f2f4-494a-989e-8138bc0436d5": {
+   "editorName": "SigilShop_Weapon_ChaurusWarAxe",
+   "min": 28,
+   "max": 32
+  },
+  "ca193c3b-ac65-4bce-ab44-38026a41dfb0": {
+   "editorName": "SigilShop_DivineChaurusMace",
+   "min": 45,
+   "max": 100
+  },
+  "cac4d68c-7e27-4d45-98f2-4cdd28d1b5a7": {
+   "editorName": "PlayerLvlOffer_02_ Lvl100",
+   "min": 0,
+   "max": 0
+  },
+  "cb07ed73-c4c2-418f-a0be-b7d82a09f1cf": {
+   "editorName": "DecoOffer_M_Abyss3_2020-03-30 00:00_2020-04-02 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "cb52d197-8b88-4b43-b37d-cd9171a68a31": {
+   "editorName": "SigilShop_DivineHideBoots",
+   "min": 45,
+   "max": 100
+  },
+  "cb5f7868-9130-49ec-bfc9-627f4b0c855e": {
+   "editorName": "GemPack04_b_JourneymanBlacksmith",
+   "min": 10,
+   "max": 30
+  },
+  "cba68825-b1bb-4549-a24c-eb754b88eb0f": {
+   "editorName": "SigilShop_Weapon_SilverGreatsword_Temp06_NoEnch",
+   "min": 1,
+   "max": 14
+  },
+  "cc2e4a7a-f65f-45f6-ae8b-9031f6e40a85": {
+   "editorName": "SigilShop_DivineElvenBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "ccd9e02c-6270-413a-9577-b41be791f56a": {
+   "editorName": "SigilShop_Armor_EbonyArmor_Arcane02",
+   "min": 35,
+   "max": 49
+  },
+  "cd584365-19b3-470d-a83c-d16d13978d3c": {
+   "editorName": "SigilShop_Shield_DwarvenLightShield_Arcane01",
+   "min": 20,
+   "max": 29
+  },
+  "cd939cb7-a555-428e-ac94-a291b256c410": {
+   "editorName": "SigilShop_Weapon_MadnessWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "ce18d426-c002-4f51-83ee-4cda20c73c02": {
+   "editorName": "SigilShop_DivineDwarvenMailHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "ce1cb5a5-0df3-4e40-94c5-287d9ce2c017": {
+   "editorName": "SigilShop_DivineDaedricMace",
+   "min": 45,
+   "max": 100
+  },
+  "ce941c19-179d-4b50-a3b2-6950fbf1181c": {
+   "editorName": "SigilShop_Ultimate_MephalasTeacher",
+   "min": 35,
+   "max": 100
+  },
+  "ce984c9c-51cc-4008-b63e-7e9b4b3c2825": {
+   "editorName": "SigilShop_DivineChitinGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "cee3e128-340b-4c9a-bbad-62492884d663": {
+   "editorName": "SigilShop_DivineDwarvenPlateBoots",
+   "min": 45,
+   "max": 100
+  },
+  "cf1152fc-06de-4255-b91c-da6c82524c0d": {
+   "editorName": "SigilShop_Armor_OrcishPlateHelmet_Temp04_NoEnch",
+   "min": 15,
+   "max": 24
+  },
+  "cf56bf0a-c95d-4698-9b43-f49d9550cce8": {
+   "editorName": "EmoteOffer_Guffaw_2020-01-04 00:00_2020-01-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "cf7b53b6-93ac-47bb-a87c-ba45a141d804": {
+   "editorName": "SigilShop_SoulGem_Petty",
+   "min": 1,
+   "max": 100
+  },
+  "cfc8ee3e-0c55-4ed4-8d5b-547e3a0bc7de": {
+   "editorName": "DecoOffer33%_M_Stele1_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "cfcdaa60-3f1f-443f-bb9b-ee61df8cafe6": {
+   "editorName": "SigilShop_Jewelry_GoldEmeraldRing_ShieldBashQuickStrikes_NoEnch",
+   "min": 30,
+   "max": 34
+  },
+  "cfdd2197-9401-4444-8754-973cd8d0d4eb": {
+   "editorName": "PlayerLvlOffer_03_ Lvl70",
+   "min": 0,
+   "max": 0
+  },
+  "cfecd565-9704-465a-bb42-29bfcbf37922": {
+   "editorName": "SigilShop_Armor_SilverArmor_Temp06_FortMgc",
+   "min": 1,
+   "max": 14
+  },
+  "d014bf3a-b71c-481d-9b2c-0d6b1a272528": {
+   "editorName": "SigilShop_Armor_OrcishScaleGauntlets_Arcane01",
+   "min": 15,
+   "max": 24
+  },
+  "d02875da-c506-4006-aeb8-68b017f0a193": {
+   "editorName": "SigilShop_TownMaterials_Copper_x20",
+   "min": 1,
+   "max": 100
+  },
+  "d0414c5f-b76c-457c-ba81-9ec3a74b77cf": {
+   "editorName": "SigilShop_EffectIngredients_VoidSalts",
+   "min": 1,
+   "max": 100
+  },
+  "d0460dba-3678-4ead-99f2-26aa43a83de7": {
+   "editorName": "SigilShop_LTUltimate_FireWarhammer",
+   "min": 25,
+   "max": 55
+  },
+  "d04c941f-af9f-41e5-9ca0-047d2a4a5369": {
+   "editorName": "SigilShop_Weapon_DwarvenWarAxe_Arcane02",
+   "min": 20,
+   "max": 29
+  },
+  "d0a7e3f8-8973-474b-81fc-7ca017fd7253": {
+   "editorName": "PlayerLvlOffer_03_ Lvl52",
+   "min": 0,
+   "max": 0
+  },
+  "d0ca8af1-f7b3-4c21-8257-9332ccb5b038": {
+   "editorName": "SigilShop_Weapon_ForswornWarhammer",
+   "min": 18,
+   "max": 22
+  },
+  "d1156e76-3875-4fc3-8ba2-45644aae16c9": {
+   "editorName": "DecoOffer_S_IceKhajiit_2019-12-28 00:00_2019-12-30 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "d226eb23-b0c8-4332-8f99-1e6253467c74": {
+   "editorName": "SigilShop_Weapon_AncientNordicLongsword",
+   "min": 13,
+   "max": 17
+  },
+  "d2312e9c-51f1-4207-a9ff-67fbdbbf0dad": {
+   "editorName": "SigilShop_DivineGlassLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "d2726583-6d1d-48d6-9f18-c5a59e765a48": {
+   "editorName": "SigilShop_DivineDaedricBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "d2939952-a691-4327-9c28-8bf1a5ca64dc": {
+   "editorName": "EmoteOffer_Boo_2019-09-24 00:00_2029-09-27 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "d30121a2-a5b3-4185-bb6e-5cafa0f3e355": {
+   "editorName": "PlayerLvlOffer_03_ Lvl98",
+   "min": 0,
+   "max": 0
+  },
+  "d33f3d5e-d453-4852-8e8b-d0708f3421cf": {
+   "editorName": "SigilShop_Weapon_SilverWarhammer_Temp06_PhyBlockPiercing",
+   "min": 1,
+   "max": 14
+  },
+  "d36b9c32-58a6-4c5e-9480-f2421f349efe": {
+   "editorName": "SigilShop_DivineHideShield",
+   "min": 45,
+   "max": 100
+  },
+  "d396f160-016f-4f73-ba29-fa562ce71786": {
+   "editorName": "SigilShop_DivineChaurusWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "d456cd8b-de55-4d4b-908c-12f9168a43cf": {
+   "editorName": "SigilShop_Armor_DragonscaleArmor_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "d468a864-58fa-4d6c-ab18-1627831cc977": {
+   "editorName": "SigilShop_Armor_QuicksilverArmor_Temp08_NoEnch",
+   "min": 25,
+   "max": 34
+  },
+  "d48e8358-29e3-41b7-a0e7-79b0b1da54c7": {
+   "editorName": "SigilShop_DivineOrcishPlateHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "d4f84d8d-e6c0-45ad-9899-a6eae501b008": {
+   "editorName": "SigilShop_Weapon_GlassDagger_Temp04_NoEnch",
+   "min": 30,
+   "max": 39
+  },
+  "d5069283-972f-456d-ba4e-5684f33429c0": {
+   "editorName": "SigilShop_DivineIronWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "d56cc96a-007a-4367-a027-f15141f24e71": {
+   "editorName": "SigilShop_DivineDwarvenMailArmor",
+   "min": 45,
+   "max": 100
+  },
+  "d5b853c9-5520-402c-b174-ee791d775366": {
+   "editorName": "PlayerLvlOffer_03_ Lvl54",
+   "min": 0,
+   "max": 0
+  },
+  "d61a84ab-74fa-4fcb-b881-5b3a7266bdf2": {
+   "editorName": "Player Level Up offer - Level 11",
+   "min": 0,
+   "max": 0
+  },
+  "d61c3ded-584e-4885-bc21-36bdb79952b2": {
+   "editorName": "SigilShop_DivineDaedricPlateArmor",
+   "min": 45,
+   "max": 100
+  },
+  "d653824e-22d6-409c-8acf-a0338234847f": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteRing_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "d655a347-83ee-4985-9e59-77be51b7921f": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-08-21 00:00_2019-08-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "d67fce0f-9ab7-4e07-8f1f-3890117d3610": {
+   "editorName": "SigilShop_Weapon_GoldenSaintLightHammer",
+   "min": 39,
+   "max": 44
+  },
+  "d687485e-8227-4488-8c06-dc9f0fda5ef9": {
+   "editorName": "SigilShop_DivineEbonyHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "d6dda15b-948a-4f9a-93ee-cddd8357936d": {
+   "editorName": "DecoOffer25%_S_Bundle_BannerMorthal_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "d6ee1439-1c79-4a20-a93d-09483458cf50": {
+   "editorName": "SigilShop_Jewel_Pyrine",
+   "min": 40,
+   "max": 100
+  },
+  "d6ff55f5-5403-42c1-ad6d-c163a6cd8e0f": {
+   "editorName": "DecoOffer_S_Nirnroot_2020-06-06 00:00_2020-06-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "d70058d3-9c13-4fbf-a0c2-bc4b3e631ebd": {
+   "editorName": "SigilShop_Ultimate_MagickaArmor",
+   "min": 35,
+   "max": 100
+  },
+  "d7011414-e0a9-4673-a6e0-cfc453f9b2e5": {
+   "editorName": "SigilShop_Weapon_DarkSeducerDagger",
+   "min": 39,
+   "max": 44
+  },
+  "d709c92f-7d29-48b3-a995-8b0179521758": {
+   "editorName": "SigilShop_Armor_DragonplateBoots_Arcane02",
+   "min": 45,
+   "max": 100
+  },
+  "d7136b6b-5cd2-451d-a849-23da1f69dbb5": {
+   "editorName": "PlayerLvlOffer_03_ Lvl95",
+   "min": 0,
+   "max": 0
+  },
+  "d759ef08-4e49-4f02-9c1b-41c5e2cbc3af": {
+   "editorName": "SigilShop_DivineSteelGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "d76516f1-4c71-4575-b18e-585a0fb29733": {
+   "editorName": "SigilShop_DivineForswornLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "d77644b0-7c30-4a9b-a6fc-fc1c85de2a2a": {
+   "editorName": "SigilShop_LTUltimate_FrostWarAxe",
+   "min": 25,
+   "max": 55
+  },
+  "d7c13199-61f7-4eb4-9091-d91118c3fddf": {
+   "editorName": "SigilShop_Armor_ElvenHelmet_Temp06_NoEnch",
+   "min": 25,
+   "max": 34
+  },
+  "d7f39196-133d-4cd1-8489-cfadf9363ad3": {
+   "editorName": "SigilShop_Armor_DaedricPlateBoots_Temp08_NoEnch",
+   "min": 40,
+   "max": 100
+  },
+  "d82c2e37-c7b4-4cfa-81d5-6040c069caaf": {
+   "editorName": "SigilShop_DivineGoldenSaintBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "d874cc89-9b15-4db7-8300-77c5c0ee9040": {
+   "editorName": "IAP_HealingPack_02",
+   "min": 20,
+   "max": 27
+  },
+  "d87c8ca7-b837-47a2-8c54-bdfc1bb5fbab": {
+   "editorName": "DecoOffer50%_S_Bundle_BannerMorthal_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "d8f58e69-880c-419d-beee-6ae8fadcd353": {
+   "editorName": "SigilShop_Weapon_MadnessDagger",
+   "min": 45,
+   "max": 100
+  },
+  "d91b808c-3b73-4f78-b663-785ad0d5f721": {
+   "editorName": "Test with user maximum test 2",
+   "min": 0,
+   "max": 0
+  },
+  "d91f3c57-50c5-42b2-83fc-142804519afa": {
+   "editorName": "PlayerLvlOffer_02_ Lvl22",
+   "min": 0,
+   "max": 0
+  },
+  "d9712d67-605a-4c69-bbdf-83cbbb60c140": {
+   "editorName": "SigilShop_DivineDaedricWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "da24adae-b4e9-4223-80dc-ed1704ce80f0": {
+   "editorName": "SigilShop_Ultimate_Stormkiss",
+   "min": 35,
+   "max": 100
+  },
+  "dac59a1a-7f22-4306-9117-fa90d44aee3d": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "dacb15f2-dc8c-4aad-b96e-721e9532a5f1": {
+   "editorName": "DecoOffer_S_Candelabra_2020-01-11 00:00_2020-01-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "dad0d6f8-60b0-441c-b4ef-6ab6757afdb8": {
+   "editorName": "DecoOffer_S_Candelabra_2020-03-02 00:00_2020-03-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "dad81891-b5bf-41b7-863c-0a3beee83484": {
+   "editorName": "SigilShop_Shield_StalhrimShield_Temp06_PowBlock",
+   "min": 35,
+   "max": 49
+  },
+  "dae48287-d814-4d91-9f81-58dc3d7f04b5": {
+   "editorName": "DecoOffer_M_Lectern_2019-08-05 00:00_2019-08-08 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "db988a52-b664-4189-8c3f-bee13fed6849": {
+   "editorName": "SigilShop_Unique_RingOfDremora",
+   "min": 50,
+   "max": 100
+  },
+  "dbcb7683-0b59-4c05-95bf-81f50a63f214": {
+   "editorName": "SigilShop_DivineForswornBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "dbe89281-cb11-4f8b-8a38-1e5be5215e68": {
+   "editorName": "SigilShop_Weapon_ElvenBattleaxe_Arcane02",
+   "min": 25,
+   "max": 34
+  },
+  "dc31b5dc-744a-4bb7-94aa-23c26998d930": {
+   "editorName": "PlayerLvlOffer_03_ Lvl74",
+   "min": 0,
+   "max": 0
+  },
+  "dc9b84b7-783e-4dc8-9fa0-03a6e1b4a6af": {
+   "editorName": "SigilShop_Armor_QuicksilverBoots_Temp06_FortMgc",
+   "min": 25,
+   "max": 34
+  },
+  "dca1b441-67dc-404f-b09f-5bb1aa4598b4": {
+   "editorName": "IAP_ElementalPack_02",
+   "min": 20,
+   "max": 27
+  },
+  "ddbad1d9-bbd9-4a85-87c7-17b683af030b": {
+   "editorName": "SigilShop_Shield_ChitinShield_Arcane01",
+   "min": 1,
+   "max": 15
+  },
+  "dde8b44a-49f6-4179-9d3f-98838ccb78c2": {
+   "editorName": "PlayerLvlOffer_03_ Lvl77",
+   "min": 0,
+   "max": 0
+  },
+  "ddfde62d-3d6e-4f1b-9102-aa3476637c84": {
+   "editorName": "SigilShop_Shield_OrcishScaledShield_Arcane01",
+   "min": 15,
+   "max": 24
+  },
+  "de238dc2-980e-4e6c-b3ab-cfb90c076ae9": {
+   "editorName": "SigilShop_DivineDaedricMailBoots",
+   "min": 45,
+   "max": 100
+  },
+  "de84f4c7-59c7-4553-b7f9-584f450a7963": {
+   "editorName": "SigilShop_Armor_ChaurusArmor_Temp08_FortStm",
+   "min": 30,
+   "max": 39
+  },
+  "dead2d7e-83ba-4b3a-b2e8-3eb154fe7c81": {
+   "editorName": "SigilShop_Weapon_DaedricBattleaxe_Arcane01",
+   "min": 40,
+   "max": 100
+  },
+  "deef41aa-1875-43ea-b0a3-8318acd6207a": {
+   "editorName": "DecoOffer_M_Bones_2020-04-19 00:00_2020-04-22 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "df146d2e-fc1f-4498-b499-e6903e84ae06": {
+   "editorName": "SigilShop_Weapon_ElvenLongsword_Arcane01",
+   "min": 25,
+   "max": 34
+  },
+  "e00b28b2-6c1a-4f41-bad0-c7bd94cc188e": {
+   "editorName": "DecoOffer50%_M_Stele1_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "e09dccef-9e29-438d-b9c3-268d3ef1c7b5": {
+   "editorName": "DecoOffer_L_FancyFountain_2020-06-01 00:00_2020-06-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e13cb542-3e0e-4146-b0c3-01ad606b4a37": {
+   "editorName": "SigilShop_DivineNordicSteelWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "e2092118-d940-4c41-ba16-1e7d583157b4": {
+   "editorName": "DecoOffer33%_M_Abyss2_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "e2877399-8910-4b74-977a-b12c952ccf8f": {
+   "editorName": "SigilShop_Jewel_Ruby",
+   "min": 1,
+   "max": 19
+  },
+  "e28ab3f1-32df-4577-9274-188da9a19107": {
+   "editorName": "SigilShop_Jewel_Arentine",
+   "min": 40,
+   "max": 100
+  },
+  "e29703dd-2b85-44b8-9eb4-e681a4a4636b": {
+   "editorName": "EmoteOffer_BabyDrake_2020-01-18 00:00_2020-01-19 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e2adab5b-6c80-482b-a61a-11fc7653a7f4": {
+   "editorName": "DecoOffer_S_Candelabra_2020-05-05 00:00_2020-05-08 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e3638472-0eda-4d6e-a29a-64043c85fa7c": {
+   "editorName": "SigilShop_Weapon_OrcishWarAxe_Temp06_NoEnch",
+   "min": 15,
+   "max": 24
+  },
+  "e37b200a-dd0b-451e-933e-a0c8614bc0c7": {
+   "editorName": "SigilShop_Smithing_T8-T9",
+   "min": 30,
+   "max": 100
+  },
+  "e37e55d7-476b-4190-8db7-897debd69c1c": {
+   "editorName": "SigilShop_Armor_GoldenSaintHelmet",
+   "min": 39,
+   "max": 100
+  },
+  "e383a8d1-330e-4b5e-9e4d-7b8d6b5e352d": {
+   "editorName": "DecoOffer_S_Candelabra_2020-05-25 00:00_2020-05-28 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e3c65977-1d35-4b80-ae69-e16109ecce72": {
+   "editorName": "SigilShop_Weapon_StalhrimLightHammer",
+   "min": 33,
+   "max": 38
+  },
+  "e450f900-9406-4a96-ab49-4097b0fc39fb": {
+   "editorName": "SigilShop_Weapon_GoldenSaintGreatsword",
+   "min": 39,
+   "max": 44
+  },
+  "e4ada615-fc8a-44d3-954a-3f67bc717697": {
+   "editorName": "SigilShop_Weapon_OrcishLongsword_Temp06_Haste",
+   "min": 15,
+   "max": 24
+  },
+  "e4c1c546-a908-4f60-b31b-eb4743251b3e": {
+   "editorName": "DecoOffer_S_Nirnroot_2019-05-21 00:00_2019-05-24 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e4c98d4a-c376-4514-a215-fa6b2ad6729b": {
+   "editorName": "SigilShop_DivineEbonyArmor",
+   "min": 45,
+   "max": 100
+  },
+  "e4ea78fa-f49a-44de-8ad0-d0965f5ce487": {
+   "editorName": "SigilShop_Ultimate_DefensiveSpellsRing",
+   "min": 35,
+   "max": 100
+  },
+  "e550e51f-cd55-440b-aa39-526f7bbf10ec": {
+   "editorName": "SigilShop_DivineChitinArmor",
+   "min": 45,
+   "max": 100
+  },
+  "e5f96da6-8e5e-4854-ab68-6dbd6da9bd49": {
+   "editorName": "SigilShop_Weapon_DarkSeducerBattleaxe",
+   "min": 39,
+   "max": 44
+  },
+  "e64cf8bd-cdd1-4b93-8dd5-f6fc4ad07792": {
+   "editorName": "IAP_HealingPack_03",
+   "min": 28,
+   "max": 49
+  },
+  "e6a4db93-c393-4537-b743-f6c98c1f6b1c": {
+   "editorName": "SigilShop_Weapon_NordicSteelWarhammer",
+   "min": 23,
+   "max": 27
+  },
+  "e6fcd4dc-e8fc-4c55-a112-5631cc0dc7d6": {
+   "editorName": "SigilShop_DivineGoldenSaintMace",
+   "min": 45,
+   "max": 100
+  },
+  "e6fde53c-68af-4e24-b413-5002bfabb20f": {
+   "editorName": "DecoOffer_S_BundleBannerMorthal_2020-08-09 00:00_2020-08-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e70bc8b6-d4b3-49e6-8fb7-73a4fa284c02": {
+   "editorName": "SigilShop_Armor_ChitinArmor_Arcane01",
+   "min": 1,
+   "max": 14
+  },
+  "e74fc4ec-f2f8-430a-ac35-550f97ef3501": {
+   "editorName": "EmoteOffer_Tantrum_2019-12-16 00:00_2019-12-20 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e7510dad-ae81-4912-89bc-079a0c416565": {
+   "editorName": "SigilShop_Armor_SilverGauntlets_Temp08_NoEnch",
+   "min": 1,
+   "max": 14
+  },
+  "e777068a-7cb2-4b7e-b7dc-02ef97ab1ee4": {
+   "editorName": "SigilShop_DivineSteelBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "e7c09315-d6dd-4f47-8842-9ced54e99eb3": {
+   "editorName": "EmoteOffer_NirnRoot_2020-01-11 00:00_2020-01-12 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e7ec053a-eba0-4937-9ad4-f99c2ed68022": {
+   "editorName": "SigilShop_Weapon_SilverDagger_Temp08_Combo",
+   "min": 1,
+   "max": 14
+  },
+  "e82f0264-cb7f-4eca-846a-9adbe0771944": {
+   "editorName": "SigilShop_Weapon_DragonboneLongsword_Temp06_Haste",
+   "min": 45,
+   "max": 100
+  },
+  "e87130d1-ee58-4b51-99da-01e599a08c11": {
+   "editorName": "SigilShop_Weapon_OrcishLightHammer_Temp04_MgcDmg",
+   "min": 15,
+   "max": 24
+  },
+  "e87d0348-84ee-48be-a19e-6201b38e4b74": {
+   "editorName": "SigilShop_Jewelry_GoldRubyRing_Arcane02",
+   "min": 20,
+   "max": 24
+  },
+  "e91e4dd6-d283-44b5-a9ae-a3c22bc390ae": {
+   "editorName": "SigilShop_DivineOrcishScaleArmor",
+   "min": 45,
+   "max": 100
+  },
+  "e93fcd23-71db-47f4-9a9d-a4a8cc41550b": {
+   "editorName": "PlayerLvlOffer_03_ Lvl32",
+   "min": 0,
+   "max": 0
+  },
+  "e9693d25-68a7-4c58-8525-d26cd801b1d6": {
+   "editorName": "DecoOffer_S_Stele3_2018-02-03 00:00_2018-02-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "e97050d1-71ca-41b9-946c-1b5e328b5ba5": {
+   "editorName": "SigilShop_Armor_DwarvenMailBoots_Arcane02",
+   "min": 20,
+   "max": 29
+  },
+  "e9b2eb88-9794-4ec8-a134-22c3eba60e1f": {
+   "editorName": "SigilShop_Armor_DivineGoldenSaintHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "e9c6fb65-3089-4408-b133-2b9f4cea9917": {
+   "editorName": "PlayerLvlOffer_02_ Lvl46",
+   "min": 0,
+   "max": 0
+  },
+  "e9deb065-4996-48c1-a391-94eba9e8cb19": {
+   "editorName": "PlayerLvlOffer_02_ Lvl48",
+   "min": 0,
+   "max": 0
+  },
+  "ea2cc56f-986f-4c06-a58c-e9a77b4c416c": {
+   "editorName": "SigilShop_Armor_DragonplateHelmet_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "eb1c9c6f-643e-4dec-a6ca-2965f1c73802": {
+   "editorName": "PlayerLvlOffer_02_ Lvl14",
+   "min": 0,
+   "max": 0
+  },
+  "eb379ede-a13e-41bc-ba55-81fd6cbb8f4a": {
+   "editorName": "SigilShop_Smithing_T1-T3",
+   "min": 1,
+   "max": 30
+  },
+  "eb54222b-1485-404e-bd15-944ae5cb1e0e": {
+   "editorName": "SigilShop_DivineDarkSeducerLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "ebb7d9a5-13a8-406e-af45-695a92c14e76": {
+   "editorName": "SigilShop_Shield_GoldenSaintShield",
+   "min": 39,
+   "max": 100
+  },
+  "ebfb633f-97fc-40bc-a492-0ebafff7e211": {
+   "editorName": "SigilShop_Weapon_NordicSteelDagger",
+   "min": 23,
+   "max": 27
+  },
+  "ec2a1477-1c7a-4a9f-8817-fe1e4d391e76": {
+   "editorName": "PlayerLvlOffer_03_ Lvl96",
+   "min": 0,
+   "max": 0
+  },
+  "ec2ce863-c74d-4783-80b3-f0e931e538aa": {
+   "editorName": "SigilShop_DivineAncientNordicDagger",
+   "min": 45,
+   "max": 100
+  },
+  "ec2e19bb-5f45-4a13-8691-cb2b70565c79": {
+   "editorName": "SigilShop_Weapon_GoldenSaintHandAxe",
+   "min": 39,
+   "max": 44
+  },
+  "ec5fa669-3e38-432c-9b44-19e543fcb39b": {
+   "editorName": "SigilShop_SoulGem_Bundle_Lesser",
+   "min": 1,
+   "max": 100
+  },
+  "eca28f9a-11a4-4ab8-a722-57f2b26b19dd": {
+   "editorName": "SigilShop_Weapon_OrcishMace_Arcane01",
+   "min": 15,
+   "max": 24
+  },
+  "ecea0fe1-ba64-4749-ba43-9815a981944d": {
+   "editorName": "DecoOffer_S_Nirnroot_2020-07-08 00:00_2020-07-11 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "ed302b2f-ff7d-4a94-b585-ae6e791e7ff7": {
+   "editorName": "SigilShop_DivineDarkSeducerHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "ed5f1e6d-0581-4878-8048-76b98afceb5b": {
+   "editorName": "DecoOffer25%_M_Bones_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "ed7c6d4b-e7f4-45d0-95ed-daf828828ffa": {
+   "editorName": "SigilShop_DivineQuicksilverShield",
+   "min": 45,
+   "max": 100
+  },
+  "eda15f84-8c48-46df-a1e4-89d1a972c219": {
+   "editorName": "DecoOffer_M_FullSpire_2020-02-14 00:00_2020-02-17 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "edc02ca1-25f9-4246-b37a-ec37523c7bad": {
+   "editorName": "PlayerLvlOffer_03_ Lvl38",
+   "min": 0,
+   "max": 0
+  },
+  "edd47a39-32ae-4ea6-b6a8-7bb71c20c795": {
+   "editorName": "SigilShop_DivineOrcishHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "edfd8ded-cc83-4e25-9004-5c46cb25256a": {
+   "editorName": "DecoOffer_S_Candelabra_2019-04-03 00:00_2019-04-06 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "ee33f3f4-0738-4627-bade-0dfbac2e4865": {
+   "editorName": "SigilShop_Armor_DragonscaleHelmet_Temp08_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "ee60c264-b352-4d94-9c1d-be09ffc4f40e": {
+   "editorName": "SigilShop_DivineSilverShield",
+   "min": 45,
+   "max": 100
+  },
+  "eee1c789-f0b4-4bfb-a9e1-33bfadc89bb4": {
+   "editorName": "DecoOffer_S_Crystal_Shrine_2019-11-24 00:00_2019-11-28 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "eefb8902-2c35-41c8-9816-13723773e1c2": {
+   "editorName": "SigilShop_DivineDarkSeducerLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "ef234f68-8ee2-4fdd-8fbe-a8f9bf70fc21": {
+   "editorName": "GemPack05_b_JourneymanEnchanter",
+   "min": 20,
+   "max": 45
+  },
+  "ef6ca2a0-b68e-4dfe-8b62-ff73892e465b": {
+   "editorName": "SigilShop_Jewelry_SilverAmethystNecklace_Arcane01",
+   "min": 1,
+   "max": 19
+  },
+  "efadd0dd-e2bc-4f68-a980-da6775dc31b7": {
+   "editorName": "SigilShop_Weapon_DwarvenLightHammer_Temp06_NoEnch",
+   "min": 20,
+   "max": 29
+  },
+  "efb49333-b3ba-4a06-802c-b4cfdb42d16c": {
+   "editorName": "SigilShop_DivineEbonyGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "f00845dc-310e-4a9a-aa43-ded4e3c61cd9": {
+   "editorName": "SigilShop_DivineChaurusArmor",
+   "min": 45,
+   "max": 100
+  },
+  "f03a364c-7249-4c28-8343-30459c9613a8": {
+   "editorName": "EmoteOffer_Salute_2020-01-27 00:00_2020-01-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "f0756358-03c5-4963-8555-ab9c6e0c659a": {
+   "editorName": "PlayerLvlOffer_03_ Lvl86",
+   "min": 0,
+   "max": 0
+  },
+  "f174a539-afac-42ab-9b12-58447b8ce153": {
+   "editorName": "DecoOffer_S_EmeraldBeacon_2019-12-10 00:00_2019-12-13 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "f1983736-1eef-456b-84c4-9bedacaa1304": {
+   "editorName": "SigilShop_Weapon_DragonboneWarAxe_Temp06_NoEnch",
+   "min": 45,
+   "max": 100
+  },
+  "f208bac7-e664-45d6-9f93-0516b0841a1f": {
+   "editorName": "Player Level Up offer - Level 19",
+   "min": 0,
+   "max": 0
+  },
+  "f234c8be-4354-407c-be64-2bc0cf26dff8": {
+   "editorName": "Player Level Up offer - Level 35",
+   "min": 0,
+   "max": 0
+  },
+  "f27c4ab7-53cc-4b7b-9a91-169cdf034c0b": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireRing_ShieldBashDodgingStrike_AbsStm",
+   "min": 25,
+   "max": 29
+  },
+  "f29a0a07-c241-425b-893d-97aa045a7872": {
+   "editorName": "DecoOffer_S_Candelabra_2019-05-25 00:00_2019-05-28 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "f2e87166-3d86-4e2c-92ba-74866259b40f": {
+   "editorName": "SigilShop_DivineStalhrimWarhammer",
+   "min": 45,
+   "max": 100
+  },
+  "f2fc4148-9e10-43d9-a1ae-f11c7073bae9": {
+   "editorName": "SigilShop_Weapon_GlassBattleaxe_Temp08_PhyBlockPiercing",
+   "min": 30,
+   "max": 39
+  },
+  "f30947e8-369f-4b83-8a2e-398102df55a3": {
+   "editorName": "SigilShop_DivineDwarvenPlateHelmet",
+   "min": 45,
+   "max": 100
+  },
+  "f3267fd9-81b4-4ca9-957e-1d2abac59dfb": {
+   "editorName": "SigilShop_Shield_ChaurusShield_Arcane02",
+   "min": 30,
+   "max": 39
+  },
+  "f38425cd-82eb-4f31-a7cf-c71abdec5d7d": {
+   "editorName": "SigilShop_DivineSteelLongsword",
+   "min": 45,
+   "max": 100
+  },
+  "f38f8e2b-447b-480f-98de-b24daff32f52": {
+   "editorName": "SigilShop_Weapon_DaedricLongsword_Arcane02",
+   "min": 40,
+   "max": 100
+  },
+  "f3f5a1c7-0f37-4a3c-a2db-977c35349dad": {
+   "editorName": "GemPack04_c_ExpertBlacksmith",
+   "min": 20,
+   "max": 40
+  },
+  "f3f65d3f-32bf-47c7-b4c2-90df83906010": {
+   "editorName": "SigilShop_Weapon_DaedricLightHammer_Arcane01",
+   "min": 40,
+   "max": 100
+  },
+  "f40c16b5-13cf-4e95-b80d-367052f22104": {
+   "editorName": "SigilShop_Weapon_DragonboneLongsword_Arcane01",
+   "min": 45,
+   "max": 100
+  },
+  "f410e424-2b40-452f-9da3-f4a82e663cd9": {
+   "editorName": "Player Level Up offer - Level 22",
+   "min": 0,
+   "max": 0
+  },
+  "f49c4b50-aa31-4195-85f2-5c04c0469c09": {
+   "editorName": "SigilShop_Weapon_NordicSteelGreatsword",
+   "min": 23,
+   "max": 27
+  },
+  "f4cd9bad-7704-4c7a-a2bb-6225fa029a90": {
+   "editorName": "SigilShop_Shield_DwarvenShield_Temp06_PowBlock",
+   "min": 20,
+   "max": 29
+  },
+  "f5a5a6e0-0984-4f19-a02d-ec97e7f2d4f8": {
+   "editorName": "SigilShop_DivineStalhrimBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "f5d84d2b-1e7b-49be-9202-947aea06b083": {
+   "editorName": "SigilShop_Weapon_ForswornWarAxe",
+   "min": 18,
+   "max": 22
+  },
+  "f62fab9a-f8d0-4232-88b1-793f71357469": {
+   "editorName": "DecoOffer25%_S_Nirnroot_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "f730d806-b522-43c4-a467-19ce331d2d17": {
+   "editorName": "SigilShop_Jewelry_GoldSapphireNecklace_Arcane02",
+   "min": 25,
+   "max": 29
+  },
+  "f735aa76-57f8-43a6-ab18-af17798c4ca2": {
+   "editorName": "DecoOffer33%_S_Crystal_Shrine_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "f7457009-e03a-4652-b494-d382c9b20b77": {
+   "editorName": "SigilShop_Armor_GlassHelmet_Temp06_FortMgc",
+   "min": 30,
+   "max": 39
+  },
+  "f76b3dc9-d8e8-46a9-91d8-2bc438b457ae": {
+   "editorName": "SigilShop_DivineEbonyMace",
+   "min": 45,
+   "max": 100
+  },
+  "f76d9088-5367-4a32-b0dc-3f3403cf02f8": {
+   "editorName": "DecoOffer_L_ScaryTree_2020-05-13 00:00_2020-05-16 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "f76e9824-5263-4f3b-a858-7f4adfd5d818": {
+   "editorName": "PlayerLvlOffer_03_ Lvl44",
+   "min": 0,
+   "max": 0
+  },
+  "f7807aca-96fe-4418-8000-372d01410eff": {
+   "editorName": "SigilShop_EffectIngredients_ImpStool",
+   "min": 1,
+   "max": 100
+  },
+  "f7857db5-8bdc-4aaf-9fae-3345bccdb18c": {
+   "editorName": "DecoOffer_S_BundleBannerRiften_2019-06-02 00:00_2019-06-05 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "f7a59539-f9d0-4469-8fbf-f5f563e03ad1": {
+   "editorName": "PlayerLvlOffer_03_ Lvl71",
+   "min": 0,
+   "max": 0
+  },
+  "f7ad0d53-5f4a-485b-9c3a-b998b379d47e": {
+   "editorName": "SigilShop_Armor_OrcishPlateBoots_Arcane01",
+   "min": 15,
+   "max": 24
+  },
+  "f7dc5524-3ac6-4d6f-9189-89625b4d879f": {
+   "editorName": "SigilShop_Weapon_EbonyHandAxe_Temp06_MgcDmg",
+   "min": 35,
+   "max": 49
+  },
+  "f807c2a6-ae4b-4300-bbd1-7dd843c8834d": {
+   "editorName": "Player Level Up offer - Level 14",
+   "min": 0,
+   "max": 0
+  },
+  "f80a3b10-7346-4f4a-b8bf-53a576621eb7": {
+   "editorName": "SigilShop_DivineSteelHandAxe",
+   "min": 45,
+   "max": 100
+  },
+  "f8986fa2-bcd7-427e-ae88-09998fdebb2d": {
+   "editorName": "DecoOffer50%_L_ScaryTree_MockSale",
+   "min": 0,
+   "max": 0
+  },
+  "f94258f4-6a66-46b2-b992-be69a6bad15b": {
+   "editorName": "SigilShop_Weapon_AncientNordicWarhammer",
+   "min": 13,
+   "max": 17
+  },
+  "f9a0fc50-4b23-4084-be00-8b8af92c1a8a": {
+   "editorName": "DecoOffer_M_Abyss3_2019-02-06 00:00_2019-02-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fa09d977-6203-463e-be4c-50d40a0c4093": {
+   "editorName": "DecoOffer_M_Bones_2020-08-01 00:00_2020-08-04 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fa112821-5472-4cdc-81e6-dcc95ec4f220": {
+   "editorName": "PlayerLvlOffer_03_ Lvl64",
+   "min": 0,
+   "max": 0
+  },
+  "fa4bfb39-6f7e-4043-b38b-5e007b366959": {
+   "editorName": "DecoOffer_S_Stele3_2020-07-16 00:00_2020-07-19 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fa57423b-c095-4c84-9335-56e6a3dede68": {
+   "editorName": "EmoteOffer_Arrow_2020-01-25 00:00_2020-01-26 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fa5b6d8b-3da2-43d6-96f1-78ddc4ec48bb": {
+   "editorName": "DecoOffer_S_Stele3_2019-02-26 00:00_2019-03-01 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "faa09742-5b9e-4c4d-8125-35ee98c9bdf6": {
+   "editorName": "PlayerLvlOffer_03_ Lvl53",
+   "min": 0,
+   "max": 0
+  },
+  "fab24ea4-dd00-4746-89fe-db2ba2be8e3f": {
+   "editorName": "Player Level Up offer - Level 47",
+   "min": 0,
+   "max": 0
+  },
+  "fab35b22-b0b1-420b-8604-32761cf1794c": {
+   "editorName": "DecoOffer_M_LifeTree01_2019-12-01 00:00_2019-12-31 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fae0c2d3-fed4-4175-b03d-412fc0c256f0": {
+   "editorName": "SigilShop_DivineLeatherGauntlets",
+   "min": 45,
+   "max": 100
+  },
+  "fb49fc8a-279b-4cba-8b67-6364003eef65": {
+   "editorName": "SigilShop_Armor_ElvenArmor_Arcane02",
+   "min": 25,
+   "max": 34
+  },
+  "fbd06bea-34f2-4ca0-b6af-b983e56084dd": {
+   "editorName": "IAP_ElementalPack_04",
+   "min": 50,
+   "max": 100
+  },
+  "fc0d56da-3b93-407e-aeff-e1997e03d0a0": {
+   "editorName": "DecoOffer_L_FancyFountain_2019-07-01 00:00_2019-07-07 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fc3d2e8d-ad00-4d4f-a5e9-1a90c1a48a31": {
+   "editorName": "SigilShop_DivineStalhrimWarAxe",
+   "min": 45,
+   "max": 100
+  },
+  "fc523b1f-2855-49cc-b6ff-52d09b2e343c": {
+   "editorName": "DecoOffer_S_RotisserieChicken_2019-12-06 00:00_2019-12-09 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8": {
+   "editorName": "SigilShop_Jewelry_EbonyFaeriteNecklace_Armsman_FortMgcRegen",
+   "min": 45,
+   "max": 100
+  },
+  "fcd42a1c-2c05-48fb-bf7f-f7775f2a79b5": {
+   "editorName": "DecoOffer_M_Stele1_2019-12-25 00:00_2019-12-29 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "fd022c2e-a06c-4271-aa66-4424b1a8a7ab": {
+   "editorName": "Town Level Up Offer - Level 4",
+   "min": 0,
+   "max": 0
+  },
+  "fd7fd4ae-c121-485b-9d57-04029d6a0bb3": {
+   "editorName": "SigilShop_DivineIronGreatsword",
+   "min": 45,
+   "max": 100
+  },
+  "fe1007de-19a1-44f7-b30c-f3f9f5d122f3": {
+   "editorName": "PlayerLvlOffer_02_ Lvl60",
+   "min": 0,
+   "max": 0
+  },
+  "fe252199-573e-4dcd-8de9-7f0f3e049907": {
+   "editorName": "SigilShop_DivineSilverDagger",
+   "min": 45,
+   "max": 100
+  },
+  "fe6e58d0-ad60-4b6a-8f54-f85bf4b53759": {
+   "editorName": "SigilShop_Weapon_DaedricDagger_Temp08_Combo",
+   "min": 40,
+   "max": 100
+  },
+  "ff38d8f7-b327-45d3-b0ee-4dee29931ba4": {
+   "editorName": "SigilShop_Weapon_AncientNordicWarAxe",
+   "min": 13,
+   "max": 17
+  },
+  "ff4e4fc6-cb1c-4b0b-93af-f062a6bcbb3f": {
+   "editorName": "SigilShop_DivineChaurusBattleaxe",
+   "min": 45,
+   "max": 100
+  },
+  "ffbf07e1-45bd-4702-922a-ff0349a3d9b7": {
+   "editorName": "SigilShop_DivineStalhrimLightHammer",
+   "min": 45,
+   "max": 100
+  },
+  "g195d9ea-e813-4455-90bd-9846149ed7ft": {
+   "editorName": "DecoOffer_S_Candelabra_2019-03-22 00:00_2019-03-25 23:59",
+   "min": 0,
+   "max": 0
+  },
+  "x510cf8d-61d7-4ff0-bbe3-4037033506k": {
+   "editorName": "DecoOffer_L_FancyFountain_2019-03-01 00:00_2019-03-07 23:59",
+   "min": 0,
+   "max": 0
+  }
+ }
+}
