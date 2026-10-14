@@ -249,11 +249,14 @@ pub async fn collect_daily_reward(
             {
                 reward_uid = def.reward_uid;
                 let daily_reward = def.daily_reward_for_level(entry.character.0.level);
+                // A later alt shares the live row's id, so it is folded in as
+                // well (#387); the original's key is unchanged.
+                let roll_alt = crate::alt_roll::for_character(&mut conn, character_id).await;
                 let collect_reward = collect_reward_for(
                     &daily_reward,
                     &globals.static_data.chest_loots,
                     def.reward_uid,
-                    &format!("{character_id}:{period}"),
+                    &crate::alt_roll::fold_key(format!("{character_id}:{period}"), roll_alt),
                     &entry.inventory.0.item_templates(),
                 );
                 status_reward = collect_reward.clone();
