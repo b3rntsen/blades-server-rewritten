@@ -2784,4 +2784,38 @@ mod tests {
             println!("Elder treasury L{level:3}: gold median {}  tiers {}  ench tier {}", golds[1000], pct(&tiers), pct(&ench));
         }
     }
+
+    /// #387: at 45 and up the Legendary chest's shields are Dragonscale and
+    /// Dragonplate one for one (the tier's two shield templates, uniformly), and a
+    /// Dragonscale Armor with Fire Resistance is rare, not impossible. Fire
+    /// Resistance is a primary only at enchant tiers 1, 3, 5, 7, 9 and 10, and
+    /// never a cuirass secondary; at 46 the cuirass carries tier 6, 7 or 8, so it
+    /// takes a tier-7 piece and one primary in three: about one chest in 115, and
+    /// none in 200 chests about one time in six.
+    #[test]
+    fn dragon_shields_split_evenly_and_fire_resistant_dragonscale_is_rare() {
+        let fire: Uuid = "464bedb7-a631-43b6-a2df-f65f089d39da".parse().unwrap();
+        let cuirass: Uuid = "659dd496-f71e-4cf8-aaee-8f0c4723410e".parse().unwrap();
+        let scale_shield: Uuid = "6362ecf3-42d9-4d8d-af30-2b9fc2deb92a".parse().unwrap();
+        let plate_shield: Uuid = "ded7cfb8-5e4c-419a-8acb-792fb5b6c646".parse().unwrap();
+        let (chests, mut fire_cuirass, mut scale, mut plate) = (40_000u64, 0u64, 0u64, 0u64);
+        for nonce in 0..chests {
+            let g = roll_bundle(&big(), 46, nonce).unwrap();
+            let mut hit = false;
+            for i in g.items.iter().map(|i| &i.item) {
+                scale += u64::from(i.item_template_id == scale_shield);
+                plate += u64::from(i.item_template_id == plate_shield);
+                if i.item_template_id == cuirass && i.properties.enchanting.iter().any(|e| e.id == fire) {
+                    assert_eq!(i.properties.enchanting[0].id, fire, "a primary only");
+                    assert!([7, 9, 10].contains(&i.properties.enchanting[0].tier));
+                    hit = true;
+                }
+            }
+            fire_cuirass += u64::from(hit);
+        }
+        let share = scale as f64 / (scale + plate) as f64;
+        assert!((0.47..=0.53).contains(&share), "Dragonscale shields {share:.3} of {}", scale + plate);
+        let p = fire_cuirass as f64 / chests as f64;
+        assert!((0.006..=0.012).contains(&p), "Fire Resistance Dragonscale Armor in {p:.4} of chests");
+    }
 }
