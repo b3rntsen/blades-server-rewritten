@@ -137,7 +137,7 @@ const KNOWN_FAILURES: &[Known] = &[
         reason: "Silver/Gold treasury (and daily) chest rings and necklaces carry a grade but no GRADING: \
                  `script/extract_chest_loot.py` keeps only ENCHANTING when an item has any, so 77 of the \
                  100 retail chest jewels (every enchanted one) lost their bonuses. Fix: \
-                 fix/audit-chest-jewelry-grading.",
+                 fix/audit-chest-jewelry-grading (#525).",
     },
     Known {
         subject: "chest:",
@@ -145,7 +145,7 @@ const KNOWN_FAILURES: &[Known] = &[
         contains: "frozen item",
         reason: "Treasury tiers 1-3 copy one retail piece per item slot from the nearest openings; where few \
                  of them paid an item (Wooden: 44 of 154) one piece is every item. Fix: \
-                 fix/audit-treasury-gear-generated (generated around the retail piece, as Legendary chests).",
+                 fix/audit-treasury-gear-generated (#527; generated around the retail piece, as Legendary chests).",
     },
     Known {
         subject: "chest:",

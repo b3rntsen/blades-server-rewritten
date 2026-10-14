@@ -49,9 +49,9 @@ invalid, nothing frozen. The defects are all in the **chests**.
 
 | # | Defect | Where | Numbers | Fix |
 |---|---|---|---|---|
-| 1 | **Chest rings and necklaces have no ability bonuses** (grade but no GRADING) | Silver, Gold, daily chests, every level | 77 of the 100 retail chest jewels — every enchanted one — lost GRADING in `extract_chest_loot.py`; up to 1 Silver/Gold item in 5 at a level is such a ring | FIX_A |
-| 2 | **Treasury chest gear frozen** (one retail piece per slot, verbatim) | Wooden, Silver, Gold, daily | Wooden: the same Hide Gauntlets in 46/46 items at L1, Dwarven Plate Armor 43/43 at L49, Stalhrim Gauntlets 26/26 at L60; 26 instances in 1,088 items. Gold/Silver rings: one ring is 40-59% of rings at L30-49 | FIX_B (stacked on FIX_A) |
-| 3 | **Golden (Rare) store chest: APK-allowed bonuses unreachable** | Golden chest, every level | 8/34 ring and 2/15 necklace GRADING never appear; 552 pieces in 10,000; enchantments frozen | FIX_C |
+| 1 | **Chest rings and necklaces have no ability bonuses** (grade but no GRADING) | Silver, Gold, daily chests, every level | 77 of the 100 retail chest jewels — every enchanted one — lost GRADING in `extract_chest_loot.py`; up to 1 Silver/Gold item in 5 at a level is such a ring | #525 |
+| 2 | **Treasury chest gear frozen** (one retail piece per slot, verbatim) | Wooden, Silver, Gold, daily | Wooden: the same Hide Gauntlets in 46/46 items at L1, Dwarven Plate Armor 43/43 at L49, Stalhrim Gauntlets 26/26 at L60; 26 instances in 1,088 items. Gold/Silver rings: one ring is 40-59% of rings at L30-49 | #527 (stacked on #525) |
+| 3 | **Golden (Rare) store chest: APK-allowed bonuses unreachable** | Golden chest, every level | 8/34 ring and 2/15 necklace GRADING never appear; 552 pieces in 10,000; enchantments frozen | #526 |
 
 Measured after each fix with this harness: (1) the "no GRADING" finding fires
 0 times; (2) frozen items and repeating jewellery 0 times, Wooden 470 instances
@@ -733,8 +733,8 @@ Offers the client lists at each character level (live in the replayed calendar A
 
 | Subject | Check | Finding | Reason | Firing |
 |---|---|---|---|---:|
-| `chest:` | Validity | "but no GRADING properties" | Silver/Gold treasury (and daily) chest rings and necklaces carry a grade but no GRADING: `script/extract_chest_loot.py` keeps only ENCHANTING when an item has any, so 77 of the 100 retail chest jewels (every enchanted one) lost their bonuses. Fix: fix/audit-chest-jewelry-grading. | 58 |
-| `chest:` | Variety | "frozen item" | Treasury tiers 1-3 copy one retail piece per item slot from the nearest openings; where few of them paid an item (Wooden: 44 of 154) one piece is every item. Fix: fix/audit-treasury-gear-generated (generated around the retail piece, as Legendary chests). | 8 |
+| `chest:` | Validity | "but no GRADING properties" | Silver/Gold treasury (and daily) chest rings and necklaces carry a grade but no GRADING: `script/extract_chest_loot.py` keeps only ENCHANTING when an item has any, so 77 of the 100 retail chest jewels (every enchanted one) lost their bonuses. Fix: fix/audit-chest-jewelry-grading (#525). | 58 |
+| `chest:` | Variety | "frozen item" | Treasury tiers 1-3 copy one retail piece per item slot from the nearest openings; where few of them paid an item (Wooden: 44 of 154) one piece is every item. Fix: fix/audit-treasury-gear-generated (#527; generated around the retail piece, as Legendary chests). | 8 |
 | `chest:` | Variety | "repeating jewellery" | Same cause as the frozen items: one retail ring/necklace instance per slot, verbatim. Fix: fix/audit-treasury-gear-generated. | 38 |
 | `chest:treasury:wooden` | Validity | "requires level" | The Wooden table is thin (44 openings with an item), so a level-10 chest's neighbourhood reaches openings at 20+ and pays Elven gear (+13; retail's own Wooden max is +10). Pinning items to the level would NARROW what players get today: open question in the report. | 1 |
 
