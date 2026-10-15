@@ -283,24 +283,71 @@ pub fn item_allowed_in_slot(
     }
 }
 
+/// The instanced gear item with this id, wherever the player holds it: in the backpack
+/// or already worn in some equipment slot.
+///
+/// An equip request can name either. Switching a saved build (loadout profile) sends
+/// the build's full slot map, and a ring that is worn in ring slot A but saved in ring
+/// slot B in the build arrives as "slot B ← an item that is not in the backpack".
+pub fn owned_gear_item<'a>(
+    inv: &'a CompleteInventory,
+    item_id: &Uuid,
+) -> Option<&'a crate::user_data::Item> {
+    inv.backpack.items.0.get(item_id).or_else(|| {
+        inv.loadout
+            .equipped_items
+            .0
+            .values()
+            .find(|e| e.id == *item_id)
+            .map(|e| &e.item)
+    })
+}
+
+/// Report #395: switching builds unequipped a ring and dropped it in the backpack
+/// marked "new", every time.
+///
+/// The request is a whole slot map, `{slotId: itemId | null}`, but the old code
+/// applied it one slot at a time in `HashMap` order: unequip what is in this slot,
+/// then equip the target FROM THE BACKPACK. A ring that is already worn in the
+/// other ring slot is not in the backpack, so it was skipped as a "stale id" —
+/// and when its own slot came up later it was unequipped into the backpack. Two
+/// rings that trade places (the same ring saved in ring slot 1 in one build and
+/// ring slot 2 in another) therefore always ended with one ring slot empty; a
+/// one-way move broke or not depending on hash order. Retail landed all 27
+/// cross-slot ring moves (10 of them full swaps) in the captured
+/// `/loadouts/current` traffic, and never returned the moved ring to the backpack.
+///
+/// So the map is applied as a whole, in two phases:
+///   1. every slot the request writes gives its current item back to the backpack;
+///   2. every target is equipped — from the backpack, or, when it is worn in a slot
+///      this request does not write, moved out of that slot.
+/// The outcome no longer depends on iteration order.
 pub fn apply_equipment_updates(
     inv: &mut CompleteInventory,
     updates: &HashMap<Uuid, Option<Uuid>>,
     tracker: &mut InventoryChangeTracker,
     game_data: Option<&crate::game_data::GameData>,
 ) {
-    for (slot, target) in updates {
-        // Refuse a nonsense equip BEFORE unequipping what is already there.
-        // Order matters: rejecting after the removal would strip the slot and
-        // leave it empty, which is a different bug with the same cause.
-        if let (Some(gd), Some(item_id)) = (game_data, target.as_ref()) {
-            if let Some(item) = inv.backpack.items.0.get(item_id) {
-                if !item_allowed_in_slot(gd, *slot, item.item_template_id) {
-                    continue;
-                }
+    // Refuse a nonsense equip BEFORE unequipping what is already there.
+    // Order matters: rejecting after the removal would strip the slot and
+    // leave it empty, which is a different bug with the same cause.
+    let accepted: Vec<(Uuid, Option<Uuid>)> = updates
+        .iter()
+        .filter(|(slot, target)| {
+            let (Some(gd), Some(item_id)) = (game_data, target.as_ref()) else {
+                return true;
+            };
+            match owned_gear_item(inv, item_id) {
+                Some(item) => item_allowed_in_slot(gd, **slot, item.item_template_id),
+                None => true,
             }
-        }
-        // Return whatever currently occupies the slot to the backpack.
+        })
+        .map(|(slot, target)| (*slot, *target))
+        .collect();
+    let written: std::collections::HashSet<Uuid> = accepted.iter().map(|(s, _)| *s).collect();
+
+    // Phase 1: return whatever occupies each written slot to the backpack.
+    for (slot, _) in &accepted {
         if let Some(prev) = inv.loadout.equipped_items.0.remove(slot) {
             tracker
                 .modified_loadout
@@ -309,33 +356,69 @@ pub fn apply_equipment_updates(
             inv.backpack.items.0.insert(prev.id, prev.item);
             tracker.modified_backpack.items.insert(prev.id);
         }
-        if let Some(item_id) = target {
-            // Equip an instanced gear item from the backpack.
-            if let Some(item) = inv.backpack.items.0.remove(item_id) {
-                tracker.modified_backpack.items.insert(*item_id);
-                inv.loadout.equipped_items.0.insert(
-                    *slot,
-                    SingleEquippedItem {
-                        id: *item_id,
-                        slot: *slot,
-                        item,
-                    },
-                );
-                tracker
-                    .modified_loadout
-                    .modified_equipped_items
-                    .insert(*slot);
-            } else if inv.backpack.stackable_items.count(*item_id) > 0 {
-                // Not instanced gear, but the id IS a stackable consumable the player
-                // owns → treat it as a consumable equip rather than silently skipping.
-                // (A client can route a potion through equipmentUpdates; without this it
-                // fell through and the client saw "Unable to connect".)
-                add_equipped_consumable(&mut inv.loadout.equipped_consumables, *item_id);
-                tracker.modified_loadout.consumables_changed = true;
-            }
-            // else: unknown id (stale client) — skip silently, as before.
-        }
     }
+
+    // Phase 2: equip every target.
+    for (slot, target) in &accepted {
+        let Some(item_id) = target else { continue };
+        if let Some(item) = inv.backpack.items.0.remove(item_id) {
+            // Instanced gear from the backpack (including an item phase 1 just
+            // returned there from another written slot).
+            tracker.modified_backpack.items.insert(*item_id);
+            equip_into(inv, tracker, *slot, *item_id, item);
+        } else if let Some(from) = inv
+            .loadout
+            .equipped_items
+            .0
+            .iter()
+            .find(|(s, e)| e.id == *item_id && !written.contains(*s))
+            .map(|(s, _)| *s)
+        {
+            // Worn in a slot this request leaves alone: move it across. (A slot the
+            // request DOES write was emptied in phase 1, so finding the item there
+            // means two slots named the same item — the first one keeps it.)
+            let moved = inv
+                .loadout
+                .equipped_items
+                .0
+                .remove(&from)
+                .expect("slot was just found");
+            tracker
+                .modified_loadout
+                .modified_equipped_items
+                .insert(from);
+            equip_into(inv, tracker, *slot, *item_id, moved.item);
+        } else if inv.backpack.stackable_items.count(*item_id) > 0 {
+            // Not instanced gear, but the id IS a stackable consumable the player
+            // owns → treat it as a consumable equip rather than silently skipping.
+            // (A client can route a potion through equipmentUpdates; without this it
+            // fell through and the client saw "Unable to connect".)
+            add_equipped_consumable(&mut inv.loadout.equipped_consumables, *item_id);
+            tracker.modified_loadout.consumables_changed = true;
+        }
+        // else: unknown id (stale client) — skip silently, as before.
+    }
+}
+
+fn equip_into(
+    inv: &mut CompleteInventory,
+    tracker: &mut InventoryChangeTracker,
+    slot: Uuid,
+    item_id: Uuid,
+    item: crate::user_data::Item,
+) {
+    inv.loadout.equipped_items.0.insert(
+        slot,
+        SingleEquippedItem {
+            id: item_id,
+            slot,
+            item,
+        },
+    );
+    tracker
+        .modified_loadout
+        .modified_equipped_items
+        .insert(slot);
 }
 
 /// Insert a consumable template id into the equipped-consumable list (idempotent: no
@@ -550,6 +633,188 @@ mod tests {
             inv.backpack.items.0.contains_key(&junk_id),
             "the junk stays in the backpack"
         );
+    }
+
+    const RING_SLOT_1: &str = "0d8f2023-4701-41e8-8bd5-92381d787456";
+    const RING_SLOT_2: &str = "959c1931-bf85-4587-92ec-8ecaa58b06d5";
+
+    fn wear(inv: &mut CompleteInventory, slot: Uuid, id: Uuid, template: Uuid) {
+        inv.loadout.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id,
+                slot,
+                item: item_of(template),
+            },
+        );
+    }
+
+    fn worn(inv: &CompleteInventory, slot: Uuid) -> Option<Uuid> {
+        inv.loadout.equipped_items.0.get(&slot).map(|e| e.id)
+    }
+
+    /// Report #395 (Sephoris): "When switching saved equipment, a ring is unequipped
+    /// and then marked as new. I have to re-equip it every time."
+    ///
+    /// Her builds save the SAME two rings in opposite ring slots ("Feuer Gift": slot 1
+    /// = Grand Inquisitor's Ring, slot 2 = the other; "Frost": the reverse). Switching
+    /// between them is a swap: each target is worn in the other ring slot, not in
+    /// the backpack. The old one-slot-at-a-time apply skipped the first target as an
+    /// unknown id and then unequipped it into the backpack, so one ring slot always
+    /// came back empty and the ring reappeared in the backpack diff (= "new").
+    #[test]
+    fn switching_builds_that_swap_two_worn_rings_keeps_both_rings_on() {
+        let gd = slot_test_game_data();
+        let (s1, s2): (Uuid, Uuid) = (RING_SLOT_1.parse().unwrap(), RING_SLOT_2.parse().unwrap());
+        let inquisitor = Uuid::from_u128(0x90d1);
+        let other = Uuid::from_u128(0x73a0);
+        let weapon_slot: Uuid = "417e79de-c810-42f8-8273-f9759df6ae25".parse().unwrap();
+        let dagger = Uuid::from_u128(0xDA);
+
+        let mut inv = inv();
+        wear(&mut inv, s1, inquisitor, RING);
+        wear(&mut inv, s2, other, RING);
+        wear(&mut inv, weapon_slot, dagger, WEAPON);
+
+        // The build switch sends the build's whole slot map, unchanged slots included.
+        let mut t = InventoryChangeTracker::default();
+        apply_equipment_updates(
+            &mut inv,
+            &HashMap::from([
+                (s1, Some(other)),
+                (s2, Some(inquisitor)),
+                (weapon_slot, Some(dagger)),
+            ]),
+            &mut t,
+            Some(&gd),
+        );
+
+        assert_eq!(
+            worn(&inv, s1),
+            Some(other),
+            "ring slot 1 holds the other ring"
+        );
+        assert_eq!(
+            worn(&inv, s2),
+            Some(inquisitor),
+            "ring slot 2 holds the Inquisitor ring"
+        );
+        assert_eq!(worn(&inv, weapon_slot), Some(dagger));
+        assert!(
+            inv.backpack.items.0.is_empty(),
+            "no ring falls into the backpack"
+        );
+
+        let update = inv.generate_client_update(&t);
+        assert!(
+            update.loadout.unequipped_item_slots.is_empty(),
+            "no slot is reported empty"
+        );
+        assert_eq!(update.loadout.equipped_items.0[&s1].id, other);
+        assert_eq!(update.loadout.equipped_items.0[&s2].id, inquisitor);
+        assert!(
+            update.backpack.items.0.is_empty(),
+            "a ring served as a backpack item is what the client flags as new"
+        );
+    }
+
+    /// A one-way move (worn ring goes to the other ring slot, a backpack ring takes
+    /// its place) used to depend on `HashMap` order. Fresh maps reseed the hasher, so
+    /// repeating the call covers both orders.
+    #[test]
+    fn moving_a_worn_ring_to_the_other_ring_slot_does_not_depend_on_order() {
+        let gd = slot_test_game_data();
+        let (s1, s2): (Uuid, Uuid) = (RING_SLOT_1.parse().unwrap(), RING_SLOT_2.parse().unwrap());
+        let (a, b, c) = (
+            Uuid::from_u128(0xA),
+            Uuid::from_u128(0xB),
+            Uuid::from_u128(0xC),
+        );
+        for _ in 0..64 {
+            let mut inv = inv();
+            wear(&mut inv, s1, a, RING);
+            wear(&mut inv, s2, b, RING);
+            inv.backpack.items.0.insert(c, item_of(RING));
+            let mut t = InventoryChangeTracker::default();
+            apply_equipment_updates(
+                &mut inv,
+                &HashMap::from([(s1, Some(c)), (s2, Some(a))]),
+                &mut t,
+                Some(&gd),
+            );
+            assert_eq!(worn(&inv, s1), Some(c));
+            assert_eq!(worn(&inv, s2), Some(a));
+            assert_eq!(
+                inv.backpack.items.0.keys().copied().collect::<Vec<_>>(),
+                vec![b],
+                "only the ring that left the build goes to the backpack"
+            );
+        }
+    }
+
+    /// Naming a worn item for a slot the request does not otherwise touch moves it
+    /// across and empties its old slot — it is never in two slots at once.
+    #[test]
+    fn a_worn_ring_named_for_the_other_slot_moves_rather_than_duplicates() {
+        let gd = slot_test_game_data();
+        let (s1, s2): (Uuid, Uuid) = (RING_SLOT_1.parse().unwrap(), RING_SLOT_2.parse().unwrap());
+        let a = Uuid::from_u128(0xA);
+        let mut inv = inv();
+        wear(&mut inv, s1, a, RING);
+        let mut t = InventoryChangeTracker::default();
+        apply_equipment_updates(&mut inv, &HashMap::from([(s2, Some(a))]), &mut t, Some(&gd));
+        assert_eq!(worn(&inv, s2), Some(a));
+        assert_eq!(worn(&inv, s1), None);
+        assert!(inv.backpack.items.0.is_empty());
+        let update = inv.generate_client_update(&t);
+        assert!(update.loadout.unequipped_item_slots.contains(&s1));
+    }
+
+    /// One item named for two slots ends up in exactly one of them.
+    #[test]
+    fn one_item_named_for_both_ring_slots_is_worn_once() {
+        let gd = slot_test_game_data();
+        let (s1, s2): (Uuid, Uuid) = (RING_SLOT_1.parse().unwrap(), RING_SLOT_2.parse().unwrap());
+        let a = Uuid::from_u128(0xA);
+        for _ in 0..16 {
+            let mut inv = inv();
+            inv.backpack.items.0.insert(a, item_of(RING));
+            let mut t = InventoryChangeTracker::default();
+            apply_equipment_updates(
+                &mut inv,
+                &HashMap::from([(s1, Some(a)), (s2, Some(a))]),
+                &mut t,
+                Some(&gd),
+            );
+            let copies = [worn(&inv, s1), worn(&inv, s2)]
+                .iter()
+                .filter(|w| **w == Some(a))
+                .count()
+                + inv.backpack.items.0.contains_key(&a) as usize;
+            assert_eq!(copies, 1, "the ring exists exactly once");
+        }
+    }
+
+    /// The slot-type check still applies to a worn item being moved: a ring cannot
+    /// be moved out of its ring slot into the weapon slot.
+    #[test]
+    fn a_worn_ring_cannot_be_moved_into_the_weapon_slot() {
+        let gd = slot_test_game_data();
+        let s1: Uuid = RING_SLOT_1.parse().unwrap();
+        let weapon_slot: Uuid = "417e79de-c810-42f8-8273-f9759df6ae25".parse().unwrap();
+        let (ring, dagger) = (Uuid::from_u128(0xA), Uuid::from_u128(0xDA));
+        let mut inv = inv();
+        wear(&mut inv, s1, ring, RING);
+        wear(&mut inv, weapon_slot, dagger, WEAPON);
+        let mut t = InventoryChangeTracker::default();
+        apply_equipment_updates(
+            &mut inv,
+            &HashMap::from([(weapon_slot, Some(ring))]),
+            &mut t,
+            Some(&gd),
+        );
+        assert_eq!(worn(&inv, weapon_slot), Some(dagger));
+        assert_eq!(worn(&inv, s1), Some(ring));
     }
 
     const WEAPON: Uuid = Uuid::from_u128(0x11);
