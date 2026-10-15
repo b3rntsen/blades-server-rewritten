@@ -2265,8 +2265,9 @@ mod tests {
     /// Every retail piece, used as a shell, generates: never `None` (which would
     /// silently pay the recorded piece), always at the shell's own material tier,
     /// with the shell's tempering, enchant count and tier, a primary distinct
-    /// from the secondaries, and jewellery keeping its kind (its grade is drawn
-    /// afresh, #393; `rule_broken` checks grade = sum of tiers).
+    /// from the secondaries, and jewellery keeping its kind, grade and GRADING
+    /// tiers (HauDrauf, #393: Elder, Legendary and Golden chest jewellery stays as
+    /// retail paid it).
     #[test]
     fn every_retail_shell_generates_at_its_own_tier() {
         for (i, (_, items)) in retail_banded().iter().enumerate() {
@@ -2286,7 +2287,15 @@ mod tests {
                     let kind = legendary_gear::kind_of(s).unwrap();
                     if kind == "ring" || kind == "necklace" {
                         assert_eq!(legendary_gear::kind_of(t), Some(kind));
-                        assert!(g.grade.is_some(), "generated jewellery is graded");
+                        assert_eq!(g.grade, shell.grade);
+                        // The grade's tiers stay; the properties are drawn (#378).
+                        let tiers = |v: &[crate::user_data::ItemSingleProperty]| {
+                            v.iter().map(|p| p.tier).collect::<Vec<_>>()
+                        };
+                        assert_eq!(
+                            tiers(&g.properties.grading),
+                            tiers(&shell.properties.grading)
+                        );
                     }
                     if let Some(why) = legendary_gear::rule_broken(&g) {
                         panic!("{why}");
@@ -2296,12 +2305,15 @@ mod tests {
         }
     }
 
-    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): an Elder,
-    /// Legendary or Golden chest's ring or necklace has one, two or three GRADING
-    /// properties 8 / 17 / 75% of the time, like every other source. Before, the
-    /// grade was the retail shell's (5 / 7 / 88% over the 542 recorded jewels).
+    /// #393 (HauDrauf, 2026-10-15): the 8 / 17 / 75% property-count split every
+    /// other source follows is NOT applied to the Elder, Legendary and Golden
+    /// chests. Their jewellery keeps the retail shell's grade (5 / 7 / 88% one /
+    /// two / three properties over the 542 recorded jewels; sampled here about
+    /// 7 / 1 / 92 Legendary, 5 / 10 / 85 Elder, 16 / 20 / 64 Golden), so each
+    /// chest's split is far from 8 / 17 / 75. `every_retail_shell_generates_at_its_own_tier`
+    /// checks the grade piece by piece.
     #[test]
-    fn chest_jewellery_follows_the_property_count_split() {
+    fn chest_jewellery_keeps_the_shell_grade() {
         use crate::features::jewelry_grades::JEWELRY_PROPERTY_COUNT_PERCENT;
         for (name, product) in [
             ("Legendary", legendary()),
@@ -2328,13 +2340,14 @@ mod tests {
             let n = count.iter().sum::<u64>();
             assert!(n >= 2000, "{name}: only {n} jewels in {nonce} chests");
             eprintln!("#393 {name}: {count:?} of {n}");
-            for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
-                let got = count[props] as f64 * 100.0 / n as f64;
-                assert!(
-                    (got - f64::from(pct)).abs() <= 3.0,
-                    "{name}: {props} properties {got:.1}% (want {pct}%)"
-                );
-            }
+            let off = JEWELRY_PROPERTY_COUNT_PERCENT
+                .iter()
+                .map(|(props, pct)| (count[*props] as f64 * 100.0 / n as f64 - f64::from(*pct)).abs())
+                .fold(0.0, f64::max);
+            assert!(
+                off > 4.0,
+                "{name}: {count:?} is the 8/17/75 split (within {off:.1} points); the shell grade is not kept"
+            );
         }
     }
 

@@ -411,7 +411,9 @@ pub fn roll_loot(
 /// THE ROLL is [`super::legendary_gear::generate`]: the retail piece stays the
 /// shell — its material tier, tempering, enchant count and enchant tier — and
 /// around it the kind, the template of that tier and the enchantments are drawn
-/// from the APK tables, and a jewel's grade by the one jewellery rule (#393). Nothing a chest paid before is out
+/// from the APK tables. A jewel is then graded by the one jewellery rule (#393:
+/// 8 / 17 / 75% one / two / three properties), not the shell's grade, which the
+/// Elder, Legendary and Golden chests keep. Nothing a chest paid before is out
 /// of reach: the shell's own template and enchantments remain possible, at the
 /// same tier. A piece outside the pool (none today) is paid as before.
 fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
@@ -421,7 +423,8 @@ fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
             continue;
         }
         let seed = mix(nonce ^ 0x3C79_AC49_2BA7_B653 ^ (slot as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93));
-        if let Some(item) = super::legendary_gear::generate(&reward.item, seed) {
+        if let Some(mut item) = super::legendary_gear::generate(&reward.item, seed) {
+            super::legendary_gear::regrade_jewelry(&mut item, mix(seed ^ 0x393));
             reward.item = item;
         }
     }

@@ -10,7 +10,9 @@
 //!
 //! WHERE IT APPLIES: every ring and necklace the server grades at random — town
 //! merchants, crafting results, the Sigil shop, Wooden/Silver/Gold treasury
-//! chests, Elder/Legendary/Golden chests, and dungeon enemy loot. Never to a fixed
+//! chests, and dungeon enemy loot. NOT the Elder, Legendary and Golden store
+//! chests: HauDrauf (#393, 2026-10-15) wants their jewellery as retail paid it,
+//! so they keep the recorded shell's grade (5 / 7 / 88%). Never to a fixed
 //! (mandatory-property) template, to authored GRADING the server keeps as it is,
 //! or to an item the player already owns.
 //!
@@ -32,13 +34,15 @@ pub const JEWELRY_GRADES: [(u64, u32, &[u64]); 6] = [
 ];
 
 /// Percent of randomly graded rings and necklaces carrying 1, 2 and 3 GRADING
-/// properties: `(property count, percent)`, summing to 100. Every source.
+/// properties: `(property count, percent)`, summing to 100. Every source but the
+/// Elder, Legendary and Golden chests (see the module doc).
 ///
 /// Per HauDrauf, tracker #393. First for the Sigil shop (2026-10-14: "thousands
 /// of rings" bought in retail, one property maybe 5%, two maybe 10%, the vast
 /// majority three; a first step of 75% three, the rest split 1 : 2), then, after
 /// testing it, for every ring and necklace (2026-10-15): "überall, keine
-/// Unterschiede" — everywhere, there were no differences.
+/// Unterschiede" — everywhere, there were no differences — except the Elder,
+/// Legendary and Golden chests, which he asked to keep as they were.
 ///
 /// THE RECORD is thin and does not all agree, which is why HauDrauf's word
 /// decides it. The 542 Legendary/Elder/Golden chest jewels split 5 / 7 / 88, and

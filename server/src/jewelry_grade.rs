@@ -15,7 +15,8 @@
 //!
 //! * the property COUNT by [`JEWELRY_PROPERTY_COUNT_PERCENT`] — 8% one, 17% two,
 //!   75% three — per HauDrauf #393 (2026-10-15, "überall, keine Unterschiede":
-//!   every ring and necklace from every source, as in the Sigil shop);
+//!   every ring and necklace from every source, as in the Sigil shop, except the
+//!   Elder, Legendary and Golden store chests, which keep retail's grade);
 //! * `JewelryGradeData._jewelryGradeData` — the grade among those with that many
 //!   properties by its APK weight, and the grade fixes the tiers of its GRADING
 //!   properties (`_providedBonuses`).
