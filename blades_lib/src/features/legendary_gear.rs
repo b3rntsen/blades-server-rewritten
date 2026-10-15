@@ -19,8 +19,8 @@
 //!
 //! THE GENERATOR. The retail piece the tier rule picks (#489/#495) is kept as the
 //! SHELL: it carries what retail decided jointly with the tier and that no table
-//! states — the tempering level, how many enchantments and at what tier, and for
-//! jewellery the grade. Around it the piece is generated:
+//! states — the tempering level and how many enchantments at what tier. Around it
+//! the piece is generated:
 //! - the kind of equipment, by the share retail paid each kind (`categoryWeights`:
 //!   weapons about three times as often as each armour slot); jewellery keeps the
 //!   shell's kind, because ring and necklace GRADING properties are disjoint sets;
@@ -31,11 +31,12 @@
 //!   at the shell's enchant tier, and the secondaries uniformly without repeats
 //!   from the template's secondary table. Retail's frequencies are flat; the
 //!   crafting weights in `enchanting.json` are not what the chest used;
-//! - for a ring or necklace, the GRADING properties (the ability bonus ranks)
-//!   uniformly without repeats from the APK's ring or necklace grade list, at the
-//!   shell's tiers (#378: Sephoris held twelve Ebony Faerite Rings with the same
-//!   three bonuses, because the shell's GRADING was copied). The grade, and so
-//!   the tiers, stay the shell's.
+//! - for a ring or necklace, the grade by the one jewellery rule
+//!   ([`super::jewelry_grades`]: 8% one property, 17% two, 75% three, per
+//!   HauDrauf #393 — the shell's grade used to be kept), and the GRADING
+//!   properties (the ability bonus ranks) uniformly without repeats from the
+//!   APK's ring or necklace grade list (#378: Sephoris held twelve Ebony Faerite
+//!   Rings with the same three bonuses, because the shell's GRADING was copied).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -196,14 +197,12 @@ pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Optio
         shell.properties.enchanting.first().map_or(0, |e| e.tier),
         seed,
     )?;
-    let grading = roll_grading(
-        &template.category,
-        &shell.properties.grading,
-        seed ^ 0x2F2D_C2B1_7A4E_9D63,
-    );
+    // Jewellery is graded afresh (#393); anything else keeps the shell's (none).
+    let (grade, grading) = roll_jewelry_grading(&template.category, seed ^ 0x2F2D_C2B1_7A4E_9D63)
+        .map_or_else(|| (shell.grade, shell.properties.grading.clone()), |(g, p)| (Some(g), p));
     Some(Item {
         item_template_id: template_id,
-        grade: shell.grade,
+        grade,
         tempering_level: shell.tempering_level,
         durability,
         properties: ItemPropertiesAll { enchanting, grading },
@@ -211,84 +210,66 @@ pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Optio
     })
 }
 
-/// The shell's GRADING tiers with the properties drawn afresh, uniformly and
-/// without repeats, from the ring or necklace grade list (#378). Anything else,
-/// or a table that did not load, keeps the shell's GRADING.
-fn roll_grading(
-    category: &str,
-    shell: &[ItemSingleProperty],
-    seed: u64,
-) -> Vec<ItemSingleProperty> {
-    let Some(table) = pool().table.grading_tables.get(category) else {
-        return shell.to_vec();
-    };
-    if !is_jewelry(category) || table.len() < shell.len() {
-        return shell.to_vec();
+/// A fresh `(grade, GRADING)` for a ring or necklace of `category`: the tiers by
+/// the one jewellery rule ([`super::jewelry_grades`], #393), the properties
+/// uniformly and without repeats from the ring or necklace grade list (#378).
+/// `None` for anything else, or when the list did not load.
+fn roll_jewelry_grading(category: &str, seed: u64) -> Option<(u64, Vec<ItemSingleProperty>)> {
+    if !is_jewelry(category) {
+        return None;
+    }
+    let table = pool().table.grading_tables.get(category)?;
+    let tiers = super::jewelry_grades::tiers_from_seed(seed ^ 0x7C15_9E37_79B9_4A7F);
+    if table.len() < tiers.len() {
+        return None;
     }
     let mut ids = table.clone();
-    shell
+    let grading: Vec<ItemSingleProperty> = tiers
         .iter()
         .enumerate()
-        .map(|(k, p)| {
+        .map(|(k, &tier)| {
             let j = k + pick(seed ^ (k as u64 + 1).rotate_left(37), ids.len() - k);
             ids.swap(k, j);
-            ItemSingleProperty { id: ids[k], tier: p.tier }
+            ItemSingleProperty { id: ids[k], tier }
         })
-        .collect()
+        .collect();
+    Some((grading.iter().map(|p| p.tier).sum(), grading))
 }
 
-/// `JewelryGradeData._jewelryGradeData`'s `_providedBonuses` by grade: the tier of
-/// each GRADING property a ring or necklace of that grade carries, highest first
-/// (APK `gameplaymetadata`; the server's `jewelry_grade::JEWELRY_GRADES` holds the
-/// same rows with their weights, and a test there keeps the two equal).
-pub const JEWELRY_GRADE_BONUSES: [(u64, &[u64]); 6] = [
-    (1, &[1]),
-    (2, &[1, 1]),
-    (3, &[1, 1, 1]),
-    (4, &[2, 1, 1]),
-    (5, &[2, 2, 1]),
-    (6, &[2, 2, 2]),
-];
+/// Grade a randomly graded ring or necklace afresh by the one jewellery rule
+/// (#393): grade and GRADING both, everything else as it was. `false`, untouched,
+/// for anything that is not a loot-pool ring or necklace — which keeps fixed
+/// (mandatory-property) templates such as the Ultimate rings out of it.
+pub(crate) fn regrade_jewelry(item: &mut Item, seed: u64) -> bool {
+    let Some(t) = pool().table.templates.get(&item.item_template_id) else {
+        return false;
+    };
+    let Some((grade, grading)) = roll_jewelry_grading(&t.category, seed) else {
+        return false;
+    };
+    item.grade = Some(grade);
+    item.properties.grading = grading;
+    true
+}
 
-/// Give a ring or necklace that carries a grade but no GRADING the properties its
-/// grade stands for (#392 audit). `false`, untouched, for anything else.
+/// Grade a ring or necklace that carries a grade but no GRADING (#392 audit).
+/// `false`, untouched, for anything else.
 ///
 /// THE BUG. Most rings and necklaces a Silver or Gold treasury chest paid had a
 /// grade and no GRADING — no ability bonuses at all. The chest corpus lost them:
 /// `script/extract_chest_loot.py` rebuilt `properties` from ENCHANTING alone
 /// whenever an item had any, so 77 of the 100 retail chest jewels — every
-/// enchanted one — lost their GRADING; the 23 unenchanted ones kept it. Retail's
-/// own were complete: of the graded non-arcane retail rings and necklaces the
-/// server checked (`jewelry_grade`, those 23 among them), 1,121 of 1,121 carry
-/// `grade == sum(tiers)` with the tiers of their grade's `_providedBonuses`.
+/// enchanted one — lost their GRADING; the 23 unenchanted ones kept it.
 ///
-/// THE RULE is the APK's: the grade fixes the tiers ([`JEWELRY_GRADE_BONUSES`]);
-/// the properties are drawn uniformly and without repeats from the slot's grade
-/// list, as for a Legendary chest's jewellery ([`roll_grading`]). The grade, the
-/// enchantments and everything else stay as retail paid them.
+/// THE RULE. The grade used to stay the recorded one and only its properties were
+/// drawn; since #393 the grade is drawn too, by the one jewellery rule
+/// ([`regrade_jewelry`]). The enchantments and everything else stay as retail
+/// paid them.
 pub(crate) fn fill_missing_grading(item: &mut Item, seed: u64) -> bool {
-    let Some(t) = pool().table.templates.get(&item.item_template_id) else {
-        return false;
-    };
-    if !is_jewelry(&t.category) || !item.properties.grading.is_empty() {
+    if item.grade.is_none() || !item.properties.grading.is_empty() {
         return false;
     }
-    let Some((_, tiers)) = JEWELRY_GRADE_BONUSES
-        .iter()
-        .find(|(g, _)| Some(*g) == item.grade)
-    else {
-        return false;
-    };
-    let shell: Vec<ItemSingleProperty> = tiers
-        .iter()
-        .map(|&tier| ItemSingleProperty { id: Uuid::nil(), tier })
-        .collect();
-    let grading = roll_grading(&t.category, &shell, seed);
-    if grading.iter().any(|p| p.id.is_nil()) {
-        return false;
-    }
-    item.properties.grading = grading;
-    true
+    regrade_jewelry(item, seed)
 }
 
 /// `count` enchantments at `tier`: a recipe primary allowed on the template at

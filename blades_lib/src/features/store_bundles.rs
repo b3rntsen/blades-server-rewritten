@@ -2265,8 +2265,8 @@ mod tests {
     /// Every retail piece, used as a shell, generates: never `None` (which would
     /// silently pay the recorded piece), always at the shell's own material tier,
     /// with the shell's tempering, enchant count and tier, a primary distinct
-    /// from the secondaries, and jewellery keeping its kind, grade and GRADING
-    /// tiers.
+    /// from the secondaries, and jewellery keeping its kind (its grade is drawn
+    /// afresh, #393; `rule_broken` checks grade = sum of tiers).
     #[test]
     fn every_retail_shell_generates_at_its_own_tier() {
         for (i, (_, items)) in retail_banded().iter().enumerate() {
@@ -2286,20 +2286,54 @@ mod tests {
                     let kind = legendary_gear::kind_of(s).unwrap();
                     if kind == "ring" || kind == "necklace" {
                         assert_eq!(legendary_gear::kind_of(t), Some(kind));
-                        assert_eq!(g.grade, shell.grade);
-                        // The grade's tiers stay; the properties are drawn (#378).
-                        let tiers = |v: &[crate::user_data::ItemSingleProperty]| {
-                            v.iter().map(|p| p.tier).collect::<Vec<_>>()
-                        };
-                        assert_eq!(
-                            tiers(&g.properties.grading),
-                            tiers(&shell.properties.grading)
-                        );
+                        assert!(g.grade.is_some(), "generated jewellery is graded");
                     }
                     if let Some(why) = legendary_gear::rule_broken(&g) {
                         panic!("{why}");
                     }
                 }
+            }
+        }
+    }
+
+    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): an Elder,
+    /// Legendary or Golden chest's ring or necklace has one, two or three GRADING
+    /// properties 8 / 17 / 75% of the time, like every other source. Before, the
+    /// grade was the retail shell's (5 / 7 / 88% over the 542 recorded jewels).
+    #[test]
+    fn chest_jewellery_follows_the_property_count_split() {
+        use crate::features::jewelry_grades::JEWELRY_PROPERTY_COUNT_PERCENT;
+        for (name, product) in [
+            ("Legendary", legendary()),
+            ("Elder", EPIC_CHEST_PRODUCT_ID),
+            ("Golden", Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b)),
+        ] {
+            let mut count = [0u64; 4];
+            let mut nonce = 0u64;
+            while count.iter().sum::<u64>() < 2500 && nonce < 100_000 {
+                let level = [10u64, 25, 40, 49, 60, 80, 100][(nonce % 7) as usize];
+                let g = roll_bundle(&product, level, nonce).expect("the chest rolls");
+                for item in g.items.iter().map(|r| &r.item) {
+                    if matches!(
+                        legendary_gear::kind_of(&item.item_template_id),
+                        Some("ring" | "necklace")
+                    ) {
+                        let gr = &item.properties.grading;
+                        assert_eq!(item.grade, Some(gr.iter().map(|p| p.tier).sum()), "{name}");
+                        count[gr.len()] += 1;
+                    }
+                }
+                nonce += 1;
+            }
+            let n = count.iter().sum::<u64>();
+            assert!(n >= 2000, "{name}: only {n} jewels in {nonce} chests");
+            eprintln!("#393 {name}: {count:?} of {n}");
+            for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+                let got = count[props] as f64 * 100.0 / n as f64;
+                assert!(
+                    (got - f64::from(pct)).abs() <= 3.0,
+                    "{name}: {props} properties {got:.1}% (want {pct}%)"
+                );
             }
         }
     }

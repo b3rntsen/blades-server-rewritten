@@ -2267,6 +2267,48 @@ mod tests {
         assert!(!grant.items[0].item.properties.grading.is_empty());
     }
 
+    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): a town
+    /// merchant's ring or necklace has one, two or three GRADING properties 8 / 17
+    /// / 75% of the time, by both merchant paths — the window roll and the
+    /// purchase-time grade of a bare bundle. Before, the APK weights alone gave
+    /// 22 / 20 / 58%.
+    #[test]
+    fn merchant_jewelry_follows_the_property_count_split() {
+        use crate::jewelry_grade::JEWELRY_PROPERTY_COUNT_PERCENT;
+        let bundles = deploy_jewelry_bundles();
+        let per = 2400 / bundles.len() as u64 + 1;
+        let (mut window, mut minted) = ([0u64; 4], [0u64; 4]);
+        for (id, def) in &bundles {
+            for nonce in 0..per {
+                let mut grant = def.grant.clone();
+                let mut rng = crate::jewelry_roll::seeded(&[id.as_bytes(), b"393"], nonce);
+                roll_like_the_window(&mut grant, &mut rng);
+                for ri in &grant.items {
+                    assert_retail_merchant_jewelry(id, &ri.item);
+                    window[ri.item.properties.grading.len()] += 1;
+                }
+                for ri in mint_bundle(&def.grant, 1, deploy_items(), &mut rng).items {
+                    if ri.item.grade.is_some() {
+                        assert_retail_merchant_jewelry(id, &ri.item);
+                        minted[ri.item.properties.grading.len()] += 1;
+                    }
+                }
+            }
+        }
+        for (path, count) in [("window", window), ("purchase", minted)] {
+            let n: u64 = count.iter().sum();
+            eprintln!("#393 merchant {path}: {count:?} of {n}");
+            assert!(n >= 2000, "{path}: only {n} jewels");
+            for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+                let got = count[props] as f64 * 100.0 / n as f64;
+                assert!(
+                    (got - f64::from(pct)).abs() <= 3.0,
+                    "{path}: {props} properties {got:.1}% (want {pct}%)"
+                );
+            }
+        }
+    }
+
     /// THE BUG (#321): Enchanter stock was rolled with the Sigil store's measured
     /// ENCHANTING counts (mostly 3), so a ring bought in town arrived with three
     /// secondary enchantments and no primary. Retail sold every one blank.

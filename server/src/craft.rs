@@ -2570,6 +2570,40 @@ mod tests {
         );
     }
 
+    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): a crafted
+    /// ring has one, two or three GRADING properties 8 / 17 / 75% of the time.
+    /// Before, the APK weights alone gave 22 / 20 / 58%.
+    #[test]
+    fn crafted_jewelry_follows_the_property_count_split() {
+        use crate::jewelry_grade::JEWELRY_PROPERTY_COUNT_PERCENT;
+        let mut rng = seeded(393);
+        let n = 2400u64;
+        let mut count = [0u64; 4];
+        for _ in 0..n {
+            let results = serde_json::json!({"items":[{
+                "id": Uuid::new_v4(),
+                "itemTemplateId": GOLD_EMERALD_RING,
+                "temperingLevel": 0,
+                "durability": 150.0
+            }]});
+            let graded = grade_bare_jewelry_results(results, deploy_items(), &mut rng);
+            let item = serde_json::from_value::<RewardItem>(graded["items"][0].clone())
+                .expect("reward item")
+                .item;
+            let g = &item.properties.grading;
+            assert_eq!(item.grade, Some(g.iter().map(|p| p.tier).sum()), "grade = sum of tiers");
+            count[g.len()] += 1;
+        }
+        eprintln!("#393 crafted: {count:?} of {n}");
+        for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+            let got = count[props] as f64 * 100.0 / n as f64;
+            assert!(
+                (got - f64::from(pct)).abs() <= 3.0,
+                "{props} properties {got:.1}% (want {pct}%)"
+            );
+        }
+    }
+
     #[test]
     fn crafted_non_jewelry_results_stay_ungraded() {
         let results = serde_json::json!({"items":[{

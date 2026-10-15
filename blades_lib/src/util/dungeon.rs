@@ -829,8 +829,16 @@ fn roll_enemy_loot_with_context(
                     // shape, so `Item` deserializes it directly. A malformed
                     // one is skipped, never fatal: a partial corpus must not
                     // take down dungeon generation.
-                    if let Ok(item) = serde_json::from_value::<Item>(raw.clone()) {
-                        result.item.0.insert(rng.uuid(), item);
+                    if let Ok(mut item) = serde_json::from_value::<Item>(raw.clone()) {
+                        let key = rng.uuid();
+                        // A ring or necklace is graded afresh by the one jewellery
+                        // rule (#393: 8 / 17 / 75% one / two / three properties,
+                        // "überall"); the recorded instance's grade was retail's
+                        // roll, 34 / 30 / 36% over the corpus. Seeded from the
+                        // key so no other draw on this corpse moves.
+                        let seed = (key.as_u128() as u64) ^ ((key.as_u128() >> 64) as u64);
+                        crate::features::legendary_gear::regrade_jewelry(&mut item, seed);
+                        result.item.0.insert(key, item);
                     }
                 }
             }
@@ -2581,6 +2589,41 @@ mod enemy_loot_tests {
             }
         }
         assert!(unknown.is_empty(), "corpus groups absent from parsed.json: {unknown:?}");
+    }
+
+    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): a ring or
+    /// necklace off a corpse has one, two or three GRADING properties 8 / 17 / 75%
+    /// of the time, like every other source. Before, it was the recorded retail
+    /// instance's: 34 / 30 / 36% over the 552 in the corpus.
+    #[test]
+    fn enemy_loot_jewellery_follows_the_property_count_split() {
+        use crate::features::jewelry_grades::JEWELRY_PROPERTY_COUNT_PERCENT;
+        // A group the corpus never saw rolls the general table, which pays most
+        // of the recorded jewellery (about 4% of corpses at enemy level 13).
+        let group = Uuid::from_u128(0x3930_0000_0000_4000_8000_0000_0000_0393);
+        let mut count = [0u64; 4];
+        let mut enemy = 0usize;
+        while count.iter().sum::<u64>() < 2500 && enemy < 400_000 {
+            let dungeon = Uuid::from_u128(0x393 + (enemy / 64) as u128);
+            for loot in roll_enemy_loot(&dungeon, &group, 0, enemy % 64, 13).values() {
+                for item in loot.item.0.values() {
+                    if item.grade.is_none() {
+                        continue;
+                    }
+                    let g = &item.properties.grading;
+                    assert_eq!(item.grade, Some(g.iter().map(|p| p.tier).sum()), "grade = sum of tiers");
+                    count[g.len()] += 1;
+                }
+            }
+            enemy += 1;
+        }
+        let n = count.iter().sum::<u64>();
+        assert!(n >= 2000, "only {n} jewels on {enemy} corpses");
+        eprintln!("#393 enemy loot: {count:?} of {n}");
+        for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+            let got = count[props] as f64 * 100.0 / n as f64;
+            assert!((got - f64::from(pct)).abs() <= 3.0, "{props} properties: {got:.1}% (want {pct}%)");
+        }
     }
 
     /// THE BUG (#152): every corpse in the game was empty.

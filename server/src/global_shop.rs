@@ -895,8 +895,8 @@ fn grant_from_offer_contents_with_enchanting(
 ///
 /// Jewellery takes its property COUNT from HauDrauf's retail experience (#393:
 /// 8% one property, 17% two, 75% three -
-/// `jewelry_grade::SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`), the grade within that
-/// count from the APK grade table, and its PROPERTIES afresh, without repeats,
+/// `jewelry_grade::JEWELRY_PROPERTY_COUNT_PERCENT`, the rule every ring and
+/// necklace now follows), the grade within that count from the APK grade table, and its PROPERTIES afresh, without repeats,
 /// from the slot's whole APK list (`jewelry_grade::fill`, #392). The grade used
 /// to be copied from the 32 tier-2 ring outcomes we captured, 13 of them
 /// single-property, so 41% of rings came with one property and none at grade 6.
@@ -918,7 +918,7 @@ fn roll_arcane_grading(
         return None;
     }
     let mut rng = crate::jewelry_roll::seeded(&[template.as_bytes(), b"arcane-grade"], roll_nonce);
-    let tiers = crate::jewelry_grade::roll_sigil_arcane_tiers(&mut rng);
+    let tiers = crate::jewelry_grade::roll_tiers(&mut rng);
     crate::jewelry_grade::fill(slot, tiers, &mut rng)
 }
 
@@ -4504,13 +4504,13 @@ mod report_387_alts_roll_their_own {
 /// 36%, and her 45 necklaces 18% / 18% / 64% (corpus: 25% / 20% / 55%).
 ///
 /// THE FIX. Every Sigil-shop arcane ring and necklace draws its property count
-/// from HauDrauf's shares (`jewelry_grade::SIGIL_ARCANE_PROPERTY_COUNT_PERCENT`)
+/// from HauDrauf's shares (`jewelry_grade::JEWELRY_PROPERTY_COUNT_PERCENT`)
 /// and, within three properties, its grade by the APK weights.
 #[cfg(test)]
 mod report_393_sigil_jewelry_property_count {
     use super::*;
     use crate::jewelry_grade::{
-        JEWELRY_GRADES, NECKLACE, RING, SIGIL_ARCANE_PROPERTY_COUNT_PERCENT,
+        JEWELRY_GRADES, JEWELRY_PROPERTY_COUNT_PERCENT, NECKLACE, RING,
     };
 
     /// SigilShop_Jewelry_EbonyFaeriteRing_Arcane02 - the reporter's ring.
@@ -4584,7 +4584,7 @@ mod report_393_sigil_jewelry_property_count {
                 share(count[2]),
                 share(count[3])
             );
-            for (props, pct) in SIGIL_ARCANE_PROPERTY_COUNT_PERCENT {
+            for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
                 let got = share(count[props]);
                 assert!(
                     (got - f64::from(pct)).abs() <= 2.5,
@@ -4646,20 +4646,85 @@ mod report_393_sigil_jewelry_property_count {
         );
     }
 
-    /// CONTROL: the merchant / crafted roll (`jewelry_grade::roll`) is untouched
-    /// and still gives ~22% single-property jewellery by the APK weights.
+    /// #393, 2026-10-15 ("überall, keine Unterschiede"): the merchant / crafted
+    /// roll (`jewelry_grade::roll`) follows the same split. It used to be the APK
+    /// weights alone: ~22% single-property jewellery.
     #[test]
-    fn the_merchant_roll_is_unchanged() {
+    fn the_merchant_roll_follows_the_same_split() {
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::seed_from_u64(393);
-        let n = 20_000;
-        let one = (0..n)
-            .filter(|_| crate::jewelry_grade::roll(RING, &mut rng).unwrap().1.len() == 1)
-            .count();
-        let share = one as f64 / n as f64;
-        assert!(
-            (share - 0.22).abs() < 0.015,
-            "merchant grade-1 share {share:.3}"
-        );
+        for slot in [RING, NECKLACE] {
+            let n = 20_000u64;
+            let mut count = [0u64; 4];
+            for _ in 0..n {
+                let (grade, g) = crate::jewelry_grade::roll(slot, &mut rng).unwrap();
+                assert_eq!(grade, g.iter().map(|p| p.tier).sum::<u64>());
+                count[g.len()] += 1;
+            }
+            for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+                let got = count[props] as f64 * 100.0 / n as f64;
+                assert!(
+                    (got - f64::from(pct)).abs() <= 3.0,
+                    "{slot}: {props} properties {got:.1}% (want {pct}%)"
+                );
+            }
+        }
+    }
+
+    /// #393: Sigil jewellery whose grading the shop re-rolls although the offer
+    /// is not an arcane needs-roll one (`reroll_sigil_jewelry`) follows the split
+    /// too. Fixed templates stay out.
+    #[test]
+    fn other_rerolled_sigil_jewels_follow_the_split() {
+        let sd = sd();
+        let items = item_table();
+        let mut products = Vec::new();
+        for (id, c) in &sd.global_shop_offer_contents {
+            if c.contents.len() != 1 {
+                continue;
+            }
+            let e = &c.contents[0];
+            let Some(t) = items.get(&e.item_template_id).map(|i| i.r#type) else {
+                continue;
+            };
+            if matches!(t, RING | NECKLACE)
+                && !(e.arcane_tier > 0 && e.grading.is_empty())
+                && !crate::fixed_templates::has_mandatory_properties(e.item_template_id)
+            {
+                products.push((*id, t));
+            }
+        }
+        assert!(!products.is_empty(), "no re-rolled Sigil jewels found");
+        let mut count = [0u64; 4];
+        let per = 2400 / products.len() as u64 + 1;
+        for (product, slot) in &products {
+            for i in 0..per {
+                let buyer = Uuid::from_u128(0x3930_0000_0000_4000_8000_0000_0000_1000 + u128::from(i % 40));
+                let Some(r) = purchase_reward(
+                    sd,
+                    &repair_data(),
+                    items,
+                    *product,
+                    purchase_roll_nonce(i / 40, buyer, None),
+                ) else {
+                    break;
+                };
+                for it in &r.items {
+                    if items.get(&it.item.item_template_id).map(|i| i.r#type) == Some(*slot) {
+                        count[check(&it.item, *slot)] += 1;
+                    }
+                }
+            }
+        }
+        let n: u64 = count.iter().sum();
+        eprintln!("#393 re-rolled Sigil jewels ({} offers): {count:?} of {n}", products.len());
+        assert!(n >= 2000, "only {n} re-rolled Sigil jewels sampled");
+        for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+            let got = count[props] as f64 * 100.0 / n as f64;
+            assert!(
+                (got - f64::from(pct)).abs() <= 3.0,
+                "{props} properties {got:.1}% (want {pct}%)"
+            );
+        }
     }
 }
