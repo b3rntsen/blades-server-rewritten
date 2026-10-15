@@ -569,7 +569,8 @@ fn without_armour_in_the_wrong_slot(
             let (Some(want), Some(item_id)) = (armour_equipment_slot_for(**slot), target) else {
                 return true;
             };
-            let Some(item) = inventory.backpack.items.0.get(item_id) else {
+            // Backpack OR another slot: a build switch can move a worn piece (#395).
+            let Some(item) = character_ops::owned_gear_item(inventory, item_id) else {
                 return true;
             };
             match crate::arena::combat::gamedata::armor(
