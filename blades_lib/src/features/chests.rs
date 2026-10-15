@@ -409,9 +409,11 @@ pub fn roll_loot(
 /// most three times.
 ///
 /// THE ROLL is [`super::legendary_gear::generate`]: the retail piece stays the
-/// shell — its material tier, tempering, enchant count and enchant tier, and a
-/// jewel's grade — and around it the kind, the template of that tier and the
-/// enchantments are drawn from the APK tables. Nothing a chest paid before is out
+/// shell — its material tier, tempering, enchant count and enchant tier — and
+/// around it the kind, the template of that tier and the enchantments are drawn
+/// from the APK tables. A jewel is then graded by the one jewellery rule (#393:
+/// 8 / 17 / 75% one / two / three properties), not the shell's grade, which the
+/// Elder, Legendary and Golden chests keep. Nothing a chest paid before is out
 /// of reach: the shell's own template and enchantments remain possible, at the
 /// same tier. A piece outside the pool (none today) is paid as before.
 fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
@@ -421,14 +423,16 @@ fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
             continue;
         }
         let seed = mix(nonce ^ 0x3C79_AC49_2BA7_B653 ^ (slot as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93));
-        if let Some(item) = super::legendary_gear::generate(&reward.item, seed) {
+        if let Some(mut item) = super::legendary_gear::generate(&reward.item, seed) {
+            super::legendary_gear::regrade_jewelry(&mut item, mix(seed ^ 0x393));
             reward.item = item;
         }
     }
 }
 
-/// The GRADING a treasury chest's rings and necklaces lost in the corpus, drawn
-/// from their grade (see [`super::legendary_gear::fill_missing_grading`]).
+/// The grade and GRADING of a treasury chest's ring or necklace whose GRADING the
+/// corpus lost and that [`generate_treasury_gear`] did not generate (see
+/// [`super::legendary_gear::fill_missing_grading`]).
 /// Deterministic in the chest's nonce, so a retried open pays the same ring.
 fn fill_jewelry_grading(grant: &mut RewardGrant, nonce: u64) {
     use crate::features::store_bundles::mix;
@@ -1243,7 +1247,8 @@ mod tests {
     /// `JewelryGradeData`.
     #[test]
     fn treasury_chest_jewellery_carries_the_grading_of_its_grade() {
-        use crate::features::legendary_gear::{JEWELRY_GRADE_BONUSES, kind_of, rule_broken};
+        use crate::features::jewelry_grades::JEWELRY_GRADES;
+        use crate::features::legendary_gear::{kind_of, rule_broken};
         let t = committed();
         let is_jewel = |id: &Uuid| matches!(kind_of(id), Some("ring" | "necklace"));
 
@@ -1274,7 +1279,7 @@ mod tests {
                         let grade = item.grade.expect("chest jewellery is graded");
                         let mut tiers: Vec<u64> = item.properties.grading.iter().map(|p| p.tier).collect();
                         tiers.sort_unstable_by(|a, b| b.cmp(a));
-                        let want = JEWELRY_GRADE_BONUSES.iter().find(|(g, _)| *g == grade).unwrap().1;
+                        let want = JEWELRY_GRADES.iter().find(|(g, _, _)| *g == grade).unwrap().2;
                         assert_eq!(tiers, want, "grade {grade} GRADING tiers");
                         assert_eq!(rule_broken(item), None, "{item:?}");
                         distinct.insert(serde_json::to_string(&item.properties.grading).unwrap());
@@ -1291,6 +1296,42 @@ mod tests {
             "{} distinct GRADING sets in {jewels} jewels",
             distinct.len()
         );
+    }
+
+    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): a Wooden,
+    /// Silver or Gold chest's ring or necklace has one, two or three GRADING
+    /// properties 8 / 17 / 75% of the time, like every other source. Before, the
+    /// grade was the recorded one: 25 / 20 / 57% over the corpus.
+    #[test]
+    fn treasury_chest_jewellery_follows_the_property_count_split() {
+        use crate::features::jewelry_grades::JEWELRY_PROPERTY_COUNT_PERCENT;
+        use crate::features::legendary_gear::kind_of;
+        let t = committed();
+        let mut count = [0u64; 4];
+        let mut by_tier = [0u64; 4];
+        let mut i = 0u64;
+        while count.iter().sum::<u64>() < 3000 && i < 200_000 {
+            let tier = 1 + (i % 3) as i64;
+            let level = [5u64, 20, 35, 45, 60, 80, 100][(i / 3 % 7) as usize];
+            let reward = roll_loot(&t, tier, level, &format!("split:{i}"), &HashSet::new()).unwrap();
+            for item in reward.items.iter().map(|r| &r.item) {
+                if matches!(kind_of(&item.item_template_id), Some("ring" | "necklace")) {
+                    let g = &item.properties.grading;
+                    assert_eq!(item.grade, Some(g.iter().map(|p| p.tier).sum()), "grade = sum of tiers");
+                    count[g.len()] += 1;
+                    by_tier[tier as usize] += 1;
+                }
+            }
+            i += 1;
+        }
+        let n = count.iter().sum::<u64>();
+        assert!(n >= 2000, "only {n} treasury chest jewels in {i} chests");
+        eprintln!("#393 treasury chests: {count:?} of {n} (by tier {by_tier:?})");
+        assert_eq!(count[0], 0, "a chest jewel without GRADING");
+        for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
+            let got = count[props] as f64 * 100.0 / n as f64;
+            assert!((got - f64::from(pct)).abs() <= 3.0, "{props} properties: {got:.1}% (want {pct}%)");
+        }
     }
 
     /// The economy audit (#392): treasury chest gear repeated — a level-1 Wooden

@@ -35,7 +35,11 @@
 //!   uniformly without repeats from the APK's ring or necklace grade list, at the
 //!   shell's tiers (#378: Sephoris held twelve Ebony Faerite Rings with the same
 //!   three bonuses, because the shell's GRADING was copied). The grade, and so
-//!   the tiers, stay the shell's.
+//!   the tiers, stay the shell's: HauDrauf (#393, 2026-10-15) wants Elder,
+//!   Legendary and Golden chest jewellery as retail paid it (5 / 7 / 88% one /
+//!   two / three properties over the 542 recorded). The Wooden, Silver and Gold
+//!   treasury chests regrade the result by the one jewellery rule
+//!   ([`regrade_jewelry`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -237,58 +241,52 @@ fn roll_grading(
         .collect()
 }
 
-/// `JewelryGradeData._jewelryGradeData`'s `_providedBonuses` by grade: the tier of
-/// each GRADING property a ring or necklace of that grade carries, highest first
-/// (APK `gameplaymetadata`; the server's `jewelry_grade::JEWELRY_GRADES` holds the
-/// same rows with their weights, and a test there keeps the two equal).
-pub const JEWELRY_GRADE_BONUSES: [(u64, &[u64]); 6] = [
-    (1, &[1]),
-    (2, &[1, 1]),
-    (3, &[1, 1, 1]),
-    (4, &[2, 1, 1]),
-    (5, &[2, 2, 1]),
-    (6, &[2, 2, 2]),
-];
+/// Grade a ring or necklace afresh by the one jewellery rule (#393): the tiers
+/// by [`super::jewelry_grades`], the properties as [`roll_grading`] draws them;
+/// grade and GRADING both, everything else as it was. For the Wooden, Silver
+/// and Gold treasury chests and enemy loot — not the Elder, Legendary or Golden
+/// chest, which keep their shell's grade. `false`, untouched, for anything that
+/// is not a loot-pool ring or necklace — which keeps fixed (mandatory-property)
+/// templates such as the Ultimate rings out of it.
+pub(crate) fn regrade_jewelry(item: &mut Item, seed: u64) -> bool {
+    let Some(t) = pool().table.templates.get(&item.item_template_id) else {
+        return false;
+    };
+    if !is_jewelry(&t.category) {
+        return false;
+    }
+    let tiers: Vec<ItemSingleProperty> =
+        super::jewelry_grades::tiers_from_seed(seed ^ 0x7C15_9E37_79B9_4A7F)
+            .iter()
+            .map(|&tier| ItemSingleProperty { id: Uuid::nil(), tier })
+            .collect();
+    let grading = roll_grading(&t.category, &tiers, seed);
+    if grading.iter().any(|p| p.id.is_nil()) {
+        return false;
+    }
+    item.grade = Some(grading.iter().map(|p| p.tier).sum());
+    item.properties.grading = grading;
+    true
+}
 
-/// Give a ring or necklace that carries a grade but no GRADING the properties its
-/// grade stands for (#392 audit). `false`, untouched, for anything else.
+/// Grade a ring or necklace that carries a grade but no GRADING (#392 audit).
+/// `false`, untouched, for anything else.
 ///
 /// THE BUG. Most rings and necklaces a Silver or Gold treasury chest paid had a
 /// grade and no GRADING — no ability bonuses at all. The chest corpus lost them:
 /// `script/extract_chest_loot.py` rebuilt `properties` from ENCHANTING alone
 /// whenever an item had any, so 77 of the 100 retail chest jewels — every
-/// enchanted one — lost their GRADING; the 23 unenchanted ones kept it. Retail's
-/// own were complete: of the graded non-arcane retail rings and necklaces the
-/// server checked (`jewelry_grade`, those 23 among them), 1,121 of 1,121 carry
-/// `grade == sum(tiers)` with the tiers of their grade's `_providedBonuses`.
+/// enchanted one — lost their GRADING; the 23 unenchanted ones kept it.
 ///
-/// THE RULE is the APK's: the grade fixes the tiers ([`JEWELRY_GRADE_BONUSES`]);
-/// the properties are drawn uniformly and without repeats from the slot's grade
-/// list, as for a Legendary chest's jewellery ([`roll_grading`]). The grade, the
-/// enchantments and everything else stay as retail paid them.
+/// THE RULE. The grade used to stay the recorded one and only its properties were
+/// drawn; since #393 the grade is drawn too, by the one jewellery rule
+/// ([`regrade_jewelry`]). The enchantments and everything else stay as retail
+/// paid them.
 pub(crate) fn fill_missing_grading(item: &mut Item, seed: u64) -> bool {
-    let Some(t) = pool().table.templates.get(&item.item_template_id) else {
-        return false;
-    };
-    if !is_jewelry(&t.category) || !item.properties.grading.is_empty() {
+    if item.grade.is_none() || !item.properties.grading.is_empty() {
         return false;
     }
-    let Some((_, tiers)) = JEWELRY_GRADE_BONUSES
-        .iter()
-        .find(|(g, _)| Some(*g) == item.grade)
-    else {
-        return false;
-    };
-    let shell: Vec<ItemSingleProperty> = tiers
-        .iter()
-        .map(|&tier| ItemSingleProperty { id: Uuid::nil(), tier })
-        .collect();
-    let grading = roll_grading(&t.category, &shell, seed);
-    if grading.iter().any(|p| p.id.is_nil()) {
-        return false;
-    }
-    item.properties.grading = grading;
-    true
+    regrade_jewelry(item, seed)
 }
 
 /// `count` enchantments at `tier`: a recipe primary allowed on the template at
