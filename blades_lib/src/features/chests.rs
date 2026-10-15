@@ -413,7 +413,7 @@ pub fn roll_loot(
 /// around it the kind, the template of that tier and the enchantments are drawn
 /// from the APK tables. A jewel is then graded by the one jewellery rule (#393:
 /// 8 / 17 / 75% one / two / three properties), not the shell's grade, which the
-/// Elder, Legendary and Golden chests keep. Nothing a chest paid before is out
+/// Elder and Legendary chests keep. Nothing a chest paid before is out
 /// of reach: the shell's own template and enchantments remain possible, at the
 /// same tier. A piece outside the pool (none today) is paid as before.
 fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
