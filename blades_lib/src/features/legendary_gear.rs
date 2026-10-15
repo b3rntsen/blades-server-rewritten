@@ -35,11 +35,11 @@
 //!   uniformly without repeats from the APK's ring or necklace grade list, at the
 //!   shell's tiers (#378: Sephoris held twelve Ebony Faerite Rings with the same
 //!   three bonuses, because the shell's GRADING was copied). The grade, and so
-//!   the tiers, stay the shell's: HauDrauf (#393, 2026-10-15) wants Elder,
-//!   Legendary and Golden chest jewellery as retail paid it (5 / 7 / 88% one /
-//!   two / three properties over the 542 recorded). The Wooden, Silver and Gold
-//!   treasury chests regrade the result by the one jewellery rule
-//!   ([`regrade_jewelry`]).
+//!   the tiers, stay the shell's: HauDrauf (#393, 2026-10-15) wants Elder and
+//!   Legendary chest jewellery as retail paid it (5 / 7 / 88% one / two / three
+//!   properties over the 542 recorded). The Golden store chest and the Wooden,
+//!   Silver and Gold treasury chests regrade the result by the one jewellery
+//!   rule ([`regrade_jewelry`]).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -244,8 +244,8 @@ fn roll_grading(
 /// Grade a ring or necklace afresh by the one jewellery rule (#393): the tiers
 /// by [`super::jewelry_grades`], the properties as [`roll_grading`] draws them;
 /// grade and GRADING both, everything else as it was. For the Wooden, Silver
-/// and Gold treasury chests and enemy loot — not the Elder, Legendary or Golden
-/// chest, which keep their shell's grade. `false`, untouched, for anything that
+/// and Gold treasury chests, the Golden store chest and enemy loot — not the
+/// Elder or Legendary chest, which keep their shell's grade. `false`, untouched, for anything that
 /// is not a loot-pool ring or necklace — which keeps fixed (mandatory-property)
 /// templates such as the Ultimate rings out of it.
 pub(crate) fn regrade_jewelry(item: &mut Item, seed: u64) -> bool {

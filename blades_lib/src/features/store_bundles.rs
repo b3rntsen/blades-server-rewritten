@@ -956,11 +956,22 @@ pub fn roll_bundle_with(
         // [`GOLDEN_CHEST_CORPUS_ID`]); the other bundles keep the retail piece.
         let piece = if is_legendary || is_elder || is_golden {
             let gen_seed = mix(slot_seed ^ 0x4F1B_BCDC_BFA5_3E0B);
-            match tier {
+            let mut piece = match tier {
                 Some(tier) => super::legendary_gear::generate_at(&shell, tier, gen_seed),
                 None => super::legendary_gear::generate(&shell, gen_seed),
             }
-            .unwrap_or(shell)
+            .unwrap_or(shell);
+            // The Golden chest's jewellery is then regraded by the one jewellery
+            // rule, 8 / 17 / 75% (HauDrauf, #393: "the same split as everything
+            // else"); Elder and Legendary keep the shell's grade. Its own seed, so
+            // every other draw, and every non-jewel, is as it was.
+            if is_golden {
+                super::legendary_gear::regrade_jewelry(
+                    &mut piece,
+                    mix(slot_seed ^ 0x9E6C_63D0_676A_9A99),
+                );
+            }
+            piece
         } else {
             shell
         };
@@ -1053,8 +1064,10 @@ const ELDER_CHEST_CORPUS_ID: Uuid = Uuid::from_u128(0x9e4dc391_422e_4b25_ba90_fa
 /// are already generated: all 710 of its 355 purchases' pieces are APK loot-pool
 /// members of their tier, and retail repeated a piece at most four times. So its
 /// pieces are generated around the retail piece the same way (tier, tempering,
-/// enchant count and tier, a jewel's grade kept; kind, template, enchantments and
-/// GRADING from the APK tables). The retail piece itself stays reachable.
+/// enchant count and tier kept; kind, template, enchantments and GRADING from the
+/// APK tables). Unlike Elder and Legendary, a jewel's grade is then drawn by the
+/// one jewellery rule, 8 / 17 / 75% one / two / three properties (HauDrauf, #393;
+/// the shell's grade gave 16 / 20 / 64). The retail piece itself stays reachable.
 const GOLDEN_CHEST_CORPUS_ID: Uuid = Uuid::from_u128(0x11b322d2_1b5e_4e90_bb41_a8d90ca9548b);
 
 /// The ten soul gems, `SoulGem1` to `SoulGem10`. English / German client names
@@ -2266,8 +2279,8 @@ mod tests {
     /// silently pay the recorded piece), always at the shell's own material tier,
     /// with the shell's tempering, enchant count and tier, a primary distinct
     /// from the secondaries, and jewellery keeping its kind, grade and GRADING
-    /// tiers (HauDrauf, #393: Elder, Legendary and Golden chest jewellery stays as
-    /// retail paid it).
+    /// tiers (HauDrauf, #393: Elder and Legendary chest jewellery stays as retail
+    /// paid it; the Golden chest regrades it afterwards, outside `generate`).
     #[test]
     fn every_retail_shell_generates_at_its_own_tier() {
         for (i, (_, items)) in retail_banded().iter().enumerate() {
@@ -2305,50 +2318,117 @@ mod tests {
         }
     }
 
+    /// The property-count split of a chest's jewellery, `[_, one, two, three]`,
+    /// over at least 2000 jewels, each with its grade equal to its tiers' sum.
+    fn chest_jewel_split(name: &str, product: &Uuid) -> [u64; 4] {
+        let mut count = [0u64; 4];
+        let mut nonce = 0u64;
+        while count.iter().sum::<u64>() < 2500 && nonce < 100_000 {
+            let level = [10u64, 25, 40, 49, 60, 80, 100][(nonce % 7) as usize];
+            let g = roll_bundle(product, level, nonce).expect("the chest rolls");
+            for item in g.items.iter().map(|r| &r.item) {
+                if matches!(
+                    legendary_gear::kind_of(&item.item_template_id),
+                    Some("ring" | "necklace")
+                ) {
+                    let gr = &item.properties.grading;
+                    assert_eq!(item.grade, Some(gr.iter().map(|p| p.tier).sum()), "{name}");
+                    count[gr.len()] += 1;
+                }
+            }
+            nonce += 1;
+        }
+        let n = count.iter().sum::<u64>();
+        assert!(n >= 2000, "{name}: only {n} jewels in {nonce} chests");
+        eprintln!("#393 {name}: {count:?} of {n}");
+        count
+    }
+
+    /// The largest gap, in percentage points, between `count` and 8 / 17 / 75.
+    fn off_the_split(count: &[u64; 4]) -> f64 {
+        use crate::features::jewelry_grades::JEWELRY_PROPERTY_COUNT_PERCENT;
+        let n = count.iter().sum::<u64>() as f64;
+        JEWELRY_PROPERTY_COUNT_PERCENT
+            .iter()
+            .map(|(props, pct)| (count[*props] as f64 * 100.0 / n - f64::from(*pct)).abs())
+            .fold(0.0, f64::max)
+    }
+
     /// #393 (HauDrauf, 2026-10-15): the 8 / 17 / 75% property-count split every
-    /// other source follows is NOT applied to the Elder, Legendary and Golden
-    /// chests. Their jewellery keeps the retail shell's grade (5 / 7 / 88% one /
-    /// two / three properties over the 542 recorded jewels; sampled here about
-    /// 7 / 1 / 92 Legendary, 5 / 10 / 85 Elder, 16 / 20 / 64 Golden), so each
-    /// chest's split is far from 8 / 17 / 75. `every_retail_shell_generates_at_its_own_tier`
-    /// checks the grade piece by piece.
+    /// other source follows is NOT applied to the Elder and Legendary chests.
+    /// Their jewellery keeps the retail shell's grade (sampled about 7 / 1 / 92
+    /// Legendary, 5 / 10 / 85 Elder), so each chest's split is far from
+    /// 8 / 17 / 75. `every_retail_shell_generates_at_its_own_tier` checks the
+    /// grade piece by piece.
     #[test]
     fn chest_jewellery_keeps_the_shell_grade() {
-        use crate::features::jewelry_grades::JEWELRY_PROPERTY_COUNT_PERCENT;
-        for (name, product) in [
-            ("Legendary", legendary()),
-            ("Elder", EPIC_CHEST_PRODUCT_ID),
-            ("Golden", Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b)),
-        ] {
-            let mut count = [0u64; 4];
-            let mut nonce = 0u64;
-            while count.iter().sum::<u64>() < 2500 && nonce < 100_000 {
-                let level = [10u64, 25, 40, 49, 60, 80, 100][(nonce % 7) as usize];
-                let g = roll_bundle(&product, level, nonce).expect("the chest rolls");
-                for item in g.items.iter().map(|r| &r.item) {
-                    if matches!(
-                        legendary_gear::kind_of(&item.item_template_id),
-                        Some("ring" | "necklace")
-                    ) {
-                        let gr = &item.properties.grading;
-                        assert_eq!(item.grade, Some(gr.iter().map(|p| p.tier).sum()), "{name}");
-                        count[gr.len()] += 1;
-                    }
-                }
-                nonce += 1;
-            }
-            let n = count.iter().sum::<u64>();
-            assert!(n >= 2000, "{name}: only {n} jewels in {nonce} chests");
-            eprintln!("#393 {name}: {count:?} of {n}");
-            let off = JEWELRY_PROPERTY_COUNT_PERCENT
-                .iter()
-                .map(|(props, pct)| (count[*props] as f64 * 100.0 / n as f64 - f64::from(*pct)).abs())
-                .fold(0.0, f64::max);
+        for (name, product) in [("Legendary", legendary()), ("Elder", EPIC_CHEST_PRODUCT_ID)] {
+            let count = chest_jewel_split(name, &product);
+            let off = off_the_split(&count);
             assert!(
                 off > 4.0,
                 "{name}: {count:?} is the 8/17/75 split (within {off:.1} points); the shell grade is not kept"
             );
         }
+    }
+
+    /// #393 (HauDrauf, 2026-10-15): the Golden store chest's jewellery follows
+    /// the 8 / 17 / 75% split like everything else. It kept the shell's grade
+    /// before, about 16 / 20 / 64.
+    #[test]
+    fn golden_chest_jewellery_follows_the_split() {
+        let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
+        let count = chest_jewel_split("Golden", &golden);
+        let off = off_the_split(&count);
+        assert!(off <= 3.0, "Golden: {count:?} is {off:.1} points off 8/17/75");
+    }
+
+    /// The Golden regrade touches jewellery GRADING only: the same nonces pay the
+    /// same non-jewel pieces, and the same jewel templates, tempering and
+    /// enchantments, as the generated pieces did before it.
+    #[test]
+    fn golden_regrade_changes_only_jewel_grading() {
+        let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
+        let corpus = corpus_product(&golden).unwrap();
+        let mut jewels = 0;
+        for level in [5u64, 30, 49, 80] {
+            let band = corpus
+                .by_level
+                .iter()
+                .find(|b| level >= b.min_buyer_level && level <= b.max_buyer_level)
+                .or_else(|| {
+                    corpus
+                        .by_level
+                        .iter()
+                        .min_by_key(|b| level_distance(level, b.min_buyer_level, b.max_buyer_level))
+                })
+                .unwrap();
+            for nonce in 0..300u64 {
+                let g = roll_bundle(&golden, level, nonce).unwrap();
+                // The pre-#393 piece, from the same seeds.
+                let seed = mix(golden.as_u128() as u64 ^ mix(nonce) ^ level.rotate_left(13));
+                for slot in 0..core_slots(band) {
+                    let slot_seed =
+                        mix(seed ^ 0xA076_1D64_78BD_642F_u64.wrapping_mul(slot as u64 + 1));
+                    let shell = draw(band, slot_seed).unwrap().reward.items[slot].clone();
+                    let gen_seed = mix(slot_seed ^ 0x4F1B_BCDC_BFA5_3E0B);
+                    let old = legendary_gear::generate(&shell, gen_seed).unwrap_or(shell);
+                    let new = &g.items[slot].item;
+                    assert_eq!(new.item_template_id, old.item_template_id);
+                    assert_eq!(new.tempering_level, old.tempering_level);
+                    assert_eq!(new.properties.enchanting, old.properties.enchanting);
+                    if matches!(
+                        legendary_gear::kind_of(&old.item_template_id),
+                        Some("ring" | "necklace")
+                    ) {
+                        jewels += 1;
+                    } else {
+                        assert_eq!(new, &old, "L{level} #{nonce}: a non-jewel changed");
+                    }
+                }
+            }
+        }
+        assert!(jewels > 100, "only {jewels} jewels");
     }
 
     // ---- #368 (cont.): the progression tables for the PR ----

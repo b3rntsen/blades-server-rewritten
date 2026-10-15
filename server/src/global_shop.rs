@@ -896,7 +896,7 @@ fn grant_from_offer_contents_with_enchanting(
 /// Jewellery takes its property COUNT from HauDrauf's retail experience (#393:
 /// 8% one property, 17% two, 75% three -
 /// `jewelry_grade::JEWELRY_PROPERTY_COUNT_PERCENT`, the rule every ring and
-/// necklace but the Elder/Legendary/Golden chest ones now follows), the grade within that count from the APK grade table, and its PROPERTIES afresh, without repeats,
+/// necklace but the Elder/Legendary chest ones now follows), the grade within that count from the APK grade table, and its PROPERTIES afresh, without repeats,
 /// from the slot's whole APK list (`jewelry_grade::fill`, #392). The grade used
 /// to be copied from the 32 tier-2 ring outcomes we captured, 13 of them
 /// single-property, so 41% of rings came with one property and none at grade 6.
