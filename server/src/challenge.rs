@@ -21,7 +21,7 @@ use actix_web::{
 use blades_lib::economy::{GEMS, RewardGrant, apply_reward};
 use blades_lib::features::challenges::{
     self, ACTIVE_CHALLENGE_COUNT, ChallengeInstance, ChallengeState, ChallengeStatus,
-    ChallengeTemplate,
+    ChallengeTemplate, gems_only_reward,
 };
 use blades_lib::user_data::{
     CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, CompleteWallet,
@@ -69,6 +69,18 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Re-derive every active challenge's reward from its template (owner-approved
+/// deviation from retail, #388, 2026-10-16): one handed out before #388 still
+/// carries its template's retail reward, gold included, and must pay (and show)
+/// gems only, doubled. Always from the template, so it never doubles twice.
+fn sync_rewards(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
+    for c in &mut state.active {
+        if let Some(t) = pool.iter().find(|t| t.template_id == c.template_id) {
+            c.reward = gems_only_reward(&t.reward);
+        }
+    }
+}
+
 /// Drop terminal (completed/abandoned) challenges and refill the active set back up
 /// to [`ACTIVE_CHALLENGE_COUNT`] from the template pool (advancing the cursor). The
 /// server mints the fresh instance/objective UUIDs (this crate has no uuid-v4).
@@ -79,6 +91,7 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
     if pool.is_empty() {
         return;
     }
+    sync_rewards(state, pool);
     let (secs, ms) = (now_secs(), now_ms());
     while state.active.len() < ACTIVE_CHALLENGE_COUNT {
         let idx = state.cursor % pool.len();
@@ -239,6 +252,7 @@ async fn resolve(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
+            sync_rewards(&mut entry.server_state.0.challenges, &globals.static_data.challenge_templates);
 
             // Resolve the targeted challenge in place.
             let mut resolved = {
@@ -316,6 +330,30 @@ mod tests {
         assert_eq!(category_id_for_reward(&gems), GEM_CATEGORY_ID);
         assert_eq!(category_id_for_reward(&gold), CURRENCY_CATEGORY_ID);
         assert_ne!(GEM_CATEGORY_ID, CURRENCY_CATEGORY_ID);
+    }
+
+    /// #388 (owner-approved deviation from retail, 2026-10-16): a challenge handed
+    /// out before the change still carried retail's gold; it is re-derived from its
+    /// template and pays gems only, and syncing twice never doubles twice.
+    #[test]
+    fn a_stored_gold_challenge_pays_doubled_gems_and_syncing_is_idempotent() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pool = crate::static_loader::load(&dir).challenge_templates;
+        let gold_template = pool
+            .iter()
+            .find(|t| t.reward.currencies.get(&blades_lib::economy::GOLD) == Some(&750))
+            .expect("a 750-gold template");
+        let mut stale = ChallengeInstance::from_template(gold_template, Uuid::from_u128(1), Uuid::from_u128(2), 0, 0);
+        stale.reward = gold_template.reward.clone(); // as stored before #388
+        let mut state = ChallengeState { active: vec![stale], cursor: 0, points: 0 };
+        for _ in 0..2 {
+            sync_rewards(&mut state, &pool);
+            assert_eq!(state.active[0].reward.currencies, HashMap::from([(GEMS, 6)]), "750 gold = 3 gems, doubled");
+            assert_eq!(category_id_for_reward(&state.active[0].reward), GEM_CATEGORY_ID);
+        }
+        refill(&mut state, &pool);
+        assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
+        assert!(state.active.iter().all(|c| c.reward.currencies.keys().all(|k| *k == GEMS)));
     }
 }
 
