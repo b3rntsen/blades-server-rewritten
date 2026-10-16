@@ -3,9 +3,17 @@
 //! players to the arena).
 //!
 //! After every [`FIGHTS_PER_WEAPON_GIFT`]th finished arena fight, won or lost, the
-//! player is gifted one of the nine Divine Stalhrim weapons, chosen uniformly, at
-//! Arcane tier [`WEAPON_GIFT_ARCANE_TIER`] with [`WEAPON_GIFT_ENCHANTMENTS`]
-//! enchantments at tier [`WEAPON_GIFT_ENCHANT_TIER`].
+//! player is gifted one of the nine Divine Stalhrim weapons, chosen uniformly, as a
+//! BLANK Arcane II weapon ([`WEAPON_GIFT_ARCANE_TIER`], no enchantments).
+//!
+//! HauDrauf's "zwei garantierte Verzauberungen" is the client's label for Arcane
+//! tier 2 — "guaranteed exactly 2 bonus enchantments when enchanted", the phrase
+//! he used for the Sigil Arcane02 necklaces in #386, which the shop sells blank.
+//! So the weapon arrives exactly as retail's Sigil Arcane02 weapon grants did:
+//! `{itemTemplateId, temperingLevel: 0, durability: <max>, arcaneTier: 2}` with no
+//! ENCHANTING and no grade. The player enchants it, and the enchant
+//! (`craft.rs::roll_enchant`) then adds the primary plus exactly two bonus
+//! enchantments, because `arcaneTierCountOdds["2"]` is `[0, 0, 1]`.
 //!
 //! # The count
 //!
@@ -20,11 +28,12 @@
 //! "Divine Stalhrim" is the APK's Dragonbone-strength Stalhrim: every one is
 //! material tier 10 at required level 45 with exactly its Dragonbone twin's
 //! durability and weapon type ("as strong as those made of dragon bones"). The
-//! Divine templates are not in the Legendary loot pool (their `lootWeight` is 0),
-//! so the enchantments are rolled on the twin's enchanting tables by the
-//! Legendary-gear generator ([`blades_lib::features::legendary_gear`]): a recipe
-//! primary allowed on the weapon at tier 10, then a distinct secondary from the
-//! weapon's secondary table, each uniformly.
+//! Divine templates are not in the Legendary loot pool (their `lootWeight` is 0).
+//! Should the gift ever carry pre-rolled enchantments
+//! ([`WEAPON_GIFT_ENCHANTMENTS`] > 0), they are rolled on the twin's enchanting
+//! tables by the Legendary-gear generator
+//! ([`blades_lib::features::legendary_gear`]): a recipe primary allowed on the
+//! weapon, then distinct secondaries, each uniformly.
 //!
 //! # Delivery
 //!
@@ -49,12 +58,14 @@ pub const FIGHTS_PER_WEAPON_GIFT: i64 = 25;
 /// 2026-10-16).
 pub const WEAPON_GIFT_ARCANE_TIER: u64 = 2;
 
-/// Enchantments on the gifted weapon (a primary, then secondaries). Owner-approved
-/// deviation (#390/#391, 2026-10-16).
-pub const WEAPON_GIFT_ENCHANTMENTS: usize = 2;
+/// Pre-rolled enchantments on the gifted weapon: none. The weapon is gifted blank,
+/// as the Sigil shop sells Arcane02 items; Arcane II guarantees two bonus
+/// enchantments when the player enchants it. Owner-approved deviation (#390/#391,
+/// 2026-10-16).
+pub const WEAPON_GIFT_ENCHANTMENTS: usize = 0;
 
-/// The enchantment tier: 10, the top recipe tier, matching the weapons' own
-/// material tier 10. Owner-approved deviation (#390/#391, 2026-10-16).
+/// The tier any pre-rolled enchantment would take (unused while
+/// [`WEAPON_GIFT_ENCHANTMENTS`] is 0): 10, matching the weapons' material tier.
 pub const WEAPON_GIFT_ENCHANT_TIER: u64 = 10;
 
 /// The gift's server-side description (never shown: the client renders the
@@ -118,7 +129,7 @@ pub fn milestone_reached(fights: i64) -> bool {
 }
 
 /// The weapon a gift pays, drawn from its own id so the roll is reproducible
-/// from the row alone: a uniform pick of the nine, then the enchantments.
+/// from the row alone: a uniform pick of the nine, blank at Arcane II.
 pub fn roll_weapon(gift_id: Uuid) -> GiftItem {
     let seed = crate::jewelry_roll::seed(&[gift_id.as_bytes(), b"arena-fight-gift"], 0);
     let (template, twin, name) =
@@ -130,8 +141,8 @@ pub fn roll_weapon(gift_id: Uuid) -> GiftItem {
         seed.rotate_left(17) ^ 0x9E37_79B9_7F4A_7C15,
     )
     .unwrap_or_else(|| {
-        // Pinned by `every_weapon_rolls_two_valid_enchantments`; a table change
-        // that broke it still pays the weapon rather than nothing.
+        // Only reachable with WEAPON_GIFT_ENCHANTMENTS > 0; a table that cannot
+        // supply the roll still pays the weapon rather than nothing.
         log::error!("arena fight gift: no enchanting roll for {name}; granting it plain");
         Vec::new()
     });
@@ -366,25 +377,38 @@ mod tests {
         }
     }
 
-    /// Every one of the nine rolls at Arcane II with exactly two distinct
-    /// enchantments at tier 10, and all nine come up.
+    /// Every gift is one of the nine, blank (no ENCHANTING) at Arcane II, and all
+    /// nine come up.
     #[test]
-    fn every_weapon_rolls_two_valid_enchantments() {
+    fn every_gift_is_a_blank_arcane_two_divine_stalhrim() {
         let mut seen = std::collections::BTreeSet::new();
         for n in 0..400u128 {
             let item = roll_weapon(Uuid::from_u128(n * 7919 + 1));
             assert!(DIVINE_STALHRIM_WEAPONS.iter().any(|w| w.0 == item.item_template_id));
             assert_eq!(item.quantity, 1);
             assert_eq!(item.arcane_tier, Some(2));
-            assert_eq!(item.enchanting.len(), 2, "two enchantments");
-            assert!(item.enchanting.iter().all(|p| p.tier == 10));
-            assert_ne!(item.enchanting[0].id, item.enchanting[1].id, "no repeated enchantment");
+            assert!(item.enchanting.is_empty(), "gifted blank, enchanted by the player");
             seen.insert(item.item_template_id);
         }
         assert_eq!(seen.len(), 9, "the pick reaches all nine weapons");
-        // The roll is a function of the gift id: GET and claim agree.
+        // The pick is a function of the gift id: GET and claim agree.
         let id = Uuid::from_u128(42);
-        assert_eq!(roll_weapon(id).enchanting, roll_weapon(id).enchanting);
+        assert_eq!(roll_weapon(id).item_template_id, roll_weapon(id).item_template_id);
+    }
+
+    /// Arcane II is what guarantees the two bonus enchantments: the shipped
+    /// enchanting tables give an arcane-2 item exactly 2 secondaries when it is
+    /// enchanted (`craft.rs::roll_enchant` reads these odds).
+    #[test]
+    fn arcane_two_guarantees_exactly_two_bonus_enchantments_on_enchant() {
+        let e: blades_lib::static_data::EnchantingData = serde_json::from_str(include_str!(
+            "../../../deploy/static/enchanting.json"
+        ))
+        .unwrap();
+        assert_eq!(e.arcane_tier_count_odds[&WEAPON_GIFT_ARCANE_TIER], vec![0.0, 0.0, 1.0]);
+        for (divine, _, name) in DIVINE_STALHRIM_WEAPONS {
+            assert!(e.table_for(&divine).is_some(), "{name} has a secondary table to draw from");
+        }
     }
 
     #[test]
@@ -393,43 +417,99 @@ mod tests {
         assert_eq!(hits, vec![25, 50, 75, 100]);
     }
 
-    /// The claimed gift grants exactly one weapon instance carrying the rolled
-    /// enchantments and arcane tier, while the client is shown only retail's
-    /// `{itemTemplateId, quantity}` line.
+    /// The claimed gift grants exactly one weapon instance shaped exactly like
+    /// retail's Sigil Arcane02 weapon grants, while the client is shown only
+    /// retail's `{itemTemplateId, quantity}` gift line.
+    ///
+    /// The control is retail itself: `global_shop_grants.json` holds captured
+    /// Arcane02 grants of the Dragonbone twins — `{arcaneTier: 2, durability,
+    /// id, itemTemplateId, temperingLevel: 0}`, nothing else. The gifted Divine
+    /// Stalhrim must serialize with the same keys and its twin's durability.
     #[test]
-    fn the_gift_grants_one_enchanted_weapon_instance() {
-        let item = roll_weapon(Uuid::from_u128(5));
-        let row = FightGiftRow {
-            id: Uuid::from_u128(5),
-            user_id: Uuid::nil(),
-            character_id: Uuid::nil(),
-            source_alt_uuid: None,
-            milestone: 25,
-            item: serde_json::to_value(&item).unwrap(),
-            created_at: 0,
-            granted_at: None,
-        };
-        let def = row.gift_def().unwrap();
-        let types = std::collections::HashMap::from([(
-            item.item_template_id,
-            blades_lib::game_data::GameDataItem { name: "Stalhrim".into(), r#type: 2 },
-        )]);
-        let repair =
-            blades_lib::features::repair::RepairData::from_json(&serde_json::json!({}), &serde_json::json!({}));
-        let reward = blades_lib::features::gifts::build_gift_reward(&def, &types, &repair);
-        assert_eq!(reward.items.len(), 1, "exactly one weapon");
-        assert!(reward.stackable_items.is_empty() && reward.currencies.is_empty());
-        let granted = &reward.items[0].item;
-        assert_eq!(granted.item_template_id, item.item_template_id);
-        assert_eq!(granted.arcane_tier, Some(2));
-        assert_eq!(granted.properties.enchanting, item.enchanting);
-        assert!(granted.durability > 0.0);
+    fn the_gift_grants_one_blank_arcane_two_weapon_like_the_sigil_shop() {
+        let grants: serde_json::Value =
+            serde_json::from_str(include_str!("../../../deploy/static/global_shop_grants.json"))
+                .unwrap();
+        let mut retail = Vec::new();
+        fn walk(v: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if m.get("arcaneTier") == Some(&serde_json::json!(2))
+                        && let Some(t) = m.get("itemTemplateId").and_then(|t| t.as_str())
+                        && DIVINE_STALHRIM_WEAPONS.iter().any(|w| w.1.to_string() == t)
+                    {
+                        out.push(v.clone());
+                    }
+                    m.values().for_each(|x| walk(x, out));
+                }
+                serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        walk(&grants, &mut retail);
+        assert!(retail.len() >= 3, "captured Arcane02 Dragonbone weapon grants exist");
 
-        let shown = serde_json::to_value(def.for_client()).unwrap();
-        assert_eq!(
-            shown["items"][0],
-            serde_json::json!({"itemTemplateId": item.item_template_id, "quantity": 1})
-        );
+        let durability: serde_json::Value =
+            serde_json::from_str(include_str!("../../../deploy/static/item_durability.json"))
+                .unwrap();
+        let repair =
+            blades_lib::features::repair::RepairData::from_json(&durability, &serde_json::json!({}));
+
+        for captured in &retail {
+            let twin: Uuid = captured["itemTemplateId"].as_str().unwrap().parse().unwrap();
+            let (divine, _, name) =
+                *DIVINE_STALHRIM_WEAPONS.iter().find(|w| w.1 == twin).unwrap();
+            let item = GiftItem {
+                item_template_id: divine,
+                quantity: 1,
+                arcane_tier: Some(WEAPON_GIFT_ARCANE_TIER),
+                enchanting: Vec::new(),
+            };
+            let row = FightGiftRow {
+                id: Uuid::from_u128(5),
+                user_id: Uuid::nil(),
+                character_id: Uuid::nil(),
+                source_alt_uuid: None,
+                milestone: 25,
+                item: serde_json::to_value(&item).unwrap(),
+                created_at: 0,
+                granted_at: None,
+            };
+            let def = row.gift_def().unwrap();
+            let types = std::collections::HashMap::from([(
+                divine,
+                blades_lib::game_data::GameDataItem { name: name.into(), r#type: 2 },
+            )]);
+            let reward = blades_lib::features::gifts::build_gift_reward(&def, &types, &repair);
+            assert_eq!(reward.items.len(), 1, "exactly one weapon");
+            assert!(reward.stackable_items.is_empty() && reward.currencies.is_empty());
+            let granted = &reward.items[0].item;
+            assert_eq!(granted.item_template_id, divine);
+            assert_eq!(granted.arcane_tier, Some(2));
+            assert_eq!(granted.grade, None);
+            assert_eq!(granted.tempering_level, 0);
+            assert!(granted.properties.enchanting.is_empty() && granted.properties.grading.is_empty());
+
+            let mut ours = serde_json::to_value(granted).unwrap();
+            let mut theirs = captured.clone();
+            ours.as_object_mut().unwrap().remove("id");
+            theirs.as_object_mut().unwrap().remove("id");
+            theirs["itemTemplateId"] = serde_json::json!(divine);
+            // An empty `properties` object is how every server-built item
+            // serializes; retail omitted it. The Sigil path emits the same.
+            if ours.get("properties").is_some_and(|p| {
+                p.as_object().is_some_and(|o| o.values().all(|v| v.as_array().is_some_and(|a| a.is_empty())))
+            }) {
+                ours.as_object_mut().unwrap().remove("properties");
+            }
+            assert_eq!(ours, theirs, "{name}: same shape and durability as retail's Arcane02 {twin}");
+
+            let shown = serde_json::to_value(def.for_client()).unwrap();
+            assert_eq!(
+                shown["items"][0],
+                serde_json::json!({"itemTemplateId": divine, "quantity": 1})
+            );
+        }
     }
 
     async fn fixture() -> Option<AsyncPgConnection> {
@@ -506,8 +586,8 @@ mod tests {
         assert!(alt.is_ok(), "outer transaction poisoned: {alt:?}");
     }
 
-    /// The 25th fight on an account mints exactly one Divine Stalhrim weapon with
-    /// two enchantments; the count runs across the account's alts; another
+    /// The 25th fight on an account mints exactly one blank Arcane II Divine
+    /// Stalhrim weapon; the count runs across the account's alts; another
     /// account's fights do not move it; and only the alt that fought the 25th is
     /// offered the gift.
     #[tokio::test]
@@ -561,7 +641,7 @@ mod tests {
         assert_eq!(t.fights, 25, "alts share the account's count");
         let (gift_id, item) = t.gift.expect("the 25th fight mints a gift");
         assert!(DIVINE_STALHRIM_WEAPONS.iter().any(|w| w.0 == item.item_template_id));
-        assert_eq!(item.enchanting.len(), 2);
+        assert!(item.enchanting.is_empty(), "blank: Arcane II, enchanted by the player");
         assert_eq!(item.arcane_tier, Some(2));
 
         let rows = gift_rows(&mut conn).await;

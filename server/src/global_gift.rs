@@ -579,9 +579,10 @@ pub async fn claim_global_gift(
                             .await?;
                     }
                     log::info!(
-                        "arena fight gift: {gift_id} (account fight #{}) claimed by character \
-                         {character_id}",
-                        gift.milestone
+                        "arena fight gift: {gift_id} (account {} fight #{}) claimed by character {}",
+                        gift.user_id,
+                        gift.milestone,
+                        gift.character_id
                     );
                     Ok::<_, BladeApiError>(Json(GiftClaimResponse {
                         reward,
