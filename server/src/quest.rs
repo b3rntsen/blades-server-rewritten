@@ -430,7 +430,7 @@ fn event_row_fresh(
         scaling,
         row_id,
         0,
-        blades_lib::features::loot_level::dungeon_loot_shift(scaling, player_level, info.difficulty_level),
+        player_level,
     )
     .ok()
     .map(|(_, data)| data)
@@ -5035,15 +5035,15 @@ pub(crate) mod event_quests {
                 .level_scaling
                 .enemy_level(player_level);
             // Every stage of the event's dungeon (#323) and no other (#329), seeded
-            // per run, its loot the level-100 character's from level 49 (#398).
-            let scaling = &static_data.quests_daily.level_scaling;
-            dungeon = blades_lib::util::quest::generate_for_event_dungeon_with_loot_shift(
+            // per run, its loot the level-100 character's from level 49 with soul
+            // gems Grand at 49-60 (#398).
+            dungeon = blades_lib::util::quest::generate_for_event_dungeon_for_character(
                 game_data,
                 &dungeon_id,
                 Some(blades_lib::util::dungeon::run_loot_seed(&quest_id, 0)),
                 enemy_level,
-                scaling,
-                blades_lib::features::loot_level::dungeon_loot_shift(scaling, player_level, enemy_level),
+                &static_data.quests_daily.level_scaling,
+                player_level,
             );
         }
 
@@ -6961,10 +6961,13 @@ mod event_quest_tests {
             (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
             (47, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional
             (48, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional (retail L48)
-            // From 49 the level-100 character's gem (#398, HauDrauf: "from 49 no
-            // difference to level 100"); #370's Grand at 49-60 became Glorious.
-            (49, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"),  // Glorious
-            (60, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"),  // Glorious
+            // From 49 the level-100 character's rewards (#398), but its soul gem
+            // stays Grand to 60 (HauDrauf #398, 2026-10-16: "at the end of events
+            // you get Grand instead of Glorious ... Grand from level 49").
+            (49, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (55, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (60, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (61, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"),  // Glorious
             (100, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"), // Glorious
         ] {
             let paid = materials_paid_at(&sd, gld, level);

@@ -693,16 +693,16 @@ async fn handle_event_dungeon_update(
             // At the instance row's level, the same data `enter` stores: only used to
             // repair an attempt whose stored data is empty (below), with the loot the
             // character is paid at (#398).
-            let regenerate = |loot_shift: i64| {
+            let regenerate = |character_level: i64| {
                 event_dungeon_data(
                     &app_state.game_data,
                     dungeon_id,
                     difficulty_level,
                     &app_state.static_data.quests_daily.level_scaling,
-                    loot_shift,
+                    character_level,
                 )
             };
-            let (event_dungeon_settings_id, _) = regenerate(0)?;
+            let (event_dungeon_settings_id, _) = regenerate(1)?;
 
             // No game_data.events lookup here: the event template identifies the event,
             // while parsed quest data identifies the dungeon and its spawn groups.
@@ -746,12 +746,7 @@ async fn handle_event_dungeon_update(
                 // Attempts started before report #135's fix were generated using the
                 // event quest UUID, which is not a dungeon UUID, so all three maps
                 // were empty. Repair them in-place on their next update.
-                regenerate(blades_lib::features::loot_level::dungeon_loot_shift(
-                    &app_state.static_data.quests_daily.level_scaling,
-                    i64::from(character_data.character.0.level),
-                    difficulty_level,
-                ))?
-                .1
+                regenerate(i64::from(character_data.character.0.level))?.1
             } else {
                 stored_generated_data
             };
@@ -812,10 +807,15 @@ async fn handle_event_dungeon_update(
                     )
                 },
             ) {
-                Some(repaired) => {
+                Some(mut repaired) => {
                     log::info!(
                         "dungeon_update: character {character_id} is in a different EVENT dungeon \
                          variant than we generated; regenerated from the spawner it reported (#174)"
+                    );
+                    // An event's soul gems stay Grand at 49-60 (#398).
+                    blades_lib::features::loot_level::cap_event_dungeon_soul_gems(
+                        &mut repaired,
+                        i64::from(character_data.character.0.level),
                     );
                     repaired
                 }
@@ -2390,7 +2390,7 @@ mod event_kill_rewards_tests {
                 scaling,
                 row.quest_id,
                 0,
-                blades_lib::features::loot_level::dungeon_loot_shift(scaling, 89, level),
+                89,
             )
             .unwrap();
             let enemies = attempt.enemy_generated_data.values().flatten().flatten().count() as u64;

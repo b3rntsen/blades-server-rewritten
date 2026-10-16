@@ -1306,29 +1306,34 @@ impl EventQuestTemplate {
 
     /// The `rewards[]` an instance minted for a character of `level` carries: its
     /// band's ladder, with each crafting material at `level`'s own step (#362).
-    /// From level 49 that is the level-100 character's ladder and step (#398).
-    pub fn rewards_for_level(&self, level: i64) -> Vec<crate::economy::RewardGrant> {
-        let level = crate::features::loot_level::effective_loot_level(level);
+    /// From level 49 that is the level-100 character's ladder and step (#398), its
+    /// soul gems Grand at 49-60
+    /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
+    pub fn rewards_for_level(&self, real_level: i64) -> Vec<crate::economy::RewardGrant> {
+        let level = crate::features::loot_level::effective_loot_level(real_level);
         let mut out = self
             .band_for_level(level)
             .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone());
         let slot = self.slot_items(false);
         for tier in &mut out {
             crate::features::event_materials::scale_to_level(tier, level, &slot);
+            crate::features::loot_level::cap_event_soul_gems(&mut tier.stackable_items, real_level);
         }
         out
     }
 
     /// The `finalReward` an instance minted for a character of `level` carries, its
     /// material at `level`'s own step like the milestones'. From level 49 that is
-    /// the level-100 character's (#398).
-    pub fn final_reward_for_level(&self, level: i64) -> Option<crate::economy::RewardGrant> {
-        let level = crate::features::loot_level::effective_loot_level(level);
+    /// the level-100 character's (#398), its soul gems Grand at 49-60
+    /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
+    pub fn final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
+        let level = crate::features::loot_level::effective_loot_level(real_level);
         let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
             None => self.final_reward.clone(),
         }?;
         crate::features::event_materials::scale_to_level(&mut out, level, &self.slot_items(true));
+        crate::features::loot_level::cap_event_soul_gems(&mut out.stackable_items, real_level);
         Some(out)
     }
 
