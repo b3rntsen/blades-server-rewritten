@@ -1121,8 +1121,18 @@ fn audit_products(ctx: &Ctx) -> Vec<Subject> {
             out.push(s);
             continue;
         }
-        let rolled = crate::global_shop::rolls_jewelry_per_purchase(&ctx.sd, &ctx.items, id);
-        let how = if rolled {
+        // A THEMED ring/necklace (APK-authored GRADING, #403) still goes through
+        // the per-purchase path for a fresh instance id, but its properties are
+        // fixed by design: retail sold the authored set every time.
+        let themed = ctx
+            .sd
+            .global_shop_offer_contents
+            .get(&id)
+            .is_some_and(|c| c.contents.iter().any(crate::global_shop::is_themed_jewelry));
+        let rolled = crate::global_shop::rolls_jewelry_per_purchase(&ctx.sd, &ctx.items, id) && !themed;
+        let how = if themed {
+            "global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403)"
+        } else if rolled {
             "global_shop::purchase_reward, jewellery rolled per purchase"
         } else if ctx.sd.global_shop_grants.contains_key(&id) {
             "global_shop::purchase_reward, captured retail grant (fixed)"

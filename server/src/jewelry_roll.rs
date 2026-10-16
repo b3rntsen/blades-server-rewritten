@@ -7,6 +7,11 @@
 //! count/grade ranges of those Sigil grants and this module draws property ids
 //! from the APK pools.
 //!
+//! THEMED Sigil jewellery is the exception (#403): an offer whose GRADING the APK
+//! authors (`..._FrostbiteIceSpikeBlizzardArmor_NoEnch`) is sold exactly as
+//! authored, because every retail purchase of one we hold is that exact set.
+//! `global_shop::is_themed_jewelry` keeps those offers away from this module.
+//!
 //! Town merchants are different (#321): every retail town-shop ring/necklace was
 //! a blank — a rolled grade and GRADING, never ENCHANTING — so the Sigil counts
 //! must not be applied to Enchanter stock.
