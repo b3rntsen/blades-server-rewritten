@@ -79,11 +79,14 @@ import collections
 import datetime
 import json
 import math
+import os
 import random
 import re
 import sqlite3
 import statistics
 import sys
+
+from fill_shop_sampling_gaps import fill as fill_sampling_gaps, load as load_json
 
 SHOPS = {
     "26fdb92f-a4df-4928-a97b-dee8699af605": "Forge",
@@ -432,6 +435,14 @@ def main():
         "script/extract_shop_level_stock.py (reports #309, #335; prod capture DB, retail traffic to 2026-06-30): each retail shop open labelled with its building's level "
         "from the latest town-bearing response (towns/current, upgrade, complete, styles, buildings), a re-opened catalog keeping its last label; "
         f"open states seen {dict(states)}; one template per level verified."
+    )
+    # Report #397: retail's rare potion tail is sampled, not exhaustive. Without
+    # this, every re-measure would drop the potions no captured catalog listed.
+    static = os.path.dirname(args.stock)
+    report += fill_sampling_gaps(
+        stock,
+        load_json(os.path.join(static, "shop_bundles.json")),
+        load_json(os.path.join(static, "parsed.json"))["items_template"],
     )
     print("\n".join(report))
     if args.write:

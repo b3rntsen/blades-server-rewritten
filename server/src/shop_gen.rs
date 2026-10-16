@@ -270,6 +270,33 @@ pub fn window_key(start_ms: i64) -> u64 {
     start_ms.max(0) as u64
 }
 
+/// The tier of a potion or poison template name:
+/// `Items.Name.Poison.ElementalWeakness.Frost.Tier9` → 9.
+#[cfg(test)]
+pub(crate) fn potion_tier(name: &str) -> Option<u64> {
+    let rest = name
+        .strip_prefix("Items.Name.Potion.")
+        .or_else(|| name.strip_prefix("Items.Name.Poison."))?;
+    rest.rsplit_once(".Tier")?.1.parse().ok()
+}
+
+/// Every shop bundle that sells one stack of a potion or poison (what the APK
+/// lets a merchant list), with the potion's tier.
+#[cfg(test)]
+pub(crate) fn potion_bundles(
+    bundles: &HashMap<Uuid, blades_lib::static_data::ShopBundle>,
+    items: &HashMap<Uuid, blades_lib::game_data::GameDataItem>,
+) -> HashMap<Uuid, u64> {
+    bundles
+        .iter()
+        .filter(|(_, b)| b.grant.items.is_empty() && b.grant.stackable_items.len() == 1)
+        .filter_map(|(id, b)| {
+            let template = b.grant.stackable_items.keys().next()?;
+            Some((*id, potion_tier(&items.get(template)?.name)?))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -939,6 +966,13 @@ mod tests {
         (ALCHEMIST, 108, 42, 95),
     ];
 
+    /// Bundles a level-9 pool holds beyond what retail's catalogs listed: the
+    /// Alchemist's 12 tier 7-9 potions no captured catalog happened to list
+    /// (report #397, `script/fill_shop_sampling_gaps.py`).
+    fn gap_filled_at_l9(type_id: &str) -> usize {
+        if type_id == ALCHEMIST { 12 } else { 0 }
+    }
+
     /// A level-9 merchant offers every bundle retail's level-9 merchant listed,
     /// and its catalogs differ from one another as often as retail's did. The
     /// June snapshot held 17 level-9 Alchemist catalogs and 23 distinct bundles,
@@ -949,10 +983,11 @@ mod tests {
         let shop = ty("4271dbf6-52bf-4fb0-85a7-3d5b69a35dab");
         for (type_id, catalogs, bundles, distinct_sets) in RETAIL_L9_VARIETY {
             let pool = measured_pool(&cfg, &ty(type_id), 9);
+            let bundles = bundles + gap_filled_at_l9(type_id);
             assert_eq!(
                 pool.len(),
                 bundles,
-                "{type_id} level-9 pool size vs retail's distinct bundles"
+                "{type_id} level-9 pool size vs retail's distinct bundles (+ gap fill)"
             );
 
             // Every pool bundle comes up within 40 retail-sized samples.
@@ -994,30 +1029,28 @@ mod tests {
     const STAMINA_T8: &str = "814f52c4-0285-4414-9d21-24ba2ff45a20";
     const MAGICKA_T9: &str = "ee0ef15a-d2f4-46f2-865b-399ff7a91c21";
     const STAMINA_T9: &str = "86b3d8a7-16ea-4db5-a2a2-85db62c4ed22";
-    /// The one shop bundle holding a lone Health T9 potion. Retail's Alchemist
-    /// never listed it; T9/T10 healing came in the gem store's revive packs.
+    /// The one shop bundle holding a lone Health T9 potion. Retail's 108 level-9
+    /// Alchemist catalogs never listed it, which #335 read as "never sold". It is
+    /// one of the twelve tier 7-9 potions a uniform rare draw expects to miss in
+    /// 108 catalogs (report #397), so the pool now holds it.
     const HEALTH_T9: &str = "e0ffce3a-5180-4cbe-b5d4-1ac8a7755970";
 
-    /// The report: a level-9 Alchemist never offered the two highest potion tiers.
+    /// Report #335: a level-9 Alchemist never offered the two highest potion tiers.
     /// Neither did retail's, mostly. Of 108 retail level-9 Alchemist catalogs (22
     /// characters), 4 listed a T9 restoration potion (Magicka T9 3, Stamina T9 1),
-    /// none listed Health T9, and none listed any T10. Every one listed Health T8
-    /// (2-4 of them); Magicka T8 19/108, Stamina T8 12/108.
+    /// and none listed any T10 (no shop bundle sells a T10 potion). Every one
+    /// listed Health T8 (2-4 of them); Magicka T8 19/108, Stamina T8 12/108.
     #[test]
     fn a_level_9_alchemist_sells_top_tier_potions_at_retails_rate() {
         let cfg = load_committed();
         let alch = ty(ALCHEMIST);
         let pool = measured_pool(&cfg, &alch, 9);
-        for id in [MAGICKA_T9, STAMINA_T9] {
+        for id in [MAGICKA_T9, STAMINA_T9, HEALTH_T9] {
             assert!(
                 measured_band(pool, ty(id)).is_some(),
                 "level-9 Alchemist pool lacks {id}"
             );
         }
-        assert!(
-            measured_band(pool, ty(HEALTH_T9)).is_none(),
-            "retail never listed a lone Health T9"
-        );
 
         let shop = ty("523dcee9-677e-4c70-8efd-a5d02b099eed");
         let n = 10_800u64;
@@ -1049,6 +1082,189 @@ mod tests {
         within("Health T8", rate(&[HEALTH_T8]), 1.0, 0.03);
         within("Magicka T8", rate(&[MAGICKA_T8]), 19.0 / 108.0, 0.06);
         within("Stamina T8", rate(&[STAMINA_T8]), 12.0 / 108.0, 0.05);
+    }
+
+    // ── Report #397: every potion the APK sells at the level's tiers ────────────
+    //
+    // HauDrauf: "The Alchemist's offer doesn't seem random: the same tier-9
+    // potions always show up and others never." The level-9 pool held only the
+    // bundles retail's 108 captured catalogs listed. Besides Health T8 (every
+    // catalog), Magicka T8 (19) and Stamina T8 (12), retail listed a tier 7-9
+    // potion or poison 46 times, 1-3 times per kind: a rare draw that 108
+    // catalogs cannot exhaust. Twelve of the forty kinds in that window never
+    // came up (a uniform draw expects twelve), five of them tier 9, and the
+    // pool made exactly those twelve impossible.
+
+    /// Every potion bundle the APK lets a merchant sell, with its tier.
+    fn apk_potions() -> HashMap<Uuid, u64> {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let read =
+            |f: &str| std::fs::read_to_string(dir.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+        // Keyed by uuid, plus a `_meta`-style key or two (as `static_loader` reads it).
+        let raw: HashMap<String, serde_json::Value> =
+            serde_json::from_str(&read("shop_bundles.json")).expect("shop_bundles.json parses");
+        let bundles: HashMap<Uuid, blades_lib::static_data::ShopBundle> = raw
+            .into_iter()
+            .filter_map(|(k, v)| Some((Uuid::parse_str(&k).ok()?, serde_json::from_value(v).ok()?)))
+            .collect();
+        let gd: blades_lib::game_data::GameData =
+            serde_json::from_str(&read("parsed.json")).expect("parsed.json parses");
+        potion_bundles(&bundles, &gd.items_template)
+    }
+
+    /// HauDrauf's level-9 Alchemist window on prod, restocked every 10 hours.
+    const HAUDRAUF_ALCHEMIST: &str = "523dcee9-677e-4c70-8efd-a5d02b099eed";
+    const HAUDRAUF_OPENED: i64 = 1_792_123_055_600;
+
+    fn restock_keys(n: i64) -> impl Iterator<Item = u64> {
+        (0..n).map(|i| window_key(HAUDRAUF_OPENED + i * 36_000_000))
+    }
+
+    /// The tier-9 potions the APK sells: 14 kinds (restoration x3, resist x4,
+    /// damage-restoration poison x3, weakness poison x4).
+    fn tier_9_potions() -> std::collections::BTreeSet<Uuid> {
+        apk_potions()
+            .into_iter()
+            .filter(|(_, t)| *t == 9)
+            .map(|(b, _)| b)
+            .collect()
+    }
+
+    #[test]
+    fn a_level_9_alchemist_can_offer_every_potion_the_apk_sells_at_its_tiers() {
+        let cfg = load_committed();
+        let potions = apk_potions();
+        // Control on the helper: 14 kinds at each of tiers 1-9, no shop bundle
+        // sells a T10 potion.
+        for tier in 1..=9 {
+            assert_eq!(
+                potions.values().filter(|t| **t == tier).count(),
+                14,
+                "APK potion bundles at tier {tier}"
+            );
+        }
+        assert!(potions.values().all(|t| *t <= 9));
+
+        let pool = measured_pool(&cfg, &ty(ALCHEMIST), 9);
+        let held: HashMap<Uuid, u32> = pool.iter().map(|e| (e.bundle_id, e.weight)).collect();
+        // The window is retail's: it listed tier 7-9 potions at level 9, never 6.
+        let tiers: Vec<u64> = held
+            .keys()
+            .filter_map(|b| potions.get(b).copied())
+            .collect();
+        assert_eq!(
+            (tiers.iter().min(), tiers.iter().max()),
+            (Some(&7), Some(&9)),
+            "level-9 potion tier window"
+        );
+        let missing: Vec<String> = potions
+            .iter()
+            .filter(|(_, t)| (7..=9).contains(*t))
+            .filter(|(b, _)| held.get(b).copied().unwrap_or(0) == 0)
+            .map(|(b, t)| format!("T{t} {b}"))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "level-9 Alchemist can never offer {} APK potions: {missing:?}",
+            missing.len()
+        );
+    }
+
+    /// The test the report asked for, at retail's rate. Each rare potion comes
+    /// up in about 1% of retail's level-9 catalogs, so 200 restocks expect about
+    /// 2 sightings per tier-9 kind and most, not all, show. The old pool held 9
+    /// of the 14 kinds, so it could never show more than 9; 2,000 restocks show
+    /// every one.
+    #[test]
+    fn restocks_show_every_tier_9_potion() {
+        let cfg = load_committed();
+        let alch = ty(ALCHEMIST);
+        let shop = ty(HAUDRAUF_ALCHEMIST);
+        let t9 = tier_9_potions();
+        let seen_in = |n: i64| -> std::collections::BTreeSet<Uuid> {
+            restock_keys(n)
+                .flat_map(|k| generate_catalog(&cfg, &alch, 9, &shop, k))
+                .map(|b| b.id)
+                .filter(|b| t9.contains(b))
+                .collect()
+        };
+        let in_200 = seen_in(200);
+        // The bound is structural, not fitted: more than the old pool could ever
+        // show. At ~1% per kind, 200 restocks expect about 12 of the 14.
+        assert!(
+            in_200.len() > 9,
+            "200 restocks showed {}/14 tier-9 potions; the pre-#397 pool could show 9",
+            in_200.len()
+        );
+        let in_2000 = seen_in(2000);
+        let never: Vec<&Uuid> = t9.difference(&in_2000).collect();
+        assert!(
+            never.is_empty(),
+            "2,000 restocks never showed tier-9 {never:?}"
+        );
+    }
+
+    /// Spread, not just reach: retail's anchor (Health T8, 108/108 catalogs)
+    /// stays in nearly every window; nothing else may sit in more than a quarter
+    /// of them (the economy audit's variety limit; retail's most frequent other
+    /// potion, Magicka T8, was 19/108) and no tier-9 kind in more than 5%. The
+    /// catalog stays retail's size (8 bundles) with as many potions as retail's.
+    #[test]
+    fn no_alchemist_potion_dominates_the_restocks() {
+        let cfg = load_committed();
+        let alch = ty(ALCHEMIST);
+        let shop = ty(HAUDRAUF_ALCHEMIST);
+        let potions = apk_potions();
+        let n = 3000i64;
+        let mut windows_listing: HashMap<Uuid, usize> = HashMap::new();
+        let mut other_potions = 0usize;
+        for k in restock_keys(n) {
+            let out = generate_catalog(&cfg, &alch, 9, &shop, k);
+            assert_eq!(out.len(), 8, "retail's level-9 Alchemist lists 8 bundles");
+            for b in out.iter().filter(|b| potions.contains_key(&b.id)) {
+                *windows_listing.entry(b.id).or_default() += 1;
+                if b.id != ty(HEALTH_T8) {
+                    other_potions += 1;
+                }
+            }
+        }
+        let share = |b: &Uuid| windows_listing.get(b).copied().unwrap_or(0) as f64 / n as f64;
+        assert!(
+            share(&ty(HEALTH_T8)) >= 0.95,
+            "Health T8 is retail's anchor"
+        );
+        for (b, _) in windows_listing.iter().filter(|(b, _)| **b != ty(HEALTH_T8)) {
+            let limit = if potions[b] == 9 { 0.05 } else { 0.25 };
+            assert!(
+                share(b) <= limit,
+                "T{} potion {b} in {:.1}% of restocks (limit {:.0}%)",
+                potions[b],
+                share(b) * 100.0,
+                limit * 100.0
+            );
+        }
+        let per_catalog = other_potions as f64 / n as f64;
+        assert!(
+            (per_catalog - 77.0 / 108.0).abs() <= 0.15,
+            "{per_catalog:.2} non-anchor potions per catalog; retail 77/108"
+        );
+    }
+
+    /// The roll varies per character too: two players' level-9 Alchemists
+    /// restocking at the same instant get different catalogs.
+    #[test]
+    fn two_characters_alchemists_roll_their_own_stock() {
+        let cfg = load_committed();
+        let alch = ty(ALCHEMIST);
+        let haudrauf = ty(HAUDRAUF_ALCHEMIST);
+        let sephoris = ty("581136fc-1afc-42a9-8d68-4aa28027d274");
+        let same = restock_keys(100)
+            .filter(|k| roll(&cfg, &alch, 9, &haudrauf, *k) == roll(&cfg, &alch, 9, &sephoris, *k))
+            .count();
+        assert_eq!(
+            same, 0,
+            "{same}/100 windows identical across two characters"
+        );
     }
 
     #[test]

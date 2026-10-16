@@ -27,7 +27,10 @@
 //!   product or chest hands out one item instance (template + every property) or
 //!   one whole reward in more than [`VARIETY_MAX_SHARE`] of rolls.
 //! * **Coverage** (reported): every GRADING property, enchantment and template the
-//!   APK allows for that slot / tier is reachable within the rolls.
+//!   APK allows for that slot / tier is reachable within the rolls; every potion a
+//!   merchant sells at the tiers a building level stocks is in that level's pool
+//!   (#397). A merchant level whose pool is no larger than its catalog is a frozen
+//!   catalog (Variety).
 //! * **Level fit** (reported): no single metal or enchanting ingredient above
 //!   [`SINGLE_KIND_MAX_SHARE`] of a chest's stacks where other kinds are paid at
 //!   that level.
@@ -153,6 +156,15 @@ const KNOWN_FAILURES: &[Known] = &[
         contains: "repeating jewellery",
         reason: "Same cause as the frozen items: one retail ring/necklace instance per slot, verbatim. Fix: \
                  fix/audit-treasury-gear-generated.",
+    },
+    Known {
+        subject: "merchant:",
+        check: Check::Variety,
+        contains: "frozen catalog",
+        reason: "Building levels with ONE retail catalog (Forge 5-6, Workshop 2, Alchemist 1 and 6) were \
+                 measured as exactly that catalog, so every window lists it again. One catalog says what \
+                 the level CAN sell, not how often; widening it needs a model of the neighbouring levels \
+                 (follow-up to #397, which fixed the level-9 Alchemist's rare potions).",
     },
     Known {
         subject: "chest:treasury:wooden",
@@ -1265,6 +1277,14 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
         for c in grading_coverage(ctx, &refs) {
             s.flag(Check::Coverage, c);
         }
+        for level in 0..=9u64 {
+            if let Some(f) = frozen_catalog(building, level) {
+                s.flag(Check::Variety, f);
+            }
+            if let Some(c) = merchant_potion_reach(ctx, building, level) {
+                s.flag(Check::Coverage, c);
+            }
+        }
         // The capture-measured level pools replace the authored tier pool at
         // every level they cover (`shop_gen::generate_catalog`), so they are
         // what a merchant can stock.
@@ -1286,6 +1306,82 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
         out.push(s);
     }
     out
+}
+
+/// The pool `shop_gen::generate_catalog` draws from at a building level: the
+/// measured level pool where there is one, else the authored pool up to the
+/// level's tier cap.
+fn merchant_pool(
+    building: &crate::shop_gen::BuildingGeneration,
+    level: u64,
+) -> Vec<&crate::shop_gen::PoolEntry> {
+    let cap = building.levels.get(&level.to_string()).map(|p| p.tier_cap).unwrap_or(0);
+    match building.level_pools.get(&level.to_string()).filter(|p| !p.is_empty()) {
+        Some(pool) => pool.iter().collect(),
+        None => building.item_pool.iter().filter(|e| e.tier <= cap).collect(),
+    }
+}
+
+/// Variety for a merchant: a level whose pool is no larger than the catalog it
+/// rolls lists the same bundles in every window.
+fn frozen_catalog(building: &crate::shop_gen::BuildingGeneration, level: u64) -> Option<String> {
+    let k = building.levels.get(&level.to_string())?.max_items as usize;
+    let pool = merchant_pool(building, level).len();
+    (pool > 0 && pool <= k).then(|| {
+        format!(
+            "frozen catalog: building L{level} lists the same {pool} bundles in every window \
+             (pool {pool} <= maxItems {k})"
+        )
+    })
+}
+
+/// Coverage for a merchant's potions (report #397), against the APK rather than
+/// against the captured catalogs the pool was built from: every potion or poison
+/// the merchant sells (a one-stack shop bundle in its authored pool) at a tier
+/// inside the tier window the level's pool already spans must be in that pool.
+///
+/// The older coverage line compares what was stocked with the pool itself, so a
+/// pool built from 108 retail catalogs that never happened to list 12 rare
+/// potions passed it: those 12 were in neither.
+fn merchant_potion_reach(
+    ctx: &Ctx,
+    building: &crate::shop_gen::BuildingGeneration,
+    level: u64,
+) -> Option<String> {
+    let own: HashSet<Uuid> = building.item_pool.iter().map(|e| e.bundle_id).collect();
+    let potions: HashMap<Uuid, u64> =
+        crate::shop_gen::potion_bundles(&ctx.sd.shop_bundles, &ctx.items)
+            .into_iter()
+            .filter(|(b, _)| own.contains(b))
+            .collect();
+    let held: HashSet<Uuid> = merchant_pool(building, level).iter().map(|e| e.bundle_id).collect();
+    let tiers: Vec<u64> = held.iter().filter_map(|b| potions.get(b).copied()).collect();
+    let (lo, hi) = (*tiers.iter().min()?, *tiers.iter().max()?);
+    let allowed: Vec<Uuid> = potions
+        .iter()
+        .filter(|(_, t)| (lo..=hi).contains(*t))
+        .map(|(b, _)| *b)
+        .collect();
+    let mut missing: Vec<String> = allowed
+        .iter()
+        .filter(|b| !held.contains(b))
+        .map(|b| {
+            let template = ctx.sd.shop_bundles[b].grant.stackable_items.keys().next().copied();
+            template.map(|t| ctx.name(&t)).unwrap_or_else(|| short(b))
+        })
+        .collect();
+    if missing.is_empty() {
+        return None;
+    }
+    missing.sort();
+    let n = missing.len();
+    missing.truncate(4);
+    Some(format!(
+        "L{level}: {n}/{} potions the APK sells at tiers {lo}-{hi} can never be stocked ({}{})",
+        allowed.len(),
+        missing.join(", "),
+        if n > 4 { ", ..." } else { "" }
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1767,4 +1863,35 @@ fn economy_audit_rules_reject_known_bad_items() {
     assert!(modal_share(&frozen).0 > VARIETY_MAX_SHARE);
     let varied: Vec<String> = (0..10).map(|i| i.to_string()).collect();
     assert!(modal_share(&varied).0 <= VARIETY_MAX_SHARE);
+}
+
+/// Report #397: the merchant rules must reject the defect they name (a probe
+/// needs a control). The level-9 Alchemist pool as it was before the fix, built
+/// only from what 108 retail catalogs listed, must be flagged; the committed
+/// pool must not. A pool no larger than its catalog is a frozen catalog.
+#[test]
+fn economy_audit_flags_unreachable_merchant_potions() {
+    let ctx = Ctx::load();
+    let alchemist = crate::shop::VENDOR_BUILDING_TYPES[3];
+    let committed = ctx.shop_stock.generation[&alchemist].clone();
+    assert_eq!(merchant_potion_reach(&ctx, &committed, 9), None, "committed L9 pool reaches every potion");
+    assert_eq!(frozen_catalog(&committed, 9), None);
+
+    // The pre-#397 pool: the same pool without the twelve potions no captured
+    // catalog listed (Health T9 among them).
+    let mut thin = committed.clone();
+    let pool = thin.level_pools.get_mut("9").expect("L9 pool");
+    let filled = [
+        "11603218-", "44f78c79-", "55183a20-", "68dc8e66-", "6b34cb1d-", "6f6ce4e9-",
+        "7432e1ab-", "8da4936d-", "9c07230e-", "a9be5d5f-", "e0ffce3a-", "fec18f17-",
+    ];
+    pool.retain(|e| !filled.iter().any(|p| e.bundle_id.to_string().starts_with(p)));
+    assert_eq!(pool.len(), 42, "control: retail listed 42 distinct L9 bundles");
+    let finding = merchant_potion_reach(&ctx, &thin, 9).expect("the thin pool is flagged");
+    assert!(finding.starts_with("L9: 12/42 potions"), "{finding}");
+
+    // Frozen: shrink the pool to the catalog size.
+    let k = thin.levels["9"].max_items as usize;
+    thin.level_pools.get_mut("9").unwrap().truncate(k);
+    assert!(frozen_catalog(&thin, 9).is_some_and(|f| f.contains("frozen catalog")));
 }
