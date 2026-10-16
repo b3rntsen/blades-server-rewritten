@@ -61,6 +61,10 @@ use uuid::Uuid;
 
 use crate::jewelry_grade::{self, NECKLACE, RING};
 
+/// The beginner economy (#388): sampled checks of each change.
+#[cfg(test)]
+mod report_388;
+
 /// The character levels every level-dependent generator is sampled at.
 const LEVELS: [u64; 10] = [1, 10, 20, 30, 40, 45, 49, 60, 80, 100];
 

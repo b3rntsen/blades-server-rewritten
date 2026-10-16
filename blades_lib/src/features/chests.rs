@@ -375,7 +375,7 @@ pub fn roll_loot(
     let tier = tier.max(1) as u64;
     let nonce = stable_nonce(chest_key);
     let elder_treasury = tables.provisional_tiers.get(&4).map(Vec::as_slice);
-    crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned, elder_treasury)
+    let mut grant = crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned, elder_treasury)
         .or_else(|| {
             let (pool, _) = tables.pool_for(tier)?;
             let mut grant = compose_loot(pool, level, nonce)?;
@@ -388,7 +388,24 @@ pub fn roll_loot(
             }
             fill_jewelry_grading(&mut grant, nonce);
             Some(grant)
-        })
+        })?;
+    pay_chest_gems(&mut grant, tier, nonce);
+    Some(grant)
+}
+
+/// A chest's gems under the beginner economy (#388): a Wooden chest always pays
+/// 3-5 and a Silver chest 6-8
+/// ([`crate::features::beginner_economy::WOODEN_CHEST_GEMS`],
+/// [`crate::features::beginner_economy::SILVER_CHEST_GEMS`]); any other tier's gems
+/// (none today) pay 20% more. Owner-approved deviation from retail, #388, 2026-10-16.
+fn pay_chest_gems(grant: &mut RewardGrant, tier: u64, nonce: u64) {
+    use crate::features::beginner_economy::{add_gem_bonus, chest_gems};
+    match chest_gems(tier, crate::features::store_bundles::mix(nonce ^ 0x388_6E35_C4E5_7388)) {
+        Some(gems) => {
+            grant.currencies.insert(crate::economy::GEMS, gems);
+        }
+        None => add_gem_bonus(grant),
+    }
 }
 
 /// A Wooden, Silver or Gold chest's gear, generated around the retail piece

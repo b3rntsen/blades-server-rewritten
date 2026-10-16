@@ -1514,7 +1514,7 @@ fn generate_for_dungeon_inner(
     let dungeon = game_data.dungeons.get(dungeon_uuid)?;
     let enemy_level = levels.base();
 
-    Some(DungeonGeneratedData {
+    let mut data = DungeonGeneratedData {
         enemy_generated_data: dungeon
             .spawn_info
             .enemy_spawn_groups
@@ -1621,7 +1621,45 @@ fn generate_for_dungeon_inner(
             .collect(),
         algorithm_version: 1,
         version: 0,
-    })
+    };
+    beginner_economy_loot(&mut data, seed_context);
+    Some(data)
+}
+
+/// The beginner economy (#388) on a generated dungeon's corpse and container
+/// loot: gems 20% more on average
+/// ([`crate::features::beginner_economy::with_gem_bonus_drawn`]). Seeded by the
+/// dungeon, run and each result's own keys, so a re-fetch pays the same.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+fn beginner_economy_loot(data: &mut DungeonGeneratedData, ctx: LootSeedContext) {
+    use crate::features::beginner_economy::add_drawn_gem_bonus;
+    let base = mix64(ctx.dungeon_uuid.as_u128() as u64 ^ ctx.run_seed.rotate_left(7) ^ 0x388_0000_6E35);
+    let key = |group: &Uuid, a: usize, b: usize, table: &Uuid| {
+        mix64(
+            base ^ (group.as_u128() as u64).rotate_left(13)
+                ^ (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (b as u64).rotate_left(40)
+                ^ (table.as_u128() as u64).rotate_left(29),
+        )
+    };
+    for (group, spawners) in &mut data.enemy_generated_data {
+        for (a, enemies) in spawners.iter_mut().enumerate() {
+            for (b, enemy) in enemies.iter_mut().enumerate() {
+                add_drawn_gem_bonus(&mut enemy.spawn_group_loot.currencies, key(group, a, b, &Uuid::nil()));
+                for (table, loot) in &mut enemy.loot_table_loot {
+                    add_drawn_gem_bonus(&mut loot.currencies, key(group, a, b, table));
+                }
+            }
+        }
+    }
+    for (group, pile) in &mut data.item_generated_data {
+        for (a, result) in pile.iter_mut().enumerate() {
+            for (table, loot) in &mut result.loot_table_loot {
+                add_drawn_gem_bonus(&mut loot.currencies, key(group, a, usize::MAX, table));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2319,7 +2319,7 @@ fn grant_currencies_to_the_wallet(reward: &mut RewardGrant) {
 /// predicts it from level, category or objective count, so a constant would be a
 /// fabrication wearing a fallback's clothes. `quest_rewards.json._meta` lists exactly
 /// which quests are in that state.
-fn resolve_completion_reward(
+pub(crate) fn resolve_completion_reward(
     static_data: &blades_lib::static_data::StaticData,
     quest_id: Uuid,
     quest: &blades_lib::user_data::Quest,
@@ -2347,12 +2347,16 @@ fn resolve_completion_reward(
         };
     }
 
-    // Template first: `quest_rewards.json` is keyed by gldQuestId.
-    if let Some(r) = static_data.quest_rewards.get(&quest.gld_quest_id) {
-        return r.clone();
-    }
-    if let Some(r) = static_data.quest_rewards.get(&quest_id) {
-        return r.clone();
+    // Template first: `quest_rewards.json` is keyed by gldQuestId. Its gems pay 20%
+    // more (owner-approved deviation from retail, #388, 2026-10-16).
+    let fixed = static_data
+        .quest_rewards
+        .get(&quest.gld_quest_id)
+        .or_else(|| static_data.quest_rewards.get(&quest_id));
+    if let Some(r) = fixed {
+        let mut r = r.clone();
+        blades_lib::features::beginner_economy::add_gem_bonus(&mut r);
+        return r;
     }
     log::warn!(
         "[quest] no captured reward for quest {quest_id} (template {}) — paying nothing",
@@ -3717,12 +3721,17 @@ pub(crate) mod jobs_gen {
 
     /// A job's `rewardGemCount`, which retail fixes by its pool's presentation and
     /// never by the secret room (0 of 109 standard secret-room jobs paid gems).
+    ///
+    /// Plus 20%, rounded up (owner-approved deviation from retail, #388,
+    /// 2026-10-16, [`blades_lib::features::beginner_economy::with_gem_bonus`]):
+    /// featured 4 -> 5, boss 12 -> 15.
     pub fn job_gem_reward(presentation: i64) -> u64 {
-        match presentation {
+        let retail = match presentation {
             1 => FEATURED_JOB_GEMS,
             2 => BOSS_JOB_GEMS,
             _ => 0,
-        }
+        };
+        blades_lib::features::beginner_economy::with_gem_bonus(retail)
     }
 
     /// Objective template IDs are fixed per job type in the captures.
@@ -5683,8 +5692,9 @@ mod report337_job_xp {
             ("f950c41c", 26, 500, 640, 0),
             ("6f6de44d", 20, 354, 490, 0),
             ("58d85b87", 21, 376, 580, 0),
-            ("684ab17d", 23, 424, 0, 12),
-            ("6ac9d913", 21, 376, 0, 4),
+            // Gems: retail's 12 and 4, plus 20% rounded up (#388).
+            ("684ab17d", 23, 424, 0, 15),
+            ("6ac9d913", 21, 376, 0, 5),
         ]
         .into_iter()
         .map(|(id, d, xp, gold, gems)| (id.to_string(), d, xp, gold, gems))
@@ -6852,12 +6862,18 @@ mod event_quest_tests {
                 assert!(std::ptr::eq(tmpl.band_for_level(level).unwrap(), top), "{gld} level {level}: top band");
                 let minted = tmpl.rewards_for_level(level);
                 assert_eq!(ladder(&minted), ladder(&top.rewards), "{gld} level {level}: sigils");
+                // The band's, its gems 20% more (owner-approved deviation, #388).
+                let bonus = |r: &RewardGrant| {
+                    let mut r = r.clone();
+                    blades_lib::features::beginner_economy::add_gem_bonus(&mut r);
+                    r
+                };
                 let got: Vec<_> = minted.iter().map(amounts).collect();
-                let want: Vec<_> = top.rewards.iter().map(amounts).collect();
+                let want: Vec<_> = top.rewards.iter().map(|r| amounts(&bonus(r))).collect();
                 assert_eq!(got, want, "{gld} level {level}: milestone amounts");
                 assert_eq!(
                     tmpl.final_reward_for_level(level).as_ref().map(amounts),
-                    top.final_reward.as_ref().map(amounts),
+                    top.final_reward.as_ref().map(|r| amounts(&bonus(r))),
                     "{gld} level {level}: final bonus"
                 );
             }
@@ -6897,7 +6913,9 @@ mod event_quest_tests {
             row.final_reward = tmpl.final_reward_for_level(*minted_at);
             // Finished two levels later: the row's band still decides.
             let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &row, 4).expect("last tier pays");
-            let retail: RewardGrant = serde_json::from_str(retail).unwrap();
+            let mut retail: RewardGrant = serde_json::from_str(retail).unwrap();
+            // Retail's, its gems 20% more (owner-approved deviation, #388, 2026-10-16).
+            blades_lib::features::beginner_economy::add_gem_bonus(&mut retail);
             // Exact, materials included. 9181f784's band 3 was once exempted here as
             // a "seasonally rotated material" (Moonstone in one capture, Malachite in
             // the other); it was the level — 27 and 28, either side of the Glass
@@ -9544,7 +9562,7 @@ mod report_306_job_gems {
         let featured: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 1).collect();
         assert!(featured.len() >= 7 * 40, "every weekday rolls a featured job");
         for (_, j) in &featured {
-            assert_eq!(gems(j), 4, "retail: 84 of 84 featured jobs paid 4 gems");
+            assert_eq!(gems(j), 5, "retail: 84 of 84 featured jobs paid 4 gems; +20% rounded up (#388)");
             assert_eq!(gold(j), 0, "retail: 84 of 84 featured jobs paid no gold");
         }
     }
@@ -9554,7 +9572,7 @@ mod report_306_job_gems {
         let boss: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 2).collect();
         assert!(!boss.is_empty());
         for (_, j) in &boss {
-            assert_eq!(gems(j), 12, "retail: 27 of 27 boss jobs paid 12 gems");
+            assert_eq!(gems(j), 15, "retail: 27 of 27 boss jobs paid 12 gems; +20% rounded up (#388)");
             assert_eq!(gold(j), 0, "retail: 27 of 27 boss jobs paid no gold");
         }
     }
@@ -9616,10 +9634,10 @@ mod report_306_job_gems {
             ("346135d3-ad76-4658-b0f2-af7fb77c4a0d", "4956c6ab", 79, 1566, "UI.Jobs.Names.Rescue.006", 0, 1650),
             ("01cda05c-b403-4ef6-97ed-a987f47b4a69", "4956c6ab", 75, 1526, "UI.Jobs.Names.Rescue.004", 0, 1650),
             ("de1a54e3-7889-4e9b-a6d3-e24f344fdb5d", "4956c6ab", 73, 1506, "UI.Jobs.Names.Rescue.001", 0, 1570),
-            // boss Duel: prod served 0 gems / 1620 gold
-            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1526, "UI.Jobs.Names.Duel.002", 12, 0),
-            // Friday featured Rescue: prod served 0 gems / 1660 gold
-            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1586, "UI.Jobs.Names.Rescue.001", 4, 0),
+            // boss Duel: prod served 0 gems / 1620 gold; retail 12 gems, 15 since #388
+            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1526, "UI.Jobs.Names.Duel.002", 15, 0),
+            // Friday featured Rescue: prod served 0 gems / 1660 gold; retail 4, 5 since #388
+            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1586, "UI.Jobs.Names.Rescue.001", 5, 0),
         ];
         assert_eq!(jobs.len(), want.len());
         for (id, pool, d, xp, name, gem, gold_) in want {

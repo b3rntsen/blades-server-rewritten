@@ -242,17 +242,19 @@ fn levels_below_49_are_unchanged() {
 
     // #388 (owner-approved deviation from retail, 2026-10-16) moves sources below
     // 49 on purpose, and each of its changes re-pins what it moves: containers
-    // holding 2 / 4 / 6 stacks (quests, event_dungeons, jobs).
+    // holding 2 / 4 / 6 stacks (quests, event_dungeons, jobs); gems +20% and fixed
+    // Wooden / Silver chest gems (events, abyss_floor, quests, event_dungeons,
+    // jobs, treasury).
     let pinned: [(&str, u64); 9] = [
-        ("events", 0x7445_3735_abb6_35b1),
+        ("events", 0x644f_4c4a_2107_3dbb),
         ("daily", 0x40d7_bed5_0a28_cc9a),
         ("abyss_rewards", 0xcbb0_1935_28c0_3bba),
-        ("abyss_floor", 0x57ca_1f7e_2bfe_f747),
-        ("quests", 0x0d0a_d7c6_73c0_fe44),
-        ("event_dungeons", 0xe3f7_2bf4_fde8_7e8f),
-        ("jobs", 0xc21b_5de4_2c53_289d),
+        ("abyss_floor", 0x19f7_db1d_7c8e_8795),
+        ("quests", 0xe307_d823_915f_06f4),
+        ("event_dungeons", 0xb51a_ecab_dec1_3efc),
+        ("jobs", 0x0722_bb62_840e_a09a),
         ("store", 0xb3b8_adde_182b_a5ca),
-        ("treasury", 0xfe7b_85af_c723_b9e0),
+        ("treasury", 0xbb1f_323e_d44c_5640),
     ];
     assert_eq!(got, pinned.to_vec(), "a source moved for a character below level 49");
 }

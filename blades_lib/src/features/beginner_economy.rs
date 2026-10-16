@@ -6,7 +6,13 @@
 //! the package sets is a named constant here, so each one can be tuned or reverted
 //! on its own.
 
+use std::collections::HashMap;
+use std::ops::RangeInclusive;
+
 use uuid::Uuid;
+
+use crate::economy::{RewardGrant, GEMS};
+use crate::features::store_bundles::mix;
 
 // ---------------------------------------------------------------------------
 // 1. Containers: loot stacks per breakable
@@ -96,6 +102,92 @@ pub fn container_stacks(table: &Uuid, group_name: Option<&str>) -> Option<usize>
     container_class(table, group_name).map(|c| c.stacks)
 }
 
+// ---------------------------------------------------------------------------
+// 2. Gems (the green premium currency)
+// ---------------------------------------------------------------------------
+
+/// Percent added to every gem reward: quests, jobs, events, dungeon corpses and
+/// containers (so the Abyss's too). Chests use [`WOODEN_CHEST_GEMS`] and
+/// [`SILVER_CHEST_GEMS`] instead; Gold, Elder and Legendary chests paid none and
+/// still pay none. Arena rewards and challenges are not touched here.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub const GEM_BONUS_PERCENT: u64 = 20;
+
+/// Gems a Wooden chest pays, every opening, evenly drawn (retail paid 1-2).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub const WOODEN_CHEST_GEMS: RangeInclusive<u64> = 3..=5;
+
+/// Gems a Silver chest pays, every opening, evenly drawn (retail paid 0, 2 or 3).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub const SILVER_CHEST_GEMS: RangeInclusive<u64> = 6..=8;
+
+/// A fixed gem reward with [`GEM_BONUS_PERCENT`] added, ROUNDED UP so every
+/// reward visibly grows: 4 -> 5, 12 -> 15, 36 -> 44.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn with_gem_bonus(gems: u64) -> u64 {
+    (gems * (100 + GEM_BONUS_PERCENT)).div_ceil(100)
+}
+
+/// A rolled gem drop with [`GEM_BONUS_PERCENT`] added, the fraction paid as one
+/// more gem that often: a corpse's or container's single gem is 2 one time in
+/// five, so drops pay exactly 20% more on average (rounding up would double them).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn with_gem_bonus_drawn(gems: u64, seed: u64) -> u64 {
+    let scaled = gems * (100 + GEM_BONUS_PERCENT);
+    scaled / 100 + u64::from(mix(seed) % 100 < scaled % 100)
+}
+
+/// [`with_gem_bonus`] on a reward's gems, wherever it carries them: `currencies`,
+/// or `stackableItems`, where an event's ladder lists them.
+pub fn add_gem_bonus(reward: &mut RewardGrant) {
+    for stacks in [&mut reward.currencies, &mut reward.stackable_items] {
+        if let Some(gems) = stacks.get_mut(&GEMS) {
+            *gems = with_gem_bonus(*gems);
+        }
+    }
+}
+
+/// [`with_gem_bonus_drawn`] on a dungeon loot result's gems.
+pub fn add_drawn_gem_bonus(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
+    if let Some(gems) = stacks.get_mut(&GEMS) {
+        *gems = with_gem_bonus_drawn(*gems, seed);
+    }
+}
+
+/// An event's milestones (`rewards[]`) as minted for a character of `level`: gems
+/// +20% ([`add_gem_bonus`]).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn event_rewards(tiers: &mut [RewardGrant], _level: i64) {
+    for tier in tiers.iter_mut() {
+        add_gem_bonus(tier);
+    }
+}
+
+/// An event's `finalReward` as minted for a character of `level`: gems +20%
+/// ([`add_gem_bonus`]).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn event_final_reward(reward: &mut RewardGrant, _level: i64) {
+    add_gem_bonus(reward);
+}
+
+/// The gems a treasury chest of `tier` pays: [`WOODEN_CHEST_GEMS`] for tier 1,
+/// [`SILVER_CHEST_GEMS`] for tier 2, drawn from `seed`; `None` for any other tier.
+pub fn chest_gems(tier: u64, seed: u64) -> Option<u64> {
+    let range = match tier {
+        1 => WOODEN_CHEST_GEMS,
+        2 => SILVER_CHEST_GEMS,
+        _ => return None,
+    };
+    Some(range.start() + mix(seed) % (range.end() - range.start() + 1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +204,32 @@ mod tests {
         assert_eq!(container_stacks(&Uuid::nil(), Some("Breakable_T1")), None);
         let job = container_class(&JOB_CONTAINER_TABLE, Some("In secret, rare rarity")).unwrap();
         assert_eq!(job.fill_table, LARGE_CONTAINER_TABLE);
+    }
+
+    #[test]
+    fn gems_pay_20_percent_more() {
+        for (before, after) in [(0, 0), (1, 2), (2, 3), (4, 5), (5, 6), (9, 11), (10, 12), (12, 15), (15, 18), (36, 44), (50, 60)] {
+            assert_eq!(with_gem_bonus(before), after, "{before}");
+        }
+        // Drawn: a single gem pays 1.2 on average, never less than 1 nor more than 2.
+        let paid: Vec<u64> = (0..10_000).map(|s| with_gem_bonus_drawn(1, s)).collect();
+        assert!(paid.iter().all(|g| (1..=2).contains(g)));
+        let mean = paid.iter().sum::<u64>() as f64 / paid.len() as f64;
+        assert!((mean - 1.2).abs() < 0.02, "{mean}");
+        assert_eq!(with_gem_bonus_drawn(5, 7), 6, "an exact 20% is never rounded");
+        let mut r = RewardGrant::default();
+        r.currencies.insert(GEMS, 4);
+        r.stackable_items.insert(GEMS, 36);
+        add_gem_bonus(&mut r);
+        assert_eq!((r.currencies[&GEMS], r.stackable_items[&GEMS]), (5, 44));
+    }
+
+    #[test]
+    fn wooden_chests_pay_3_to_5_gems_and_silver_6_to_8() {
+        for (tier, range) in [(1, 3..=5), (2, 6..=8)] {
+            let seen: std::collections::BTreeSet<u64> = (0..300).filter_map(|s| chest_gems(tier, s)).collect();
+            assert_eq!(seen, range.collect(), "tier {tier}");
+        }
+        assert_eq!(chest_gems(3, 1), None);
     }
 }

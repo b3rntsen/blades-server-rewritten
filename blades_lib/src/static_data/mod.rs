@@ -1287,6 +1287,26 @@ impl EventQuestTemplate {
         self.rewards.len().max(self.payable_rewards.len())
     }
 
+    /// The `rewards[]` an instance minted for a character of `level` carries:
+    /// [`Self::retail_rewards_for_level`] under the beginner economy (owner-approved
+    /// deviation from retail, #388, 2026-10-16,
+    /// [`crate::features::beginner_economy::event_rewards`]).
+    pub fn rewards_for_level(&self, real_level: i64) -> Vec<crate::economy::RewardGrant> {
+        let mut out = self.retail_rewards_for_level(real_level);
+        crate::features::beginner_economy::event_rewards(&mut out, real_level);
+        out
+    }
+
+    /// The `finalReward` an instance minted for a character of `level` carries:
+    /// [`Self::retail_final_reward_for_level`] under the beginner economy
+    /// (owner-approved deviation from retail, #388, 2026-10-16,
+    /// [`crate::features::beginner_economy::event_final_reward`]).
+    pub fn final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
+        let mut out = self.retail_final_reward_for_level(real_level)?;
+        crate::features::beginner_economy::event_final_reward(&mut out, real_level);
+        Some(out)
+    }
+
     /// The band a character of `level` is minted at: the highest band whose
     /// `min_level` it has reached, or the lowest band below every threshold.
     /// From [`EVENT_TOP_BAND_FROM_LEVEL`] on it is always the top band, whatever
@@ -1309,7 +1329,7 @@ impl EventQuestTemplate {
     /// From level 49 that is the level-100 character's ladder and step (#398), its
     /// soul gems Grand at 49-60
     /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
-    pub fn rewards_for_level(&self, real_level: i64) -> Vec<crate::economy::RewardGrant> {
+    fn retail_rewards_for_level(&self, real_level: i64) -> Vec<crate::economy::RewardGrant> {
         let level = crate::features::loot_level::effective_loot_level(real_level);
         let mut out = self
             .band_for_level(level)
@@ -1326,7 +1346,7 @@ impl EventQuestTemplate {
     /// material at `level`'s own step like the milestones'. From level 49 that is
     /// the level-100 character's (#398), its soul gems Grand at 49-60
     /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
-    pub fn final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
+    fn retail_final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
         let level = crate::features::loot_level::effective_loot_level(real_level);
         let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
