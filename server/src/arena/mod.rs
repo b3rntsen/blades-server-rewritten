@@ -1,3 +1,4 @@
+pub mod arena_bonus_rewards;
 pub mod arena_economy;
 pub mod arena_ladder;
 pub mod arena_promotion_loot;

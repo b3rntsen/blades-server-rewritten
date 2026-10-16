@@ -627,6 +627,7 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     let gold = uuid::Uuid::parse_str(crate::arena::combat::messages::ARENA_GOLD_CURRENCY_UUID)
         .expect("arena gold currency is a valid UUID");
     lo.wallet_gold = r.wallet.0.balance(gold);
+    lo.wallet_gems = r.wallet.0.balance(blades_lib::economy::GEMS);
     lo.character_experience = r.character.0.experience;
     lo.backpack_version = r.inventory.0.backpack_version;
     lo.treasury_version = r.inventory.0.treasury_version;

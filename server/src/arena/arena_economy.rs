@@ -63,6 +63,10 @@ pub struct MatchEconomyOutcome {
     pub gold: i64,
     /// Character XP granted — identical to the value on the op49 card.
     pub character_xp: i64,
+    /// Arena Gems for this match — identical to the value on the op49 card. An
+    /// owner-approved deviation from retail (#390/#391, 2026-10-16); see
+    /// [`crate::arena::arena_bonus_rewards`]. 0 for an abandoned or voided match.
+    pub gems: i64,
     /// Signed trophy swing (already Elo-weighted by the engine).
     pub trophy_delta: i64,
     /// Rounds this player won (drives the chest meter).
@@ -166,6 +170,27 @@ fn add_promotion_currencies(
     promo.currencies.iter().map(|(_, n)| n).sum()
 }
 
+/// The match's own reward — gold, XP and the arena Gems — before promotion loot
+/// and the Arena Giveaway are added to it.
+fn match_reward_grant(o: &MatchEconomyOutcome) -> RewardGrant {
+    let mut reward = RewardGrant::default();
+    if o.gold > 0 {
+        reward
+            .currencies
+            .insert(ARENA_GOLD_CURRENCY_UUID_PARSED.clone(), o.gold as u64);
+    }
+    // Owner-approved deviation (#390/#391, 2026-10-16): Gems for every finished
+    // match, credited in the same transaction as the gold.
+    if o.gems > 0 {
+        *reward
+            .currencies
+            .entry(blades_lib::economy::GEMS)
+            .or_insert(0) += o.gems as u64;
+    }
+    reward.character_xp = o.character_xp.max(0) as u64;
+    reward
+}
+
 fn promotion_needs_loot_marker(promo: &arena_ladder::PromotionRewards) -> bool {
     !promo.loot_thresholds.is_empty()
 }
@@ -267,13 +292,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     ch.matchmaking_pvp_trophies,
                     ch.level,
                 );
-                let mut reward = RewardGrant::default();
-                if o.gold > 0 {
-                    reward
-                        .currencies
-                        .insert(ARENA_GOLD_CURRENCY_UUID_PARSED.clone(), o.gold as u64);
-                }
-                reward.character_xp = o.character_xp.max(0) as u64;
+                let mut reward = match_reward_grant(&o);
                 let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
                 let promotion_currencies = add_promotion_currencies(&mut reward, &promo);
 
@@ -434,13 +453,14 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
     let Some(a) = applied else { return Ok(()) };
 
     info!(
-        "arena economy: persisted {} for L{} character {} — gold {:+}, xp {:+}, \
+        "arena economy: persisted {} for L{} character {} — gold {:+}, xp {:+}, gems {:+}, \
          trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}{}",
         if outcome.win { "WIN" } else { "LOSS" },
         outcome.level,
         a.character_id,
         outcome.gold,
         outcome.character_xp,
+        outcome.gems,
         a.pre_trophies,
         a.post_trophies,
         outcome.trophy_delta,
@@ -880,6 +900,7 @@ mod tests {
             level: 86,
             gold: 14961,
             character_xp: 691,
+            gems: 6,
             trophy_delta: 30,
             rounds_won: 2,
             rounds_lost: 0,
@@ -916,8 +937,9 @@ mod tests {
     fn crossing_500_stages_premium_gems_for_durable_application() {
         let promo = arena_ladder::promotion_rewards(499, 500, 86);
         let mut reward = RewardGrant::default();
-        assert_eq!(add_promotion_currencies(&mut reward, &promo), 50);
-        assert_eq!(reward.currencies.get(&blades_lib::economy::GEMS), Some(&50));
+        // Retail's 50, doubled by the owner-approved #390/#391 policy.
+        assert_eq!(add_promotion_currencies(&mut reward, &promo), 100);
+        assert_eq!(reward.currencies.get(&blades_lib::economy::GEMS), Some(&100));
         assert!(
             promotion_needs_loot_marker(&promo),
             "gem-only arena promotions still need the durable per-threshold marker"
@@ -933,6 +955,49 @@ mod tests {
         assert_eq!(add_promotion_currencies(&mut reward, &disabled), 0);
         assert!(!reward.currencies.contains_key(&blades_lib::economy::GEMS));
         assert!(!promotion_needs_loot_marker(&disabled));
+    }
+
+    fn plain_outcome(win: bool, gems: i64) -> MatchEconomyOutcome {
+        MatchEconomyOutcome {
+            character_id: Uuid::from_u128(7),
+            game_session_id: None,
+            level: 86,
+            gold: 1_000,
+            character_xp: 50,
+            gems,
+            trophy_delta: 0,
+            rounds_won: if win { 2 } else { 0 },
+            rounds_lost: if win { 0 } else { 2 },
+            win,
+            completed_at_secs: 1_700_000_000,
+            opponent_character_id: None,
+            h2h: false,
+        }
+    }
+
+    /// Owner-approved deviation (#390/#391): the Gems the engine priced reach the
+    /// wallet through the same grant as the gold, and only the Gems.
+    #[test]
+    fn a_win_credits_six_gems_and_a_loss_three() {
+        use crate::arena::arena_bonus_rewards::{MatchFinish, match_gems};
+        use blades_lib::economy::GEMS;
+        use blades_lib::user_data::CompleteWallet;
+        for (win, expected) in [(true, 6u64), (false, 3u64)] {
+            let gems = match_gems(MatchFinish::of(win, false)) as i64;
+            let reward = match_reward_grant(&plain_outcome(win, gems));
+            assert_eq!(reward.currencies.get(&GEMS), Some(&expected));
+            assert_eq!(reward.currencies.get(&ARENA_GOLD_CURRENCY_UUID_PARSED), Some(&1_000));
+
+            // `apply_reward` credits every `currencies` entry with exactly this call.
+            let mut wallet = CompleteWallet::default();
+            for (currency, amount) in &reward.currencies {
+                wallet.credit(*currency, *amount);
+            }
+            assert_eq!(wallet.balance(GEMS), expected, "the wallet holds the match Gems");
+        }
+        // CONTROL: an abandoned match grants no Gems at all, not a zero entry.
+        let reward = match_reward_grant(&plain_outcome(false, 0));
+        assert!(!reward.currencies.contains_key(&GEMS));
     }
 
     async fn h2h_fixture() -> Option<AsyncPgConnection> {
@@ -1034,6 +1099,7 @@ mod tests {
             level: 1,
             gold: 0,
             character_xp: 0,
+            gems: 0,
             trophy_delta: if win { 24 } else { -24 },
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },

@@ -1107,6 +1107,9 @@ pub struct Loadout {
     /// Pre-match economy snapshot used to build the same inventory/wallet diff the
     /// asynchronous PostgreSQL writer will persist after op49 is sent.
     pub wallet_gold: u64,
+    /// Pre-match Gems balance, so the op49 wallet can show the credited Gems
+    /// (owner-approved arena Gems, #390/#391).
+    pub wallet_gems: u64,
     pub character_experience: u64,
     pub backpack_version: u64,
     pub treasury_version: u64,

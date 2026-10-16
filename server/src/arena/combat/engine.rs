@@ -450,6 +450,11 @@ pub struct MatchInstance {
     /// waiting to be adopted at the next between-rounds beat (report #232). See
     /// [`Self::stage_between_rounds_loadout`].
     staged_loadouts: Vec<Option<Loadout>>,
+    /// The slot that ended the match by conceding — the exit button or an ENet
+    /// departure — if one did. That side abandoned the fight: it keeps the
+    /// recorded loss but is paid no arena Gems and the fight does not count
+    /// toward the per-account weapon gift (owner-approved #390/#391).
+    conceded_slot: Option<usize>,
 }
 
 impl MatchInstance {
@@ -512,6 +517,7 @@ impl MatchInstance {
             interround_profile_round: None,
             interround_profiles_sent: vec![false; capacity],
             staged_loadouts: vec![None; capacity],
+            conceded_slot: None,
         }
     }
 
@@ -966,6 +972,7 @@ impl MatchInstance {
         let Some(winner) = self.combat.opponent_of(loser_slot) else {
             return Vec::new(); // solo / bot — nobody to award the match to
         };
+        self.conceded_slot = Some(loser_slot);
 
         // A concession inside a round-ending death's ~216 ms window: that round was
         // decided first, so its burst (op29, RoundEnd, Idle, PostRound, its op48) goes
@@ -1697,6 +1704,7 @@ impl MatchInstance {
     /// [`arena_economy`](crate::arena::arena_economy) so it survives the walk back to
     /// the menu.
     fn broadcast_match_end_results(&self, out: &mut Vec<(usize, Vec<u8>)>) {
+        use crate::arena::arena_bonus_rewards;
         use crate::arena::arena_economy::{self, MatchEconomyOutcome};
         use crate::arena::arena_ladder::{self, MatchOutcome};
 
@@ -1926,10 +1934,59 @@ impl MatchInstance {
                 .treasury_version
                 .saturating_add(u64::from(!inventory_chests.is_empty()));
 
+            // A match against one of our own bots that this player never played
+            // costs them nothing.
+            //
+            // Policy, set by the owner 2026-09-20: a bug in a human-vs-AI match
+            // nulls the result. Cups lost to a fight the player never saw
+            // generate a support complaint we do not want and cannot answer,
+            // and the opponent is ours, so there is no one to be unfair to.
+            //
+            // The test is "sent us not one byte during a live round" (#303). `on_c2s` is the only
+            // way client bytes reach the engine, so this cannot be true of a
+            // player who actually fought — any tap, block or move sets it. It is
+            // deliberately NOT a heuristic about damage or rounds: a player can
+            // legitimately lose without landing a hit, but cannot legitimately
+            // play a whole match in total silence.
+            //
+            // Only the cups and the win/loss record are voided. Gold and XP are
+            // left alone: taking those back turns one complaint into a different
+            // one, and they are not what the policy is about.
+            let never_arrived = !self.saw_in_round_c2s.get(slot).copied().unwrap_or(true);
+            let versus_bot = opponent
+                .map(|o| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout))
+                .unwrap_or(false);
+            let void_result = void_ai_match_result(!never_arrived, versus_bot);
+
+            // Arena Gems — owner-approved deviation (#390/#391, 2026-10-16), see
+            // `arena_bonus_rewards`. A win or a loss pays; the side that conceded
+            // and a voided no-show abandoned the fight and are paid nothing. There
+            // is no drawn match: a tiebreak loser is paid as a loss.
+            let finish = arena_bonus_rewards::MatchFinish::of(
+                is_winner,
+                void_result || self.conceded_slot == Some(slot),
+            );
+            let gems = arena_bonus_rewards::match_gems(finish);
+            let promotion_gems: u64 = promo
+                .currencies
+                .iter()
+                .filter(|(currency, _)| *currency == blades_lib::economy::GEMS.to_string())
+                .map(|(_, n)| *n)
+                .sum();
+            let wallet_gems = (gems + promotion_gems > 0).then(|| {
+                f.loadout
+                    .wallet_gems
+                    .saturating_add(gems)
+                    .saturating_add(promotion_gems)
+                    .min(i64::MAX as u64) as i64
+            });
+
             let reward = messages::MatchEndReward {
                 gold: payout.gold,
                 character_xp: payout.character_xp,
                 wallet_gold,
+                gems: gems as i64,
+                wallet_gems,
                 character_experience,
                 backpack_version,
                 treasury_version,
@@ -1995,29 +2052,6 @@ impl MatchInstance {
             );
             out.push((slot, frame));
 
-            // A match against one of our own bots that this player never played
-            // costs them nothing.
-            //
-            // Policy, set by the owner 2026-09-20: a bug in a human-vs-AI match
-            // nulls the result. Cups lost to a fight the player never saw
-            // generate a support complaint we do not want and cannot answer,
-            // and the opponent is ours, so there is no one to be unfair to.
-            //
-            // The test is "sent us not one byte during a live round" (#303). `on_c2s` is the only
-            // way client bytes reach the engine, so this cannot be true of a
-            // player who actually fought — any tap, block or move sets it. It is
-            // deliberately NOT a heuristic about damage or rounds: a player can
-            // legitimately lose without landing a hit, but cannot legitimately
-            // play a whole match in total silence.
-            //
-            // Only the cups and the win/loss record are voided. Gold and XP are
-            // left alone: taking those back turns one complaint into a different
-            // one, and they are not what the policy is about.
-            let never_arrived = !self.saw_in_round_c2s.get(slot).copied().unwrap_or(true);
-            let versus_bot = opponent
-                .map(|o| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout))
-                .unwrap_or(false);
-            let void_result = void_ai_match_result(!never_arrived, versus_bot);
             if void_result {
                 log::warn!(
                     "arena: voiding result for slot {slot} in {:?} — no c2s in any live round against a bot; \
@@ -2063,6 +2097,7 @@ impl MatchInstance {
                     level,
                     gold: payout.gold,
                     character_xp: payout.character_xp,
+                    gems: gems as i64,
                     trophy_delta: if void_result { 0 } else { trophy_delta },
                     rounds_won,
                     rounds_lost,
@@ -2357,9 +2392,10 @@ pub(in crate::arena::combat) mod tests {
     fn a_new_arena_puts_its_gems_on_the_match_end_card() {
         let promo = crate::arena::arena_ladder::promotion_rewards(499, 500, 86);
         let value = super::promotion_reward_json(&promo, &[]);
+        // Retail's 50, doubled by the owner-approved #390/#391 policy.
         assert_eq!(
             value["currencies"]["470c8f58-a8dd-4c07-8c92-843b785e1139"],
-            serde_json::json!(50)
+            serde_json::json!(100)
         );
     }
 
@@ -4569,6 +4605,40 @@ pub(in crate::arena::combat) mod tests {
         assert!(m.is_finished(), "the conceded match finishes → survivor returns to lobby");
     }
 
+    /// Owner-approved arena Gems (#390/#391): the player who left abandoned the
+    /// fight and is paid nothing; the survivor is paid the win.
+    #[test]
+    fn a_departure_pays_the_survivor_and_not_the_leaver() {
+        let (mut m, t0) = live_inst(2);
+        let leave = t0 + Duration::from_secs(3);
+        m.concede_by_departure(1, leave);
+
+        let gems = blades_lib::economy::GEMS.to_string();
+        let mut cards = std::collections::BTreeMap::new();
+        let step = Duration::from_millis(250);
+        for i in 1..=120u32 {
+            for (slot, b) in m.on_tick(2, leave + step * i) {
+                if b.len() > 3 && b[1] == 0x36 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    if nd.int(3) == Some(49) {
+                        let v: serde_json::Value =
+                            serde_json::from_str(nd.string(13).unwrap()).unwrap();
+                        cards.insert(slot, v);
+                    }
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        assert_eq!(cards[&0]["reward"]["currencies"][gems.as_str()], 6, "survivor paid the win");
+        assert!(
+            cards[&1]["reward"]["currencies"].get(gems.as_str()).is_none(),
+            "the leaver abandoned the fight: no Gems"
+        );
+        assert_eq!(cards[&1]["wallet"].as_array().unwrap().len(), 1, "leaver's wallet unchanged");
+    }
+
     /// A concession must NOT fire when the match is already ending — a disconnect there
     /// is the normal DisconnectingPlayers teardown, not a forfeit — and must be a no-op
     /// for a lone player with no opponent to award.
@@ -4736,6 +4806,13 @@ pub(in crate::arena::combat) mod tests {
             let v: serde_json::Value = serde_json::from_str(rj).expect("ResultsJSON parses");
             assert!(v["reward"]["currencies"].is_object(), "ResultsJSON has reward.currencies");
             assert!(v["reward"]["characterXp"].is_number(), "ResultsJSON has reward.characterXp");
+            // Owner-approved arena Gems (#390/#391): the 2-0 winner's card shows 6,
+            // the loser's 3, and each wallet carries the credited Gems balance.
+            let gems = blades_lib::economy::GEMS.to_string();
+            let expected = if *slot == 0 { 6 } else { 3 };
+            assert_eq!(v["reward"]["currencies"][gems.as_str()], expected, "slot {slot} card Gems");
+            assert_eq!(v["wallet"][1]["currencyId"], gems.as_str());
+            assert_eq!(v["wallet"][1]["balance"], expected, "starter wallet held 0 Gems");
             let own_trophies = v["character"]["pvpTrophies"]
                 .as_i64()
                 .expect("ResultsJSON character.pvpTrophies is a number");

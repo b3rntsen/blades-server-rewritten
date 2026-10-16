@@ -360,6 +360,9 @@ pub fn tiers_crossed(old_high_water: i64, new_high_water: i64) -> Vec<&'static A
         .collect()
 }
 
+/// The premium-currency (Gems) id as the generated promotion loot spells it.
+const PROMOTION_GEMS_CURRENCY: &str = "470c8f58-a8dd-4c07-8c92-843b785e1139";
+
 /// The `rewardNewLevelArena` content for a high-water move — the chests and fixed
 /// stackables from every rung crossed, at the player's current character level.
 pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_level: u16) -> PromotionRewards {
@@ -383,7 +386,15 @@ pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_lev
             *stackable_items.entry(item.template_uuid).or_insert(0) += item.quantity;
         }
         for item in fixed_currencies {
-            *currencies.entry(item.currency_uuid).or_insert(0) += item.quantity;
+            // Gems are doubled: owner-approved deviation (#390/#391, 2026-10-16).
+            // Applied here rather than at either consumer so the op49 card and
+            // the durable wallet credit cannot disagree.
+            let quantity = if item.currency_uuid == PROMOTION_GEMS_CURRENCY {
+                super::arena_bonus_rewards::promotion_gems(item.quantity)
+            } else {
+                item.quantity
+            };
+            *currencies.entry(item.currency_uuid).or_insert(0) += quantity;
         }
     }
     PromotionRewards {
@@ -808,7 +819,8 @@ mod tests {
         assert_eq!((promoted.arena, promoted.level), (2, 1));
         let promo = promotion_rewards(499, 500, 86);
         assert_eq!(promo.chests, vec![(4, 86)]);
-        assert_eq!(promo.currencies, vec![("470c8f58-a8dd-4c07-8c92-843b785e1139", 50)]);
+        // Retail's table pays 50; doubled by the owner-approved #390/#391 policy.
+        assert_eq!(promo.currencies, vec![("470c8f58-a8dd-4c07-8c92-843b785e1139", 100)]);
         assert_eq!(promo.loot_thresholds, vec![500]);
 
         // The engine/persistence store max(live trophies, old high-water). A later
@@ -817,6 +829,33 @@ mod tests {
         let high_water_after_loss = 500.max(live_after_loss);
         let still_promoted = tier_for_trophies(high_water_after_loss);
         assert_eq!((still_promoted.arena, still_promoted.level), (2, 1));
+    }
+
+    /// Owner-approved deviation (#390/#391, 2026-10-16): every new-arena
+    /// promotion pays twice retail's Gems, at every arena that pays any.
+    #[test]
+    fn a_promotion_pays_double_the_retail_gems() {
+        assert_eq!(PROMOTION_GEMS_CURRENCY, blades_lib::economy::GEMS.to_string());
+        for tier in ARENA_LADDER.iter().filter(|t| t.arena >= 2 && t.level == 1) {
+            let retail: u64 = super::super::arena_promotion_loot::currencies_for(tier.loot_table, 86)
+                .iter()
+                .filter(|c| c.currency_uuid == PROMOTION_GEMS_CURRENCY)
+                .map(|c| c.quantity)
+                .sum();
+            assert!(retail > 0, "arena {} promotion pays retail Gems", tier.arena);
+            let promo = promotion_rewards(tier.required_trophies - 1, tier.required_trophies, 86);
+            assert_eq!(
+                promo.currencies,
+                vec![(PROMOTION_GEMS_CURRENCY, 2 * retail)],
+                "arena {} promotion",
+                tier.arena
+            );
+        }
+        // Crossing two paying rungs in one match pays both, each doubled.
+        let a2 = ARENA_LADDER.iter().find(|t| t.arena == 2 && t.level == 1).unwrap();
+        let a3 = ARENA_LADDER.iter().find(|t| t.arena == 3 && t.level == 1).unwrap();
+        let both = promotion_rewards(a2.required_trophies - 1, a3.required_trophies, 86);
+        assert_eq!(both.currencies, vec![(PROMOTION_GEMS_CURRENCY, 2 * (50 + 100))]);
     }
 
     #[test]

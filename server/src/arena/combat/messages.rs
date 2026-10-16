@@ -1465,6 +1465,14 @@ pub struct MatchEndReward {
     pub character_xp: i64,
     /// The recipient's gold WALLET balance AFTER crediting (`wallet[].balance`).
     pub wallet_gold: i64,
+    /// Arena Gems granted this match (`reward.currencies[GEMS]`). An owner-approved
+    /// deviation from retail (#390/#391, 2026-10-16): retail's card carried gold
+    /// only, so 0 leaves the card byte-for-byte retail.
+    pub gems: i64,
+    /// The recipient's Gems balance AFTER crediting this match's Gems and any
+    /// promotion Gems, when the match changed it. `None` keeps the retail
+    /// gold-only `wallet`.
+    pub wallet_gems: Option<i64>,
     /// Total character XP after crediting the match reward.
     pub character_experience: u64,
     /// Post-mutation inventory versions. Retail includes both even when only one
@@ -1512,6 +1520,8 @@ impl Default for MatchEndReward {
             gold: 0,
             character_xp: 0,
             wallet_gold: 0,
+            gems: 0,
+            wallet_gems: None,
             character_experience: 0,
             backpack_version: 0,
             treasury_version: 0,
@@ -1626,17 +1636,30 @@ pub fn results_json(
         );
     }
 
+    // Arena Gems (#390/#391) ride the same `currencies` map and `wallet` array
+    // every other reward block uses — the shape a global-gift claim answers with.
+    let gems_currency = blades_lib::economy::GEMS.to_string();
+    let mut currencies = serde_json::Map::new();
+    currencies.insert(ARENA_GOLD_CURRENCY_UUID.into(), json!(reward.gold));
+    if reward.gems > 0 {
+        currencies.insert(gems_currency.clone(), json!(reward.gems));
+    }
+    let mut wallet = vec![json!({ "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold })];
+    if let Some(balance) = reward.wallet_gems {
+        wallet.push(json!({ "currencyId": gems_currency, "balance": balance }));
+    }
+
     json!({
         "characterId": recipient_char_uuid,
         "character": character,
         "reward": {
-            "currencies": { ARENA_GOLD_CURRENCY_UUID: reward.gold },
+            "currencies": Value::Object(currencies),
             "characterXp": reward.character_xp,
         },
         "rewardNewLevelArena": reward.reward_new_level_arena,
         "currentRequestIndex": request_index,
         "inventory": Value::Object(inventory),
-        "wallet": [ { "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold } ],
+        "wallet": wallet,
     })
     .to_string()
 }
@@ -2892,6 +2915,31 @@ mod tests {
         // rewardNewLevelArena empty (no promotion); currentRequestIndex echoed.
         assert_eq!(v["rewardNewLevelArena"], serde_json::json!({}));
         assert_eq!(v["currentRequestIndex"], 789104);
+        // No arena Gems → the retail gold-only shape, unchanged.
+        assert_eq!(v["reward"]["currencies"].as_object().unwrap().len(), 1);
+        assert_eq!(v["wallet"].as_array().unwrap().len(), 1);
+    }
+
+    /// Owner-approved arena Gems (#390/#391): the card shows the Gems in the same
+    /// `reward.currencies` map as the gold, and the credited Gems balance beside
+    /// the gold balance, so the client sees the update without a resync.
+    #[test]
+    fn results_json_carries_the_arena_gems() {
+        let gems = blades_lib::economy::GEMS.to_string();
+        let reward = MatchEndReward {
+            gold: 4047,
+            wallet_gold: 10_000,
+            gems: 6,
+            wallet_gems: Some(1_206),
+            ..Default::default()
+        };
+        let out = results_json("38c987fd-c42b-4ea6-b869-c8d4c03055f9", "{}", "{}", &reward, 1);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["reward"]["currencies"][ARENA_GOLD_CURRENCY_UUID], 4047);
+        assert_eq!(v["reward"]["currencies"][gems.as_str()], 6);
+        assert_eq!(v["wallet"][0]["currencyId"], ARENA_GOLD_CURRENCY_UUID);
+        assert_eq!(v["wallet"][1]["currencyId"], gems.as_str());
+        assert_eq!(v["wallet"][1]["balance"], 1_206);
     }
 
     /// Retail op49 carries a compact post-match character snapshot, not the full
