@@ -459,15 +459,53 @@ fn validate_purchase_prices(
     }
 }
 
+/// What `GET /catalogoverrides/globalshop` sends: the overrides whose window covers
+/// `now`, and nothing else.
+///
+/// THE BUG THIS FIXES (tracker #400). "When the game has been open for a while the
+/// shop will not open any more; I have to restart."
+///
+/// [`current_catalog`] keeps one entry for EVERY offer — the live window, else the
+/// next one, else the last — because the price check and the caps need the whole
+/// calendar. The endpoint served that map verbatim: 546 offers, 472 of them not
+/// starting for up to 41 days, 320,802 bytes. Retail never sent a non-live
+/// override: 923 of 923 captured responses held only offers live at the moment of
+/// the request (71 on average, at most 79, at most 46,152 bytes).
+///
+/// The client re-fetches this on every store open (the reporter's: ~120 times a
+/// day) and copies it into its persistence tree, so a long session parsed and
+/// stored seven times what retail ever gave it, hundreds of times over, and held
+/// hundreds of not-yet-started overrides — a state retail's client never saw.
+/// Serving only what is live restores retail's shape and size. Because the client
+/// re-fetches at every store open, an offer that starts later in the session still
+/// appears the next time the store opens, as it did in retail.
+///
+/// An entry without a window is kept (none ship today). Pricing, caps and purchase
+/// validation keep reading [`current_catalog`], so what can be bought is unchanged.
+pub(crate) fn served_catalog(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+) -> Value {
+    let mut catalog = current_catalog(static_data, now);
+    if let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    {
+        map.retain(|_, e| window_of(e).is_none_or(|(s, en)| s <= now && now <= en));
+    }
+    catalog
+}
+
 /// `GET /catalogoverrides/globalshop` — retail's calendar replayed so it covers the
-/// present, then overlaid with anything an admin authored. See [`current_catalog`].
+/// present, overlaid with anything an admin authored, cut to what is live now. See
+/// [`served_catalog`].
 #[get("/blades.bgs.services/api/game/v1/public/catalogoverrides/globalshop")]
 pub async fn get_override(app_state: web::Data<Arc<ServerGlobal>>) -> Json<Value> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    Json(current_catalog(&app_state.static_data, now))
+    Json(served_catalog(&app_state.static_data, now))
 }
 
 /// `GET /catalogoverrides/iap` — real-money SKU catalogue, served verbatim (priced
@@ -3697,6 +3735,87 @@ mod report238_calendar_tests {
         let cat = current_catalog(&sd, REPORTED);
         assert_eq!(
             window_of(&cat["globalShopOverrides"][TRANSCENDENT]),
+            Some((start, end))
+        );
+    }
+
+    /// When Sephoris filed #400: 2026-10-16 07:33 UTC.
+    const REPORT_400: i64 = 1_792_135_980;
+
+    /// Tracker #400. Retail's `GET /catalogoverrides/globalshop` held ONLY offers live
+    /// at the moment of the request — 923 of 923 captured responses, at most 79
+    /// offers and 46,152 bytes. We served every offer in the calendar (546, 320,802
+    /// bytes at the report), 472 of them weeks from starting, on every store open.
+    ///
+    /// Swept over two whole replay cycles, so every day of the rotation and the wrap
+    /// are covered: every served override must be live, and the payload must stay
+    /// within retail's envelope. The control is the full catalogue at the reported
+    /// moment, which is what the endpoint used to return.
+    #[test]
+    fn the_store_endpoint_serves_only_live_offers_at_retail_size() {
+        let sd = shipped();
+        let before = current_catalog(&sd, REPORT_400);
+        let before_len = serde_json::to_string(&before).unwrap().len();
+        assert!(
+            before["globalShopOverrides"].as_object().unwrap().len() > 500
+                && before_len > 300_000,
+            "control: the full catalogue is what #400's client was fetching ({before_len} bytes)"
+        );
+
+        let (mut max_offers, mut max_bytes) = (0, 0);
+        for t in (REPORT_400..REPORT_400 + 2 * REPLAY_PERIOD).step_by(3 * 3_600) {
+            let served = served_catalog(&sd, t);
+            let map = served["globalShopOverrides"].as_object().unwrap();
+            for (id, e) in map {
+                let (s, en) = window_of(e).unwrap();
+                assert!(s <= t && t <= en, "{id} served outside its window at {t}");
+            }
+            assert!(!map.is_empty(), "the store is empty at {t}");
+            max_offers = max_offers.max(map.len());
+            max_bytes = max_bytes.max(serde_json::to_string(&served).unwrap().len());
+        }
+        // Retail's measured ceiling is 79 offers / 46 KB. A little headroom for the
+        // replay's window boundaries, but nowhere near the 546 / 320 KB served before.
+        assert!(max_offers <= 120, "up to {max_offers} offers served at once");
+        assert!(max_bytes <= 80_000, "up to {max_bytes} bytes served at once");
+    }
+
+    /// Cutting the payload must not hide anything that is on sale: every offer the
+    /// full catalogue has live (the set the price check honours) is still served,
+    /// unchanged, at every step of a cycle.
+    #[test]
+    fn nothing_on_sale_is_dropped_from_the_store_endpoint() {
+        let sd = shipped();
+        for t in (REPORT_400..REPORT_400 + REPLAY_PERIOD).step_by(5 * 3_600) {
+            let full = current_catalog(&sd, t);
+            let served = served_catalog(&sd, t);
+            let served = served["globalShopOverrides"].as_object().unwrap();
+            for (id, e) in full["globalShopOverrides"].as_object().unwrap() {
+                if is_live(e, t) {
+                    assert_eq!(served.get(id), Some(e), "{id} is on sale at {t} but was not served");
+                }
+            }
+        }
+    }
+
+    /// An authored window is served while it runs and not before: the cut applies
+    /// after the authored overlay, like retail never announcing an offer early.
+    #[test]
+    fn an_authored_window_is_served_only_while_it_runs() {
+        let mut sd = shipped();
+        let (start, end) = (REPORT_400 + DAY, REPORT_400 + 2 * DAY);
+        sd.global_shop_authored = serde_json::json!({
+            "globalShopOverrides": { TRANSCENDENT: {
+                "activeStartDate": start, "activeEndDate": end, "isActive": true,
+                "maxPurchaseLimits": [], "maxPurchases": 0,
+                "prices": [{ "currencyId": SIGIL, "quantity": 5 }],
+            }}
+        });
+        assert!(served_catalog(&sd, REPORT_400)["globalShopOverrides"]
+            .get(TRANSCENDENT)
+            .is_none());
+        assert_eq!(
+            window_of(&served_catalog(&sd, start + 3_600)["globalShopOverrides"][TRANSCENDENT]),
             Some((start, end))
         );
     }
