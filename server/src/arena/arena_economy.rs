@@ -42,6 +42,7 @@ use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
 use crate::DbPool;
+use crate::arena::arena_fight_gift;
 use crate::arena::arena_ladder;
 use crate::arena::combat::messages::ARENA_GOLD_CURRENCY_UUID;
 use crate::arena::ranking;
@@ -67,6 +68,10 @@ pub struct MatchEconomyOutcome {
     /// owner-approved deviation from retail (#390/#391, 2026-10-16); see
     /// [`crate::arena::arena_bonus_rewards`]. 0 for an abandoned or voided match.
     pub gems: i64,
+    /// Whether this side FINISHED the fight (won or lost it; did not concede and
+    /// was not voided as a no-show). Only a finished fight counts toward the
+    /// per-account weapon gift ([`crate::arena::arena_fight_gift`]).
+    pub finished_fight: bool,
     /// Signed trophy swing (already Elo-weighted by the engine).
     pub trophy_delta: i64,
     /// Rounds this player won (drives the chest meter).
@@ -388,6 +393,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 let post_trophies = entry.character.0.pvp_trophies;
                 let post_high_water = entry.character.0.matchmaking_pvp_trophies;
                 let character_id = entry.id;
+                let user_id = entry.user_id;
 
                 {
                     use crate::schema::characters;
@@ -431,7 +437,45 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     }
                 }
 
+                // THE WEAPON GIFT (owner-approved #390/#391): count this finished
+                // fight on the ACCOUNT and mint the gift on every 25th. In a nested
+                // transaction — a savepoint — so a failure (the table not yet
+                // migrated, say) rolls back only the count and never the reward
+                // above, which a failed statement in this transaction would.
+                let fight_tally = if o.finished_fight {
+                    let now = o.completed_at_secs;
+                    let counted = conn
+                        .transaction::<_, anyhow::Error, _>(|conn| {
+                            async move {
+                                let alt = arena_fight_gift::live_alt(conn, character_id).await?;
+                                arena_fight_gift::record_finished_fight(
+                                    conn,
+                                    user_id,
+                                    character_id,
+                                    alt,
+                                    now,
+                                )
+                                .await
+                            }
+                            .scope_boxed()
+                        })
+                        .await;
+                    match counted {
+                        Ok(tally) => Some(tally),
+                        Err(e) => {
+                            warn!(
+                                "arena fight gift: could not count the fight for account {user_id} \
+                                 (character {character_id}); the match REWARD IS SAFE: {e}"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 Ok(Some(AppliedOutcome {
+                    fight_tally,
                     giveaway_gems: giveaway.map(|(_, g)| g).unwrap_or(0),
                     character_id,
                     pre_trophies,
@@ -484,6 +528,25 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
             String::new()
         },
     );
+
+    if let Some(tally) = &a.fight_tally {
+        match &tally.gift {
+            Some((gift_id, item)) => info!(
+                "arena fight gift: character {} reached account fight #{} — gift {gift_id} \
+                 ({} at arcane tier {:?}, {} enchantment(s))",
+                a.character_id,
+                tally.fights,
+                item.item_template_id,
+                item.arcane_tier,
+                item.enchanting.len(),
+            ),
+            None => log::debug!(
+                "arena fight gift: character {} at account fight #{}",
+                a.character_id,
+                tally.fights
+            ),
+        }
+    }
 
     if a.giveaway_gems > 0 {
         info!(
@@ -876,6 +939,9 @@ struct AppliedOutcome {
     promotion_currencies: u64,
     /// Gems paid by an open Arena Giveaway window, 0 when none was running.
     giveaway_gems: i64,
+    /// The account's fight count after this match and any weapon gift it minted;
+    /// `None` when the fight did not count or could not be counted.
+    fight_tally: Option<arena_fight_gift::FightTally>,
 }
 
 /// The arena gold currency uuid, parsed once. Same constant the op49 card uses, so
@@ -901,6 +967,7 @@ mod tests {
             gold: 14961,
             character_xp: 691,
             gems: 6,
+            finished_fight: true,
             trophy_delta: 30,
             rounds_won: 2,
             rounds_lost: 0,
@@ -965,6 +1032,7 @@ mod tests {
             gold: 1_000,
             character_xp: 50,
             gems,
+            finished_fight: gems > 0,
             trophy_delta: 0,
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },
@@ -1084,6 +1152,7 @@ mod tests {
             promotion_stackables: 0,
             promotion_currencies: 0,
             giveaway_gems: 0,
+            fight_tally: None,
         }
     }
 
@@ -1100,6 +1169,7 @@ mod tests {
             gold: 0,
             character_xp: 0,
             gems: 0,
+            finished_fight: true,
             trophy_delta: if win { 24 } else { -24 },
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },

@@ -2098,6 +2098,7 @@ impl MatchInstance {
                     gold: payout.gold,
                     character_xp: payout.character_xp,
                     gems: gems as i64,
+                    finished_fight: finish.is_finished(),
                     trophy_delta: if void_result { 0 } else { trophy_delta },
                     rounds_won,
                     rounds_lost,

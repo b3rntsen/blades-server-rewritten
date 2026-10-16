@@ -90,6 +90,19 @@ pub async fn get_announcements(
         announcements.push(authored_gift_announcement(&gift, now));
     }
 
+    // The arena weapon gift (owner-approved #390/#391), for the same reason: its
+    // id is only discoverable here. ONE at a time — the oldest unclaimed for the
+    // alt playing now; the next appears once it is claimed. A failure (the table
+    // not yet migrated) costs only this banner, never the feed.
+    match crate::arena::arena_fight_gift::pending_for_live_alt(&mut conn, character_id).await {
+        Ok(pending) => {
+            if let Some(gift) = pending.into_iter().next() {
+                announcements.push(arena_weapon_gift_announcement(&gift, now));
+            }
+        }
+        Err(e) => log::warn!("announcements: arena weapon gifts unavailable: {e}"),
+    }
+
     // Last, and for every source at once: put the asset on a host the client can
     // actually resolve. Done here rather than at each `push` so a new kind of
     // announcement cannot be added on an unreachable host by omission.
@@ -212,6 +225,25 @@ fn authored_gift_announcement(
     }
 }
 
+/// The banner for one arena weapon gift (owner-approved #390/#391).
+///
+/// GIFT-BEARING through the edge's existing `gift/` namespace: the uuid in the
+/// path becomes the manifest's `GlobalGiftId` and arms the Claim button. The
+/// gift never closes, so the banner rolls a month ahead like a dateless
+/// authored gift.
+fn arena_weapon_gift_announcement(
+    gift: &crate::arena::arena_fight_gift::FightGiftRow,
+    now: i64,
+) -> Announcement {
+    Announcement {
+        id: gift.id.to_string(),
+        r#type: "BASIC".into(),
+        start_time: gift.created_at.min(now),
+        ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
+        asset_url: format!("https://announcements.blades.bgs.services/gift/{}", gift.id),
+    }
+}
+
 fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement {
     let start = season.ended_at.unwrap_or(season.ends_at);
     Announcement {
@@ -284,6 +316,32 @@ mod tests {
         assert_eq!(a.start_time, now, "0 start means now, not 1970");
         assert_eq!(a.ttl, now + REWARD_ANNOUNCEMENT_LIFETIME);
         assert!(a.ttl > now, "a dateless gift must still be live");
+    }
+
+    /// The arena weapon gift's banner points at the gift itself in the
+    /// gift-bearing namespace, and is live now.
+    #[test]
+    fn the_arena_weapon_gift_banner_arms_its_own_claim() {
+        let id = uuid::uuid!("2b6a8e0e-1c51-4b8e-9f4e-3f1d6c0c2a77");
+        let gift = crate::arena::arena_fight_gift::FightGiftRow {
+            id,
+            user_id: uuid::Uuid::nil(),
+            character_id: uuid::Uuid::nil(),
+            source_alt_uuid: None,
+            milestone: 25,
+            item: serde_json::json!({}),
+            created_at: 1_000,
+            granted_at: None,
+        };
+        let a = arena_weapon_gift_announcement(&gift, 2_000);
+        assert_eq!(a.id, id.to_string());
+        assert!(a.asset_url.ends_with(&format!("/gift/{id}")), "{}", a.asset_url);
+        assert!(a.start_time <= 2_000 && a.ttl > 2_000, "live now");
+        assert_eq!(
+            reachable_asset_url(&a.asset_url, DEFAULT_ASSET_ORIGIN),
+            format!("{DEFAULT_ASSET_ORIGIN}/gift/{id}"),
+            "moved to the reachable host with the gift id intact"
+        );
     }
 
     /// CONTROL: the Free for All banner is deliberately NOT gift-bearing, and

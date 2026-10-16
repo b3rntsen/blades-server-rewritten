@@ -32,7 +32,7 @@ use uuid::Uuid;
 
 use crate::{
     BladeApiError, ServerGlobal,
-    arena::{season_rewards, season_store},
+    arena::{arena_fight_gift, season_rewards, season_store},
     models::{CharacterDbEntryEconomy, CharacterDbEntryServerState},
     session::SessionLookedUpMaybe,
     util::get_only_single_character_and_check_permission,
@@ -84,6 +84,28 @@ async fn live_alt(
 
 /// Out-of-band service id for gift error envelopes (not a real Blades id).
 const GIFT_SERVICE_ID: u64 = 9003;
+
+/// The arena weapon gift `gift_id` of this character, if it is one (owner-approved
+/// #390/#391). A failed lookup — the table not yet migrated, say — reads as "not
+/// one of these", so every other kind of gift keeps working.
+async fn arena_weapon_gift(
+    conn: &mut diesel_async::AsyncPgConnection,
+    gift_id: Uuid,
+    character_id: Uuid,
+) -> Option<arena_fight_gift::FightGiftRow> {
+    match arena_fight_gift::find(conn, gift_id, character_id, false).await {
+        Ok(row) => row,
+        Err(e) => {
+            log::warn!("arena fight gift: lookup of {gift_id} failed; treating it as not one: {e}");
+            None
+        }
+    }
+}
+
+fn gift_store_err(e: anyhow::Error) -> BladeApiError {
+    log::error!("arena fight gift: {e}");
+    BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, GIFT_SERVICE_ID, 4)
+}
 
 fn map_gift_err(e: GiftError) -> BladeApiError {
     match e {
@@ -243,6 +265,23 @@ pub async fn get_global_gift(
             global_gift: GiftView {
                 global_gift_id: gift_id,
                 claim_count,
+                global_gift_override: def.for_client(),
+            },
+        }));
+    }
+
+    // An arena weapon gift (owner-approved #390/#391): one weapon, offered only
+    // to the alt that fought the milestone fight, like a season award.
+    if let Some(gift) = arena_weapon_gift(&mut conn, gift_id, character_id).await {
+        let alt = live_alt(&mut conn, character_id).await?;
+        if !season_store::award_belongs_to_alt(gift.source_alt_uuid, alt) {
+            return Err(map_gift_err(GiftError::NotFound));
+        }
+        let def = gift.gift_def().ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+        return Ok(Json(GiftViewResponse {
+            global_gift: GiftView {
+                global_gift_id: gift_id,
+                claim_count: gift.claim_count(),
                 global_gift_override: def.for_client(),
             },
         }));
@@ -455,6 +494,95 @@ pub async fn claim_global_gift(
                             .await?;
                     }
 
+                    Ok::<_, BladeApiError>(Json(GiftClaimResponse {
+                        reward,
+                        global_gift: ClaimedGiftInfo {
+                            global_gift_id: gift_id,
+                            claim_count: 1,
+                        },
+                        inventory,
+                        wallet,
+                    }))
+                }
+                .scope_boxed()
+            })
+            .await;
+    }
+
+    // An arena weapon gift (owner-approved #390/#391): one weapon instance, once,
+    // to the alt that fought the milestone fight. The unlocked probe only routes;
+    // the row is re-read under lock inside the transaction.
+    if arena_weapon_gift(&mut conn, gift_id, character_id).await.is_some() {
+        let globals = app_state.get_ref().clone();
+        return conn
+            .transaction(move |mut conn| {
+                async move {
+                    // Gift row before the character, as season awards lock theirs.
+                    let gift = arena_fight_gift::find(&mut conn, gift_id, character_id, true)
+                        .await
+                        .map_err(gift_store_err)?
+                        .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+                    if gift.granted_at.is_some() {
+                        return Err(map_gift_err(GiftError::LimitReached));
+                    }
+                    let mut entry = {
+                        use crate::schema::characters;
+                        characters::table
+                            .filter(characters::id.eq(character_id))
+                            .filter(characters::user_id.eq(user_id))
+                            .select(CharacterDbEntryEconomy::as_select())
+                            .for_no_key_update()
+                            .first(&mut conn)
+                            .await
+                            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+                    };
+                    // Read with the character row locked, so it cannot change.
+                    let alt = live_alt(&mut conn, character_id).await?;
+                    if !season_store::award_belongs_to_alt(gift.source_alt_uuid, alt) {
+                        return Err(map_gift_err(GiftError::NotFound));
+                    }
+                    let def = gift.gift_def().ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+                    let mut reward = gifts::build_gift_reward(
+                        &def,
+                        &globals.game_data.items_template,
+                        &globals.repair_data,
+                    );
+                    for item in &mut reward.items {
+                        item.id = Uuid::new_v4();
+                    }
+                    let mut tracker = InventoryChangeTracker::default();
+                    apply_reward(
+                        &reward,
+                        &mut entry.wallet.0,
+                        &mut entry.inventory.0,
+                        &mut entry.character.0,
+                        &mut tracker,
+                    );
+                    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+                        entry.inventory.0.backpack_version += 1;
+                    }
+                    entry.server_state.0.gift_claims.insert(gift_id, 1);
+                    if !arena_fight_gift::mark_granted(&mut conn, gift_id, now_secs())
+                        .await
+                        .map_err(gift_store_err)?
+                    {
+                        return Err(BladeApiError::new(StatusCode::CONFLICT, GIFT_SERVICE_ID, 5));
+                    }
+
+                    let inventory = entry.inventory.0.generate_client_update(&tracker);
+                    let wallet = entry.wallet.0.clone();
+                    {
+                        use crate::schema::characters;
+                        diesel::update(characters::table.filter(characters::id.eq(entry.id)))
+                            .set(entry)
+                            .execute(&mut conn)
+                            .await?;
+                    }
+                    log::info!(
+                        "arena fight gift: {gift_id} (account fight #{}) claimed by character \
+                         {character_id}",
+                        gift.milestone
+                    );
                     Ok::<_, BladeApiError>(Json(GiftClaimResponse {
                         reward,
                         global_gift: ClaimedGiftInfo {
