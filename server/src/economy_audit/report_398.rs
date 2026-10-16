@@ -240,14 +240,17 @@ fn levels_below_49_are_unchanged() {
     }
     got.push(("treasury", h));
 
+    // #388 (owner-approved deviation from retail, 2026-10-16) moves sources below
+    // 49 on purpose, and each of its changes re-pins what it moves: containers
+    // holding 2 / 4 / 6 stacks (quests, event_dungeons, jobs).
     let pinned: [(&str, u64); 9] = [
         ("events", 0x7445_3735_abb6_35b1),
         ("daily", 0x40d7_bed5_0a28_cc9a),
         ("abyss_rewards", 0xcbb0_1935_28c0_3bba),
         ("abyss_floor", 0x57ca_1f7e_2bfe_f747),
-        ("quests", 0x1e88_fcc6_608a_b8c1),
-        ("event_dungeons", 0x7b34_bfa1_3352_e75a),
-        ("jobs", 0xaaa8_1f0b_d8d0_e39d),
+        ("quests", 0x0d0a_d7c6_73c0_fe44),
+        ("event_dungeons", 0xe3f7_2bf4_fde8_7e8f),
+        ("jobs", 0xc21b_5de4_2c53_289d),
         ("store", 0xb3b8_adde_182b_a5ca),
         ("treasury", 0xfe7b_85af_c723_b9e0),
     ];

@@ -544,6 +544,58 @@ fn roll_loot_table_with_context(
     out
 }
 
+/// One container's roll of a floor table: retail's draw, except that a breakable
+/// outside the Abyss holds exactly its size class's number of loot stacks
+/// ([`crate::features::beginner_economy::container_stacks`]: 2 / 4 / 6).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16. The client places the
+/// containers (the APK's spawn points), so the server cannot add one; it fills
+/// those it has. The first draw is retail's whole result, as before, its gold
+/// included. Further draws of its size's breakable table (the same table, but for
+/// a job's, which pays one kind only), each under its own seed, add stacks of
+/// kinds the container does not hold yet until it holds its number; a draw
+/// with more stacks than the number keeps the first ones in id order. Gold is
+/// only ever the first draw's, so a container's coin stays retail's.
+fn roll_container_table(
+    ctx: LootSeedContext,
+    spawn_id: &Uuid,
+    group_name: Option<&str>,
+    table_id: &Uuid,
+    result_index: usize,
+    enemy_level: i64,
+) -> LootTableResult {
+    use crate::features::beginner_economy::{container_class, CONTAINER_FILL_MAX_DRAWS};
+
+    let mut out = roll_loot_table_with_context(ctx, spawn_id, table_id, result_index, enemy_level);
+    let Some(class) = container_class(table_id, group_name).filter(|_| !ctx.abyss) else {
+        return out;
+    };
+    let want = class.stacks;
+    let sorted = |stacks: &HashMap<Uuid, u64>| {
+        let mut v: Vec<(Uuid, u64)> = stacks.iter().map(|(k, q)| (*k, *q)).collect();
+        v.sort_unstable();
+        v
+    };
+    if out.stackable_items.len() > want {
+        out.stackable_items = sorted(&out.stackable_items).into_iter().take(want).collect();
+    }
+    for draw in 1..=CONTAINER_FILL_MAX_DRAWS {
+        if out.stackable_items.len() >= want {
+            break;
+        }
+        // Far past any pile's own indices, so a fill draw is never another
+        // container's draw.
+        let index = result_index + (draw << 20);
+        let extra = roll_loot_table_with_context(ctx, spawn_id, &class.fill_table, index, enemy_level);
+        for (id, q) in sorted(&extra.stackable_items) {
+            if out.stackable_items.len() < want {
+                out.stackable_items.entry(id).or_insert(q);
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 fn roll_loot_table(
     dungeon_uuid: &Uuid,
@@ -1551,9 +1603,10 @@ fn generate_for_dungeon_inner(
                             .map(|k| {
                                 (
                                     *k,
-                                    roll_loot_table_with_context(
+                                    roll_container_table(
                                         seed_context,
                                         item_spawn_id,
+                                        spawn_info.name.as_deref(),
                                         k,
                                         result_index,
                                         enemy_level,
@@ -3230,7 +3283,11 @@ mod spawn_table_tests {
             .loot_table_loot
             .get(&lumber)
             .expect("the interactable's own table is still rolled");
-        let direct = roll_loot_table(&dungeon, &spawn, &lumber, 0, 20);
+        // The pot's table is the medium breakable's, filled to its stack count
+        // (#388) under the table's own seeds — still independent of the key table.
+        let name = game_data.dungeons[&dungeon].spawn_info.item[&spawn].name.clone();
+        let direct =
+            roll_container_table(default_seed_context(&dungeon), &spawn, name.as_deref(), &lumber, 0, 20);
         assert_eq!(
             serde_json::to_value(from_generation).unwrap(),
             serde_json::to_value(&direct).unwrap(),

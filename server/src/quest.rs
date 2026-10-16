@@ -1269,8 +1269,9 @@ mod report152_stale_story_loot_tests {
             .count();
         // A count of our own deterministic rolls, so it moves with the floor-loot
         // corpus: 37 before #374 drew each table from the levels nearest the
-        // dungeon's, which changed the level-48 results these rolls pick from.
-        assert_eq!(paying_spawns, 36, "the capture-derived deterministic rolls");
+        // dungeon's, which changed the level-48 results these rolls pick from; 37
+        // again since #388 fills every breakable to its 2 / 4 / 6 stacks.
+        assert_eq!(paying_spawns, 37, "the capture-derived deterministic rolls");
 
         // Exact shape of the reporter's durable pre-fix row: spawn/table ids exist,
         // but every result is empty. Preserve the enemy/chest sections verbatim.
@@ -5826,6 +5827,27 @@ mod report85_job_generated_data_tests {
             !data.enemy_generated_data.is_empty(),
             "the control quest must still generate enemies"
         );
+    }
+
+    /// #388 (owner-approved deviation from retail, 2026-10-16): a job's breakables
+    /// hold 2 / 4 / 6 loot stacks by rarity (common / uncommon / rare).
+    #[test]
+    fn report_388_job_containers_hold_2_4_6_stacks() {
+        use blades_lib::features::beginner_economy::{container_stacks, JOB_CONTAINER_TABLE};
+        let gd = game_data();
+        let spawns = &gd.dungeons[&jobs_gen::JOB_SPAWN_GROUPS_REFERENCE].spawn_info.item;
+        let mut by_size = std::collections::BTreeMap::new();
+        for job in board() {
+            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0).unwrap();
+            for (spawn, pile) in &data.item_generated_data {
+                for loot in pile.iter().filter_map(|r| r.loot_table_loot.get(&JOB_CONTAINER_TABLE)) {
+                    let want = container_stacks(&JOB_CONTAINER_TABLE, spawns[spawn].name.as_deref()).unwrap();
+                    assert_eq!(loot.stackable_items.len(), want, "job {} spawn {spawn}", job["questId"]);
+                    *by_size.entry(want).or_insert(0) += 1;
+                }
+            }
+        }
+        assert_eq!(by_size.keys().copied().collect::<Vec<_>>(), vec![2, 4, 6], "{by_size:?}");
     }
 
     /// An entry the client cannot populate a level from is no better than a missing one:

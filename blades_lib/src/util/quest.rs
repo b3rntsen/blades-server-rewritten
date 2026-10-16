@@ -933,6 +933,32 @@ mod event_dungeons_as_retail_built_them {
         }
     }
 
+    /// #388 (owner-approved deviation from retail, 2026-10-16): every breakable in
+    /// an event dungeon holds 2 / 4 / 6 loot stacks by size, at every level, and
+    /// the client's container count is unchanged (the server cannot add one).
+    #[test]
+    fn report_388_event_containers_hold_2_4_6_stacks() {
+        use crate::features::beginner_economy::container_stacks;
+        let gd = game_data();
+        let mut filled = 0;
+        for dungeon in [EQ21, EQ25, EQ27, EQ30, EQ40] {
+            for level in [1, 7, 20, 45, 49, 78, 100] {
+                let data = generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
+                let spawns = &gd.dungeons[&uuid(dungeon)].spawn_info.item;
+                for (spawn, pile) in &data.item_generated_data {
+                    for result in pile {
+                        for (table, loot) in &result.loot_table_loot {
+                            let Some(want) = container_stacks(table, spawns[spawn].name.as_deref()) else { continue };
+                            assert_eq!(loot.stackable_items.len(), want, "{dungeon} at {level}: {spawn} {table}");
+                            filled += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(filled > 300, "{filled} containers checked");
+    }
+
     /// CONTROL for report #374's "fewer containers": both events place exactly the
     /// containers retail sent for them -- 7 small, 3 medium, 1 large in all six
     /// captured generations (EQ21 at difficulty 23 and 78, EQ27 at 22 and 72).
