@@ -510,26 +510,33 @@ fn resolve_dungeon_settings_id(
 /// This used to be `generate_for_dungeon(.., 1, 100)`. A level-89 player saw
 /// level-73 enemies worth 258 XP each on the quest row, but every kill paid 100 XP,
 /// every corpse was rolled at level 1, and every chest was a level-1 chest.
+///
+/// `loot_shift` ([`blades_lib::features::loot_level::dungeon_loot_shift`]) lifts the
+/// corpse and container loot to the level-100 character's from level 49 (#398).
 pub(crate) fn event_dungeon_data(
     game_data: &GameData,
     quest_id: Uuid,
     difficulty_level: i64,
     scaling: &QuestLevelScaling,
+    loot_shift: i64,
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
     // Every stage, not just the one the template names (#323) — and no stage the
     // event never had (#329).
-    let generated_data = blades_lib::util::quest::generate_for_event_dungeon(
+    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_with_loot_shift(
         game_data,
         &dungeon_uuid,
+        None,
         enemy_level,
         scaling,
+        loot_shift,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
 }
 
+/// [`event_dungeon_data`] for one run of the instance, seeded per run.
 pub(crate) fn event_dungeon_data_for_run(
     game_data: &GameData,
     quest_id: Uuid,
@@ -537,18 +544,20 @@ pub(crate) fn event_dungeon_data_for_run(
     scaling: &QuestLevelScaling,
     instance_quest_id: Uuid,
     completion_count: u64,
+    loot_shift: i64,
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
     // Every stage of a multi-stage event (`_A`, `_B`, `_C`), as retail generated it.
     // Only the named first stage left the rest of the run without experience, drops
     // or container loot (#323). A stage the event never had is left out (#329).
-    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_with_seed(
+    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_with_loot_shift(
         game_data,
         &dungeon_uuid,
-        run_loot_seed(&instance_quest_id, completion_count),
+        Some(run_loot_seed(&instance_quest_id, completion_count)),
         enemy_level,
         scaling,
+        loot_shift,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
@@ -641,6 +650,59 @@ async fn own_event_tiers(
         .and_then(|c| c.0["completedQuests"][instance_quest_id.to_string()].as_i64())
         .unwrap_or(0)
         .max(0))
+}
+
+/// The lowest level any enemy of `generated` stands at: the level a story quest's
+/// dungeon was generated at (every story enemy stands at one level). `None` for a
+/// dungeon without enemies.
+pub(crate) fn generated_enemy_level(generated: &DungeonGeneratedData) -> Option<u64> {
+    generated
+        .enemy_generated_data
+        .values()
+        .flatten()
+        .flatten()
+        .map(|e| e.enemy_level.max(1) as u64)
+        .min()
+}
+
+/// The level an ordinary quest's dungeon is entered at: the row's
+/// `difficultyLevel` for a job, and for a story quest -- whose row carries retail's
+/// `-1` (`STORY_QUEST_DIFFICULTY_LEVEL`) -- the level its enemies were generated at.
+///
+/// Report #398: `-1` became level 1, so every story dungeon reported itself as a
+/// level-1 dungeon and every chest found in one was minted as a level-1 chest. Retail
+/// sent the real level (a level-40 dungeon in the captures).
+pub(crate) fn quest_dungeon_level(difficulty_level: i64, generated: Option<&DungeonGeneratedData>) -> u64 {
+    if difficulty_level >= 1 {
+        return difficulty_level as u64;
+    }
+    generated.and_then(generated_enemy_level).unwrap_or(1)
+}
+
+/// The character's level, for the loot it is paid at (#398). 1 for a missing row.
+pub(crate) async fn character_level(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+) -> Result<i64, BladeApiError> {
+    use crate::schema::characters::dsl as ch;
+    let character: Option<JsonDbWrapper<serde_json::Value>> = ch::characters
+        .filter(ch::id.eq(char_id))
+        .select(ch::character)
+        .first(conn)
+        .await
+        .optional()?;
+    Ok(character.and_then(|c| c.0["level"].as_i64()).unwrap_or(1).max(1))
+}
+
+/// The loot shift of an event run at `difficulty_level` for this character (#398).
+async fn event_loot_shift(
+    conn: &mut AsyncPgConnection,
+    scaling: &QuestLevelScaling,
+    char_id: Uuid,
+    difficulty_level: i64,
+) -> Result<i64, BladeApiError> {
+    let level = character_level(conn, char_id).await?;
+    Ok(blades_lib::features::loot_level::dungeon_loot_shift(scaling, level, difficulty_level))
 }
 
 /// Put an event instance back to how its next run starts.
@@ -786,6 +848,13 @@ pub(crate) async fn event_dungeon_exit(
         milestones,
     );
     if !exhausted {
+        let loot_shift = event_loot_shift(
+            conn,
+            &sd.quests_daily.level_scaling,
+            char_id,
+            row.info.0.difficulty_level,
+        )
+        .await?;
         let (_, next_data) = event_dungeon_data_for_run(
             game_data,
             template_id,
@@ -793,6 +862,7 @@ pub(crate) async fn event_dungeon_exit(
             &sd.quests_daily.level_scaling,
             instance_id,
             completion.completion_count as u64,
+            loot_shift,
         )?;
         row.generated_data.0 = Some(next_data);
     }
@@ -980,7 +1050,10 @@ pub async fn enter_quest_dungeon(
                     current_state: body.current_state,
                     enemy_status: HashMap::default(),
                     seed: rand::random::<u32>() as i64,
-                    level: quest.info.0.difficulty_level.max(1) as u64,
+                    level: quest_dungeon_level(
+                        quest.info.0.difficulty_level,
+                        quest.generated_data.0.as_ref(),
+                    ),
                     version: 1, //TODO: figure out where this version come from.
                     collected_chests: HashSet::default(),
                 };
@@ -1194,7 +1267,7 @@ mod dungeon_settings_resolution {
         let expected_dungeon =
             Uuid::parse_str("924f1147-fd7f-4736-9e2d-f33fa942dbdd").unwrap();
         let (dungeon_id, generated) =
-            event_dungeon_data(&gd, quest_id, 40, &crate::quest::shipped_scaling())
+            event_dungeon_data(&gd, quest_id, 40, &crate::quest::shipped_scaling(), 0)
             .expect("the EQ15 event quest must generate a real dungeon payload");
 
         assert_eq!(dungeon_id, expected_dungeon);
@@ -1228,7 +1301,7 @@ mod dungeon_settings_resolution {
 
         for quest_id in sd.event_quests.templates.keys() {
             let (dungeon_id, generated) =
-                event_dungeon_data(&gd, *quest_id, 40, &sd.quests_daily.level_scaling)
+                event_dungeon_data(&gd, *quest_id, 40, &sd.quests_daily.level_scaling, 0)
                 .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
             assert!(gd.dungeons.contains_key(&dungeon_id), "resolved dungeon exists");
             let stages: Vec<_> =
@@ -1319,6 +1392,7 @@ mod dungeon_settings_resolution {
                 scaling,
                 m.quest_id,
                 0,
+                blades_lib::features::loot_level::dungeon_loot_shift(scaling, 89, level),
             )
             .expect("generates");
             assert_eq!(
@@ -1346,7 +1420,7 @@ mod dungeon_settings_resolution {
 
         // "A Battle Unceasing" (EQ15), the event the prod row was on.
         let eq15 = Uuid::parse_str("e8f3614c-8672-4f77-9dad-4b400676f4b6").unwrap();
-        let (_, attempt) = event_dungeon_data(&gd, eq15, 73, scaling).unwrap();
+        let (_, attempt) = event_dungeon_data(&gd, eq15, 73, scaling, 0).unwrap();
         assert_eq!(enemies(&attempt).len(), 14);
         let mut levels: Vec<i64> = enemies(&attempt).iter().map(|e| e.enemy_level).collect();
         levels.sort();
@@ -1369,8 +1443,8 @@ mod dungeon_settings_resolution {
         let level = scaling.enemy_level(89);
 
         let (_, tier_one) =
-            event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0).unwrap();
-        let (_, retry) = event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0).unwrap();
+            event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0, 0).unwrap();
+        let (_, retry) = event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0, 0).unwrap();
         assert_eq!(
             serde_json::to_value(&tier_one).unwrap(),
             serde_json::to_value(&retry).unwrap(),
@@ -1380,7 +1454,7 @@ mod dungeon_settings_resolution {
         let mut described = Vec::new();
         for tier in 0..5 {
             let (_, generated) =
-                event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, tier).unwrap();
+                event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, tier, 0).unwrap();
             described.push(serde_json::to_value(&generated).unwrap());
         }
         assert!(
@@ -1421,7 +1495,15 @@ mod dungeon_settings_resolution {
         assert_eq!(row.difficulty_level, 73);
         assert!(enemies(&data).iter().all(|e| e.enemy_level == 73 && e.given_xp == 258));
 
-        let same = generate_for_dungeon(&gd, &dungeon, 73, scaling.given_xp(73)).unwrap();
+        // Its loot is the level-100 character's (#398); the enemies stay at 73.
+        let same = blades_lib::util::dungeon::generate_for_dungeon_with_loot_shift(
+            &gd,
+            &dungeon,
+            None,
+            blades_lib::util::dungeon::EnemyLevels::Flat { level: 73, given_xp: scaling.given_xp(73) },
+            blades_lib::features::loot_level::dungeon_loot_shift(scaling, 89, 73),
+        )
+        .unwrap();
         assert_eq!(
             serde_json::to_value(&data).unwrap(),
             serde_json::to_value(&same).unwrap()
@@ -1457,7 +1539,7 @@ mod dungeon_settings_resolution {
         let instance = Uuid::from_u128(0x323);
         for (event, stages, enemy_count, chest_count) in [(EQ24, 2, 20, 2), (EQ22, 3, 14, 2)] {
             let (dungeon, attempt) =
-                event_dungeon_data_for_run(&gd, uuid(event), 16, scaling, instance, 0).unwrap();
+                event_dungeon_data_for_run(&gd, uuid(event), 16, scaling, instance, 0, 0).unwrap();
             let family = blades_lib::util::quest::quest_dungeon_family_ids(&gd, &dungeon).unwrap();
             assert_eq!(family.len(), stages, "event {event}");
             for stage in &family {
@@ -1484,7 +1566,7 @@ mod dungeon_settings_resolution {
 
             // The plain (unseeded) path the update handler heals empty rows with
             // covers the same stages.
-            let (_, plain) = event_dungeon_data(&gd, uuid(event), 16, scaling).unwrap();
+            let (_, plain) = event_dungeon_data(&gd, uuid(event), 16, scaling, 0).unwrap();
             assert_eq!(enemies(&plain).len(), enemy_count, "event {event}: unseeded path");
         }
     }
@@ -1512,6 +1594,7 @@ mod dungeon_settings_resolution {
             row.quest.difficulty_level,
             scaling,
             row.quest_id,
+            0,
             0,
         )
         .unwrap();
@@ -1572,9 +1655,10 @@ mod dungeon_settings_resolution {
             scaling,
             row.quest_id,
             0,
+            0,
         )
         .unwrap();
-        let (_, plain) = event_dungeon_data(&gd, uuid(EQ23), 2, scaling).unwrap();
+        let (_, plain) = event_dungeon_data(&gd, uuid(EQ23), 2, scaling, 0).unwrap();
 
         for (path, data) in
             [("mint", row.dungeon.as_ref().unwrap()), ("attempt", &attempt), ("heal", &plain)]
@@ -1755,7 +1839,7 @@ mod dungeon_settings_resolution {
             "difficultyLevel": 20,
             "objectiveStatuses": {},
         });
-        let generated = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling())
+        let generated = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0)
             .expect("the reference dungeon is in the corpus");
 
         let settings_id = resolve_dungeon_settings_id(
@@ -1857,6 +1941,8 @@ async fn handle_event_dungeon_entry(
     }
     let completion_count = completion.completion_count as usize;
     let enemy_level = difficulty_level.max(1);
+    let loot_shift =
+        event_loot_shift(conn, &sd.quests_daily.level_scaling, character_id, enemy_level).await?;
     let (dungeon_uuid, dungeon_data) = event_dungeon_data_for_run(
         game_data,
         quest_id,
@@ -1864,6 +1950,7 @@ async fn handle_event_dungeon_entry(
         &sd.quests_daily.level_scaling,
         instance_quest_id,
         completion.completion_count as u64,
+        loot_shift,
     )?;
 
     // Has the character already completed all tiers? Only a NEW attempt is refused

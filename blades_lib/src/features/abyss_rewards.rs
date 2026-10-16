@@ -263,6 +263,8 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 /// FROM LEVEL 49 the package is the top band's, drawn as at level 100 (report #383,
 /// [`TOP_BAND_FROM_LEVEL`]): Glorious gems and the Transcendent upgrade included.
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
+    // From 49 everything is drawn as at level 100, its gem re-grading included (#398).
+    let character_level = crate::features::loot_level::effective_loot_level_u64(character_level);
     let mut grant = RewardGrant::default();
     if score < END_PACKAGE_MIN_SCORE {
         return grant;
@@ -640,7 +642,13 @@ fn borrow_from_above<'a>(
 /// The single resolution of a rung's reward, shared by the advertisement and the
 /// grant. The draw is a function of the run seed and the rung only — never of
 /// the score that selected it — so advertising and paying cannot disagree.
-fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant {
+/// From level 49 a rung pays what it pays a level-100 character (#398) — its chest
+/// at level 100, its stack from the level-100 pool — with one exception kept on
+/// purpose: a level 49-59 character still has #371's extra Grand Soul Gem among the
+/// results beside the golden chest, which level 100 does not. Paying exactly level
+/// 100 would take that away, and rewards are never narrowed without HauDrauf.
+fn rung_reward(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant {
+    let character_level = crate::features::loot_level::effective_loot_level_u64(real_level);
     let mut grant = RewardGrant::default();
 
     if rung.kind == "chest" {
@@ -676,7 +684,7 @@ fn rung_reward(rung: &Rung, character_level: u64, run_seed: i64) -> RewardGrant 
     }
 
     let seed = mix((run_seed as u64) ^ (u64::from(rung.score)).rotate_left(29));
-    let extra = grand_gem_beside_the_golden_chest(rung.score, character_level);
+    let extra = grand_gem_beside_the_golden_chest(rung.score, real_level);
     let mut candidates: Vec<&ObservedReward> = pool.iter().map(|r| &r.reward).collect();
     if let Some(grand) = &extra {
         candidates.push(grand);
@@ -741,7 +749,8 @@ mod tests {
     }
 
     /// The chest rungs are the deterministic ones: fixed tier, and the chest is
-    /// cut to the character's own level. 72 of 72 observations.
+    /// cut to the character's own level. 72 of 72 observations. From level 49 that
+    /// level is the one the character is paid as, 100 (#398).
     #[test]
     fn chest_rungs_take_the_characters_level() {
         for (rung, tier) in [(50u32, 1u64), (360, 3)] {
@@ -752,8 +761,9 @@ mod tests {
                 assert_eq!(grant.chests.len(), 1, "rung {rung} must grant one chest");
                 assert_eq!(grant.chests[0].tier, tier, "rung {rung} tier");
                 assert_eq!(
-                    grant.chests[0].level, level,
-                    "rung {rung} must cut the chest to the character's level"
+                    grant.chests[0].level,
+                    crate::features::loot_level::effective_loot_level_u64(level),
+                    "rung {rung} must cut the chest to the character's (paid-as) level"
                 );
                 assert!(grant.chests[0].id.is_none(), "the treasury assigns the id");
                 assert!(grant.stackable_items.is_empty() && grant.items.is_empty());
@@ -1296,7 +1306,7 @@ mod tests {
                 let chest = future_reward_for_rung(50, level, *seed).unwrap();
                 let rung70 = future_reward_for_rung(70, level, *seed).unwrap();
                 rung35.stackable_items == HashMap::from([(uuid(item), count)])
-                    && chest.chests.iter().any(|c| (c.tier, c.level) == (1, level))
+                    && chest.chests.iter().any(|c| (c.tier, c.level) == (1, crate::features::loot_level::effective_loot_level_u64(level)))
                     && seventy.is_none_or(|(i, n)| rung70.stackable_items == HashMap::from([(uuid(i), n)]))
                     && end_package(score, level, *seed).stackable_items == transcendent
             });
