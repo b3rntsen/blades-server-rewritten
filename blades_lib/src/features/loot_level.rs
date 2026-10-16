@@ -13,8 +13,17 @@
 //! required-level checks still read the real level.
 //!
 //! Below 49 nothing changes: [`effective_loot_level`] is the identity there.
+//!
+//! One exception, also HauDrauf's: EVENT soul gems at 49-60 stay Grand
+//! ([`EVENT_GRAND_SOUL_GEM_LEVELS`], [`cap_event_soul_gems`]).
+
+use std::collections::HashMap;
+use std::ops::RangeInclusive;
+
+use uuid::Uuid;
 
 use crate::static_data::QuestLevelScaling;
+use crate::user_data::{DungeonGeneratedData, LootTableResult};
 
 /// From this character level on, loot is rolled as for [`TOP_LOOT_LEVEL`] (#398).
 pub const TOP_LOOT_FROM_LEVEL: i64 = 49;
@@ -63,6 +72,60 @@ pub fn dungeon_loot_shift(scaling: &QuestLevelScaling, character_level: i64, dun
     (scaling.enemy_level(paid_as) - dungeon_level).max(0)
 }
 
+/// The character levels whose EVENT soul gems are Grand, never better (#398).
+///
+/// HauDrauf (#398, 2026-10-16), after level 49 was made to pay as level 100:
+/// "At the end of events you get Grand soul gems instead of Glorious. Within the
+/// events themselves you get Grand from level 49. Otherwise there were no big
+/// differences between 49 and 60." (translated from German: "mächtige" instead of
+/// "herrliche"). It matches the retail captures, which saw events pay Grand at
+/// 56-58 and Glorious from 61 (`event_material_ladders.json`).
+///
+/// So an event's milestones, final reward and dungeon (corpse and container loot)
+/// pay a 49-60 character level 100's rewards with every soul gem above Grand
+/// (Glorious, Transcendent) paid as Grand, same count. Nothing else moves: not the
+/// rest of the event's rewards, not other sources, not 61+.
+pub const EVENT_GRAND_SOUL_GEM_LEVELS: RangeInclusive<i64> = TOP_LOOT_FROM_LEVEL..=60;
+
+/// Grand Soul Gem (`Items.Name.SoulGem8`).
+pub const GRAND_SOUL_GEM: Uuid = Uuid::from_u128(0x68d7941e_8c8d_47bf_9f66_becb058f1817);
+
+/// The soul gems above Grand: Glorious (`SoulGem9`) and Transcendent (`SoulGem10`).
+pub const SOUL_GEMS_ABOVE_GRAND: [Uuid; 2] = [
+    Uuid::from_u128(0xbafe6ed5_6473_4a4c_aef5_421d3af5c8cb),
+    Uuid::from_u128(0xd94bab85_53d5_4c9c_a637_acd94fc66c98),
+];
+
+/// Pay every soul gem above Grand in an EVENT reward's `stacks` as Grand, same
+/// count, for a character of `character_level` in [`EVENT_GRAND_SOUL_GEM_LEVELS`].
+/// A no-op at every other level.
+pub fn cap_event_soul_gems(stacks: &mut HashMap<Uuid, u64>, character_level: i64) {
+    if !EVENT_GRAND_SOUL_GEM_LEVELS.contains(&character_level) {
+        return;
+    }
+    let capped: u64 = SOUL_GEMS_ABOVE_GRAND.iter().filter_map(|gem| stacks.remove(gem)).sum();
+    if capped > 0 {
+        *stacks.entry(GRAND_SOUL_GEM).or_insert(0) += capped;
+    }
+}
+
+/// [`cap_event_soul_gems`] over an event dungeon's corpse and container loot.
+/// Chests are rolled when opened, from the chest tables every source shares, and
+/// are left alone.
+pub fn cap_event_dungeon_soul_gems(data: &mut DungeonGeneratedData, character_level: i64) {
+    if !EVENT_GRAND_SOUL_GEM_LEVELS.contains(&character_level) {
+        return;
+    }
+    let mut cap = |loot: &mut LootTableResult| cap_event_soul_gems(&mut loot.stackable_items, character_level);
+    for enemy in data.enemy_generated_data.values_mut().flatten().flatten() {
+        cap(&mut enemy.spawn_group_loot);
+        enemy.loot_table_loot.values_mut().for_each(&mut cap);
+    }
+    for item in data.item_generated_data.values_mut().flatten() {
+        item.loot_table_loot.values_mut().for_each(&mut cap);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +150,27 @@ mod tests {
         for level in 1..49 {
             assert_eq!(dungeon_loot_shift(&scaling, level, scaling.enemy_level(level)), 0);
         }
+    }
+
+    /// HauDrauf #398: Glorious and Transcendent are paid as Grand at 49-60 only.
+    #[test]
+    fn event_soul_gems_above_grand_are_grand_at_49_to_60_only() {
+        let [glorious, transcendent] = SOUL_GEMS_ABOVE_GRAND;
+        let exceptional: Uuid = "3932e499-441e-4c6d-b671-9a03131ebe6f".parse().unwrap();
+        let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
+        let stacks = HashMap::from([(glorious, 5), (transcendent, 2), (GRAND_SOUL_GEM, 1), (exceptional, 3), (lumber, 9)]);
+        for level in [49, 55, 60] {
+            let mut s = stacks.clone();
+            cap_event_soul_gems(&mut s, level);
+            assert_eq!(s, HashMap::from([(GRAND_SOUL_GEM, 8), (exceptional, 3), (lumber, 9)]), "level {level}");
+        }
+        for level in [1, 48, 61, 100] {
+            let mut s = stacks.clone();
+            cap_event_soul_gems(&mut s, level);
+            assert_eq!(s, stacks, "level {level}");
+        }
+        assert_eq!(GRAND_SOUL_GEM.to_string(), "68d7941e-8c8d-47bf-9f66-becb058f1817");
+        assert_eq!(glorious.to_string(), "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb");
+        assert_eq!(transcendent.to_string(), crate::features::abyss_rewards::TRANSCENDENT_SOUL_GEM);
     }
 }

@@ -16,6 +16,11 @@
 //!   enemy and container loot (story quests, events, jobs, the Abyss bonus), event
 //!   rewards, job gold, daily rewards and the Abyss `/end` and rungs. Enemy levels
 //!   and XP are asserted UNCHANGED alongside.
+//! * EXCEPT EVENT SOUL GEMS AT 49-60, which stay Grand
+//!   ([`blades_lib::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`], HauDrauf
+//!   2026-10-16): level 100's event rewards and event-dungeon loot with every
+//!   Glorious and Transcendent gem paid as Grand. Pinned at 49, 55 and 60 against
+//!   61 and 100.
 //!
 //! `part_a` (ignored) prints the report's numbers: `cargo test -p server
 //! report_398::part_a -- --ignored --nocapture`.
@@ -23,7 +28,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use blades_lib::economy::RewardGrant;
-use blades_lib::features::loot_level::{dungeon_loot_shift, effective_loot_level, effective_loot_level_u64};
+use blades_lib::features::loot_level::{
+    cap_event_dungeon_soul_gems, cap_event_soul_gems, effective_loot_level, effective_loot_level_u64,
+    GRAND_SOUL_GEM, SOUL_GEMS_ABOVE_GRAND,
+};
 use blades_lib::features::{abyss_rewards, chests, store_bundles};
 use blades_lib::static_data::QuestLevelScaling;
 use blades_lib::user_data::DungeonGeneratedData;
@@ -69,15 +77,7 @@ fn job_dungeon(gd: &blades_lib::game_data::GameData, pools: &Value, job: &Value,
 
 /// An event dungeon run, as `/enter` generates it for a character of `level`.
 fn event_dungeon(gd: &blades_lib::game_data::GameData, scaling: &QuestLevelScaling, dungeon: &Uuid, seed: u64, level: i64) -> Option<DungeonGeneratedData> {
-    let e = scaling.enemy_level(level);
-    blades_lib::util::quest::generate_for_event_dungeon_with_loot_shift(
-        gd,
-        dungeon,
-        Some(seed),
-        e,
-        scaling,
-        dungeon_loot_shift(scaling, level, e),
-    )
+    blades_lib::util::quest::generate_for_event_dungeon_for_character(gd, dungeon, Some(seed), scaling.enemy_level(level), scaling, level)
 }
 
 fn event_dungeons(ctx: &Ctx, gd: &blades_lib::game_data::GameData) -> Vec<Uuid> {
@@ -260,23 +260,116 @@ fn levels_below_49_are_unchanged() {
 
 const PAID_AS_100: [i64; 3] = [49, 60, 80];
 
+/// Level 100's event rewards, with its soul gems paid as `level`'s
+/// ([`cap_event_soul_gems`]: Grand at 49-60, untouched elsewhere).
+fn event_rewards_at_100_for(tmpl: &blades_lib::static_data::EventQuestTemplate, level: i64) -> (Value, Value) {
+    let mut milestones = tmpl.rewards_for_level(100);
+    for r in &mut milestones {
+        cap_event_soul_gems(&mut r.stackable_items, level);
+    }
+    let mut last = tmpl.final_reward_for_level(100);
+    if let Some(r) = &mut last {
+        cap_event_soul_gems(&mut r.stackable_items, level);
+    }
+    (serde_json::to_value(milestones).unwrap(), serde_json::to_value(last).unwrap())
+}
+
+/// Event milestones and final reward from 49 are level 100's, but for the soul
+/// gems at 49-60, which are Grand (HauDrauf, 2026-10-16).
 #[test]
 fn event_rewards_from_49_are_level_100s() {
     let ctx = Ctx::load();
     for tmpl in ctx.sd.event_quests.templates.values() {
         for l in PAID_AS_100 {
-            assert_eq!(
-                serde_json::to_value(tmpl.rewards_for_level(l)).unwrap(),
-                serde_json::to_value(tmpl.rewards_for_level(100)).unwrap(),
-                "{} milestones at {l}",
-                tmpl.gld_quest_id
-            );
-            assert_eq!(
-                serde_json::to_value(tmpl.final_reward_for_level(l)).unwrap(),
-                serde_json::to_value(tmpl.final_reward_for_level(100)).unwrap(),
-                "{} final at {l}",
-                tmpl.gld_quest_id
-            );
+            let (milestones, last) = event_rewards_at_100_for(tmpl, l);
+            assert_eq!(serde_json::to_value(tmpl.rewards_for_level(l)).unwrap(), milestones, "{} milestones at {l}", tmpl.gld_quest_id);
+            assert_eq!(serde_json::to_value(tmpl.final_reward_for_level(l)).unwrap(), last, "{} final at {l}", tmpl.gld_quest_id);
+        }
+    }
+}
+
+/// THE REPORT (HauDrauf #398, 2026-10-16): "At the end of events you get Grand
+/// soul gems instead of Glorious. Within the events themselves you get Grand from
+/// level 49." At 49, 55 and 60 every soul gem an event pays — milestones, final
+/// reward, corpses and containers — is Grand, and at least one is (so the test
+/// cannot pass on an event that pays none). 61 and 100 still pay Glorious, and
+/// everything that is not a soul gem is level 100's at all five levels.
+#[test]
+fn event_soul_gems_at_49_to_60_are_grand_and_glorious_from_61() {
+    let ctx = Ctx::load();
+    let gd = gd();
+    let scaling = crate::quest::shipped_scaling();
+    let soul_gem = |id: &Uuid| ctx.name(id).starts_with("SoulGem");
+    let gems_of = |v: &Value| -> BTreeMap<String, u64> {
+        fn walk(v: &Value, out: &mut BTreeMap<String, u64>) {
+            match v {
+                Value::Object(m) => {
+                    for (k, x) in m {
+                        match (k.as_str(), x.as_object()) {
+                            ("stackableItems", Some(o)) => o.iter().for_each(|(id, n)| *out.entry(id.clone()).or_default() += n.as_u64().unwrap_or(0)),
+                            _ => walk(x, out),
+                        }
+                    }
+                }
+                Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+                _ => {}
+            }
+        }
+        let mut all = BTreeMap::new();
+        walk(v, &mut all);
+        all.into_iter().filter(|(id, _)| soul_gem(&id.parse().unwrap())).collect()
+    };
+    let without_gems = |v: &Value| -> Value {
+        fn strip(v: &mut Value, is_gem: &dyn Fn(&str) -> bool) {
+            match v {
+                Value::Object(m) => {
+                    for (k, x) in m.iter_mut() {
+                        match (k.as_str(), x.as_object_mut()) {
+                            ("stackableItems", Some(o)) => o.retain(|id, _| !is_gem(id)),
+                            _ => strip(x, is_gem),
+                        }
+                    }
+                }
+                Value::Array(a) => a.iter_mut().for_each(|x| strip(x, is_gem)),
+                _ => {}
+            }
+        }
+        let mut v = v.clone();
+        strip(&mut v, &|id| id.parse().is_ok_and(|id| soul_gem(&id)));
+        v
+    };
+    let grand = GRAND_SOUL_GEM.to_string();
+    let glorious = SOUL_GEMS_ABOVE_GRAND[0].to_string();
+
+    let rewards_at = |l: i64| -> Value {
+        let mut ids: Vec<&Uuid> = ctx.sd.event_quests.templates.keys().collect();
+        ids.sort();
+        let t = |id: &Uuid| &ctx.sd.event_quests.templates[id];
+        Value::Array(ids.iter().map(|id| serde_json::json!([t(id).rewards_for_level(l), t(id).final_reward_for_level(l)])).collect())
+    };
+    let dungeons_at = |l: i64| -> Value {
+        let mut out = Vec::new();
+        for dungeon in event_dungeons(&ctx, &gd) {
+            for seed in [0u64, 7, 99] {
+                out.extend(event_dungeon(&gd, &scaling, &dungeon, seed, l).map(|d| loot_of(&d)));
+            }
+        }
+        Value::Array(out)
+    };
+    let (rewards_100, dungeons_100) = (rewards_at(100), dungeons_at(100));
+    for (what, at_100, at) in [("rewards", &rewards_100, &rewards_at as &dyn Fn(i64) -> Value), ("dungeons", &dungeons_100, &dungeons_at)] {
+        assert!(gems_of(at_100).contains_key(&glorious), "{what}: level 100 pays Glorious");
+        for l in [49i64, 55, 60] {
+            let v = at(l);
+            let gems = gems_of(&v);
+            assert!(gems.get(&grand).is_some_and(|n| *n > 0), "{what} at {l}: no Grand paid: {gems:?}");
+            assert_eq!(gems.keys().collect::<Vec<_>>(), vec![&grand], "{what} at {l}: only Grand, never Glorious");
+            assert_eq!(without_gems(&v), without_gems(at_100), "{what} at {l}: the rest is level 100's");
+        }
+        for l in [61i64, 100] {
+            let v = at(l);
+            assert_eq!(gems_of(&v), gems_of(at_100), "{what} at {l}: level 100's gems, Glorious included");
+            assert_eq!(v, *at_100, "{what} at {l}: exactly level 100's");
         }
     }
 }
@@ -399,8 +492,8 @@ fn story_quest_loot_from_49_is_level_100s_and_enemies_stay() {
     assert!(compared > 100, "only {compared} quest dungeons compared");
 }
 
-/// Events: loot as level 100's run of the same seed; enemies at the row's level
-/// plus their group delta, as before.
+/// Events: loot as level 100's run of the same seed, soul gems Grand at 49-60;
+/// enemies at the row's level plus their group delta, as before.
 #[test]
 fn event_dungeon_loot_from_49_is_level_100s_and_enemies_stay() {
     let ctx = Ctx::load();
@@ -411,7 +504,10 @@ fn event_dungeon_loot_from_49_is_level_100s_and_enemies_stay() {
             let Some(at_100) = event_dungeon(&gd, &scaling, &dungeon, seed, 100) else { continue };
             for l in PAID_AS_100 {
                 let at = event_dungeon(&gd, &scaling, &dungeon, seed, l).unwrap();
-                assert_eq!(loot_of(&at), loot_of(&at_100), "event {dungeon} level {l}");
+                // Level 100's loot, its soul gems Grand at 49-60 (HauDrauf, 2026-10-16).
+                let mut want = at_100.clone();
+                cap_event_dungeon_soul_gems(&mut want, l);
+                assert_eq!(loot_of(&at), loot_of(&want), "event {dungeon} level {l}");
                 let unshifted = blades_lib::util::quest::generate_for_event_dungeon_with_seed(&gd, &dungeon, seed, scaling.enemy_level(l), &scaling).unwrap();
                 assert_eq!(enemy_levels(&at), enemy_levels(&unshifted), "event {dungeon} enemies moved at {l}");
             }
@@ -720,3 +816,4 @@ fn part_a() {
         println!("EVENT REWARDS c={c}: sell/milestone={:.0} soul gems {soul:?}", evr.sell as f64 / evr.n.max(1) as f64);
     }
 }
+

@@ -511,26 +511,29 @@ fn resolve_dungeon_settings_id(
 /// level-73 enemies worth 258 XP each on the quest row, but every kill paid 100 XP,
 /// every corpse was rolled at level 1, and every chest was a level-1 chest.
 ///
-/// `loot_shift` ([`blades_lib::features::loot_level::dungeon_loot_shift`]) lifts the
-/// corpse and container loot to the level-100 character's from level 49 (#398).
+/// `character_level` is the level of the character the run is for: from 49 its
+/// corpse and container loot is the level-100 character's
+/// ([`blades_lib::features::loot_level::dungeon_loot_shift`]), with soul gems Grand
+/// at 49-60 ([`blades_lib::features::loot_level::cap_event_dungeon_soul_gems`],
+/// #398).
 pub(crate) fn event_dungeon_data(
     game_data: &GameData,
     quest_id: Uuid,
     difficulty_level: i64,
     scaling: &QuestLevelScaling,
-    loot_shift: i64,
+    character_level: i64,
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
     // Every stage, not just the one the template names (#323) — and no stage the
     // event never had (#329).
-    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_with_loot_shift(
+    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_for_character(
         game_data,
         &dungeon_uuid,
         None,
         enemy_level,
         scaling,
-        loot_shift,
+        character_level,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
@@ -544,20 +547,20 @@ pub(crate) fn event_dungeon_data_for_run(
     scaling: &QuestLevelScaling,
     instance_quest_id: Uuid,
     completion_count: u64,
-    loot_shift: i64,
+    character_level: i64,
 ) -> Result<(Uuid, DungeonGeneratedData), BladeApiError> {
     let dungeon_uuid = resolve_dungeon_settings_id(game_data, quest_id, None)?;
     let enemy_level = difficulty_level.max(1);
     // Every stage of a multi-stage event (`_A`, `_B`, `_C`), as retail generated it.
     // Only the named first stage left the rest of the run without experience, drops
     // or container loot (#323). A stage the event never had is left out (#329).
-    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_with_loot_shift(
+    let generated_data = blades_lib::util::quest::generate_for_event_dungeon_for_character(
         game_data,
         &dungeon_uuid,
         Some(run_loot_seed(&instance_quest_id, completion_count)),
         enemy_level,
         scaling,
-        loot_shift,
+        character_level,
     )
     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
     Ok((dungeon_uuid, generated_data))
@@ -692,17 +695,6 @@ pub(crate) async fn character_level(
         .await
         .optional()?;
     Ok(character.and_then(|c| c.0["level"].as_i64()).unwrap_or(1).max(1))
-}
-
-/// The loot shift of an event run at `difficulty_level` for this character (#398).
-async fn event_loot_shift(
-    conn: &mut AsyncPgConnection,
-    scaling: &QuestLevelScaling,
-    char_id: Uuid,
-    difficulty_level: i64,
-) -> Result<i64, BladeApiError> {
-    let level = character_level(conn, char_id).await?;
-    Ok(blades_lib::features::loot_level::dungeon_loot_shift(scaling, level, difficulty_level))
 }
 
 /// Put an event instance back to how its next run starts.
@@ -848,13 +840,7 @@ pub(crate) async fn event_dungeon_exit(
         milestones,
     );
     if !exhausted {
-        let loot_shift = event_loot_shift(
-            conn,
-            &sd.quests_daily.level_scaling,
-            char_id,
-            row.info.0.difficulty_level,
-        )
-        .await?;
+        let level = character_level(conn, char_id).await?;
         let (_, next_data) = event_dungeon_data_for_run(
             game_data,
             template_id,
@@ -862,7 +848,7 @@ pub(crate) async fn event_dungeon_exit(
             &sd.quests_daily.level_scaling,
             instance_id,
             completion.completion_count as u64,
-            loot_shift,
+            level,
         )?;
         row.generated_data.0 = Some(next_data);
     }
@@ -1357,6 +1343,41 @@ mod dungeon_settings_resolution {
         }
     }
 
+    /// #398 (HauDrauf, 2026-10-16): a level-55 character's event row, as `/quests`
+    /// mints it, and its attempt, as `/enter` generates it, are the same dungeon,
+    /// and neither it nor the row's rewards pay a soul gem better than Grand.
+    #[test]
+    fn a_level_55_event_row_and_attempt_agree_and_pay_grand_soul_gems() {
+        let (sd, gd) = (static_data(), game_data());
+        let scaling = &sd.quests_daily.level_scaling;
+        let above_grand = blades_lib::features::loot_level::SOUL_GEMS_ABOVE_GRAND.map(|g| g.to_string());
+        let (mut rows, mut grand) = (0, 0);
+        // A year of weekly calendars, to reach events that pay soul gems.
+        for week in 0..52i64 {
+            for m in &crate::quest::event_quests::mint(&sd, &gd, CHAR, 55, NOW + week * 7 * 86_400) {
+                let shown = m.dungeon.as_ref().expect("an event row carries dungeon data");
+                let (_, attempt) =
+                    event_dungeon_data_for_run(&gd, m.quest.gld_quest_id, m.quest.difficulty_level, scaling, m.quest_id, 0, 55)
+                        .expect("generates");
+                assert_eq!(
+                    serde_json::to_value(&attempt).unwrap(),
+                    serde_json::to_value(shown).unwrap(),
+                    "event {}",
+                    m.quest.gld_quest_id
+                );
+                // The row's milestones and final reward too, as `/quests` serves them.
+                let json = serde_json::to_string(&(&attempt, &m.quest)).unwrap();
+                for gem in &above_grand {
+                    assert!(!json.contains(gem.as_str()), "event {}: {gem} at level 55", m.quest.gld_quest_id);
+                }
+                grand += json.matches("68d7941e-8c8d-47bf-9f66-becb058f1817").count();
+                rows += 1;
+            }
+        }
+        assert!(rows > 0, "the committed calendar opens events");
+        assert!(grand > 0, "no event paid a Grand soul gem in {rows} rows, so this proves nothing");
+    }
+
     /// An event attempt is the dungeon the client was SHOWN.
     ///
     /// `/quests` mints the event row at the player's scaled level and sends its
@@ -1392,7 +1413,7 @@ mod dungeon_settings_resolution {
                 scaling,
                 m.quest_id,
                 0,
-                blades_lib::features::loot_level::dungeon_loot_shift(scaling, 89, level),
+                89,
             )
             .expect("generates");
             assert_eq!(
@@ -1941,8 +1962,7 @@ async fn handle_event_dungeon_entry(
     }
     let completion_count = completion.completion_count as usize;
     let enemy_level = difficulty_level.max(1);
-    let loot_shift =
-        event_loot_shift(conn, &sd.quests_daily.level_scaling, character_id, enemy_level).await?;
+    let level = character_level(conn, character_id).await?;
     let (dungeon_uuid, dungeon_data) = event_dungeon_data_for_run(
         game_data,
         quest_id,
@@ -1950,7 +1970,7 @@ async fn handle_event_dungeon_entry(
         &sd.quests_daily.level_scaling,
         instance_quest_id,
         completion.completion_count as u64,
-        loot_shift,
+        level,
     )?;
 
     // Has the character already completed all tiers? Only a NEW attempt is refused

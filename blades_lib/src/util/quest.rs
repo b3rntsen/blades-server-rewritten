@@ -246,6 +246,31 @@ pub fn generate_for_event_dungeon_with_loot_shift(
     })
 }
 
+/// The event run a character of `character_level` is served: its loot rolled at
+/// the level that character is paid as ([`generate_for_event_dungeon_with_loot_shift`],
+/// [`crate::features::loot_level::dungeon_loot_shift`]), its soul gems Grand at
+/// 49-60 ([`crate::features::loot_level::cap_event_dungeon_soul_gems`], #398).
+pub fn generate_for_event_dungeon_for_character(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: Option<u64>,
+    enemy_level: i64,
+    scaling: &QuestLevelScaling,
+    character_level: i64,
+) -> Option<DungeonGeneratedData> {
+    let loot_shift = crate::features::loot_level::dungeon_loot_shift(scaling, character_level, enemy_level);
+    let mut data = generate_for_event_dungeon_with_loot_shift(
+        game_data,
+        dungeon_uuid,
+        run_seed,
+        enemy_level,
+        scaling,
+        loot_shift,
+    )?;
+    crate::features::loot_level::cap_event_dungeon_soul_gems(&mut data, character_level);
+    Some(data)
+}
+
 fn generate_for_family(
     game_data: &GameData,
     dungeon_uuid: &Uuid,
