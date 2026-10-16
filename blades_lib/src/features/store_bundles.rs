@@ -1040,6 +1040,14 @@ pub fn roll_bundle_with(
             mix(seed ^ 0x3C6E_F372_FE94_F82B),
         );
     }
+    if is_golden || is_legendary || is_elder {
+        // A store chest's crafting materials come in 5, 10 or 20 (owner-approved
+        // deviation from retail, #388, 2026-10-16), as a treasury chest's.
+        crate::features::beginner_economy::size_material_stacks(
+            &mut grant.stackable_items,
+            mix(seed ^ 0x388_5743_C4E5),
+        );
+    }
     if is_golden {
         // The three best soul gems at 45-48 (owner-approved deviation from retail,
         // #388, 2026-10-16); Legendary and Elder get them from the ladder above.

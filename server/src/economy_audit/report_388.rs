@@ -256,3 +256,112 @@ fn chest_soul_gems_opened_at_45_to_48_are_the_three_best() {
     }
     assert!(paid > 0, "no treasury chest paid a soul gem");
 }
+
+// ---------------------------------------------------------------------------
+// 4. Crafting-material stacks: 5, 10 or 20
+// ---------------------------------------------------------------------------
+
+/// How many crafting-material stacks of 5, 10 and 20, and of anything else.
+#[derive(Default, Debug)]
+struct Sizes([u64; 3], Vec<u64>);
+
+impl Sizes {
+    fn add(&mut self, stacks: &HashMap<Uuid, u64>) {
+        use blades_lib::features::beginner_economy::{is_crafting_material, MATERIAL_STACK_SIZES};
+        for (_, q) in stacks.iter().filter(|(id, _)| is_crafting_material(id)) {
+            match MATERIAL_STACK_SIZES.iter().position(|s| s == q) {
+                Some(i) => self.0[i] += 1,
+                None => self.1.push(*q),
+            }
+        }
+    }
+
+    /// Only 5, 10 and 20, each a third (within `slack`) of at least `min` stacks.
+    fn assert_thirds(&self, what: &str, min: u64, slack: f64) {
+        assert!(self.1.is_empty(), "{what}: other sizes {:?}", &self.1[..self.1.len().min(10)]);
+        let n: u64 = self.0.iter().sum();
+        assert!(n >= min, "{what}: only {n} material stacks");
+        for c in self.0 {
+            let share = c as f64 / n as f64;
+            assert!((share - 1.0 / 3.0).abs() <= slack, "{what}: {:?}", self.0);
+        }
+    }
+}
+
+/// Chests (Wooden to Legendary, and the store chests), corpses and containers:
+/// every crafting-material stack is 5, 10 or 20, in equal thirds.
+#[test]
+fn material_stacks_are_5_10_or_20_in_chests_corpses_and_containers() {
+    let ctx = Ctx::load();
+    let gd = gd();
+    let scaling = crate::quest::shipped_scaling();
+    let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
+
+    let mut chest_sizes = Sizes::default();
+    for tier in [-1i64, 1, 2, 3, 4, 5] {
+        for level in SAMPLE_LEVELS {
+            for n in 0..40 {
+                let r = chests::roll_loot(&ctx.sd.chest_loots, tier, level, &format!("388m:{tier}:{level}:{n}"), &HashSet::new());
+                r.iter().for_each(|r| chest_sizes.add(&r.stackable_items));
+            }
+        }
+    }
+    for (p, _) in super::STORE_CHESTS {
+        for level in SAMPLE_LEVELS {
+            for n in 0..20u64 {
+                let r = blades_lib::features::store_bundles::roll_bundle_with(&Uuid::from_u128(p), level, n, &HashSet::new(), elder);
+                r.iter().for_each(|r| chest_sizes.add(&r.stackable_items));
+            }
+        }
+    }
+    chest_sizes.assert_thirds("chests", 1_000, 0.04);
+
+    let (mut corpses, mut containers) = (Sizes::default(), Sizes::default());
+    let mut quests: Vec<&Uuid> = gd.quests.keys().collect();
+    quests.sort();
+    for level in [3i64, 20, 45, 49, 100] {
+        for q in &quests {
+            let Ok((_, Some(d))) = blades_lib::util::quest::generate_quest_data(&gd, **q, level, &scaling) else { continue };
+            for e in d.enemy_generated_data.values().flatten().flatten() {
+                e.loot_table_loot.values().for_each(|l| corpses.add(&l.stackable_items));
+            }
+            for r in d.item_generated_data.values().flatten() {
+                r.loot_table_loot.values().for_each(|l| containers.add(&l.stackable_items));
+            }
+        }
+    }
+    // An unseeded quest dungeon draws its corpses' and containers' sizes the same
+    // at every level, so the five levels are one sample, not five: hence 0.05.
+    corpses.assert_thirds("corpses", 1_000, 0.05);
+    containers.assert_thirds("containers", 1_000, 0.05);
+}
+
+/// Event milestones and final rewards, and story-quest completion rewards: every
+/// crafting-material stack is 5, 10 or 20.
+#[test]
+fn material_stacks_are_5_10_or_20_in_events_and_quest_rewards() {
+    let ctx = Ctx::load();
+    let mut events = Sizes::default();
+    for tmpl in ctx.sd.event_quests.templates.values() {
+        for level in SAMPLE_LEVELS.map(|l| l as i64) {
+            tmpl.rewards_for_level(level).iter().for_each(|r| events.add(&r.stackable_items));
+            tmpl.final_reward_for_level(level).iter().for_each(|r| events.add(&r.stackable_items));
+        }
+    }
+    events.assert_thirds("events", 300, 0.10);
+
+    let mut quests = Sizes::default();
+    for (gld, _) in &ctx.sd.quest_rewards {
+        let quest: blades_lib::user_data::Quest = serde_json::from_value(json!({
+            "version": 0, "type": "NORMAL", "objectiveStatuses": {}, "difficultyLevel": 0,
+            "seed": 0, "gldQuestId": gld, "completed": false,
+        }))
+        .unwrap();
+        for n in 0..10u128 {
+            let mut r = crate::quest::resolve_completion_reward(&ctx.sd, *gld, &quest);
+            crate::quest::beginner_economy_completion(&mut r, 30, Uuid::from_u128(gld.as_u128() ^ n));
+            quests.add(&r.stackable_items);
+        }
+    }
+    quests.assert_thirds("story quest rewards", 100, 0.10);
+}

@@ -160,23 +160,36 @@ pub fn add_drawn_gem_bonus(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
 }
 
 /// An event's milestones (`rewards[]`) as minted for a character of `level`: gems
-/// +20% ([`add_gem_bonus`]), soul gems Grand at 45-48 ([`top_event_soul_gems`]).
+/// +20% ([`add_gem_bonus`]), soul gems Grand at 45-48 ([`top_event_soul_gems`]),
+/// crafting materials in 5, 10 or 20 ([`size_material_stacks_in_order`], drawn per
+/// `event` and milestone, the same at every level).
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub fn event_rewards(tiers: &mut [RewardGrant], level: i64) {
-    for tier in tiers.iter_mut() {
+pub fn event_rewards(tiers: &mut [RewardGrant], level: i64, event: Uuid) {
+    for (milestone, tier) in tiers.iter_mut().enumerate() {
         add_gem_bonus(tier);
         top_event_soul_gems(&mut tier.stackable_items, level);
+        size_material_stacks_in_order(&mut tier.stackable_items, event_material_seed(event, milestone));
     }
 }
 
-/// An event's `finalReward` as minted for a character of `level`: gems +20%
-/// ([`add_gem_bonus`]), soul gems Grand at 45-48 ([`top_event_soul_gems`]).
+/// An event's `finalReward` as minted for a character of `level`: as
+/// [`event_rewards`], its materials drawn as the `last_milestone`'s, so a material
+/// the two share is one size and, where retail's last tier already carried this
+/// bonus, it still does.
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub fn event_final_reward(reward: &mut RewardGrant, level: i64) {
+pub fn event_final_reward(reward: &mut RewardGrant, level: i64, event: Uuid, last_milestone: usize) {
     add_gem_bonus(reward);
     top_event_soul_gems(&mut reward.stackable_items, level);
+    size_material_stacks_in_order(&mut reward.stackable_items, event_material_seed(event, last_milestone));
+}
+
+/// The seed an event's material quantities are drawn from: the event and the
+/// milestone, never the level.
+fn event_material_seed(event: Uuid, milestone: usize) -> u64 {
+    let id = event.as_u128();
+    (id as u64) ^ ((id >> 64) as u64).rotate_left(17) ^ (milestone as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 /// The gems a treasury chest of `tier` pays: [`WOODEN_CHEST_GEMS`] for tier 1,
@@ -325,6 +338,91 @@ pub fn key_seed(key: &str) -> u64 {
     key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3))
 }
 
+// ---------------------------------------------------------------------------
+// 4. Crafting-material stacks: 5, 10 or 20
+// ---------------------------------------------------------------------------
+
+/// The quantities a crafting-material stack comes in, with equal odds: chests,
+/// corpses, containers, event rewards and story-quest rewards. Retail paid any
+/// quantity (Iron x3, Ebony x27, ...).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub const MATERIAL_STACK_SIZES: [u64; 3] = [5, 10, 20];
+
+/// The quantity of a crafting material in the Abyss's end-of-run package: always
+/// the largest, 20 (retail: Glow Dust x7, Fire Salts x19, ...).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub const ABYSS_END_MATERIAL_STACK: u64 = 20;
+
+/// Not crafting materials, though the client's ingredient gem-value table prices
+/// them: Door Key and Revive Scroll (Gold, Gem and the soul gems are excluded by
+/// kind).
+const PRICED_NON_MATERIALS: [Uuid; 2] = [
+    Uuid::from_u128(0xfaa3aeb3_9284_4d83_8981_1af00e3a6398), // Door Key
+    Uuid::from_u128(0x05a7d501_f096_41e9_8443_fd6a090d8425), // Revive Scroll
+];
+
+/// A crafting material: an ingredient the client prices in gems
+/// (`IngredientValueTable`: ingots and ores, hides, alchemy ingredients, the
+/// enchanting salts and dusts, jewels) that is not a currency, a soul gem, a
+/// Door Key, a Revive Scroll or a town material (the APK's Building and
+/// Decoration Materials, inputs of no smithing, tempering, enchanting or repair:
+/// Lumber, Limestone, Clay, ...). Potions are not in the table.
+pub fn is_crafting_material(id: &Uuid) -> bool {
+    crate::economy::missing_resources::gem_cost_for_ingredient(*id, 1).is_some()
+        && !crate::economy::is_currency(*id)
+        && !SOUL_GEMS.contains(id)
+        && !PRICED_NON_MATERIALS.contains(id)
+        && !crate::util::dungeon::TOWN_MATERIALS.contains(&id.as_u128())
+}
+
+/// The quantity one crafting-material stack is paid in: one of
+/// [`MATERIAL_STACK_SIZES`], with equal odds, drawn from `seed` and the item.
+pub fn material_stack(seed: u64, id: &Uuid) -> u64 {
+    let k = id.as_u128();
+    MATERIAL_STACK_SIZES[(mix(seed ^ (k as u64) ^ ((k >> 64) as u64).rotate_left(23)) % 3) as usize]
+}
+
+/// Every crafting-material stack in `stacks` paid as [`material_stack`]; any
+/// other stackable is kept.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn size_material_stacks(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
+    for (id, qty) in stacks.iter_mut() {
+        if *qty > 0 && is_crafting_material(id) {
+            *qty = material_stack(seed, id);
+        }
+    }
+}
+
+/// [`size_material_stacks`] for a fixed reward that names its material by level
+/// (an event milestone): the quantities are drawn by the stacks' order, not the
+/// item, so every level paid the same band gets the same quantities of its own
+/// level's materials, and a higher level's are never fewer.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn size_material_stacks_in_order(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
+    let mut materials: Vec<Uuid> =
+        stacks.iter().filter(|(id, q)| **q > 0 && is_crafting_material(id)).map(|(id, _)| *id).collect();
+    materials.sort_unstable();
+    for (i, id) in materials.into_iter().enumerate() {
+        stacks.insert(id, MATERIAL_STACK_SIZES[(mix(seed ^ (i as u64).rotate_left(32)) % 3) as usize]);
+    }
+}
+
+/// Every crafting-material stack in an Abyss end-of-run package paid as
+/// [`ABYSS_END_MATERIAL_STACK`].
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn size_abyss_end_materials(stacks: &mut HashMap<Uuid, u64>) {
+    for (id, qty) in stacks.iter_mut() {
+        if *qty > 0 && is_crafting_material(id) {
+            *qty = ABYSS_END_MATERIAL_STACK;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +495,27 @@ mod tests {
         let mut e = HashMap::from([(SOUL_GEMS[3], 3), (GLORIOUS_SOUL_GEM, 1), (lumber, 9)]);
         top_event_soul_gems(&mut e, 45);
         assert_eq!(e, HashMap::from([(GRAND_SOUL_GEM, 4), (lumber, 9)]));
+    }
+
+    #[test]
+    fn material_stacks_are_5_10_or_20_in_equal_thirds() {
+        let frost_salts = Uuid::from_u128(0x05b4dd6b_796f_4088_a772_0e33ea3db976);
+        let lumber = Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5);
+        let door_key = PRICED_NON_MATERIALS[0];
+        assert!(is_crafting_material(&frost_salts));
+        for not in [lumber, door_key, GRAND_SOUL_GEM, GEMS, crate::economy::GOLD] {
+            assert!(!is_crafting_material(&not), "{not}");
+        }
+        let mut counts = [0u32; 3];
+        for seed in 0..9_000u64 {
+            let mut s = HashMap::from([(frost_salts, 7), (lumber, 50), (door_key, 1), (GRAND_SOUL_GEM, 3)]);
+            size_material_stacks(&mut s, seed);
+            assert_eq!((s[&lumber], s[&door_key], s[&GRAND_SOUL_GEM]), (50, 1, 3));
+            counts[MATERIAL_STACK_SIZES.iter().position(|q| *q == s[&frost_salts]).unwrap()] += 1;
+        }
+        assert!(counts.iter().all(|c| (2_850..=3_150).contains(c)), "{counts:?}");
+        let mut end = HashMap::from([(frost_salts, 7), (GRAND_SOUL_GEM, 3)]);
+        size_abyss_end_materials(&mut end);
+        assert_eq!(end, HashMap::from([(frost_salts, 20), (GRAND_SOUL_GEM, 3)]));
     }
 }

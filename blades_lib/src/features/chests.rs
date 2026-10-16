@@ -368,7 +368,9 @@ pub fn roll_loot(
         let pool = tutorial_chest_loot();
         if !pool.is_empty() {
             let pick = (stable_nonce(chest_key) as usize) % pool.len();
-            return Some(pool[pick].reward.clone());
+            let mut grant = pool[pick].reward.clone();
+            size_chest_materials(&mut grant, stable_nonce(chest_key));
+            return Some(grant);
         }
     }
     // No other tier below 1 exists in the APK enum; treat one as tier 1.
@@ -390,7 +392,18 @@ pub fn roll_loot(
             Some(grant)
         })?;
     pay_chest_gems(&mut grant, tier, nonce);
+    size_chest_materials(&mut grant, nonce);
     Some(grant)
+}
+
+/// A chest's crafting materials come in 5, 10 or 20, with equal odds
+/// ([`crate::features::beginner_economy::MATERIAL_STACK_SIZES`]). Owner-approved
+/// deviation from retail, #388, 2026-10-16.
+fn size_chest_materials(grant: &mut RewardGrant, nonce: u64) {
+    crate::features::beginner_economy::size_material_stacks(
+        &mut grant.stackable_items,
+        crate::features::store_bundles::mix(nonce ^ 0x388_C4E5_7A7E),
+    );
 }
 
 /// A chest's gems under the beginner economy (#388): a Wooden chest always pays
@@ -1135,13 +1148,15 @@ mod tests {
                 for id in metal(&was) {
                     *was_kinds.entry(id).or_default() += 1;
                 }
-                // Quantities are untouched: the same multiset of metal amounts.
+                // As many metal stacks as before; since #388 (owner-approved deviation
+                // from retail, 2026-10-16) each is 5, 10 or 20.
                 let amounts = |r: &RewardGrant| {
                     let mut a: Vec<u64> = r.stackable_items.iter().filter(|(id, _)| is_metal(id)).map(|(_, q)| *q).collect();
                     a.sort_unstable();
                     a
                 };
-                assert_eq!(amounts(&now), amounts(&was), "L{level} chest {i}: metal amounts moved");
+                assert_eq!(amounts(&now).len(), amounts(&was).len(), "L{level} chest {i}: metal stacks moved");
+                assert!(amounts(&now).iter().all(|q| [5, 10, 20].contains(q)), "L{level} chest {i}: {:?}", amounts(&now));
             }
             let total: usize = kinds.values().sum();
             let was_total: usize = was_kinds.values().sum();
@@ -1159,11 +1174,17 @@ mod tests {
             (q + usize::from(*id == quicksilver), a + 1)
         });
         assert!(qs * 100 >= all * 60, "control: Quicksilver was {qs}/{all} of level-46 metal stacks");
-        // Where the Wooden table is rich, nothing changes.
+        // Where the Wooden table is rich, nothing changes: the same stacks (their
+        // material quantities are #388's 5 / 10 / 20, owner-approved deviation).
+        let kinds_of = |r: &RewardGrant| {
+            let mut k: Vec<Uuid> = r.stackable_items.keys().copied().collect();
+            k.sort();
+            k
+        };
         for level in [10u64, 20, 30, 40] {
             assert!(wooden_metal_stacks_near(&t, level) >= THIN_WOODEN_METALS, "L{level} is not thin");
             for i in 0..300 {
-                assert_eq!(roll(level, i).stackable_items, before(level, i).stackable_items, "L{level} chest {i} moved");
+                assert_eq!(kinds_of(&roll(level, i)), kinds_of(&before(level, i)), "L{level} chest {i} moved");
             }
         }
         // Retail's richer tiers are untouched at every level.
@@ -1173,7 +1194,7 @@ mod tests {
                     let key = format!("381-metal:{i}:{level}");
                     let now = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
                     let was = compose_loot(&t.tiers[&(tier as u64)], level, stable_nonce(&key)).unwrap();
-                    assert_eq!(now.stackable_items, was.stackable_items, "tier {tier} L{level} chest {i} moved");
+                    assert_eq!(kinds_of(&now), kinds_of(&was), "tier {tier} L{level} chest {i} moved");
                 }
             }
         }

@@ -1293,7 +1293,7 @@ impl EventQuestTemplate {
     /// [`crate::features::beginner_economy::event_rewards`]).
     pub fn rewards_for_level(&self, real_level: i64) -> Vec<crate::economy::RewardGrant> {
         let mut out = self.retail_rewards_for_level(real_level);
-        crate::features::beginner_economy::event_rewards(&mut out, real_level);
+        crate::features::beginner_economy::event_rewards(&mut out, real_level, self.gld_quest_id);
         out
     }
 
@@ -1303,7 +1303,14 @@ impl EventQuestTemplate {
     /// [`crate::features::beginner_economy::event_final_reward`]).
     pub fn final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
         let mut out = self.retail_final_reward_for_level(real_level)?;
-        crate::features::beginner_economy::event_final_reward(&mut out, real_level);
+        // Its materials are drawn as the last milestone's (#388).
+        let milestones = self.band_for_level(real_level).map_or(self.rewards.len(), |b| b.rewards.len());
+        crate::features::beginner_economy::event_final_reward(
+            &mut out,
+            real_level,
+            self.gld_quest_id,
+            milestones.saturating_sub(1),
+        );
         Some(out)
     }
 

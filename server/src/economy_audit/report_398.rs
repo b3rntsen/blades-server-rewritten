@@ -245,17 +245,19 @@ fn levels_below_49_are_unchanged() {
     // holding 2 / 4 / 6 stacks (quests, event_dungeons, jobs); gems +20% and fixed
     // Wooden / Silver chest gems (events, abyss_floor, quests, event_dungeons,
     // jobs, treasury); the three best soul gems at 45-48 (events, daily,
-    // abyss_rewards, abyss_floor, quests, event_dungeons, store, treasury).
+    // abyss_rewards, abyss_floor, quests, event_dungeons, store, treasury); crafting
+    // materials in 5, 10 or 20 (events, abyss_rewards, abyss_floor, quests,
+    // event_dungeons, jobs, store, treasury).
     let pinned: [(&str, u64); 9] = [
-        ("events", 0x5351_4151_1ca6_22e9),
+        ("events", 0xd066_1cc1_c35d_bcd3),
         ("daily", 0x8d8e_2e5c_0659_5552),
-        ("abyss_rewards", 0x15c7_85d6_f01d_1602),
-        ("abyss_floor", 0x4368_058e_ac1e_1364),
-        ("quests", 0x7f56_86d1_7bf9_daa2),
-        ("event_dungeons", 0xd9f4_c267_7357_80bc),
-        ("jobs", 0x0722_bb62_840e_a09a),
-        ("store", 0xa7d6_8ec5_73f4_dcf7),
-        ("treasury", 0x4b6a_b37d_b00d_87bb),
+        ("abyss_rewards", 0x132f_4e45_fafe_3e7b),
+        ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),
+        ("quests", 0x3f01_52cb_5eef_d622),
+        ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
+        ("jobs", 0x0e71_0932_2f7b_96e5),
+        ("store", 0x6bfe_d561_3f10_831a),
+        ("treasury", 0x4dab_8f09_4476_e0c4),
     ];
     assert_eq!(got, pinned.to_vec(), "a source moved for a character below level 49");
 }

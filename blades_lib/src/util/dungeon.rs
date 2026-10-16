@@ -567,7 +567,10 @@ fn roll_container_table(
     use crate::features::beginner_economy::{container_class, CONTAINER_FILL_MAX_DRAWS};
 
     let mut out = roll_loot_table_with_context(ctx, spawn_id, table_id, result_index, enemy_level);
+    // Crafting materials come in 5, 10 or 20 (owner-approved deviation, #388).
+    let material_seed = loot_seed(ctx, spawn_id, table_id, result_index) ^ 0x388_C047_A1E5;
     let Some(class) = container_class(table_id, group_name).filter(|_| !ctx.abyss) else {
+        crate::features::beginner_economy::size_material_stacks(&mut out.stackable_items, material_seed);
         return out;
     };
     let want = class.stacks;
@@ -593,6 +596,7 @@ fn roll_container_table(
             }
         }
     }
+    crate::features::beginner_economy::size_material_stacks(&mut out.stackable_items, material_seed);
     out
 }
 
@@ -910,6 +914,9 @@ fn roll_enemy_loot_with_context(
     // #383: the bonus stack, under the table it was drawn from. 871c2e9b is the
     // key every Abyss corpse carried before #381, so the client already reads it
     // on an Abyss enemy.
+    // #388: every crafting material on the corpse in 5, 10 or 20 (owner-approved
+    // deviation from retail), before the bonus joins it.
+    size_corpse_materials(ctx, spawn_group_id, spawner_index, enemy_index, &mut out);
     if let Some((item, qty)) = roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index)
         .map(|drawn| bonus_as_paid(ctx, spawn_group_id, spawner_index, enemy_index, drawn))
     {
@@ -1634,10 +1641,27 @@ fn generate_for_dungeon_inner(
     Some(data)
 }
 
+/// A corpse's crafting materials in 5, 10 or 20, each table's under its own seed
+/// (owner-approved deviation from retail, #388, 2026-10-16). Keyed off the corpse
+/// and table, never the loot stream, so no other draw moves.
+fn size_corpse_materials(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    out: &mut HashMap<Uuid, LootTableResult>,
+) {
+    let corpse = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_5743_4B53_0388;
+    for (table, loot) in out.iter_mut() {
+        let seed = mix64(corpse ^ (table.as_u128() as u64).rotate_left(13));
+        crate::features::beginner_economy::size_material_stacks(&mut loot.stackable_items, seed);
+    }
+}
+
 /// The #383 Abyss bonus stack `drawn` for a corpse as it is paid under the
 /// beginner economy (owner-approved deviation from retail, #388, 2026-10-16): a
-/// soul gem is one of the three best at 45-48. Its own seeded stream, so no
-/// retail draw moves.
+/// soul gem is one of the three best at 45-48, a material 5, 10 or 20. Its own
+/// seeded stream, so no retail draw moves.
 fn bonus_as_paid(
     ctx: LootSeedContext,
     spawn_group_id: &Uuid,
@@ -1649,6 +1673,7 @@ fn bonus_as_paid(
     let seed = mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_B045_5EED_0388);
     let mut stack = HashMap::from([drawn]);
     crate::features::beginner_economy::top_soul_gems(&mut stack, level, seed);
+    crate::features::beginner_economy::size_material_stacks(&mut stack, mix64(seed));
     stack.into_iter().next().unwrap_or(drawn)
 }
 

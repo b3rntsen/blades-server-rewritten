@@ -270,6 +270,8 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
         i64::try_from(character_level).unwrap_or(i64::MAX),
         mix((run_seed as u64) ^ 0x388_E4D0),
     );
+    // Its materials are always 20 (owner-approved deviation from retail, #388).
+    crate::features::beginner_economy::size_abyss_end_materials(&mut grant.stackable_items);
     grant
 }
 

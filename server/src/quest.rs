@@ -2382,6 +2382,16 @@ fn merge_reward(into: &mut RewardGrant, extra: &RewardGrant) {
     into.town_xp += extra.town_xp;
 }
 
+/// The beginner economy (owner-approved deviation from retail, #388, 2026-10-16)
+/// on a quest or job completion reward for a character of `level`: soul gems the
+/// three best at 45-48, crafting materials in 5, 10 or 20 (seeded by the quest, so
+/// a retried completion pays the same).
+pub(crate) fn beginner_economy_completion(reward: &mut RewardGrant, level: i64, quest_id: Uuid) {
+    use blades_lib::features::beginner_economy::{size_material_stacks, top_soul_gems};
+    top_soul_gems(&mut reward.stackable_items, level, quest_id.as_u128() as u64);
+    size_material_stacks(&mut reward.stackable_items, quest_id.as_u128() as u64 ^ 0x388);
+}
+
 // ---------------------------------------------------------------------------
 // POST /quests/{quest_id}/complete
 // ---------------------------------------------------------------------------
@@ -2643,12 +2653,7 @@ pub(crate) async fn complete_quest_in_tx(
     // deviation from retail, #388, 2026-10-16); an event's was minted with it.
     let mut reward = reward;
     if !is_event {
-        // The three best soul gems at 45-48.
-        blades_lib::features::beginner_economy::top_soul_gems(
-            &mut reward.stackable_items,
-            i64::from(entry.character.0.level),
-            quest_id.as_u128() as u64,
-        );
+        beginner_economy_completion(&mut reward, i64::from(entry.character.0.level), quest_id);
     }
 
     // Mirror the completion into `completedQuests` — what the client's tier
@@ -6458,6 +6463,19 @@ mod event_quest_tests {
     use super::*;
     use blades_lib::static_data::StaticData;
 
+    /// `r` with every crafting material's quantity set to 0: since #388
+    /// (owner-approved deviation from retail, 2026-10-16) those are 5, 10 or 20,
+    /// so a comparison with retail compares which materials, not how many.
+    fn materials_blind(r: &RewardGrant) -> RewardGrant {
+        let mut r = r.clone();
+        for (id, q) in r.stackable_items.iter_mut() {
+            if blades_lib::features::beginner_economy::is_crafting_material(id) {
+                *q = 0;
+            }
+        }
+        r
+    }
+
     /// The committed static data, loaded the way the server loads it.
     fn static_data() -> StaticData {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
@@ -6893,6 +6911,7 @@ mod event_quest_tests {
         // Counts only: the material item is re-stepped to the level (#362), the
         // amounts are the band's.
         let amounts = |r: &RewardGrant| {
+            let r = materials_blind(r);
             let mut v: Vec<u64> = r.stackable_items.values().chain(r.currencies.values()).copied().collect();
             v.sort_unstable();
             v
@@ -6963,7 +6982,7 @@ mod event_quest_tests {
             // a "seasonally rotated material" (Moonstone in one capture, Malachite in
             // the other); it was the level — 27 and 28, either side of the Glass
             // unlock — and the per-level material now pays it exactly (#362).
-            let same = paid == retail;
+            let same = materials_blind(&paid) == materials_blind(&retail);
             if !same {
                 wrong.push(format!("capture {capture} ({gld}, minted at {minted_at}): paid {}, retail {}",
                     serde_json::to_string(&paid).unwrap(), serde_json::to_string(&retail).unwrap()));
@@ -7013,7 +7032,12 @@ mod event_quest_tests {
         ] {
             let paid = materials_paid_at(&sd, gld, level);
             let metal: Uuid = metal.parse().unwrap();
-            assert_eq!(paid.get(&metal), Some(&96), "level {level}: paid {paid:?}");
+            // Retail: 96 ingots. Since #388 one stack of 5, 10 or 20, or the
+            // milestone's and the final bonus's together.
+            assert!(
+                paid.get(&metal).is_some_and(|q| [5, 10, 20, 40].contains(q)),
+                "level {level}: paid {paid:?}"
+            );
             assert_eq!(paid.len(), 1, "level {level}: one metal, nothing else: {paid:?}");
         }
         // The report itself: no Ebony below Ebony's unlock level.

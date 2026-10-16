@@ -915,12 +915,9 @@ mod event_dungeons_as_retail_built_them {
             large_high.0,
             large_mid.0
         );
-        assert!(
-            large_high.1 >= 1.15 * large_mid.1,
-            "large container items: level 78 {:.1}, level 43 {:.1}",
-            large_high.1,
-            large_mid.1
-        );
+        // Item quantities no longer grow with level: since #388 (owner-approved
+        // deviation from retail, 2026-10-16) a large container holds 6 stacks of
+        // 5, 10 or 20 materials at every level, so only gold is compared here.
         let (medium_high, medium_mid) = (high["Breakable_T2"], mid["Breakable_T2"]);
         assert!(
             medium_high.0 >= 1.15 * medium_mid.0,
