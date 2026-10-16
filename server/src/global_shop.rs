@@ -358,7 +358,64 @@ fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
 pub(crate) fn current_catalog(static_data: &blades_lib::static_data::StaticData, now: i64) -> Value {
     let replayed = replay_calendar(&static_data.global_shop_windows, now)
         .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
-    apply_authored(replayed, &static_data.global_shop_authored)
+    apply_raised_window_caps(apply_authored(replayed, &static_data.global_shop_authored))
+}
+
+/// Per-window purchase caps raised above retail's, by product id.
+///
+/// NOT RETAIL. An owner-approved deviation (tracker #394, 2026-10-16), requested
+/// by HauDrauf: "The Enchanter's packs, all tiers, that are in the shop today:
+/// raise to 9 purchases instead of 3." Retail sold each tier at most 3 times per
+/// window; its windows (one day, Thursdays 04:00 UTC) are unchanged here, only
+/// the count.
+///
+/// In code rather than in `deploy/static`: merging ships code, the static data
+/// needs a separate push. Applied in [`current_catalog`], the one place every
+/// reader goes through, so the served `/catalogoverrides/globalshop` payload and
+/// the purchase handler's cap agree. The client must see it in the payload: it
+/// builds its sold-out check from the override's `maxPurchaseLimits` first and
+/// the APK's `perUserMaximum` (3 for these packs) only for tracking ids the
+/// override does not name — a set keyed on tracking id alone
+/// (`PurchaseLimitCalculator.GetPurchaseLimits`, `PurchaseLimit.Equals`). The
+/// windowed id exists only in the override, so its `limit` is what the client
+/// enforces.
+pub(crate) const RAISED_WINDOW_CAPS: &[(&str, u64)] = &[
+    ("b790518d-9614-4dcf-ab54-6d8d749bff2b", 9), // IAP_GemPack05_a_ApprenticeEnchanter
+    ("ef234f68-8ee2-4fdd-8fbe-a8f9bf70fc21", 9), // IAP_GemPack05_b_JourneymanEnchanter
+    ("69ab6e05-8968-41a2-b45e-997c8534e166", 9), // IAP_GemPack05_c_ExpertEnchanter
+    ("6ec8f67f-2cef-41aa-a7fc-f46237ae809c", 9), // IAP_GemPack05_d_HeroicEnchanter
+];
+
+/// Rewrite the non-zero WINDOWED limit of each [`RAISED_WINDOW_CAPS`] product.
+/// The lifetime `maxPurchases` and the un-timestamped tracking ids (limit 0,
+/// unlimited) are left alone, as is everything about the window itself.
+fn apply_raised_window_caps(mut catalog: Value) -> Value {
+    let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    else {
+        return catalog;
+    };
+    for (product, cap) in RAISED_WINDOW_CAPS {
+        let Some(limits) = map
+            .get_mut(*product)
+            .and_then(|e| e.get_mut("maxPurchaseLimits"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for lim in limits {
+            let windowed = lim
+                .get("purchaseTrackingId")
+                .and_then(Value::as_str)
+                .and_then(|t| t.rsplit("::").next())
+                .is_some_and(|tail| !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()));
+            if windowed && lim.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                lim["limit"] = Value::from(*cap);
+            }
+        }
+    }
+    catalog
 }
 
 /// Lay admin-authored windows over the replayed catalogue.
@@ -1210,6 +1267,55 @@ fn current_product_purchase_tracking_ids(
     out
 }
 
+/// Whether one more purchase of `product_id` would exceed a cap: `Some((scope,
+/// used, cap))` when it would, `None` when the purchase may go ahead.
+///
+/// The lifetime cap is `maxPurchases`, counted per product. Nothing read it
+/// before, so every cap in the catalogue was decorative: one player bought a
+/// capped product 109 times. The per-window cap is counted under the offer's own
+/// windowed tracking id, so a new window starts again at zero.
+fn purchase_cap_reached(
+    state: &blades_lib::server_state::ServerState,
+    product_id: Uuid,
+    lifetime_cap: Option<u64>,
+    window_cap: Option<&(String, u64)>,
+) -> Option<(&'static str, u64, u64)> {
+    if let Some(cap) = lifetime_cap {
+        let owned = state
+            .global_shop_purchases
+            .get(&product_id)
+            .copied()
+            .unwrap_or(0);
+        if owned >= cap {
+            return Some(("lifetime", owned, cap));
+        }
+    }
+    if let Some((key, cap)) = window_cap {
+        let used = state
+            .global_shop_window_purchases
+            .get(key)
+            .copied()
+            .unwrap_or(0);
+        if used >= *cap {
+            return Some(("window", used, *cap));
+        }
+    }
+    None
+}
+
+/// Count one purchase: the lifetime per-product total and every tracking id the
+/// offer currently carries (bare override and windowed alike).
+fn record_purchase(
+    state: &mut blades_lib::server_state::ServerState,
+    product_id: Uuid,
+    tracking_ids: Vec<String>,
+) {
+    *state.global_shop_purchases.entry(product_id).or_insert(0) += 1;
+    for key in tracking_ids {
+        *state.global_shop_window_purchases.entry(key).or_insert(0) += 1;
+    }
+}
+
 /// `POST /…/globalshops/current/purchase` — buy a global-shop product: validate the
 /// client price, debit it, grant the product, bump the purchase count.
 #[post(
@@ -1292,46 +1398,19 @@ pub async fn purchase_global_shop(
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
 
-            // A product with a lifetime cap must not exceed it. Nothing read
-            // `maxPurchases` before, so every cap in the catalogue was decorative:
-            // one player bought a capped product 109 times.
-            //
             // Checked BEFORE the wallet is touched, so a refused purchase costs
             // nothing.
-            if let Some(cap) = lifetime_cap {
-                let owned = entry
-                    .server_state
-                    .0
-                    .global_shop_purchases
-                    .get(&product_id)
-                    .copied()
-                    .unwrap_or(0);
-                if owned >= cap {
-                    log::info!(
-                        "[shop] character {character_id} is at the lifetime cap for product \
-                         {product_id} ({owned}/{cap}) — refusing"
-                    );
-                    return Err(map_purchase_err(PurchaseError::InvalidPrice));
-                }
-            }
-
-            // …and the per-window cap, counted under the offer's own tracking id so a
-            // new window starts again at zero. Also before the wallet is touched.
-            if let Some((ref key, cap)) = window_cap {
-                let used = entry
-                    .server_state
-                    .0
-                    .global_shop_window_purchases
-                    .get(key)
-                    .copied()
-                    .unwrap_or(0);
-                if used >= cap {
-                    log::info!(
-                        "[shop] character {character_id} is at this window's cap for product \
-                         {product_id} ({used}/{cap}) — refusing"
-                    );
-                    return Err(map_purchase_err(PurchaseError::InvalidPrice));
-                }
+            if let Some((scope, used, cap)) = purchase_cap_reached(
+                &entry.server_state.0,
+                product_id,
+                lifetime_cap,
+                window_cap.as_ref(),
+            ) {
+                log::info!(
+                    "[shop] character {character_id} is at the {scope} cap for product \
+                     {product_id} ({used}/{cap}) — refusing"
+                );
+                return Err(map_purchase_err(PurchaseError::InvalidPrice));
             }
 
             let bought_before = entry
@@ -1472,20 +1551,7 @@ pub async fn purchase_global_shop(
                 &globals,
                 reward.town_xp,
             )?;
-            *entry
-                .server_state
-                .0
-                .global_shop_purchases
-                .entry(product_id)
-                .or_insert(0) += 1;
-            for key in product_tracking_ids {
-                *entry
-                    .server_state
-                    .0
-                    .global_shop_window_purchases
-                    .entry(key)
-                    .or_insert(0) += 1;
-            }
+            record_purchase(&mut entry.server_state.0, product_id, product_tracking_ids);
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
@@ -2160,7 +2226,8 @@ mod replay_tests {
         let id = Uuid::parse_str("6ec8f67f-2cef-41aa-a7fc-f46237ae809c").unwrap();
         let (key, cap) = window_purchase_cap(&sd, id, now)
             .expect("the product bought 109 times must expose its windowed cap");
-        assert_eq!(cap, 3, "the catalogue declares 3 per window");
+        // Retail declared 3 per window; #394 raised the Enchanter packs to 9.
+        assert_eq!(cap, 9, "the raised cap (#394) over retail's 3 per window");
         assert!(
             key.rsplit("::")
                 .next()
@@ -2246,7 +2313,7 @@ mod replay_tests {
         let product = Uuid::parse_str("6ec8f67f-2cef-41aa-a7fc-f46237ae809c").unwrap();
         let (window_key, cap) =
             window_purchase_cap(&sd, product, now).expect("incident product still has a cap");
-        assert_eq!(cap, 3);
+        assert_eq!(cap, 9, "retail's 3, raised by #394");
         let tracking_ids = current_product_purchase_tracking_ids(&sd, product, now);
         let bare_key = tracking_ids
             .iter()
@@ -3715,7 +3782,8 @@ mod report238_calendar_tests {
         for t in [REPORTED, REPORTED + 40 * DAY] {
             assert_eq!(
                 current_catalog(&sd, t),
-                shift_to_now(&sd.global_shop_overrides, t),
+                // #394's raised caps apply on either path.
+                apply_raised_window_caps(shift_to_now(&sd.global_shop_overrides, t)),
             );
         }
     }
@@ -3942,7 +4010,7 @@ mod report353_store_prestige {
         let start = src.find("pub async fn purchase_global_shop(").unwrap();
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
         let credit = body.find("crate::town::credit_town_xp(").expect("the purchase pays the town");
-        let count = body.find(".global_shop_purchases\n                .entry(product_id)").expect("counted");
+        let count = body.find("record_purchase(").expect("counted");
         assert!(credit < count, "pay the town first, then count the purchase");
         assert!(body.contains("CharacterDbEntryTownEconomy::as_select()"), "the row must carry the town");
     }
@@ -4848,5 +4916,223 @@ mod report_393_sigil_jewelry_property_count {
                 "{props} properties {got:.1}% (want {pct}%)"
             );
         }
+    }
+}
+
+/// Tracker #394 (owner-approved, 2026-10-16): the Enchanter packs, every tier,
+/// sell 9 per window instead of retail's 3. Window and everything else unchanged.
+#[cfg(test)]
+mod raised_window_cap_tests {
+    use super::*;
+
+    fn sd() -> blades_lib::static_data::StaticData {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        crate::static_loader::load(&dir)
+    }
+
+    fn is_windowed(tid: &str) -> bool {
+        tid.rsplit("::")
+            .next()
+            .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()))
+    }
+
+    /// The catalogue before the #394 override: what retail's data alone serves.
+    fn unraised(sd: &blades_lib::static_data::StaticData, now: i64) -> Value {
+        let replayed = replay_calendar(&sd.global_shop_windows, now)
+            .unwrap_or_else(|| shift_to_now(&sd.global_shop_overrides, now));
+        apply_authored(replayed, &sd.global_shop_authored)
+    }
+
+    /// One hour into `product`'s next (or current) window after `after`.
+    fn inside_window(sd: &blades_lib::static_data::StaticData, product: &str, after: i64) -> i64 {
+        let e = &current_catalog(sd, after)["globalShopOverrides"][product];
+        let start = e["activeStartDate"].as_i64().expect("window start");
+        start.max(after - 3_600) + 3_600
+    }
+
+    const BASE: i64 = 1_783_000_000 + 400 * 86_400;
+
+    #[test]
+    fn the_table_is_the_four_enchanter_tiers() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/global_shop_offer_contents.json"
+        );
+        let offers: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let mut names: Vec<&str> = RAISED_WINDOW_CAPS
+            .iter()
+            .map(|(id, cap)| {
+                assert_eq!(*cap, 9, "{id}");
+                offers["offers"][*id]["editorName"].as_str().unwrap()
+            })
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "IAP_GemPack05_a_ApprenticeEnchanter",
+                "IAP_GemPack05_b_JourneymanEnchanter",
+                "IAP_GemPack05_c_ExpertEnchanter",
+                "IAP_GemPack05_d_HeroicEnchanter",
+            ]
+        );
+    }
+
+    /// What `GET /catalogoverrides/globalshop` sends while the offer is live: the
+    /// windowed limit reads 9, where retail's data alone reads 3 (the control).
+    /// The client takes this limit from the payload; the APK default only fills
+    /// tracking ids the override does not name.
+    #[test]
+    fn the_served_payload_shows_nine_for_every_tier_and_keeps_the_thursday_window() {
+        let sd = sd();
+        for (product, _) in RAISED_WINDOW_CAPS {
+            let now = inside_window(&sd, product, BASE);
+            let served = served_catalog(&sd, now);
+            let e = &served["globalShopOverrides"][*product];
+            assert!(e.is_object(), "{product} is live and served at {now}");
+            let before = &unraised(&sd, now)["globalShopOverrides"][*product];
+
+            let limits = e["maxPurchaseLimits"].as_array().unwrap();
+            let raw = before["maxPurchaseLimits"].as_array().unwrap();
+            assert_eq!(limits.len(), raw.len());
+            for (got, was) in limits.iter().zip(raw) {
+                let tid = got["purchaseTrackingId"].as_str().unwrap();
+                assert_eq!(tid, was["purchaseTrackingId"].as_str().unwrap());
+                if is_windowed(tid) {
+                    assert_eq!(was["limit"], 3, "control: retail's data says 3 ({tid})");
+                    assert_eq!(got["limit"], 9, "served limit is raised ({tid})");
+                } else {
+                    assert_eq!(
+                        got["limit"], was["limit"],
+                        "un-windowed limit untouched ({tid})"
+                    );
+                }
+            }
+            assert_eq!(e["maxPurchases"], before["maxPurchases"]);
+            assert_eq!(e["prices"], before["prices"]);
+
+            // The window is retail's: unchanged, one day, starting Thursday 04:00 UTC.
+            let (s, en) = window_of(e).unwrap();
+            assert_eq!((s, en), window_of(before).unwrap());
+            assert_eq!(
+                s.div_euclid(86_400).rem_euclid(7),
+                0,
+                "Thursday (1970-01-01 was one)"
+            );
+            assert_eq!(s.rem_euclid(86_400), 4 * 3_600);
+            assert!(en - s < 86_400);
+        }
+    }
+
+    /// Driving the purchase handler's own cap gate and counter with the caps it
+    /// resolves: purchases 1..=9 in one window go through, the 10th is refused, and
+    /// the next window starts again at zero.
+    #[test]
+    fn the_ninth_purchase_in_a_window_succeeds_and_the_tenth_is_refused() {
+        let sd = sd();
+        for (product, _) in RAISED_WINDOW_CAPS {
+            let id = Uuid::parse_str(product).unwrap();
+            let now = inside_window(&sd, product, BASE);
+            let prices: Vec<Price> = serde_json::from_value(
+                served_catalog(&sd, now)["globalShopOverrides"][*product]["prices"].clone(),
+            )
+            .unwrap();
+            assert_eq!(validate_purchase_prices(&sd, id, &prices, now), Ok(()));
+
+            let lifetime = lifetime_purchase_cap(&sd, id, now);
+            let window = window_purchase_cap(&sd, id, now);
+            assert_eq!(lifetime, None, "{product}: no lifetime cap");
+            let (window_key, cap) = window.clone().expect("windowed cap");
+            assert_eq!(cap, 9);
+
+            let mut state = blades_lib::server_state::ServerState::default();
+            for n in 1..=9 {
+                assert_eq!(
+                    purchase_cap_reached(&state, id, lifetime, window.as_ref()),
+                    None,
+                    "{product}: purchase {n} must succeed"
+                );
+                record_purchase(
+                    &mut state,
+                    id,
+                    current_product_purchase_tracking_ids(&sd, id, now),
+                );
+            }
+            assert_eq!(
+                purchase_cap_reached(&state, id, lifetime, window.as_ref()),
+                Some(("window", 9, 9)),
+                "{product}: the 10th purchase is refused"
+            );
+
+            // The client reads sold-out from this count against the served 9.
+            let list = purchases_list_with_tracking_counts(
+                &state.global_shop_purchases,
+                &state.global_shop_window_purchases,
+                &current_purchase_tracking_ids(&sd, now),
+                &current_lifetime_purchase_tracking_ids(&sd, now),
+            );
+            assert!(
+                list.iter().any(|e| e.id == window_key && e.quantity == 9),
+                "{list:?}"
+            );
+
+            // Next Thursday is a new window with a fresh allowance.
+            let next = inside_window(&sd, product, now + 2 * 86_400);
+            let next_window = window_purchase_cap(&sd, id, next);
+            assert_ne!(next_window.as_ref().map(|w| &w.0), Some(&window_key));
+            assert_eq!(
+                purchase_cap_reached(&state, id, None, next_window.as_ref()),
+                None
+            );
+        }
+    }
+
+    /// Every other product is exactly what retail's data serves, at every hour
+    /// of a week, and a 3-per-window product still refuses its 4th purchase.
+    #[test]
+    fn other_products_are_unchanged() {
+        let sd = sd();
+        let raised: HashSet<&str> = RAISED_WINDOW_CAPS.iter().map(|(id, _)| *id).collect();
+        for now in (BASE..BASE + 7 * 86_400).step_by(6 * 3_600) {
+            let got = current_catalog(&sd, now);
+            let want = unraised(&sd, now);
+            let got = got["globalShopOverrides"].as_object().unwrap();
+            let want = want["globalShopOverrides"].as_object().unwrap();
+            assert_eq!(got.len(), want.len());
+            for (id, e) in want {
+                if !raised.contains(id.as_str()) {
+                    assert_eq!(&got[id], e, "{id} at {now}");
+                }
+            }
+        }
+
+        let catalog = current_catalog(&sd, BASE);
+        let (other, _) = catalog["globalShopOverrides"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .filter(|id| !raised.contains(id.as_str()))
+            .filter_map(|id| Uuid::parse_str(id).ok())
+            .filter_map(|id| Some((id, window_purchase_cap(&sd, id, BASE)?)))
+            .find(|(_, (_, cap))| *cap == 3)
+            .expect("another 3-per-window product");
+        let window = window_purchase_cap(&sd, other, BASE);
+        let mut state = blades_lib::server_state::ServerState::default();
+        for _ in 0..3 {
+            assert_eq!(
+                purchase_cap_reached(&state, other, None, window.as_ref()),
+                None
+            );
+            record_purchase(
+                &mut state,
+                other,
+                current_product_purchase_tracking_ids(&sd, other, BASE),
+            );
+        }
+        assert_eq!(
+            purchase_cap_reached(&state, other, None, window.as_ref()),
+            Some(("window", 3, 3)),
+            "{other}: still 3 per window"
+        );
     }
 }
