@@ -888,28 +888,6 @@ pub fn roll_bundle_for(
     roll_bundle_with(product_id, buyer_level, nonce, owned, None)
 }
 
-/// [`roll_bundle_with`] for a buyer of `character_level`: from level 49 rolled as
-/// for a level-100 buyer, and for 49-99 with the gem materials the buyer's own
-/// level would have paid kept on top (#398,
-/// [`crate::features::loot_level::keeps_own_gems`]).
-pub fn roll_bundle_for_character(
-    product_id: &Uuid,
-    character_level: u64,
-    nonce: u64,
-    owned: &HashSet<Uuid>,
-    elder_treasury: Option<&[crate::features::chests::ChestLootSample]>,
-) -> Option<RewardGrant> {
-    use crate::features::loot_level::{effective_loot_level_u64, keep_own_gems, keeps_own_gems};
-    let paid_as = effective_loot_level_u64(character_level);
-    let mut grant = roll_bundle_with(product_id, paid_as, nonce, owned, elder_treasury)?;
-    if keeps_own_gems(character_level as i64) {
-        if let Some(own) = roll_bundle_with(product_id, character_level, nonce, owned, elder_treasury) {
-            keep_own_gems(&mut grant.stackable_items, &own.stackable_items);
-        }
-    }
-    Some(grant)
-}
-
 /// The level from which an Elder chest's gold and stackables come from retail's
 /// own high-level Elder chests rather than the Epic corpus's 31-89 band (#378).
 ///

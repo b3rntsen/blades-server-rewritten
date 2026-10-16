@@ -102,14 +102,10 @@ impl DailyRewardDef {
             let same_items = own.stackable_items.len() == payload.stackable_items.len()
                 && own.stackable_items.keys().all(|k| payload.stackable_items.contains_key(k));
             if same_items {
-                for (item, count) in &own.stackable_items {
-                    let paid = payload.stackable_items.entry(*item).or_insert(0);
-                    *paid = (*paid).max(*count);
+                for (item, count) in own.stackable_items {
+                    let paid = payload.stackable_items.entry(item).or_insert(0);
+                    *paid = (*paid).max(count);
                 }
-            }
-            // And the gems of the character's own tier (#398).
-            if crate::features::loot_level::keeps_own_gems(i64::from(character_level)) {
-                crate::features::loot_level::keep_own_gems(&mut payload.stackable_items, &own.stackable_items);
             }
         }
         payload

@@ -262,20 +262,9 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 ///
 /// FROM LEVEL 49 the package is the top band's, drawn as at level 100 (report #383,
 /// [`TOP_BAND_FROM_LEVEL`]): Glorious gems and the Transcendent upgrade included.
-///
-/// From 49 everything is drawn as at level 100, its soul-gem re-grading included
-/// (#398); a 49-99 character keeps the gem materials its own level's draw pays.
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
-    use crate::features::loot_level::{effective_loot_level_u64, keep_own_gems, keeps_own_gems};
-    let mut grant = end_package_at(score, effective_loot_level_u64(character_level), run_seed);
-    if keeps_own_gems(character_level as i64) {
-        let own = end_package_at(score, character_level, run_seed);
-        keep_own_gems(&mut grant.stackable_items, &own.stackable_items);
-    }
-    grant
-}
-
-fn end_package_at(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
+    // From 49 everything is drawn as at level 100, its gem re-grading included (#398).
+    let character_level = crate::features::loot_level::effective_loot_level_u64(character_level);
     let mut grant = RewardGrant::default();
     if score < END_PACKAGE_MIN_SCORE {
         return grant;
@@ -658,21 +647,8 @@ fn borrow_from_above<'a>(
 /// purpose: a level 49-59 character still has #371's extra Grand Soul Gem among the
 /// results beside the golden chest, which level 100 does not. Paying exactly level
 /// 100 would take that away, and rewards are never narrowed without HauDrauf.
-///
-/// A 49-99 character also keeps the gem materials its own level's draw pays.
 fn rung_reward(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant {
-    use crate::features::loot_level::{effective_loot_level_u64, keep_own_gems, keeps_own_gems};
-    let mut grant = rung_reward_at(rung, effective_loot_level_u64(real_level), real_level, run_seed);
-    if keeps_own_gems(real_level as i64) {
-        let own = rung_reward_at(rung, real_level, real_level, run_seed);
-        keep_own_gems(&mut grant.stackable_items, &own.stackable_items);
-    }
-    grant
-}
-
-/// One rung's reward drawn at `character_level`, with #371's Grand gem decided by
-/// `real_level`.
-fn rung_reward_at(rung: &Rung, character_level: u64, real_level: u64, run_seed: i64) -> RewardGrant {
+    let character_level = crate::features::loot_level::effective_loot_level_u64(real_level);
     let mut grant = RewardGrant::default();
 
     if rung.kind == "chest" {
@@ -731,42 +707,6 @@ fn rung_reward_at(rung: &Rung, character_level: u64, real_level: u64, run_seed: 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// #398: from 49 a run is paid level 100's draw, and a 49-99 character keeps on
-    /// top every gem material its own level's draw paid — never fewer gems.
-    #[test]
-    fn from_49_abyss_rewards_are_level_100s_plus_own_gems() {
-        use crate::features::loot_level::is_gem_material;
-        let strip = |g: &RewardGrant| {
-            let mut g = g.clone();
-            g.stackable_items.retain(|id, _| !is_gem_material(id));
-            g
-        };
-        let at_least = |paid: &RewardGrant, own: &RewardGrant| {
-            own.stackable_items
-                .iter()
-                .filter(|(id, _)| is_gem_material(id))
-                .all(|(id, n)| paid.stackable_items.get(id).copied().unwrap_or(0) >= *n)
-        };
-        for seed in 0..400i64 {
-            for level in [49u64, 60, 80] {
-                for score in [40.0, 200.0, 700.0] {
-                    let paid = end_package(score, level, seed);
-                    assert_eq!(strip(&paid), strip(&end_package(score, 100, seed)));
-                    assert!(at_least(&paid, &end_package_at(score, level, seed)), "/end level {level} seed {seed}");
-                }
-                for rung in corpus().rungs.iter() {
-                    let paid = rung_reward(rung, level, seed);
-                    let own = rung_reward_at(rung, level, level, seed);
-                    assert!(at_least(&paid, &own), "rung {} level {level} seed {seed}", rung.score);
-                    let beside = RUNGS_BESIDE_THE_GOLDEN_CHEST.contains(&rung.score) && level <= 59;
-                    if !beside {
-                        assert_eq!(strip(&paid), strip(&rung_reward(rung, 100, seed)), "rung {}", rung.score);
-                    }
-                }
-            }
-        }
-    }
 
     /// The corpus must be compiled in and hold the ladder that was measured.
     /// Everything below is vacuous without it.

@@ -92,15 +92,12 @@ pub async fn collect_chest(
             );
             // An artifact the character already holds is never handed out again;
             // retail re-rolled it as a Legendary piece instead (#310).
-            // From level 49 a chest is minted at level 100; a 49-99 opener also keeps
-            // the gems a chest at its own level would have paid (#398).
-            let mut reward = chests::roll_loot_for_character(
+            let mut reward = chests::roll_loot(
                 &globals.static_data.chest_loots,
                 chest_tier,
                 chest_level,
                 &loot_key,
                 &entry.inventory.0.item_templates(),
-                u64::from(entry.character.0.level),
             )
                 .unwrap_or_default();
             for item in &mut reward.items {

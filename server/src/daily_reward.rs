@@ -158,7 +158,6 @@ fn collect_reward_for(
     reward_uid: Uuid,
     roll_key: &str,
     owned: &std::collections::HashSet<Uuid>,
-    character_level: u64,
 ) -> RewardGrant {
     let mut reward = RewardGrant {
         stackable_items: payload.stackable_items.clone(),
@@ -171,15 +170,9 @@ fn collect_reward_for(
     // instead carry `items`, `stackableItems` and `currencies`.
     for (idx, chest) in payload.chests.iter().enumerate() {
         let key = format!("daily:{reward_uid}:{roll_key}:{idx}:{}:{}", chest.tier, chest.level);
-        // From 49 the level-100 chest plus the gems of the character's own (#398).
-        if let Some(loot) = chests::roll_loot_for_character(
-            chest_loots,
-            chest.tier as i64,
-            chest.level,
-            &key,
-            owned,
-            character_level,
-        ) {
+        if let Some(loot) =
+            chests::roll_loot(chest_loots, chest.tier as i64, chest.level, &key, owned)
+        {
             merge_reward(&mut reward, &loot);
         }
     }
@@ -265,7 +258,6 @@ pub async fn collect_daily_reward(
                     def.reward_uid,
                     &crate::alt_roll::fold_key(format!("{character_id}:{period}"), roll_alt),
                     &entry.inventory.0.item_templates(),
-                    u64::from(entry.character.0.level),
                 );
                 status_reward = collect_reward.clone();
                 if !already {
@@ -328,7 +320,7 @@ mod collect_response_tests {
     /// Build the `reward` exactly as `collect_daily_reward` does, for one day's
     /// definition. Kept beside the handler so the two cannot drift silently.
     fn reward_for(payload: &blades_lib::features::daily_reward::DailyRewardPayload) -> RewardGrant {
-        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A), "char:1", &Default::default(), 1)
+        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A), "char:1", &Default::default())
     }
 
     fn loot_tables() -> ChestLootTables {
@@ -430,7 +422,7 @@ mod collect_response_tests {
             .expect("scaled daily reward def deserializes");
 
         let status_payload = def.daily_reward_for_level(74);
-        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid, "char:1", &Default::default(), 1);
+        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid, "char:1", &Default::default());
 
         assert_eq!(
             collect_reward.stackable_items,
@@ -484,7 +476,7 @@ mod collect_response_tests {
         for character in 0..5 {
             for week in 0..4 {
                 let key = format!("{character}:{week}");
-                let r = collect_reward_for(&payload, &tables, uid, &key, &Default::default(), 1);
+                let r = collect_reward_for(&payload, &tables, uid, &key, &Default::default());
                 assert_eq!(r.items.len(), 2);
                 seen.insert(format!("{:?}{:?}", r.currencies, r.stackable_items));
             }
@@ -492,8 +484,8 @@ mod collect_response_tests {
         assert!(seen.len() >= 15, "20 Sunday chests gave only {} distinct", seen.len());
 
         // The same character's same period pays the same (status == collect).
-        let a = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default(), 1);
-        let b = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default(), 1);
+        let a = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default());
+        let b = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default());
         assert_eq!(a.currencies, b.currencies);
     }
 }
