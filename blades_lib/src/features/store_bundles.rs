@@ -1040,6 +1040,23 @@ pub fn roll_bundle_with(
             mix(seed ^ 0x3C6E_F372_FE94_F82B),
         );
     }
+    if is_golden || is_legendary || is_elder {
+        // A store chest's crafting materials come in 5, 10 or 20 (owner-approved
+        // deviation from retail, #388, 2026-10-16), as a treasury chest's.
+        crate::features::beginner_economy::size_material_stacks(
+            &mut grant.stackable_items,
+            mix(seed ^ 0x388_5743_C4E5),
+        );
+    }
+    if is_golden {
+        // The three best soul gems at 45-48 (owner-approved deviation from retail,
+        // #388, 2026-10-16); Legendary and Elder get them from the ladder above.
+        crate::features::beginner_economy::top_soul_gems(
+            &mut grant.stackable_items,
+            i64::try_from(buyer_level).unwrap_or(i64::MAX),
+            mix(seed ^ 0x388_5047_6E35),
+        );
+    }
     for (ordinal, item) in items.into_iter().enumerate() {
         grant.items.push(RewardItem {
             // A fresh instance per purchase. The frozen ids in the capture-derived
@@ -1125,7 +1142,10 @@ const CHEST_SOUL_GEM_LADDER: &[(u64, &[(usize, u64)])] = &[
     (36, &[(4, 12), (5, 6), (6, 4)]), // band 36-50, Glass+Ebony chests
     (39, &[(5, 1), (6, 1)]),    // Sephoris; one retail chest: Greater
     (43, &[(6, 2), (8, 1)]),    // Sephoris: Glorious the highest
-    (47, &[(7, 1), (8, 2)]),    // Sephoris: Grand only at 47-48, with Glorious
+    // Owner-approved deviation from retail, #388, 2026-10-16: the three best from
+    // 45 (beginner_economy::TOP_SOUL_GEM_WEIGHTS). Sephoris had Elevated + Glorious
+    // at 45-46 and Grand + Glorious at 47-48.
+    (45, &[(7, 1), (8, 2), (9, 1)]),
     (49, &[(8, 96), (9, 41)]),  // 54-89 band: Glorious 96, Transcendent 41
 ];
 
@@ -1958,8 +1978,9 @@ mod tests {
                 let allowed: &[usize] = match level {
                     36..=38 => &[4, 5, 6],
                     39..=42 => &[5, 6],
-                    43..=46 => &[6, 8],
-                    47..=48 => &[7, 8],
+                    43..=44 => &[6, 8],
+                    // The three best from 45 (owner-approved deviation, #388).
+                    45..=48 => &[7, 8, 9],
                     _ => &[8, 9],
                 };
                 assert!(

@@ -263,6 +263,20 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 /// FROM LEVEL 49 the package is the top band's, drawn as at level 100 (report #383,
 /// [`TOP_BAND_FROM_LEVEL`]): Glorious gems and the Transcendent upgrade included.
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
+    let mut grant = end_package_drawn(score, character_level, run_seed);
+    // The three best soul gems at 45-48 (owner-approved deviation from retail, #388).
+    crate::features::beginner_economy::top_soul_gems(
+        &mut grant.stackable_items,
+        i64::try_from(character_level).unwrap_or(i64::MAX),
+        mix((run_seed as u64) ^ 0x388_E4D0),
+    );
+    // Its materials are always 20 (owner-approved deviation from retail, #388).
+    crate::features::beginner_economy::size_abyss_end_materials(&mut grant.stackable_items);
+    grant
+}
+
+/// [`end_package`] as drawn, before #388's soul gems.
+fn end_package_drawn(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
     // From 49 everything is drawn as at level 100, its gem re-grading included (#398).
     let character_level = crate::features::loot_level::effective_loot_level_u64(character_level);
     let mut grant = RewardGrant::default();
@@ -648,6 +662,18 @@ fn borrow_from_above<'a>(
 /// results beside the golden chest, which level 100 does not. Paying exactly level
 /// 100 would take that away, and rewards are never narrowed without HauDrauf.
 fn rung_reward(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant {
+    let mut grant = rung_reward_drawn(rung, real_level, run_seed);
+    // The three best soul gems at 45-48 (owner-approved deviation from retail, #388).
+    crate::features::beginner_economy::top_soul_gems(
+        &mut grant.stackable_items,
+        i64::try_from(real_level).unwrap_or(i64::MAX),
+        mix((run_seed as u64) ^ u64::from(rung.score).rotate_left(17) ^ 0x388_7E40),
+    );
+    grant
+}
+
+/// [`rung_reward`] as drawn, before #388's soul gems.
+fn rung_reward_drawn(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant {
     let character_level = crate::features::loot_level::effective_loot_level_u64(real_level);
     let mut grant = RewardGrant::default();
 
@@ -1117,13 +1143,14 @@ mod tests {
 
     /// The screenshot cases: retail's end screen paid Grand ×6 at level 47, and a
     /// single Grand at levels 57 and 58. From 45 to 48 the `/end` stack is 1-7 of
-    /// Greater, Elevated or Grand ("up to 7 of every kind"), never Glorious or
-    /// Transcendent. From 49 `/end` is the top band's (report #383), and the
+    /// Greater, Elevated or Grand ("up to 7 of every kind"), and since #388
+    /// (owner-approved deviation, 2026-10-16) Greater and Elevated are paid as
+    /// Grand, Glorious or Transcendent. From 49 `/end` is the top band's (report #383), and the
     /// level-57/58 single Grand is paid by the rungs beside the golden chest.
     #[test]
     fn levels_45_to_48_are_paid_up_to_seven_and_the_screenshots_are_reachable() {
         let grand = uuid(ALL_SOUL_GEMS[GRAND]);
-        let kinds = [GREATER, ELEVATED, GRAND].map(|g| uuid(ALL_SOUL_GEMS[g]));
+        let kinds = [GRAND, GRAND + 1, GRAND + 2].map(|g| uuid(ALL_SOUL_GEMS[g]));
         for level in [45u64, 47, 48] {
             let (gems, n) = end_gems(level, 10_000);
             assert!(gems.iter().all(|g| kinds.contains(&g.0)), "level {level}: {gems:?}");

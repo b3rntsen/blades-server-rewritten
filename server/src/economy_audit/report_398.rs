@@ -240,16 +240,25 @@ fn levels_below_49_are_unchanged() {
     }
     got.push(("treasury", h));
 
+    // #388 (owner-approved deviation from retail, 2026-10-16) moves sources below
+    // 49 on purpose, and each of its changes re-pins what it moves: containers
+    // holding 2 / 4 / 6 stacks (quests, event_dungeons, jobs); gems +20% and fixed
+    // Wooden / Silver chest gems (events, abyss_floor, quests, event_dungeons,
+    // jobs, treasury); the three best soul gems at 45-48 (events, daily,
+    // abyss_rewards, abyss_floor, quests, event_dungeons, store, treasury); crafting
+    // materials in 5, 10 or 20 (abyss_rewards, abyss_floor, quests,
+    // event_dungeons, jobs, store, treasury; not `events` while
+    // EVENT_LADDER_STACKS_FIXED is off, which pays exactly as before that change).
     let pinned: [(&str, u64); 9] = [
-        ("events", 0x7445_3735_abb6_35b1),
-        ("daily", 0x40d7_bed5_0a28_cc9a),
-        ("abyss_rewards", 0xcbb0_1935_28c0_3bba),
-        ("abyss_floor", 0x57ca_1f7e_2bfe_f747),
-        ("quests", 0x1e88_fcc6_608a_b8c1),
-        ("event_dungeons", 0x7b34_bfa1_3352_e75a),
-        ("jobs", 0xaaa8_1f0b_d8d0_e39d),
-        ("store", 0xb3b8_adde_182b_a5ca),
-        ("treasury", 0xfe7b_85af_c723_b9e0),
+        ("events", 0x5351_4151_1ca6_22e9),
+        ("daily", 0x8d8e_2e5c_0659_5552),
+        ("abyss_rewards", 0x132f_4e45_fafe_3e7b),
+        ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),
+        ("quests", 0x3f01_52cb_5eef_d622),
+        ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
+        ("jobs", 0x0e71_0932_2f7b_96e5),
+        ("store", 0x6bfe_d561_3f10_831a),
+        ("treasury", 0x4dab_8f09_4476_e0c4),
     ];
     assert_eq!(got, pinned.to_vec(), "a source moved for a character below level 49");
 }

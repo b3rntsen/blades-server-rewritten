@@ -6,6 +6,7 @@
 
 pub mod abyss_kill_score;
 pub mod abyss_rewards;
+pub mod beginner_economy;
 pub mod challenges;
 pub mod character_ops;
 pub mod chests;

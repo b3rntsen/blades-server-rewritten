@@ -544,6 +544,62 @@ fn roll_loot_table_with_context(
     out
 }
 
+/// One container's roll of a floor table: retail's draw, except that a breakable
+/// outside the Abyss holds exactly its size class's number of loot stacks
+/// ([`crate::features::beginner_economy::container_stacks`]: 2 / 4 / 6).
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16. The client places the
+/// containers (the APK's spawn points), so the server cannot add one; it fills
+/// those it has. The first draw is retail's whole result, as before, its gold
+/// included. Further draws of its size's breakable table (the same table, but for
+/// a job's, which pays one kind only), each under its own seed, add stacks of
+/// kinds the container does not hold yet until it holds its number; a draw
+/// with more stacks than the number keeps the first ones in id order. Gold is
+/// only ever the first draw's, so a container's coin stays retail's.
+fn roll_container_table(
+    ctx: LootSeedContext,
+    spawn_id: &Uuid,
+    group_name: Option<&str>,
+    table_id: &Uuid,
+    result_index: usize,
+    enemy_level: i64,
+) -> LootTableResult {
+    use crate::features::beginner_economy::{container_class, CONTAINER_FILL_MAX_DRAWS};
+
+    let mut out = roll_loot_table_with_context(ctx, spawn_id, table_id, result_index, enemy_level);
+    // Crafting materials come in 5, 10 or 20 (owner-approved deviation, #388).
+    let material_seed = loot_seed(ctx, spawn_id, table_id, result_index) ^ 0x388_C047_A1E5;
+    let Some(class) = container_class(table_id, group_name).filter(|_| !ctx.abyss) else {
+        crate::features::beginner_economy::size_material_stacks(&mut out.stackable_items, material_seed);
+        return out;
+    };
+    let want = class.stacks;
+    let sorted = |stacks: &HashMap<Uuid, u64>| {
+        let mut v: Vec<(Uuid, u64)> = stacks.iter().map(|(k, q)| (*k, *q)).collect();
+        v.sort_unstable();
+        v
+    };
+    if out.stackable_items.len() > want {
+        out.stackable_items = sorted(&out.stackable_items).into_iter().take(want).collect();
+    }
+    for draw in 1..=CONTAINER_FILL_MAX_DRAWS {
+        if out.stackable_items.len() >= want {
+            break;
+        }
+        // Far past any pile's own indices, so a fill draw is never another
+        // container's draw.
+        let index = result_index + (draw << 20);
+        let extra = roll_loot_table_with_context(ctx, spawn_id, &class.fill_table, index, enemy_level);
+        for (id, q) in sorted(&extra.stackable_items) {
+            if out.stackable_items.len() < want {
+                out.stackable_items.entry(id).or_insert(q);
+            }
+        }
+    }
+    crate::features::beginner_economy::size_material_stacks(&mut out.stackable_items, material_seed);
+    out
+}
+
 #[cfg(test)]
 fn roll_loot_table(
     dungeon_uuid: &Uuid,
@@ -858,7 +914,12 @@ fn roll_enemy_loot_with_context(
     // #383: the bonus stack, under the table it was drawn from. 871c2e9b is the
     // key every Abyss corpse carried before #381, so the client already reads it
     // on an Abyss enemy.
-    if let Some((item, qty)) = roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index) {
+    // #388: every crafting material on the corpse in 5, 10 or 20 (owner-approved
+    // deviation from retail), before the bonus joins it.
+    size_corpse_materials(ctx, spawn_group_id, spawner_index, enemy_index, &mut out);
+    if let Some((item, qty)) = roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index)
+        .map(|drawn| bonus_as_paid(ctx, spawn_group_id, spawner_index, enemy_index, drawn))
+    {
         *out.entry(Uuid::from_u128(GOLD_LOOT_TABLE_ID))
             .or_default()
             .stackable_items
@@ -1399,7 +1460,7 @@ pub fn generate_for_abyss_floor(
     enemy_level: i64,
     character_level: Option<i64>,
 ) -> Option<DungeonGeneratedData> {
-    generate_for_dungeon_inner(
+    let mut data = generate_for_dungeon_inner(
         game_data,
         dungeon_uuid,
         LootSeedContext {
@@ -1408,7 +1469,13 @@ pub fn generate_for_abyss_floor(
             ..seeded_context(dungeon_uuid, run_seed)
         },
         EnemyLevels::Flat { level: enemy_level, given_xp: 0 },
-    )
+    )?;
+    // The three best soul gems at 45-48 (owner-approved deviation, #388); the
+    // corpses' bonus gem is paid so where it is merged ([`abyss_bonus_as_paid`]).
+    if let Some(level) = character_level {
+        crate::features::beginner_economy::top_container_soul_gems(&mut data, level, false);
+    }
+    Some(data)
 }
 
 /// [`generate_for_dungeon_levelled_with_seed`] (unseeded for `run_seed: None`), with
@@ -1462,7 +1529,7 @@ fn generate_for_dungeon_inner(
     let dungeon = game_data.dungeons.get(dungeon_uuid)?;
     let enemy_level = levels.base();
 
-    Some(DungeonGeneratedData {
+    let mut data = DungeonGeneratedData {
         enemy_generated_data: dungeon
             .spawn_info
             .enemy_spawn_groups
@@ -1551,9 +1618,10 @@ fn generate_for_dungeon_inner(
                             .map(|k| {
                                 (
                                     *k,
-                                    roll_loot_table_with_context(
+                                    roll_container_table(
                                         seed_context,
                                         item_spawn_id,
+                                        spawn_info.name.as_deref(),
                                         k,
                                         result_index,
                                         enemy_level,
@@ -1568,7 +1636,99 @@ fn generate_for_dungeon_inner(
             .collect(),
         algorithm_version: 1,
         version: 0,
-    })
+    };
+    beginner_economy_loot(&mut data, seed_context);
+    Some(data)
+}
+
+/// A corpse's crafting materials in 5, 10 or 20, each table's under its own seed
+/// (owner-approved deviation from retail, #388, 2026-10-16). Keyed off the corpse
+/// and table, never the loot stream, so no other draw moves.
+fn size_corpse_materials(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    out: &mut HashMap<Uuid, LootTableResult>,
+) {
+    let corpse = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_5743_4B53_0388;
+    for (table, loot) in out.iter_mut() {
+        let seed = mix64(corpse ^ (table.as_u128() as u64).rotate_left(13));
+        crate::features::beginner_economy::size_material_stacks(&mut loot.stackable_items, seed);
+    }
+}
+
+/// The #383 Abyss bonus stack `drawn` for a corpse as it is paid under the
+/// beginner economy (owner-approved deviation from retail, #388, 2026-10-16): a
+/// soul gem is one of the three best at 45-48, a material 5, 10 or 20. Its own
+/// seeded stream, so no retail draw moves.
+fn bonus_as_paid(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    drawn: (Uuid, u64),
+) -> (Uuid, u64) {
+    let Some(level) = ctx.bonus_level else { return drawn };
+    let seed = mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_B045_5EED_0388);
+    let mut stack = HashMap::from([drawn]);
+    crate::features::beginner_economy::top_soul_gems(&mut stack, level, seed);
+    crate::features::beginner_economy::size_material_stacks(&mut stack, mix64(seed));
+    stack.into_iter().next().unwrap_or(drawn)
+}
+
+/// [`abyss_bonus_material`] as the corpse pays it ([`bonus_as_paid`], #388).
+pub fn abyss_bonus_as_paid(
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    character_level: i64,
+) -> Option<(Uuid, u64)> {
+    let ctx = LootSeedContext {
+        abyss: true,
+        bonus_level: Some(character_level),
+        ..seeded_context(dungeon_uuid, run_seed)
+    };
+    roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index)
+        .map(|drawn| bonus_as_paid(ctx, spawn_group_id, spawner_index, enemy_index, drawn))
+}
+
+/// The beginner economy (#388) on a generated dungeon's corpse and container
+/// loot: gems 20% more on average
+/// ([`crate::features::beginner_economy::with_gem_bonus_drawn`]). Seeded by the
+/// dungeon, run and each result's own keys, so a re-fetch pays the same.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+fn beginner_economy_loot(data: &mut DungeonGeneratedData, ctx: LootSeedContext) {
+    use crate::features::beginner_economy::add_drawn_gem_bonus;
+    let base = mix64(ctx.dungeon_uuid.as_u128() as u64 ^ ctx.run_seed.rotate_left(7) ^ 0x388_0000_6E35);
+    let key = |group: &Uuid, a: usize, b: usize, table: &Uuid| {
+        mix64(
+            base ^ (group.as_u128() as u64).rotate_left(13)
+                ^ (a as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (b as u64).rotate_left(40)
+                ^ (table.as_u128() as u64).rotate_left(29),
+        )
+    };
+    for (group, spawners) in &mut data.enemy_generated_data {
+        for (a, enemies) in spawners.iter_mut().enumerate() {
+            for (b, enemy) in enemies.iter_mut().enumerate() {
+                add_drawn_gem_bonus(&mut enemy.spawn_group_loot.currencies, key(group, a, b, &Uuid::nil()));
+                for (table, loot) in &mut enemy.loot_table_loot {
+                    add_drawn_gem_bonus(&mut loot.currencies, key(group, a, b, table));
+                }
+            }
+        }
+    }
+    for (group, pile) in &mut data.item_generated_data {
+        for (a, result) in pile.iter_mut().enumerate() {
+            for (table, loot) in &mut result.loot_table_loot {
+                add_drawn_gem_bonus(&mut loot.currencies, key(group, a, usize::MAX, table));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3230,7 +3390,11 @@ mod spawn_table_tests {
             .loot_table_loot
             .get(&lumber)
             .expect("the interactable's own table is still rolled");
-        let direct = roll_loot_table(&dungeon, &spawn, &lumber, 0, 20);
+        // The pot's table is the medium breakable's, filled to its stack count
+        // (#388) under the table's own seeds — still independent of the key table.
+        let name = game_data.dungeons[&dungeon].spawn_info.item[&spawn].name.clone();
+        let direct =
+            roll_container_table(default_seed_context(&dungeon), &spawn, name.as_deref(), &lumber, 0, 20);
         assert_eq!(
             serde_json::to_value(from_generation).unwrap(),
             serde_json::to_value(&direct).unwrap(),

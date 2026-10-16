@@ -98,7 +98,7 @@ pub fn generate_quest_data(
     // Shared with the Abyss — see `util::dungeon`. The Abyss used to have its
     // own hard-coded copy of this shape, which served floor 1's spawn groups on
     // every floor and hung every deeper run.
-    let generated_dungeon_data = generate_for_quest_dungeon_with_loot_shift(
+    let mut generated_dungeon_data = generate_for_quest_dungeon_with_loot_shift(
         game_data,
         &dungeon_info.dungeon_uuid,
         enemy_level,
@@ -108,6 +108,8 @@ pub fn generate_quest_data(
     .ok_or(GenerateQuestDataError::DungeonNotFound(
                 dungeon_info.dungeon_uuid,
             ))?;
+    // The three best soul gems at 45-48 (owner-approved deviation, #388).
+    crate::features::beginner_economy::top_dungeon_soul_gems(&mut generated_dungeon_data, player_level, false);
 
     Ok((quest, Some(generated_dungeon_data)))
 }
@@ -268,6 +270,8 @@ pub fn generate_for_event_dungeon_for_character(
         loot_shift,
     )?;
     crate::features::loot_level::cap_event_dungeon_soul_gems(&mut data, character_level);
+    // Grand at 45-48 (owner-approved deviation, #388).
+    crate::features::beginner_economy::top_dungeon_soul_gems(&mut data, character_level, true);
     Some(data)
 }
 
@@ -911,12 +915,9 @@ mod event_dungeons_as_retail_built_them {
             large_high.0,
             large_mid.0
         );
-        assert!(
-            large_high.1 >= 1.15 * large_mid.1,
-            "large container items: level 78 {:.1}, level 43 {:.1}",
-            large_high.1,
-            large_mid.1
-        );
+        // Item quantities no longer grow with level: since #388 (owner-approved
+        // deviation from retail, 2026-10-16) a large container holds 6 stacks of
+        // 5, 10 or 20 materials at every level, so only gold is compared here.
         let (medium_high, medium_mid) = (high["Breakable_T2"], mid["Breakable_T2"]);
         assert!(
             medium_high.0 >= 1.15 * medium_mid.0,
@@ -931,6 +932,32 @@ mod event_dungeons_as_retail_built_them {
             assert!(pay["Breakable_T3"].1 > pay["Breakable_T2"].1);
             assert!(pay["Breakable_T2"].1 > pay["Breakable_T1"].1);
         }
+    }
+
+    /// #388 (owner-approved deviation from retail, 2026-10-16): every breakable in
+    /// an event dungeon holds 2 / 4 / 6 loot stacks by size, at every level, and
+    /// the client's container count is unchanged (the server cannot add one).
+    #[test]
+    fn report_388_event_containers_hold_2_4_6_stacks() {
+        use crate::features::beginner_economy::container_stacks;
+        let gd = game_data();
+        let mut filled = 0;
+        for dungeon in [EQ21, EQ25, EQ27, EQ30, EQ40] {
+            for level in [1, 7, 20, 45, 49, 78, 100] {
+                let data = generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
+                let spawns = &gd.dungeons[&uuid(dungeon)].spawn_info.item;
+                for (spawn, pile) in &data.item_generated_data {
+                    for result in pile {
+                        for (table, loot) in &result.loot_table_loot {
+                            let Some(want) = container_stacks(table, spawns[spawn].name.as_deref()) else { continue };
+                            assert_eq!(loot.stackable_items.len(), want, "{dungeon} at {level}: {spawn} {table}");
+                            filled += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(filled > 300, "{filled} containers checked");
     }
 
     /// CONTROL for report #374's "fewer containers": both events place exactly the

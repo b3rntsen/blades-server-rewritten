@@ -1269,8 +1269,9 @@ mod report152_stale_story_loot_tests {
             .count();
         // A count of our own deterministic rolls, so it moves with the floor-loot
         // corpus: 37 before #374 drew each table from the levels nearest the
-        // dungeon's, which changed the level-48 results these rolls pick from.
-        assert_eq!(paying_spawns, 36, "the capture-derived deterministic rolls");
+        // dungeon's, which changed the level-48 results these rolls pick from; 37
+        // again since #388 fills every breakable to its 2 / 4 / 6 stacks.
+        assert_eq!(paying_spawns, 37, "the capture-derived deterministic rolls");
 
         // Exact shape of the reporter's durable pre-fix row: spawn/table ids exist,
         // but every result is empty. Preserve the enemy/chest sections verbatim.
@@ -1451,12 +1452,13 @@ pub async fn get_quests(
             // started (tracker #279, 2026-09-29 12:57). Idempotent: `do_nothing` on an
             // existing row, so an entered job's dungeon_state is never touched.
             for job in &jobs {
-                if let Some(entry) = jobs_gen::job_quest_db_entry(
+                if let Some(entry) = jobs_gen::job_quest_db_entry_for(
                     job,
                     character_id_var,
                     &globals.game_data,
                     &globals.static_data.quests_daily.level_scaling,
-                    jobs_gen::loot_shift_for(&job_pools_def, job, character.character.0.level),
+                    &job_pools_def,
+                    character.character.0.level,
                 ) {
                     use crate::schema::quests;
                     insert_into(quests::table)
@@ -1934,12 +1936,13 @@ async fn accept_quest(
             .iter()
             .find(|j| j.get("questId").and_then(|v| v.as_str()) == Some(&quest_id.to_string()))
         {
-            if let Some(entry) = jobs_gen::job_quest_db_entry(
+            if let Some(entry) = jobs_gen::job_quest_db_entry_for(
                 job,
                 character_id,
                 &app_state.game_data,
                 &app_state.static_data.quests_daily.level_scaling,
-                jobs_gen::loot_shift_for(&app_state.job_pools, job, character.character.0.level),
+                &app_state.job_pools,
+                character.character.0.level,
             ) {
                 use crate::schema::quests;
                 insert_into(quests::table)
@@ -2318,7 +2321,7 @@ fn grant_currencies_to_the_wallet(reward: &mut RewardGrant) {
 /// predicts it from level, category or objective count, so a constant would be a
 /// fabrication wearing a fallback's clothes. `quest_rewards.json._meta` lists exactly
 /// which quests are in that state.
-fn resolve_completion_reward(
+pub(crate) fn resolve_completion_reward(
     static_data: &blades_lib::static_data::StaticData,
     quest_id: Uuid,
     quest: &blades_lib::user_data::Quest,
@@ -2346,12 +2349,16 @@ fn resolve_completion_reward(
         };
     }
 
-    // Template first: `quest_rewards.json` is keyed by gldQuestId.
-    if let Some(r) = static_data.quest_rewards.get(&quest.gld_quest_id) {
-        return r.clone();
-    }
-    if let Some(r) = static_data.quest_rewards.get(&quest_id) {
-        return r.clone();
+    // Template first: `quest_rewards.json` is keyed by gldQuestId. Its gems pay 20%
+    // more (owner-approved deviation from retail, #388, 2026-10-16).
+    let fixed = static_data
+        .quest_rewards
+        .get(&quest.gld_quest_id)
+        .or_else(|| static_data.quest_rewards.get(&quest_id));
+    if let Some(r) = fixed {
+        let mut r = r.clone();
+        blades_lib::features::beginner_economy::add_gem_bonus(&mut r);
+        return r;
     }
     log::warn!(
         "[quest] no captured reward for quest {quest_id} (template {}) — paying nothing",
@@ -2373,6 +2380,16 @@ fn merge_reward(into: &mut RewardGrant, extra: &RewardGrant) {
     into.chests.extend(extra.chests.iter().cloned());
     into.character_xp += extra.character_xp;
     into.town_xp += extra.town_xp;
+}
+
+/// The beginner economy (owner-approved deviation from retail, #388, 2026-10-16)
+/// on a quest or job completion reward for a character of `level`: soul gems the
+/// three best at 45-48, crafting materials in 5, 10 or 20 (seeded by the quest, so
+/// a retried completion pays the same).
+pub(crate) fn beginner_economy_completion(reward: &mut RewardGrant, level: i64, quest_id: Uuid) {
+    use blades_lib::features::beginner_economy::{size_material_stacks, top_soul_gems};
+    top_soul_gems(&mut reward.stackable_items, level, quest_id.as_u128() as u64);
+    size_material_stacks(&mut reward.stackable_items, quest_id.as_u128() as u64 ^ 0x388);
 }
 
 // ---------------------------------------------------------------------------
@@ -2632,6 +2649,13 @@ pub(crate) async fn complete_quest_in_tx(
         )
     };
 
+    // A quest's or job's own reward under the beginner economy (owner-approved
+    // deviation from retail, #388, 2026-10-16); an event's was minted with it.
+    let mut reward = reward;
+    if !is_event {
+        beginner_economy_completion(&mut reward, i64::from(entry.character.0.level), quest_id);
+    }
+
     // Mirror the completion into `completedQuests` — what the client's tier
     // checkmarks read. For an event it is the tier counter itself, so the two cannot
     // drift: 1-5 over 185 retail samples, every one of those rows carrying 5 tiers.
@@ -2729,12 +2753,13 @@ pub(crate) async fn complete_quest_in_tx(
             &completed_job_ids,
         );
         for job in &jobs {
-            let Some(row) = jobs_gen::job_quest_db_entry(
+            let Some(row) = jobs_gen::job_quest_db_entry_for(
                 job,
                 character_id,
                 game_data,
                 &static_data.quests_daily.level_scaling,
-                jobs_gen::loot_shift_for(job_pools_def, job, character.level),
+                job_pools_def,
+                character.level,
             ) else {
                 continue;
             };
@@ -3716,12 +3741,17 @@ pub(crate) mod jobs_gen {
 
     /// A job's `rewardGemCount`, which retail fixes by its pool's presentation and
     /// never by the secret room (0 of 109 standard secret-room jobs paid gems).
+    ///
+    /// Plus 20%, rounded up (owner-approved deviation from retail, #388,
+    /// 2026-10-16, [`blades_lib::features::beginner_economy::with_gem_bonus`]):
+    /// featured 4 -> 5, boss 12 -> 15.
     pub fn job_gem_reward(presentation: i64) -> u64 {
-        match presentation {
+        let retail = match presentation {
             1 => FEATURED_JOB_GEMS,
             2 => BOSS_JOB_GEMS,
             _ => 0,
-        }
+        };
+        blades_lib::features::beginner_economy::with_gem_bonus(retail)
     }
 
     /// Objective template IDs are fixed per job type in the captures.
@@ -4259,15 +4289,43 @@ pub(crate) mod jobs_gen {
                 let quest_id = Uuid::parse_str(get_str(job, "questId")?).ok()?;
                 Some(DungeonGeneratedDataWithId {
                     quest_id,
-                    inner: generated_data_for_job(
-                        game_data,
-                        job,
-                        scaling,
-                        loot_shift_for(pools_def, job, level),
-                    )?,
+                    inner: job_dungeon_for(game_data, job, scaling, pools_def, level)?,
                 })
             })
             .collect()
+    }
+
+    /// A job's dungeon for a character of `level`: [`generated_data_for_job`] at its
+    /// [`loot_shift_for`], with the three best soul gems at 45-48 (owner-approved
+    /// deviation from retail, #388, 2026-10-16,
+    /// [`blades_lib::features::beginner_economy::top_dungeon_soul_gems`]).
+    pub fn job_dungeon_for(
+        game_data: &GameData,
+        job: &Value,
+        scaling: &QuestLevelScaling,
+        pools_def: &Value,
+        level: u16,
+    ) -> Option<DungeonGeneratedData> {
+        let mut data = generated_data_for_job(game_data, job, scaling, loot_shift_for(pools_def, job, level))?;
+        blades_lib::features::beginner_economy::top_dungeon_soul_gems(&mut data, i64::from(level), false);
+        Some(data)
+    }
+
+    /// [`job_quest_db_entry`] for a character of `level`: its dungeon is
+    /// [`job_dungeon_for`]'s, so the row and the board's generated data agree.
+    pub fn job_quest_db_entry_for(
+        job: &Value,
+        character_id: Uuid,
+        game_data: &GameData,
+        scaling: &QuestLevelScaling,
+        pools_def: &Value,
+        level: u16,
+    ) -> Option<QuestDbEntry> {
+        let mut entry = job_quest_db_entry(job, character_id, game_data, scaling, loot_shift_for(pools_def, job, level))?;
+        if let Some(data) = entry.generated_data.0.as_mut() {
+            blades_lib::features::beginner_economy::top_dungeon_soul_gems(data, i64::from(level), false);
+        }
+        Some(entry)
     }
 
     /// What a job pays on completion, read off the job's own `jobSetup`.
@@ -5682,8 +5740,9 @@ mod report337_job_xp {
             ("f950c41c", 26, 500, 640, 0),
             ("6f6de44d", 20, 354, 490, 0),
             ("58d85b87", 21, 376, 580, 0),
-            ("684ab17d", 23, 424, 0, 12),
-            ("6ac9d913", 21, 376, 0, 4),
+            // Gems: retail's 12 and 4, plus 20% rounded up (#388).
+            ("684ab17d", 23, 424, 0, 15),
+            ("6ac9d913", 21, 376, 0, 5),
         ]
         .into_iter()
         .map(|(id, d, xp, gold, gems)| (id.to_string(), d, xp, gold, gems))
@@ -5826,6 +5885,27 @@ mod report85_job_generated_data_tests {
             !data.enemy_generated_data.is_empty(),
             "the control quest must still generate enemies"
         );
+    }
+
+    /// #388 (owner-approved deviation from retail, 2026-10-16): a job's breakables
+    /// hold 2 / 4 / 6 loot stacks by rarity (common / uncommon / rare).
+    #[test]
+    fn report_388_job_containers_hold_2_4_6_stacks() {
+        use blades_lib::features::beginner_economy::{container_stacks, JOB_CONTAINER_TABLE};
+        let gd = game_data();
+        let spawns = &gd.dungeons[&jobs_gen::JOB_SPAWN_GROUPS_REFERENCE].spawn_info.item;
+        let mut by_size = std::collections::BTreeMap::new();
+        for job in board() {
+            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0).unwrap();
+            for (spawn, pile) in &data.item_generated_data {
+                for loot in pile.iter().filter_map(|r| r.loot_table_loot.get(&JOB_CONTAINER_TABLE)) {
+                    let want = container_stacks(&JOB_CONTAINER_TABLE, spawns[spawn].name.as_deref()).unwrap();
+                    assert_eq!(loot.stackable_items.len(), want, "job {} spawn {spawn}", job["questId"]);
+                    *by_size.entry(want).or_insert(0) += 1;
+                }
+            }
+        }
+        assert_eq!(by_size.keys().copied().collect::<Vec<_>>(), vec![2, 4, 6], "{by_size:?}");
     }
 
     /// An entry the client cannot populate a level from is no better than a missing one:
@@ -6383,6 +6463,23 @@ mod event_quest_tests {
     use super::*;
     use blades_lib::static_data::StaticData;
 
+    /// `r` with every crafting material's quantity set to 0 when #388's
+    /// `EVENT_LADDER_STACKS_FIXED` is on (event ladders then pay 5, 10 or 20, so
+    /// a comparison with retail compares which materials, not how many); `r`
+    /// itself while it is off, the default, when ladders keep retail's amounts.
+    fn materials_blind(r: &RewardGrant) -> RewardGrant {
+        let mut r = r.clone();
+        if !blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED {
+            return r;
+        }
+        for (id, q) in r.stackable_items.iter_mut() {
+            if blades_lib::features::beginner_economy::is_crafting_material(id) {
+                *q = 0;
+            }
+        }
+        r
+    }
+
     /// The committed static data, loaded the way the server loads it.
     fn static_data() -> StaticData {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
@@ -6818,6 +6915,7 @@ mod event_quest_tests {
         // Counts only: the material item is re-stepped to the level (#362), the
         // amounts are the band's.
         let amounts = |r: &RewardGrant| {
+            let r = materials_blind(r);
             let mut v: Vec<u64> = r.stackable_items.values().chain(r.currencies.values()).copied().collect();
             v.sort_unstable();
             v
@@ -6830,12 +6928,18 @@ mod event_quest_tests {
                 assert!(std::ptr::eq(tmpl.band_for_level(level).unwrap(), top), "{gld} level {level}: top band");
                 let minted = tmpl.rewards_for_level(level);
                 assert_eq!(ladder(&minted), ladder(&top.rewards), "{gld} level {level}: sigils");
+                // The band's, its gems 20% more (owner-approved deviation, #388).
+                let bonus = |r: &RewardGrant| {
+                    let mut r = r.clone();
+                    blades_lib::features::beginner_economy::add_gem_bonus(&mut r);
+                    r
+                };
                 let got: Vec<_> = minted.iter().map(amounts).collect();
-                let want: Vec<_> = top.rewards.iter().map(amounts).collect();
+                let want: Vec<_> = top.rewards.iter().map(|r| amounts(&bonus(r))).collect();
                 assert_eq!(got, want, "{gld} level {level}: milestone amounts");
                 assert_eq!(
                     tmpl.final_reward_for_level(level).as_ref().map(amounts),
-                    top.final_reward.as_ref().map(amounts),
+                    top.final_reward.as_ref().map(|r| amounts(&bonus(r))),
                     "{gld} level {level}: final bonus"
                 );
             }
@@ -6875,12 +6979,14 @@ mod event_quest_tests {
             row.final_reward = tmpl.final_reward_for_level(*minted_at);
             // Finished two levels later: the row's band still decides.
             let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &row, 4).expect("last tier pays");
-            let retail: RewardGrant = serde_json::from_str(retail).unwrap();
+            let mut retail: RewardGrant = serde_json::from_str(retail).unwrap();
+            // Retail's, its gems 20% more (owner-approved deviation, #388, 2026-10-16).
+            blades_lib::features::beginner_economy::add_gem_bonus(&mut retail);
             // Exact, materials included. 9181f784's band 3 was once exempted here as
             // a "seasonally rotated material" (Moonstone in one capture, Malachite in
             // the other); it was the level — 27 and 28, either side of the Glass
             // unlock — and the per-level material now pays it exactly (#362).
-            let same = paid == retail;
+            let same = materials_blind(&paid) == materials_blind(&retail);
             if !same {
                 wrong.push(format!("capture {capture} ({gld}, minted at {minted_at}): paid {}, retail {}",
                     serde_json::to_string(&paid).unwrap(), serde_json::to_string(&retail).unwrap()));
@@ -6930,7 +7036,14 @@ mod event_quest_tests {
         ] {
             let paid = materials_paid_at(&sd, gld, level);
             let metal: Uuid = metal.parse().unwrap();
-            assert_eq!(paid.get(&metal), Some(&96), "level {level}: paid {paid:?}");
+            // Retail: 96 ingots, kept while #388's EVENT_LADDER_STACKS_FIXED is
+            // off; on, one stack of 5, 10 or 20, or milestone + final bonus.
+            let want: &[u64] = if blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED {
+                &[5, 10, 20, 40]
+            } else {
+                &[96]
+            };
+            assert!(paid.get(&metal).is_some_and(|q| want.contains(q)), "level {level}: paid {paid:?}");
             assert_eq!(paid.len(), 1, "level {level}: one metal, nothing else: {paid:?}");
         }
         // The report itself: no Ebony below Ebony's unlock level.
@@ -6959,8 +7072,12 @@ mod event_quest_tests {
             (26, "19ce1a65-057f-4f34-a0ed-27de7c085662"),  // Petty
             (35, "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029"),  // Middling
             (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
-            (47, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional
-            (48, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional (retail L48)
+            (44, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
+            // Retail paid Exceptional at 47-48; since #388 (owner-approved
+            // deviation, 2026-10-16) 45-48 are paid the event's best, Grand.
+            (45, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (47, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (48, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
             // From 49 the level-100 character's rewards (#398), but its soul gem
             // stays Grand to 60 (HauDrauf #398, 2026-10-16: "at the end of events
             // you get Grand instead of Glorious ... Grand from level 49").
@@ -7001,6 +7118,11 @@ mod event_quest_tests {
             // level (#398); `report_398` pins that. Level 100's own observations
             // still hold.
             if (49..100).contains(level) {
+                continue;
+            }
+            // At 45-48 a soul gem is Grand since #388 (owner-approved deviation
+            // from retail, 2026-10-16); its other materials still hold.
+            if (45..=48).contains(level) && blades_lib::features::beginner_economy::SOUL_GEMS.contains(item) {
                 continue;
             }
             let carried = match slot.as_str() {
@@ -9522,7 +9644,7 @@ mod report_306_job_gems {
         let featured: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 1).collect();
         assert!(featured.len() >= 7 * 40, "every weekday rolls a featured job");
         for (_, j) in &featured {
-            assert_eq!(gems(j), 4, "retail: 84 of 84 featured jobs paid 4 gems");
+            assert_eq!(gems(j), 5, "retail: 84 of 84 featured jobs paid 4 gems; +20% rounded up (#388)");
             assert_eq!(gold(j), 0, "retail: 84 of 84 featured jobs paid no gold");
         }
     }
@@ -9532,7 +9654,7 @@ mod report_306_job_gems {
         let boss: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 2).collect();
         assert!(!boss.is_empty());
         for (_, j) in &boss {
-            assert_eq!(gems(j), 12, "retail: 27 of 27 boss jobs paid 12 gems");
+            assert_eq!(gems(j), 15, "retail: 27 of 27 boss jobs paid 12 gems; +20% rounded up (#388)");
             assert_eq!(gold(j), 0, "retail: 27 of 27 boss jobs paid no gold");
         }
     }
@@ -9594,10 +9716,10 @@ mod report_306_job_gems {
             ("346135d3-ad76-4658-b0f2-af7fb77c4a0d", "4956c6ab", 79, 1566, "UI.Jobs.Names.Rescue.006", 0, 1650),
             ("01cda05c-b403-4ef6-97ed-a987f47b4a69", "4956c6ab", 75, 1526, "UI.Jobs.Names.Rescue.004", 0, 1650),
             ("de1a54e3-7889-4e9b-a6d3-e24f344fdb5d", "4956c6ab", 73, 1506, "UI.Jobs.Names.Rescue.001", 0, 1570),
-            // boss Duel: prod served 0 gems / 1620 gold
-            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1526, "UI.Jobs.Names.Duel.002", 12, 0),
-            // Friday featured Rescue: prod served 0 gems / 1660 gold
-            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1586, "UI.Jobs.Names.Rescue.001", 4, 0),
+            // boss Duel: prod served 0 gems / 1620 gold; retail 12 gems, 15 since #388
+            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1526, "UI.Jobs.Names.Duel.002", 15, 0),
+            // Friday featured Rescue: prod served 0 gems / 1660 gold; retail 4, 5 since #388
+            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1586, "UI.Jobs.Names.Rescue.001", 5, 0),
         ];
         assert_eq!(jobs.len(), want.len());
         for (id, pool, d, xp, name, gem, gold_) in want {

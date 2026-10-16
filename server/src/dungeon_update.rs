@@ -559,6 +559,12 @@ async fn handle_quest_dungeon_update(
                      variant than we generated; regenerated from the spawner it reported (#174)"
                 );
                 generated_data = repaired;
+                // The three best soul gems at 45-48 (owner-approved deviation, #388).
+                blades_lib::features::beginner_economy::top_dungeon_soul_gems(
+                    &mut generated_data,
+                    i64::from(character_data.character.0.level),
+                    false,
+                );
             }
             let mut dungeon_state = quest_data
                 .dungeon_state
@@ -816,6 +822,12 @@ async fn handle_event_dungeon_update(
                     blades_lib::features::loot_level::cap_event_dungeon_soul_gems(
                         &mut repaired,
                         i64::from(character_data.character.0.level),
+                    );
+                    // And Grand at 45-48 (owner-approved deviation, #388).
+                    blades_lib::features::beginner_economy::top_dungeon_soul_gems(
+                        &mut repaired,
+                        i64::from(character_data.character.0.level),
+                        true,
                     );
                     repaired
                 }

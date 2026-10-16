@@ -4485,7 +4485,10 @@ mod tests {
         }
         assert_eq!(payout_digest(&runs), LEVEL_100_FROM_149_DIGEST);
     }
-    const LEVEL_100_FROM_149_DIGEST: u64 = 0xec68_1b36_2fc8_ec94;
+    /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
+    /// `/end` materials are 20; everything else is pinned unchanged by
+    /// [`abyss_runs_move_only_what_388_moves`].
+    const LEVEL_100_FROM_149_DIGEST: u64 = 0x4ad3_6d93_21ea_342b;
 
     /// Level 7 from floor 1: unchanged, rung by rung, for the same seeds.
     #[test]
@@ -4494,7 +4497,10 @@ mod tests {
         assert!(runs.iter().all(|r| rung_draw(r, 70).is_some()), "every run reaches rung 70");
         assert_eq!(payout_digest(&runs), LEVEL_7_FROM_1_DIGEST);
     }
-    const LEVEL_7_FROM_1_DIGEST: u64 = 0x79e9_93c1_52cd_0fbe;
+    /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
+    /// `/end` materials are 20; everything else is pinned unchanged by
+    /// [`abyss_runs_move_only_what_388_moves`].
+    const LEVEL_7_FROM_1_DIGEST: u64 = 0xb328_ce32_4938_8da8;
 
     /// Sephoris, level 45, from floor 149: below 49, so unchanged — rung 70 is still
     /// the level 34-40 captures' Nightshade, Chaurus Chitin, Quicksilver or Malachite,
@@ -4510,7 +4516,64 @@ mod tests {
         }
         assert_eq!(payout_digest(&runs), LEVEL_45_FROM_149_DIGEST);
     }
-    const LEVEL_45_FROM_149_DIGEST: u64 = 0xa32e_d7f5_fda6_1e5d;
+    /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
+    /// soul gems are the three best and its `/end` materials 20. Everything else
+    /// is pinned unchanged by [`abyss_runs_move_only_what_388_moves`].
+    const LEVEL_45_FROM_149_DIGEST: u64 = 0xda47_87ed_3ba7_8d89;
+
+    /// [`payout_digest`] blind to what #388 (owner-approved deviation from retail,
+    /// 2026-10-16) moves in a run: every soul gem taken out (the three best at
+    /// 45-48), and the `/end` stack's count zeroed (its materials are always 20).
+    fn payout_digest_388_blind(runs: &[Payout]) -> u64 {
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        let mut runs = runs.to_vec();
+        for (rungs, end) in &mut runs {
+            for (_, g) in rungs.iter_mut() {
+                g.stackable_items.retain(|id, _| !soul_gems.contains(id));
+            }
+            end.stackable_items.retain(|id, _| !soul_gems.contains(id));
+            end.stackable_items.values_mut().for_each(|q| *q = 0);
+        }
+        payout_digest(&runs)
+    }
+
+    /// #388, the three mandatory runs: level 7 from floor 1, and levels 45 and 100
+    /// from floor 149 pay everything exactly as before #388 but for its two Abyss
+    /// changes (the blind digests were taken on the commit before them); every
+    /// `/end` material is 20, and at 45 every soul gem is one of the three best.
+    #[test]
+    fn abyss_runs_move_only_what_388_moves() {
+        use blades_lib::features::beginner_economy::{is_crafting_material, ABYSS_END_MATERIAL_STACK};
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        for (level, start, count, kills, blind) in [
+            (7u32, 1u32, 30usize, MIXED_KILLS, 0x70de_e0c6_4225_b2ac_u64),
+            (45, 149, 4, DEEP_FLOOR_KILLS, 0xd5bd_df6a_7c49_1cb9),
+            (100, 149, 4, DEEP_FLOOR_KILLS, 0xb599_e98b_9612_3a1a),
+        ] {
+            let runs = payouts(level, start, count, kills);
+            assert_eq!(payout_digest_388_blind(&runs), blind, "level {level} from floor {start}");
+            let mut end_materials = 0;
+            for (_, end) in &runs {
+                for (id, q) in &end.stackable_items {
+                    if is_crafting_material(id) {
+                        assert_eq!(*q, ABYSS_END_MATERIAL_STACK, "level {level}: /end paid {q} of {id}");
+                        end_materials += 1;
+                    }
+                }
+            }
+            assert!(end_materials > 0, "level {level}: no /end material in {} runs", runs.len());
+            if level == 45 {
+                let paid: Vec<Uuid> = runs
+                    .iter()
+                    .flat_map(|(rungs, end)| rungs.iter().map(|(_, g)| g).chain([end]))
+                    .flat_map(|g| g.stackable_items.keys().copied())
+                    .filter(|id| soul_gems.contains(id))
+                    .collect();
+                assert!(!paid.is_empty(), "the runs pay soul gems");
+                assert!(paid.iter().all(|id| soul_gems[7..].contains(id)), "{paid:?}");
+            }
+        }
+    }
 
     /// Report #383: "by 50 [a player is] completely done … everything must be
     /// obtainable by level 49". A level-49 run from floor 149 draws every material
@@ -4898,7 +4961,16 @@ mod tests {
                                 index,
                                 i64::from(level),
                             );
-                            assert_eq!(added, drawn.into_iter().collect::<Vec<_>>(), "L{level}");
+                            // As the corpse pays it (#388: a soul gem the three best at 45-48).
+                            let paid = blades_lib::util::dungeon::abyss_bonus_as_paid(
+                                &slice.dungeon_settings_id,
+                                seed as u64,
+                                group,
+                                spawner,
+                                index,
+                                i64::from(level),
+                            );
+                            assert_eq!(added, paid.into_iter().collect::<Vec<_>>(), "L{level}");
                             let Some((item, qty)) = drawn else { continue };
                             assert!(materials.contains(&item), "L{level}: the bonus paid a non-material {}", name(&item));
                             t.bonus += 1;
@@ -5161,7 +5233,7 @@ mod tests {
     /// gear and retail's own stackables are the same, the bonus is the only addition.
     #[test]
     fn abyss_runs_draw_each_effect_ingredient_equally() {
-        use blades_lib::util::dungeon::{abyss_bonus_candidates, abyss_bonus_material, EFFECT_INGREDIENTS};
+        use blades_lib::util::dungeon::{abyss_bonus_as_paid, abyss_bonus_candidates, EFFECT_INGREDIENTS};
         const DEATHBELL: &str = "8b7d0044-3a38-4ee0-af45-d2892b0f508d";
         let gd = game_data();
         let names = ingredient_names();
@@ -5194,7 +5266,8 @@ mod tests {
                                     ids
                                 };
                                 assert_eq!(gear(&now), gear(&was), "L{level}: the bonus changed gear");
-                                let drawn = abyss_bonus_material(
+                                // As the corpse pays it (#388).
+                                let drawn = abyss_bonus_as_paid(
                                     &slice.dungeon_settings_id,
                                     seed as u64,
                                     group,
@@ -5216,8 +5289,11 @@ mod tests {
                                 if !EFFECT_INGREDIENTS.contains(&item.as_u128()) {
                                     continue;
                                 }
+                                // Since #388 (owner-approved deviation) a material's
+                                // quantity is 5, 10 or 20, not the band's.
                                 assert!(
-                                    abyss_bonus_candidates(i64::from(level), true).iter().any(|c| c.0 == item && c.1 == qty),
+                                    abyss_bonus_candidates(i64::from(level), true).iter().any(|c| c.0 == item)
+                                        && blades_lib::features::beginner_economy::MATERIAL_STACK_SIZES.contains(&qty),
                                     "L{level}: {} x{qty} is not one of the level's stack sizes",
                                     name(&item)
                                 );
