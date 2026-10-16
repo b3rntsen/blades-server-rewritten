@@ -135,6 +135,24 @@ pub(crate) fn generate(shell: &Item, seed: u64) -> Option<Item> {
     generate_at(shell, required_level, seed)
 }
 
+/// `count` enchantments at `tier` for an item of the pool template
+/// `table_template`, drawn as a generated Legendary piece draws them: a recipe
+/// primary allowed on the template at that tier, then distinct secondaries from
+/// the template's table, each uniformly. `None` when `table_template` is not a
+/// pool template or its tables cannot supply `count` at `tier`.
+///
+/// For a template outside the loot pool that shares a pool template's enchanting
+/// tables (same item type and weapon type), pass that pool template.
+pub fn roll_enchanting_for(
+    table_template: &Uuid,
+    count: usize,
+    tier: u64,
+    seed: u64,
+) -> Option<Vec<ItemSingleProperty>> {
+    let template = pool().table.templates.get(table_template)?;
+    roll_enchanting(template, count, tier, seed)
+}
+
 /// [`generate`] at the material tier unlocked at `required_level` rather than the
 /// shell's own: a slot whose tier retail paid too rarely to have shells of its own
 /// borrows the slot's shells from the neighbouring tiers (#368, slot 1 at
