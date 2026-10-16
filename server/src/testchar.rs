@@ -594,7 +594,7 @@ async fn load_listing(
 pub(crate) async fn apply_migration_for_tests(conn: &mut AsyncPgConnection) {
     diesel_async::SimpleAsyncConnection::batch_execute(
         conn,
-        include_str!("../../migrations/2026-10-16-000000-0000_add_test_characters/up.sql"),
+        include_str!("../../migrations/2026-10-16-000001-0000_add_test_characters/up.sql"),
     )
     .await
     .expect("test_characters migration applies");
@@ -710,7 +710,7 @@ mod tests {
             .unwrap();
             conn.batch_execute(SCHEMA).await.unwrap();
             conn.batch_execute(include_str!(
-                "../../migrations/2026-10-16-000000-0000_add_test_characters/up.sql"
+                "../../migrations/2026-10-16-000001-0000_add_test_characters/up.sql"
             ))
             .await
             .unwrap();
