@@ -2691,6 +2691,13 @@ mod tests {
                 }
             }
             let share = |t: u64| tiers.get(&t).copied().unwrap_or(0) as f64 / 1200.0;
+            if crate::features::level_curve::applies(level as i64) {
+                // Below 49 the #398 level curve sets the tiers, every chest tier alike.
+                for (r, want) in crate::features::level_curve::gear_tier_shares(level as i64) {
+                    assert!((share(r) - want).abs() <= 0.06, "level {level}: tier {r} {:.2} vs {want:.2}", share(r));
+                }
+                continue;
+            }
             assert!(
                 (0.78..=0.94).contains(&share(39)),
                 "level {level}: Daedric {:.0}%: {tiers:?}",

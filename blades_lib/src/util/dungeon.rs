@@ -517,8 +517,9 @@ fn roll_loot_table_with_context(
         return out;
     }
 
-    let mut pick = loot_seed(ctx, spawn_id, table_id, result_index) % total;
-    for r in results {
+    let seed = loot_seed(ctx, spawn_id, table_id, result_index);
+    let mut pick = seed % total;
+    for r in &results {
         let n = r.get("n").and_then(|v| v.as_u64()).unwrap_or(0);
         if pick >= n {
             pick -= n;
@@ -539,9 +540,34 @@ fn roll_loot_table_with_context(
                 }
             }
         }
+        // #398: the level curve, from retail's dungeon materials at this level.
+        if let Some(level) = curve_level(ctx, enemy_level) {
+            crate::features::level_curve::reshape_stacks(&mut out.stackable_items, level, material_catalogue(level), mix64(seed ^ CURVE_SALT));
+        }
         return out;
     }
     out
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests only: roll dungeon loot without the #398 curve, as a control.
+    static CURVE_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Salt of the level curve's side stream (#398), so it never moves a retail draw.
+const CURVE_SALT: u64 = 0x0398_C0B5_E398_C0B5;
+
+/// The level the #398 curve shapes a dungeon draw at: the level the draw reads
+/// (enemy level plus loot shift) when that is 1-48, never on an Abyss floor
+/// (its corpse loot is the retail Abyss corpus, #381). `None`: untouched.
+fn curve_level(ctx: LootSeedContext, enemy_level: i64) -> Option<i64> {
+    #[cfg(test)]
+    if CURVE_OFF.with(std::cell::Cell::get) {
+        return None;
+    }
+    let level = enemy_level + ctx.loot_shift;
+    (!ctx.abyss && crate::features::level_curve::applies(level)).then_some(level)
 }
 
 #[cfg(test)]
@@ -776,6 +802,8 @@ fn roll_enemy_loot_with_context(
     let mut out = HashMap::new();
     // The enemy keeps its level; its loot is read at the level-100 character's (#398).
     let enemy_level = enemy_level + ctx.loot_shift;
+    // `enemy_level` already carries the shift.
+    let ctx_no_shift = LootSeedContext { loot_shift: 0, ..ctx };
 
     let group = if ctx.abyss {
         // An abyss group retail never showed us rolls what abyss enemies rolled
@@ -817,6 +845,8 @@ fn roll_enemy_loot_with_context(
         // Known to neither corpus: retail keyed it on this enemy, so the key is
         // still sent, empty -- dropping the key would be a shape retail never sent.
         if let Some(results) = results {
+            // #398's side stream, keyed on this enemy and table only.
+            let curve_seed = mix64(rng.0 ^ CURVE_SALT ^ (table_id.as_u128() as u64).rotate_left(13));
             if let Some(drawn) = draw_weighted(&mut rng, &results) {
                 let loot = &drawn["loot"];
                 if let Some(stacks) = loot["stackableItems"].as_object() {
@@ -847,8 +877,16 @@ fn roll_enemy_loot_with_context(
                         // key so no other draw on this corpse moves.
                         let seed = (key.as_u128() as u64) ^ ((key.as_u128() >> 64) as u64);
                         crate::features::legendary_gear::regrade_jewelry(&mut item, seed);
+                        // #398: a weapon, armour piece or shield at a tier of the level's window.
+                        if let Some(level) = curve_level(ctx_no_shift, enemy_level) {
+                            crate::features::level_curve::reshape_item(&mut item, level, mix64(seed ^ CURVE_SALT));
+                        }
                         result.item.0.insert(key, item);
                     }
+                }
+                // #398: the level curve, from retail's dungeon materials at this level.
+                if let Some(level) = curve_level(ctx_no_shift, enemy_level) {
+                    crate::features::level_curve::reshape_stacks(&mut result.stackable_items, level, material_catalogue(level), curve_seed);
                 }
             }
         }
@@ -1052,6 +1090,44 @@ fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
     found
 }
 
+/// Every crafting-material stack retail's dungeon tables paid within
+/// [`crate::features::level_curve::MATERIAL_POOL_WINDOW`] levels of `level` --
+/// the enemy table 871c2e9b and the level-keyed container tables -- weighted by
+/// how often (#398). The pool a FIXED reward's faded material is replaced from
+/// ([`crate::features::level_curve::reshape_grant`]). Built for levels 1-48;
+/// empty from 49, where the curve does not apply.
+pub fn material_catalogue(level: i64) -> &'static [crate::features::level_curve::PoolStack] {
+    static BY_LEVEL: std::sync::OnceLock<Vec<Vec<crate::features::level_curve::PoolStack>>> = std::sync::OnceLock::new();
+    let table = BY_LEVEL.get_or_init(|| {
+        let window = crate::features::level_curve::MATERIAL_POOL_WINDOW;
+        let mut bands: Vec<&'static serde_json::Value> = Vec::new();
+        if let Some(b) = enemy_loot()["tables"]
+            .get(Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string())
+            .and_then(|t| t["byLevel"].as_array())
+        {
+            bands.extend(b.iter());
+        }
+        for entry in interactable_loot_by_level()["tables"].as_object().into_iter().flatten().map(|(_, e)| e) {
+            if entry["levelKeyed"].as_bool() == Some(true) {
+                bands.extend(entry["byLevel"].as_array().into_iter().flatten());
+            }
+        }
+        (0..crate::features::loot_level::TOP_LOOT_FROM_LEVEL)
+            .map(|level| {
+                let (lo, hi) = (level - window, level + window);
+                let near = bands.iter().filter(|b| {
+                    b["minEnemyLevel"].as_i64().unwrap_or(i64::MIN) <= hi
+                        && b["maxEnemyLevel"].as_i64().unwrap_or(i64::MAX) >= lo
+                });
+                crate::features::level_curve::pool_from_results(
+                    near.flat_map(|b| b["results"].as_array().into_iter().flatten()),
+                )
+            })
+            .collect()
+    });
+    usize::try_from(level.max(1)).ok().and_then(|l| table.get(l)).map_or(&[], Vec::as_slice)
+}
+
 /// Each effect ingredient's total weight in the enchanting bonus draw.
 const EFFECT_INGREDIENT_WEIGHT: u64 = 1_000_000;
 
@@ -1165,15 +1241,25 @@ fn roll_abyss_bonus(
         return None;
     }
     let mut pick = unit(rng.next()) * total;
+    // Float rounding past the end: the last candidate.
+    let mut drawn = candidates.last().map(|c| (c.0, c.1));
     for candidate in candidates {
         let weight = abyss_bonus_weight(candidate);
         if pick < weight {
-            return Some((candidate.0, candidate.1));
+            drawn = Some((candidate.0, candidate.1));
+            break;
         }
         pick -= weight;
     }
-    // Float rounding left the pick past the end: the last candidate.
-    candidates.last().map(|c| (c.0, c.1))
+    // #398: below 49 the level curve, as on every dungeon corpse.
+    if crate::features::level_curve::applies(level) {
+        if let Some((item, qty)) = drawn {
+            let mut stack = HashMap::from([(item, qty)]);
+            crate::features::level_curve::reshape_stacks(&mut stack, level, material_catalogue(level), mix64(rng.0 ^ CURVE_SALT));
+            drawn = stack.into_iter().next();
+        }
+    }
+    drawn
 }
 
 // -- spawn-group loot -------------------------------------------------------
@@ -1762,7 +1848,7 @@ mod interactable_loot_tests {
         let mut checked = 0;
         for (tid, entry) in tables {
             let table_id: Uuid = tid.parse().unwrap();
-            let allowed: std::collections::HashSet<String> = entry["results"]
+            let mut allowed: std::collections::HashSet<String> = entry["results"]
                 .as_array()
                 .cloned()
                 .unwrap_or_default()
@@ -1774,6 +1860,9 @@ mod interactable_loot_tests {
                         .unwrap_or_default()
                 })
                 .collect();
+            // #398: below 49 a faded material is replaced by one retail's dungeon
+            // tables paid at the level.
+            allowed.extend(material_catalogue(30).iter().map(|c| c.0.to_string()));
             for s in 0..25u128 {
                 let got = roll_loot_table(&dungeon, &Uuid::from_u128(s), &table_id, 0, 30);
                 for item in got.stackable_items.keys() {
@@ -2527,8 +2616,10 @@ mod abyss_bonus_material_tests {
         // The enchanting draw has no town material, so it is untouched.
         assert!((1..=ABYSS_BONUS_MAX_LEVEL).all(|l| abyss_bonus_candidates(l, true).iter().all(|c| !town(&c))));
 
+        // Below 49 the #398 level curve reshapes the drawn stack (its own tests),
+        // and 49-99 draw level 100's candidates; the half weight is measured at 100.
         let dungeon = Uuid::from_u128(0x383b);
-        for level in [7i64, 20, 45, 100] {
+        for level in [100i64] {
             let (mut materials, mut towns) = (0usize, 0usize);
             for i in 0..60_000usize {
                 let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
@@ -3586,6 +3677,141 @@ mod spawner_count_tests {
             for enemies in spawners {
                 assert!(enemies[1..].iter().all(|e| e.spawn_group_loot.is_empty()));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod level_curve_tests {
+    //! Report #398: the level curve on dungeon loot and the Abyss bonus, levels 1-48.
+    use super::*;
+    use crate::features::level_curve::{gear_tier_shares, is_curve_material, material_weight};
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// No faded-out material and no gear outside the window on any corpse or in any
+    /// container at levels 1-48; gold is exactly what it was.
+    #[test]
+    fn dungeon_loot_follows_the_curve_at_every_level() {
+        let gd = game_data();
+        let mut dungeons: Vec<&Uuid> = gd.dungeons.keys().collect();
+        dungeons.sort();
+        let gold = Uuid::from_u128(0xf8d27767_a85e_4fd6_a5bb_bf8a13d0daa2);
+        let (mut stacks, mut faded, mut gear) = (0usize, 0usize, 0usize);
+        for level in 1..=48i64 {
+            let window: Vec<u64> = gear_tier_shares(level).into_iter().map(|(r, _)| r).collect();
+            for d in dungeons.iter().step_by(29) {
+                let Some(data) = generate_for_dungeon_with_seed(&gd, d, 7, level, 0) else { continue };
+                let corpses = data.enemy_generated_data.values().flatten().flatten().flat_map(|e| e.loot_table_loot.values());
+                let floors = data.item_generated_data.values().flatten().flat_map(|i| i.loot_table_loot.values());
+                for loot in corpses.chain(floors) {
+                    for id in loot.stackable_items.keys().filter(|id| is_curve_material(id)) {
+                        stacks += 1;
+                        // Only the fallback (nothing to draw) may keep a faded-out one.
+                        faded += usize::from(material_weight(id, level) == 0.0);
+                    }
+                    for item in loot.item.0.values() {
+                        if let Some((r, _)) = crate::features::legendary_gear::gear_tier_of(&item.item_template_id) {
+                            gear += 1;
+                            assert!(window.contains(&r), "level {level}: tier {r} outside {window:?}");
+                        }
+                    }
+                    assert!(loot.currencies.keys().all(|c| *c == gold || !c.is_nil()));
+                }
+            }
+        }
+        assert!(stacks > 2_000 && gear > 50, "only {stacks} material stacks and {gear} pieces checked");
+        assert_eq!(faded, 0, "{faded} faded-out stacks of {stacks}");
+    }
+
+    /// The curve moves materials and gear only: against the same dungeon rolled
+    /// with the curve off, every coin, soul gem, enchanting ingredient and key is
+    /// the same, on every corpse and container, at 1-48; gear stays the same kind
+    /// in the same place.
+    #[test]
+    fn the_curve_moves_only_materials_and_gear() {
+        let gd = game_data();
+        let mut dungeons: Vec<&Uuid> = gd.dungeons.keys().collect();
+        dungeons.sort();
+        let untouched = |l: &LootTableResult| {
+            let mut v: Vec<(Uuid, u64)> = l.currencies.iter().map(|(k, q)| (*k, *q)).collect();
+            v.extend(l.stackable_items.iter().filter(|(id, _)| !is_curve_material(id)).map(|(k, q)| (*k, *q)));
+            v.sort();
+            let kinds: Vec<Option<&str>> = {
+                let mut k: Vec<(Uuid, Option<&str>)> = l.item.0.iter().map(|(id, i)| (*id, crate::features::legendary_gear::kind_of(&i.item_template_id))).collect();
+                k.sort();
+                k.into_iter().map(|(_, c)| c).collect()
+            };
+            (v, kinds, l.stackable_items.len())
+        };
+        let flat = |d: &DungeonGeneratedData| {
+            let mut out: Vec<(String, (Vec<(Uuid, u64)>, Vec<Option<&'static str>>, usize))> = Vec::new();
+            for (g, spawners) in &d.enemy_generated_data {
+                for (i, es) in spawners.iter().enumerate() {
+                    for (j, e) in es.iter().enumerate() {
+                        for (t, l) in &e.loot_table_loot {
+                            out.push((format!("{g}:{i}:{j}:{t}"), untouched(l)));
+                        }
+                    }
+                }
+            }
+            for (s, pile) in &d.item_generated_data {
+                for (i, r) in pile.iter().enumerate() {
+                    for (t, l) in &r.loot_table_loot {
+                        out.push((format!("{s}:{i}:{t}"), untouched(l)));
+                    }
+                }
+            }
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            out
+        };
+        let mut moved = 0usize;
+        for level in [3i64, 15, 25, 35, 48] {
+            for d in dungeons.iter().step_by(41) {
+                let Some(curved) = generate_for_dungeon_with_seed(&gd, d, 3, level, 0) else { continue };
+                CURVE_OFF.with(|c| c.set(true));
+                let retail = generate_for_dungeon_with_seed(&gd, d, 3, level, 0).unwrap();
+                CURVE_OFF.with(|c| c.set(false));
+                // Stack counts may only shrink (a replacement can land on a kind the
+                // result already holds and be added to it).
+                let (a, b) = (flat(&curved), flat(&retail));
+                assert_eq!(a.len(), b.len());
+                for ((ka, (va, ga, na)), (kb, (vb, gb, nb))) in a.iter().zip(&b) {
+                    assert_eq!(ka, kb);
+                    assert_eq!(va, vb, "level {level} {ka}: coins or untouched stacks moved");
+                    assert_eq!(ga, gb, "level {level} {ka}: gear kinds moved");
+                    assert!(na <= nb, "level {level} {ka}: stacks grew");
+                }
+                moved += usize::from(serde_json::to_value(&curved).unwrap() != serde_json::to_value(&retail).unwrap());
+            }
+        }
+        assert!(moved > 10, "control: the curve moved only {moved} dungeons");
+    }
+
+    /// The Abyss bonus material below 49: nothing faded out, and Pearl, Garlic and
+    /// the town materials gone by 30.
+    #[test]
+    fn abyss_bonus_follows_the_curve() {
+        let dungeon = Uuid::from_u128(0x398b);
+        for level in [7i64, 20, 30, 45] {
+            let (mut n, mut faded) = (0usize, 0usize);
+            for i in 0..20_000usize {
+                let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
+                let Some((item, _)) = abyss_bonus_material(&dungeon, i as u64, &group, i % 3, i % 2, level) else { continue };
+                if !is_curve_material(&item) {
+                    continue;
+                }
+                n += 1;
+                faded += usize::from(material_weight(&item, level) == 0.0);
+                if level >= 30 {
+                    assert!(!TOWN_MATERIALS.contains(&item.as_u128()), "level {level}: town material {item}");
+                }
+            }
+            assert!(n > 1_000, "level {level}: {n}");
+            assert_eq!(faded, 0, "level {level}: {faded} faded-out of {n}");
         }
     }
 }
