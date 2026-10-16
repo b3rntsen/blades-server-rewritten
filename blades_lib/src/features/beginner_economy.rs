@@ -160,21 +160,23 @@ pub fn add_drawn_gem_bonus(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
 }
 
 /// An event's milestones (`rewards[]`) as minted for a character of `level`: gems
-/// +20% ([`add_gem_bonus`]).
+/// +20% ([`add_gem_bonus`]), soul gems Grand at 45-48 ([`top_event_soul_gems`]).
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub fn event_rewards(tiers: &mut [RewardGrant], _level: i64) {
+pub fn event_rewards(tiers: &mut [RewardGrant], level: i64) {
     for tier in tiers.iter_mut() {
         add_gem_bonus(tier);
+        top_event_soul_gems(&mut tier.stackable_items, level);
     }
 }
 
 /// An event's `finalReward` as minted for a character of `level`: gems +20%
-/// ([`add_gem_bonus`]).
+/// ([`add_gem_bonus`]), soul gems Grand at 45-48 ([`top_event_soul_gems`]).
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub fn event_final_reward(reward: &mut RewardGrant, _level: i64) {
+pub fn event_final_reward(reward: &mut RewardGrant, level: i64) {
     add_gem_bonus(reward);
+    top_event_soul_gems(&mut reward.stackable_items, level);
 }
 
 /// The gems a treasury chest of `tier` pays: [`WOODEN_CHEST_GEMS`] for tier 1,
@@ -186,6 +188,141 @@ pub fn chest_gems(tier: u64, seed: u64) -> Option<u64> {
         _ => return None,
     };
     Some(range.start() + mix(seed) % (range.end() - range.start() + 1))
+}
+
+// ---------------------------------------------------------------------------
+// 3. Soul gems: the three best from level 45
+// ---------------------------------------------------------------------------
+
+/// The character levels that are paid the three best soul gems (Grand, Glorious,
+/// Transcendent) wherever a lower kind would be paid. From 49 every source already
+/// pays as level 100 (#398), so this is 45-48; below 45 nothing moves.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16: "the three best soul
+/// gems are paid from level 45 in every source".
+pub const TOP_SOUL_GEM_LEVELS: RangeInclusive<i64> = 45..=48;
+
+/// The ten soul gems, Petty (`SoulGem1`) to Transcendent (`SoulGem10`).
+pub const SOUL_GEMS: [Uuid; 10] = crate::features::store_bundles::SOUL_GEMS;
+
+/// Grand Soul Gem (`SoulGem8`, "Mächtiger Seelenstein").
+pub const GRAND_SOUL_GEM: Uuid = crate::features::loot_level::GRAND_SOUL_GEM;
+/// Glorious Soul Gem (`SoulGem9`, "Herrlicher Seelenstein").
+pub const GLORIOUS_SOUL_GEM: Uuid = crate::features::loot_level::SOUL_GEMS_ABOVE_GRAND[0];
+/// Transcendent Soul Gem (`SoulGem10`, "Transzendenter Seelenstein").
+pub const TRANSCENDENT_SOUL_GEM: Uuid = crate::features::loot_level::SOUL_GEMS_ABOVE_GRAND[1];
+
+/// The kind a lower soul-gem stack is paid as at [`TOP_SOUL_GEM_LEVELS`], and
+/// the weight of each: Glorious twice as likely as Grand or Transcendent, as in
+/// the Legendary chest's 47-48 (Grand 1 : Glorious 2) and 49+ (Glorious 96 :
+/// Transcendent 41) steps.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub const TOP_SOUL_GEM_WEIGHTS: [(Uuid, u64); 3] =
+    [(GRAND_SOUL_GEM, 1), (GLORIOUS_SOUL_GEM, 2), (TRANSCENDENT_SOUL_GEM, 1)];
+
+/// Pay every soul-gem stack below Grand in `stacks` as one of the three best
+/// kinds ([`TOP_SOUL_GEM_WEIGHTS`]), same count, for a character of `level` in
+/// [`TOP_SOUL_GEM_LEVELS`]. Stacks already Grand or better, and everything that
+/// is not a soul gem, are kept. A no-op at every other level.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn top_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
+    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+        return;
+    }
+    let total: u64 = TOP_SOUL_GEM_WEIGHTS.iter().map(|(_, w)| w).sum();
+    for (id, count) in lower_soul_gems(stacks) {
+        let mut at = mix(seed ^ (id.as_u128() as u64)) % total;
+        let kind = TOP_SOUL_GEM_WEIGHTS
+            .iter()
+            .find(|(_, w)| if at < *w { true } else { at -= w; false })
+            .map_or(GRAND_SOUL_GEM, |(k, _)| *k);
+        *stacks.entry(kind).or_insert(0) += count;
+    }
+}
+
+/// [`top_soul_gems`] for an EVENT reward: at [`TOP_SOUL_GEM_LEVELS`] every soul
+/// gem is Grand, same count — the most an event pays a level 49-60 character
+/// (`EVENT_GRAND_SOUL_GEM_LEVELS`, #398), so 45-48 never out-earns 49.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn top_event_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64) {
+    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+        return;
+    }
+    let mut grand: u64 = lower_soul_gems(stacks).into_iter().map(|(_, n)| n).sum();
+    for above in crate::features::loot_level::SOUL_GEMS_ABOVE_GRAND {
+        grand += stacks.remove(&above).unwrap_or(0);
+    }
+    if grand > 0 {
+        *stacks.entry(GRAND_SOUL_GEM).or_insert(0) += grand;
+    }
+}
+
+/// Remove and return the soul-gem stacks below Grand, in id order.
+fn lower_soul_gems(stacks: &mut HashMap<Uuid, u64>) -> Vec<(Uuid, u64)> {
+    let soul_gems = &SOUL_GEMS;
+    let mut lower: Vec<(Uuid, u64)> = soul_gems[..7].iter().filter_map(|id| stacks.remove(id).map(|n| (*id, n))).collect();
+    lower.sort_unstable();
+    lower
+}
+
+/// [`top_soul_gems`] (or, for an `event` dungeon, [`top_event_soul_gems`]) over a
+/// generated dungeon's corpse and container loot, for a character of `level`.
+/// Chests are rolled when opened and are paid there. Idempotent: once paid, no
+/// stack below Grand is left to move.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16.
+pub fn top_dungeon_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level: i64, event: bool) {
+    top_corpse_soul_gems(data, level, event);
+    top_container_soul_gems(data, level, event);
+}
+
+fn pay_dungeon_loot(loot: &mut crate::user_data::LootTableResult, level: i64, event: bool, seed: u64) {
+    if event {
+        top_event_soul_gems(&mut loot.stackable_items, level);
+    } else {
+        top_soul_gems(&mut loot.stackable_items, level, seed);
+    }
+}
+
+fn top_corpse_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level: i64, event: bool) {
+    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+        return;
+    }
+    for (group, spawners) in &mut data.enemy_generated_data {
+        for (a, enemies) in spawners.iter_mut().enumerate() {
+            for (b, enemy) in enemies.iter_mut().enumerate() {
+                let seed = mix(group.as_u128() as u64 ^ ((a as u64) << 32) ^ b as u64);
+                pay_dungeon_loot(&mut enemy.spawn_group_loot, level, event, seed);
+                for (table, loot) in &mut enemy.loot_table_loot {
+                    pay_dungeon_loot(loot, level, event, mix(seed ^ table.as_u128() as u64));
+                }
+            }
+        }
+    }
+}
+
+/// The container half of [`top_dungeon_soul_gems`]. An Abyss floor takes only
+/// this half: its corpses' soul gems are the #383 bonus, paid at its draw.
+pub fn top_container_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level: i64, event: bool) {
+    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+        return;
+    }
+    for (group, pile) in &mut data.item_generated_data {
+        for (a, result) in pile.iter_mut().enumerate() {
+            for (table, loot) in &mut result.loot_table_loot {
+                let seed = mix(group.as_u128() as u64 ^ (a as u64).rotate_left(48) ^ table.as_u128() as u64);
+                pay_dungeon_loot(loot, level, event, seed);
+            }
+        }
+    }
+}
+
+/// A stable seed for a string key (a chest's loot key, a reward id).
+pub fn key_seed(key: &str) -> u64 {
+    key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3))
 }
 
 #[cfg(test)]
@@ -231,5 +368,34 @@ mod tests {
             assert_eq!(seen, range.collect(), "tier {tier}");
         }
         assert_eq!(chest_gems(3, 1), None);
+    }
+
+    #[test]
+    fn soul_gems_at_45_to_48_are_the_three_best() {
+        use crate::features::store_bundles::SOUL_GEMS;
+        let lumber = Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5);
+        let mut seen = std::collections::BTreeMap::new();
+        for seed in 0..400 {
+            for level in [45, 46, 47, 48] {
+                let mut s = HashMap::from([(SOUL_GEMS[0], 3), (SOUL_GEMS[6], 2), (GLORIOUS_SOUL_GEM, 1), (lumber, 9)]);
+                top_soul_gems(&mut s, level, seed);
+                assert_eq!(s[&lumber], 9);
+                assert!(s.keys().all(|k| *k == lumber || [GRAND_SOUL_GEM, GLORIOUS_SOUL_GEM, TRANSCENDENT_SOUL_GEM].contains(k)), "{s:?}");
+                assert_eq!(s.iter().filter(|(k, _)| **k != lumber).map(|(_, n)| n).sum::<u64>(), 6, "counts kept");
+                for k in s.keys() {
+                    *seen.entry(*k).or_insert(0) += 1;
+                }
+            }
+        }
+        assert!(seen.contains_key(&GRAND_SOUL_GEM) && seen.contains_key(&TRANSCENDENT_SOUL_GEM));
+        for level in [1, 44, 49, 100] {
+            let s0 = HashMap::from([(SOUL_GEMS[0], 3), (SOUL_GEMS[6], 2)]);
+            let mut s = s0.clone();
+            top_soul_gems(&mut s, level, 1);
+            assert_eq!(s, s0, "level {level} untouched");
+        }
+        let mut e = HashMap::from([(SOUL_GEMS[3], 3), (GLORIOUS_SOUL_GEM, 1), (lumber, 9)]);
+        top_event_soul_gems(&mut e, 45);
+        assert_eq!(e, HashMap::from([(GRAND_SOUL_GEM, 4), (lumber, 9)]));
     }
 }

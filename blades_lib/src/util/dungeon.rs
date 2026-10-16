@@ -910,7 +910,9 @@ fn roll_enemy_loot_with_context(
     // #383: the bonus stack, under the table it was drawn from. 871c2e9b is the
     // key every Abyss corpse carried before #381, so the client already reads it
     // on an Abyss enemy.
-    if let Some((item, qty)) = roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index) {
+    if let Some((item, qty)) = roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index)
+        .map(|drawn| bonus_as_paid(ctx, spawn_group_id, spawner_index, enemy_index, drawn))
+    {
         *out.entry(Uuid::from_u128(GOLD_LOOT_TABLE_ID))
             .or_default()
             .stackable_items
@@ -1451,7 +1453,7 @@ pub fn generate_for_abyss_floor(
     enemy_level: i64,
     character_level: Option<i64>,
 ) -> Option<DungeonGeneratedData> {
-    generate_for_dungeon_inner(
+    let mut data = generate_for_dungeon_inner(
         game_data,
         dungeon_uuid,
         LootSeedContext {
@@ -1460,7 +1462,13 @@ pub fn generate_for_abyss_floor(
             ..seeded_context(dungeon_uuid, run_seed)
         },
         EnemyLevels::Flat { level: enemy_level, given_xp: 0 },
-    )
+    )?;
+    // The three best soul gems at 45-48 (owner-approved deviation, #388); the
+    // corpses' bonus gem is paid so where it is merged ([`abyss_bonus_as_paid`]).
+    if let Some(level) = character_level {
+        crate::features::beginner_economy::top_container_soul_gems(&mut data, level, false);
+    }
+    Some(data)
 }
 
 /// [`generate_for_dungeon_levelled_with_seed`] (unseeded for `run_seed: None`), with
@@ -1624,6 +1632,42 @@ fn generate_for_dungeon_inner(
     };
     beginner_economy_loot(&mut data, seed_context);
     Some(data)
+}
+
+/// The #383 Abyss bonus stack `drawn` for a corpse as it is paid under the
+/// beginner economy (owner-approved deviation from retail, #388, 2026-10-16): a
+/// soul gem is one of the three best at 45-48. Its own seeded stream, so no
+/// retail draw moves.
+fn bonus_as_paid(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    drawn: (Uuid, u64),
+) -> (Uuid, u64) {
+    let Some(level) = ctx.bonus_level else { return drawn };
+    let seed = mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_B045_5EED_0388);
+    let mut stack = HashMap::from([drawn]);
+    crate::features::beginner_economy::top_soul_gems(&mut stack, level, seed);
+    stack.into_iter().next().unwrap_or(drawn)
+}
+
+/// [`abyss_bonus_material`] as the corpse pays it ([`bonus_as_paid`], #388).
+pub fn abyss_bonus_as_paid(
+    dungeon_uuid: &Uuid,
+    run_seed: u64,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    character_level: i64,
+) -> Option<(Uuid, u64)> {
+    let ctx = LootSeedContext {
+        abyss: true,
+        bonus_level: Some(character_level),
+        ..seeded_context(dungeon_uuid, run_seed)
+    };
+    roll_abyss_bonus(ctx, spawn_group_id, spawner_index, enemy_index)
+        .map(|drawn| bonus_as_paid(ctx, spawn_group_id, spawner_index, enemy_index, drawn))
 }
 
 /// The beginner economy (#388) on a generated dungeon's corpse and container

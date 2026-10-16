@@ -1452,12 +1452,13 @@ pub async fn get_quests(
             // started (tracker #279, 2026-09-29 12:57). Idempotent: `do_nothing` on an
             // existing row, so an entered job's dungeon_state is never touched.
             for job in &jobs {
-                if let Some(entry) = jobs_gen::job_quest_db_entry(
+                if let Some(entry) = jobs_gen::job_quest_db_entry_for(
                     job,
                     character_id_var,
                     &globals.game_data,
                     &globals.static_data.quests_daily.level_scaling,
-                    jobs_gen::loot_shift_for(&job_pools_def, job, character.character.0.level),
+                    &job_pools_def,
+                    character.character.0.level,
                 ) {
                     use crate::schema::quests;
                     insert_into(quests::table)
@@ -1935,12 +1936,13 @@ async fn accept_quest(
             .iter()
             .find(|j| j.get("questId").and_then(|v| v.as_str()) == Some(&quest_id.to_string()))
         {
-            if let Some(entry) = jobs_gen::job_quest_db_entry(
+            if let Some(entry) = jobs_gen::job_quest_db_entry_for(
                 job,
                 character_id,
                 &app_state.game_data,
                 &app_state.static_data.quests_daily.level_scaling,
-                jobs_gen::loot_shift_for(&app_state.job_pools, job, character.character.0.level),
+                &app_state.job_pools,
+                character.character.0.level,
             ) {
                 use crate::schema::quests;
                 insert_into(quests::table)
@@ -2637,6 +2639,18 @@ pub(crate) async fn complete_quest_in_tx(
         )
     };
 
+    // A quest's or job's own reward under the beginner economy (owner-approved
+    // deviation from retail, #388, 2026-10-16); an event's was minted with it.
+    let mut reward = reward;
+    if !is_event {
+        // The three best soul gems at 45-48.
+        blades_lib::features::beginner_economy::top_soul_gems(
+            &mut reward.stackable_items,
+            i64::from(entry.character.0.level),
+            quest_id.as_u128() as u64,
+        );
+    }
+
     // Mirror the completion into `completedQuests` — what the client's tier
     // checkmarks read. For an event it is the tier counter itself, so the two cannot
     // drift: 1-5 over 185 retail samples, every one of those rows carrying 5 tiers.
@@ -2734,12 +2748,13 @@ pub(crate) async fn complete_quest_in_tx(
             &completed_job_ids,
         );
         for job in &jobs {
-            let Some(row) = jobs_gen::job_quest_db_entry(
+            let Some(row) = jobs_gen::job_quest_db_entry_for(
                 job,
                 character_id,
                 game_data,
                 &static_data.quests_daily.level_scaling,
-                jobs_gen::loot_shift_for(job_pools_def, job, character.level),
+                job_pools_def,
+                character.level,
             ) else {
                 continue;
             };
@@ -4269,15 +4284,43 @@ pub(crate) mod jobs_gen {
                 let quest_id = Uuid::parse_str(get_str(job, "questId")?).ok()?;
                 Some(DungeonGeneratedDataWithId {
                     quest_id,
-                    inner: generated_data_for_job(
-                        game_data,
-                        job,
-                        scaling,
-                        loot_shift_for(pools_def, job, level),
-                    )?,
+                    inner: job_dungeon_for(game_data, job, scaling, pools_def, level)?,
                 })
             })
             .collect()
+    }
+
+    /// A job's dungeon for a character of `level`: [`generated_data_for_job`] at its
+    /// [`loot_shift_for`], with the three best soul gems at 45-48 (owner-approved
+    /// deviation from retail, #388, 2026-10-16,
+    /// [`blades_lib::features::beginner_economy::top_dungeon_soul_gems`]).
+    pub fn job_dungeon_for(
+        game_data: &GameData,
+        job: &Value,
+        scaling: &QuestLevelScaling,
+        pools_def: &Value,
+        level: u16,
+    ) -> Option<DungeonGeneratedData> {
+        let mut data = generated_data_for_job(game_data, job, scaling, loot_shift_for(pools_def, job, level))?;
+        blades_lib::features::beginner_economy::top_dungeon_soul_gems(&mut data, i64::from(level), false);
+        Some(data)
+    }
+
+    /// [`job_quest_db_entry`] for a character of `level`: its dungeon is
+    /// [`job_dungeon_for`]'s, so the row and the board's generated data agree.
+    pub fn job_quest_db_entry_for(
+        job: &Value,
+        character_id: Uuid,
+        game_data: &GameData,
+        scaling: &QuestLevelScaling,
+        pools_def: &Value,
+        level: u16,
+    ) -> Option<QuestDbEntry> {
+        let mut entry = job_quest_db_entry(job, character_id, game_data, scaling, loot_shift_for(pools_def, job, level))?;
+        if let Some(data) = entry.generated_data.0.as_mut() {
+            blades_lib::features::beginner_economy::top_dungeon_soul_gems(data, i64::from(level), false);
+        }
+        Some(entry)
     }
 
     /// What a job pays on completion, read off the job's own `jobSetup`.
@@ -6999,8 +7042,12 @@ mod event_quest_tests {
             (26, "19ce1a65-057f-4f34-a0ed-27de7c085662"),  // Petty
             (35, "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029"),  // Middling
             (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
-            (47, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional
-            (48, "3932e499-441e-4c6d-b671-9a03131ebe6f"),  // Exceptional (retail L48)
+            (44, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
+            // Retail paid Exceptional at 47-48; since #388 (owner-approved
+            // deviation, 2026-10-16) 45-48 are paid the event's best, Grand.
+            (45, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (47, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (48, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
             // From 49 the level-100 character's rewards (#398), but its soul gem
             // stays Grand to 60 (HauDrauf #398, 2026-10-16: "at the end of events
             // you get Grand instead of Glorious ... Grand from level 49").
@@ -7041,6 +7088,11 @@ mod event_quest_tests {
             // level (#398); `report_398` pins that. Level 100's own observations
             // still hold.
             if (49..100).contains(level) {
+                continue;
+            }
+            // At 45-48 a soul gem is Grand since #388 (owner-approved deviation
+            // from retail, 2026-10-16); its other materials still hold.
+            if (45..=48).contains(level) && blades_lib::features::beginner_economy::SOUL_GEMS.contains(item) {
                 continue;
             }
             let carried = match slot.as_str() {

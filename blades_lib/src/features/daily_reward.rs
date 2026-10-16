@@ -108,6 +108,13 @@ impl DailyRewardDef {
                 }
             }
         }
+        // The three best soul gems at 45-48 (owner-approved deviation from retail,
+        // #388, 2026-10-16), drawn the same for every collect of this reward.
+        crate::features::beginner_economy::top_soul_gems(
+            &mut payload.stackable_items,
+            i64::from(character_level),
+            self.reward_uid.as_u128() as u64,
+        );
         payload
     }
 

@@ -98,7 +98,7 @@ pub fn generate_quest_data(
     // Shared with the Abyss — see `util::dungeon`. The Abyss used to have its
     // own hard-coded copy of this shape, which served floor 1's spawn groups on
     // every floor and hung every deeper run.
-    let generated_dungeon_data = generate_for_quest_dungeon_with_loot_shift(
+    let mut generated_dungeon_data = generate_for_quest_dungeon_with_loot_shift(
         game_data,
         &dungeon_info.dungeon_uuid,
         enemy_level,
@@ -108,6 +108,8 @@ pub fn generate_quest_data(
     .ok_or(GenerateQuestDataError::DungeonNotFound(
                 dungeon_info.dungeon_uuid,
             ))?;
+    // The three best soul gems at 45-48 (owner-approved deviation, #388).
+    crate::features::beginner_economy::top_dungeon_soul_gems(&mut generated_dungeon_data, player_level, false);
 
     Ok((quest, Some(generated_dungeon_data)))
 }
@@ -268,6 +270,8 @@ pub fn generate_for_event_dungeon_for_character(
         loot_shift,
     )?;
     crate::features::loot_level::cap_event_dungeon_soul_gems(&mut data, character_level);
+    // Grand at 45-48 (owner-approved deviation, #388).
+    crate::features::beginner_economy::top_dungeon_soul_gems(&mut data, character_level, true);
     Some(data)
 }
 

@@ -252,12 +252,20 @@ pub async fn collect_daily_reward(
                 // A later alt shares the live row's id, so it is folded in as
                 // well (#387); the original's key is unchanged.
                 let roll_alt = crate::alt_roll::for_character(&mut conn, character_id).await;
-                let collect_reward = collect_reward_for(
+                let roll_key = crate::alt_roll::fold_key(format!("{character_id}:{period}"), roll_alt);
+                let mut collect_reward = collect_reward_for(
                     &daily_reward,
                     &globals.static_data.chest_loots,
                     def.reward_uid,
-                    &crate::alt_roll::fold_key(format!("{character_id}:{period}"), roll_alt),
+                    &roll_key,
                     &entry.inventory.0.item_templates(),
+                );
+                // A chest's soul gems: the three best at 45-48 (owner-approved
+                // deviation from retail, #388).
+                blades_lib::features::beginner_economy::top_soul_gems(
+                    &mut collect_reward.stackable_items,
+                    i64::from(entry.character.0.level),
+                    blades_lib::features::beginner_economy::key_seed(&roll_key),
                 );
                 status_reward = collect_reward.clone();
                 if !already {

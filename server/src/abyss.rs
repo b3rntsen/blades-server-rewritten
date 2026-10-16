@@ -4510,7 +4510,42 @@ mod tests {
         }
         assert_eq!(payout_digest(&runs), LEVEL_45_FROM_149_DIGEST);
     }
-    const LEVEL_45_FROM_149_DIGEST: u64 = 0xa32e_d7f5_fda6_1e5d;
+    /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
+    /// soul gems are the three best. Everything else is pinned unchanged by
+    /// [`a_level_45_run_from_floor_149_moves_only_its_soul_gems_388`].
+    const LEVEL_45_FROM_149_DIGEST: u64 = 0x96db_ea13_0f32_e521;
+
+    /// [`payout_digest`] with every soul gem taken out: what #388's soul-gem change
+    /// must leave alone.
+    fn payout_digest_without_soul_gems(runs: &[Payout]) -> u64 {
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        let mut runs = runs.to_vec();
+        for (rungs, end) in &mut runs {
+            for (_, g) in rungs.iter_mut() {
+                g.stackable_items.retain(|id, _| !soul_gems.contains(id));
+            }
+            end.stackable_items.retain(|id, _| !soul_gems.contains(id));
+        }
+        payout_digest(&runs)
+    }
+
+    /// #388: a level-45 run from floor 149 pays only Grand, Glorious and
+    /// Transcendent soul gems, and everything else exactly as before (the digest
+    /// without soul gems was taken on the commit before the change).
+    #[test]
+    fn a_level_45_run_from_floor_149_moves_only_its_soul_gems_388() {
+        let runs = payouts(45, 149, 4, DEEP_FLOOR_KILLS);
+        assert_eq!(payout_digest_without_soul_gems(&runs), 0xdec5_28cd_89dd_82f1);
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        let paid: Vec<Uuid> = runs
+            .iter()
+            .flat_map(|(rungs, end)| rungs.iter().map(|(_, g)| g).chain([end]))
+            .flat_map(|g| g.stackable_items.keys().copied())
+            .filter(|id| soul_gems.contains(id))
+            .collect();
+        assert!(!paid.is_empty(), "the runs pay soul gems");
+        assert!(paid.iter().all(|id| soul_gems[7..].contains(id)), "{paid:?}");
+    }
 
     /// Report #383: "by 50 [a player is] completely done … everything must be
     /// obtainable by level 49". A level-49 run from floor 149 draws every material
@@ -4898,7 +4933,16 @@ mod tests {
                                 index,
                                 i64::from(level),
                             );
-                            assert_eq!(added, drawn.into_iter().collect::<Vec<_>>(), "L{level}");
+                            // As the corpse pays it (#388: a soul gem the three best at 45-48).
+                            let paid = blades_lib::util::dungeon::abyss_bonus_as_paid(
+                                &slice.dungeon_settings_id,
+                                seed as u64,
+                                group,
+                                spawner,
+                                index,
+                                i64::from(level),
+                            );
+                            assert_eq!(added, paid.into_iter().collect::<Vec<_>>(), "L{level}");
                             let Some((item, qty)) = drawn else { continue };
                             assert!(materials.contains(&item), "L{level}: the bonus paid a non-material {}", name(&item));
                             t.bonus += 1;
@@ -5161,7 +5205,7 @@ mod tests {
     /// gear and retail's own stackables are the same, the bonus is the only addition.
     #[test]
     fn abyss_runs_draw_each_effect_ingredient_equally() {
-        use blades_lib::util::dungeon::{abyss_bonus_candidates, abyss_bonus_material, EFFECT_INGREDIENTS};
+        use blades_lib::util::dungeon::{abyss_bonus_as_paid, abyss_bonus_candidates, EFFECT_INGREDIENTS};
         const DEATHBELL: &str = "8b7d0044-3a38-4ee0-af45-d2892b0f508d";
         let gd = game_data();
         let names = ingredient_names();
@@ -5194,7 +5238,8 @@ mod tests {
                                     ids
                                 };
                                 assert_eq!(gear(&now), gear(&was), "L{level}: the bonus changed gear");
-                                let drawn = abyss_bonus_material(
+                                // As the corpse pays it (#388).
+                                let drawn = abyss_bonus_as_paid(
                                     &slice.dungeon_settings_id,
                                     seed as u64,
                                     group,
