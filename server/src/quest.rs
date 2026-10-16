@@ -6463,11 +6463,15 @@ mod event_quest_tests {
     use super::*;
     use blades_lib::static_data::StaticData;
 
-    /// `r` with every crafting material's quantity set to 0: since #388
-    /// (owner-approved deviation from retail, 2026-10-16) those are 5, 10 or 20,
-    /// so a comparison with retail compares which materials, not how many.
+    /// `r` with every crafting material's quantity set to 0 when #388's
+    /// `EVENT_LADDER_STACKS_FIXED` is on (event ladders then pay 5, 10 or 20, so
+    /// a comparison with retail compares which materials, not how many); `r`
+    /// itself while it is off, the default, when ladders keep retail's amounts.
     fn materials_blind(r: &RewardGrant) -> RewardGrant {
         let mut r = r.clone();
+        if !blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED {
+            return r;
+        }
         for (id, q) in r.stackable_items.iter_mut() {
             if blades_lib::features::beginner_economy::is_crafting_material(id) {
                 *q = 0;
@@ -7032,12 +7036,14 @@ mod event_quest_tests {
         ] {
             let paid = materials_paid_at(&sd, gld, level);
             let metal: Uuid = metal.parse().unwrap();
-            // Retail: 96 ingots. Since #388 one stack of 5, 10 or 20, or the
-            // milestone's and the final bonus's together.
-            assert!(
-                paid.get(&metal).is_some_and(|q| [5, 10, 20, 40].contains(q)),
-                "level {level}: paid {paid:?}"
-            );
+            // Retail: 96 ingots, kept while #388's EVENT_LADDER_STACKS_FIXED is
+            // off; on, one stack of 5, 10 or 20, or milestone + final bonus.
+            let want: &[u64] = if blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED {
+                &[5, 10, 20, 40]
+            } else {
+                &[96]
+            };
+            assert!(paid.get(&metal).is_some_and(|q| want.contains(q)), "level {level}: paid {paid:?}");
             assert_eq!(paid.len(), 1, "level {level}: one metal, nothing else: {paid:?}");
         }
         // The report itself: no Ebony below Ebony's unlock level.

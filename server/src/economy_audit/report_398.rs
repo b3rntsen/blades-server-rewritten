@@ -246,10 +246,11 @@ fn levels_below_49_are_unchanged() {
     // Wooden / Silver chest gems (events, abyss_floor, quests, event_dungeons,
     // jobs, treasury); the three best soul gems at 45-48 (events, daily,
     // abyss_rewards, abyss_floor, quests, event_dungeons, store, treasury); crafting
-    // materials in 5, 10 or 20 (events, abyss_rewards, abyss_floor, quests,
-    // event_dungeons, jobs, store, treasury).
+    // materials in 5, 10 or 20 (abyss_rewards, abyss_floor, quests,
+    // event_dungeons, jobs, store, treasury; not `events` while
+    // EVENT_LADDER_STACKS_FIXED is off, which pays exactly as before that change).
     let pinned: [(&str, u64); 9] = [
-        ("events", 0xd066_1cc1_c35d_bcd3),
+        ("events", 0x5351_4151_1ca6_22e9),
         ("daily", 0x8d8e_2e5c_0659_5552),
         ("abyss_rewards", 0x132f_4e45_fafe_3e7b),
         ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),

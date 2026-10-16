@@ -336,8 +336,8 @@ fn material_stacks_are_5_10_or_20_in_chests_corpses_and_containers() {
     containers.assert_thirds("containers", 1_000, 0.05);
 }
 
-/// Event milestones and final rewards, and story-quest completion rewards: every
-/// crafting-material stack is 5, 10 or 20.
+/// Story-quest completion rewards, and event milestones and final rewards when
+/// `EVENT_LADDER_STACKS_FIXED` is on: every crafting-material stack is 5, 10 or 20.
 #[test]
 fn material_stacks_are_5_10_or_20_in_events_and_quest_rewards() {
     let ctx = Ctx::load();
@@ -348,7 +348,9 @@ fn material_stacks_are_5_10_or_20_in_events_and_quest_rewards() {
             tmpl.final_reward_for_level(level).iter().for_each(|r| events.add(&r.stackable_items));
         }
     }
-    events.assert_thirds("events", 300, 0.10);
+    if blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED {
+        events.assert_thirds("events", 300, 0.10);
+    }
 
     let mut quests = Sizes::default();
     for (gld, _) in &ctx.sd.quest_rewards {
@@ -364,4 +366,54 @@ fn material_stacks_are_5_10_or_20_in_events_and_quest_rewards() {
         }
     }
     quests.assert_thirds("story quest rewards", 100, 0.10);
+}
+
+/// With `EVENT_LADDER_STACKS_FIXED` off (the default, pending HauDrauf), event
+/// ladders keep retail's material amounts at every level: the minted ladder's
+/// materials are the band's, quantity for quantity. Event-dungeon corpses and
+/// containers are 5, 10 or 20 regardless.
+#[test]
+fn event_ladders_keep_retail_material_amounts_while_the_switch_is_off() {
+    use blades_lib::features::beginner_economy::{is_crafting_material, EVENT_LADDER_STACKS_FIXED};
+    if EVENT_LADDER_STACKS_FIXED {
+        return;
+    }
+    let ctx = Ctx::load();
+    let amounts = |r: &blades_lib::economy::RewardGrant| {
+        let mut v: Vec<u64> = r.stackable_items.iter().filter(|(id, _)| is_crafting_material(id)).map(|(_, q)| *q).collect();
+        v.sort_unstable();
+        v
+    };
+    let mut big = 0;
+    for tmpl in ctx.sd.event_quests.templates.values() {
+        for level in SAMPLE_LEVELS.map(|l| l as i64) {
+            let Some(band) = tmpl.band_for_level(level) else { continue };
+            for (raw, paid) in band.rewards.iter().zip(tmpl.rewards_for_level(level)) {
+                assert_eq!(amounts(&paid), amounts(raw), "{} at {level}", tmpl.gld_quest_id);
+                big += amounts(&paid).iter().filter(|q| **q > 20).count();
+            }
+        }
+    }
+    assert!(big > 50, "{big} ladder stacks above 20 kept");
+
+    let gd = gd();
+    let scaling = crate::quest::shipped_scaling();
+    let mut dungeon = Sizes::default();
+    let mut ids: Vec<&Uuid> = ctx.sd.event_quests.templates.keys().collect();
+    ids.sort();
+    for id in ids {
+        let Some(d) = gd.quests.get(id).and_then(|q| q.dungeon_info.as_ref()) else { continue };
+        for level in [10i64, 30, 45] {
+            let Some(data) = blades_lib::util::quest::generate_for_event_dungeon_for_character(
+                &gd, &d.dungeon_uuid, Some(7), scaling.enemy_level(level), &scaling, level,
+            ) else { continue };
+            for e in data.enemy_generated_data.values().flatten().flatten() {
+                e.loot_table_loot.values().for_each(|l| dungeon.add(&l.stackable_items));
+            }
+            for r in data.item_generated_data.values().flatten() {
+                r.loot_table_loot.values().for_each(|l| dungeon.add(&l.stackable_items));
+            }
+        }
+    }
+    dungeon.assert_thirds("event dungeons", 300, 0.06);
 }

@@ -159,17 +159,32 @@ pub fn add_drawn_gem_bonus(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
     }
 }
 
+/// Whether an event's milestone and final-reward LADDERS have their crafting
+/// material stacks fixed to 5, 10 or 20 as well. Off: the ladders keep their retail amounts
+/// (Ebony x96, ...). Event-dungeon corpses and containers are 5 / 10 / 20 either
+/// way.
+///
+/// Owner-approved deviation from retail, #388, 2026-10-16, held back pending
+/// HauDrauf's confirmation (no narrowing without asking): his request named
+/// containers, the Abyss end package and enemy drops, not event ladders, and
+/// 96 -> 5/10/20 would narrow a reward without asking him. Flip to `true` if he
+/// wants the ladders sized too.
+pub const EVENT_LADDER_STACKS_FIXED: bool = false;
+
 /// An event's milestones (`rewards[]`) as minted for a character of `level`: gems
 /// +20% ([`add_gem_bonus`]), soul gems Grand at 45-48 ([`top_event_soul_gems`]),
-/// crafting materials in 5, 10 or 20 ([`size_material_stacks_in_order`], drawn per
-/// `event` and milestone, the same at every level).
+/// and, when [`EVENT_LADDER_STACKS_FIXED`] is on, crafting materials in 5, 10 or
+/// 20 ([`size_material_stacks_in_order`], drawn per `event` and milestone, the
+/// same at every level).
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
 pub fn event_rewards(tiers: &mut [RewardGrant], level: i64, event: Uuid) {
     for (milestone, tier) in tiers.iter_mut().enumerate() {
         add_gem_bonus(tier);
         top_event_soul_gems(&mut tier.stackable_items, level);
-        size_material_stacks_in_order(&mut tier.stackable_items, event_material_seed(event, milestone));
+        if EVENT_LADDER_STACKS_FIXED {
+            size_material_stacks_in_order(&mut tier.stackable_items, event_material_seed(event, milestone));
+        }
     }
 }
 
@@ -182,7 +197,9 @@ pub fn event_rewards(tiers: &mut [RewardGrant], level: i64, event: Uuid) {
 pub fn event_final_reward(reward: &mut RewardGrant, level: i64, event: Uuid, last_milestone: usize) {
     add_gem_bonus(reward);
     top_event_soul_gems(&mut reward.stackable_items, level);
-    size_material_stacks_in_order(&mut reward.stackable_items, event_material_seed(event, last_milestone));
+    if EVENT_LADDER_STACKS_FIXED {
+        size_material_stacks_in_order(&mut reward.stackable_items, event_material_seed(event, last_milestone));
+    }
 }
 
 /// The seed an event's material quantities are drawn from: the event and the
