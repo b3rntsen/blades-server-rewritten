@@ -423,6 +423,11 @@ struct LootSeedContext {
     /// ([`abyss_bonus_material`], #383). `None`: no bonus (every non-Abyss floor,
     /// and an Abyss run started before the bonus existed).
     bonus_level: Option<i64>,
+    /// How many levels above each enemy's (and the dungeon's) own level its loot is
+    /// rolled: [`crate::features::loot_level::dungeon_loot_shift`] for a character
+    /// paid as level 100 (#398), zero otherwise. Never part of the seed, so a shift
+    /// changes which band a draw reads and nothing else.
+    loot_shift: i64,
 }
 
 fn default_seed_context(dungeon_uuid: &Uuid) -> LootSeedContext {
@@ -431,6 +436,7 @@ fn default_seed_context(dungeon_uuid: &Uuid) -> LootSeedContext {
         run_seed: 0,
         abyss: false,
         bonus_level: None,
+        loot_shift: 0,
     }
 }
 
@@ -440,6 +446,7 @@ fn seeded_context(dungeon_uuid: &Uuid, run_seed: u64) -> LootSeedContext {
         run_seed,
         abyss: false,
         bonus_level: None,
+        loot_shift: 0,
     }
 }
 
@@ -497,7 +504,7 @@ fn roll_loot_table_with_context(
     enemy_level: i64,
 ) -> LootTableResult {
     let mut out = LootTableResult::default();
-    let Some(results) = interactable_table_results(table_id, enemy_level) else {
+    let Some(results) = interactable_table_results(table_id, enemy_level + ctx.loot_shift) else {
         // A table we never observed stays empty, exactly as before.
         return out;
     };
@@ -767,6 +774,8 @@ fn roll_enemy_loot_with_context(
 ) -> HashMap<Uuid, LootTableResult> {
     let mut rng = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index);
     let mut out = HashMap::new();
+    // The enemy keeps its level; its loot is read at the level-100 character's (#398).
+    let enemy_level = enemy_level + ctx.loot_shift;
 
     let group = if ctx.abyss {
         // An abyss group retail never showed us rolls what abyss enemies rolled
@@ -1139,7 +1148,9 @@ fn roll_abyss_bonus(
     spawner_index: usize,
     enemy_index: usize,
 ) -> Option<(Uuid, u64)> {
-    let level = ctx.bonus_level.filter(|_| ctx.abyss)?;
+    // Banded to the level the character is PAID as: a level-49 character finds what
+    // a level-100 one does (#398).
+    let level = crate::features::loot_level::effective_loot_level(ctx.bonus_level.filter(|_| ctx.abyss)?);
     // Salted, so the stream is independent of the retail draws for this corpse.
     const SALT: u64 = 0x0383_ab55_b0b5_0383;
     let mut rng = LootRng(mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ SALT));
@@ -1398,6 +1409,24 @@ pub fn generate_for_abyss_floor(
         },
         EnemyLevels::Flat { level: enemy_level, given_xp: 0 },
     )
+}
+
+/// [`generate_for_dungeon_levelled_with_seed`] (unseeded for `run_seed: None`), with
+/// every enemy's and container's loot rolled `loot_shift` levels above the level it
+/// stands at (#398, [`crate::features::loot_level::dungeon_loot_shift`]). Enemy
+/// levels and XP are exactly `levels`'.
+pub fn generate_for_dungeon_with_loot_shift(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: Option<u64>,
+    levels: EnemyLevels,
+    loot_shift: i64,
+) -> Option<DungeonGeneratedData> {
+    let ctx = match run_seed {
+        Some(seed) => seeded_context(dungeon_uuid, seed),
+        None => default_seed_context(dungeon_uuid),
+    };
+    generate_for_dungeon_inner(game_data, dungeon_uuid, LootSeedContext { loot_shift, ..ctx }, levels)
 }
 
 /// [`generate_for_dungeon`] with each enemy's level and XP from `levels`, unseeded.

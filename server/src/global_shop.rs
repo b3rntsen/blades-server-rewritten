@@ -1376,7 +1376,10 @@ pub async fn purchase_global_shop(
             let reward = {
                 blades_lib::features::store_bundles::roll_bundle_with(
                     &product_id,
-                    u64::from(entry.character.0.level),
+                    // From level 49 the level-100 buyer's chest (#398).
+                    blades_lib::features::loot_level::effective_loot_level_u64(u64::from(
+                        entry.character.0.level,
+                    )),
                     roll_nonce,
                     &entry.inventory.0.item_templates(),
                     globals

@@ -91,13 +91,21 @@ pub fn generate_quest_data(
 
     let enemy_level = scaling.enemy_level(player_level);
     let given_xp = scaling.given_xp(enemy_level);
+    // From level 49 the loot is the level-100 character's; enemies stay (#398).
+    let loot_shift =
+        crate::features::loot_level::dungeon_loot_shift(scaling, player_level, enemy_level);
 
     // Shared with the Abyss — see `util::dungeon`. The Abyss used to have its
     // own hard-coded copy of this shape, which served floor 1's spawn groups on
     // every floor and hung every deeper run.
-    let generated_dungeon_data =
-        generate_for_quest_dungeon(game_data, &dungeon_info.dungeon_uuid, enemy_level, given_xp)
-            .ok_or(GenerateQuestDataError::DungeonNotFound(
+    let generated_dungeon_data = generate_for_quest_dungeon_with_loot_shift(
+        game_data,
+        &dungeon_info.dungeon_uuid,
+        enemy_level,
+        given_xp,
+        loot_shift,
+    )
+    .ok_or(GenerateQuestDataError::DungeonNotFound(
                 dungeon_info.dungeon_uuid,
             ))?;
 
@@ -111,8 +119,26 @@ pub fn generate_for_quest_dungeon(
     enemy_level: i64,
     given_xp: u64,
 ) -> Option<DungeonGeneratedData> {
+    generate_for_quest_dungeon_with_loot_shift(game_data, dungeon_uuid, enemy_level, given_xp, 0)
+}
+
+/// [`generate_for_quest_dungeon`] with its loot rolled `loot_shift` levels above
+/// its enemies' (#398, [`crate::features::loot_level::dungeon_loot_shift`]).
+pub fn generate_for_quest_dungeon_with_loot_shift(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    enemy_level: i64,
+    given_xp: u64,
+    loot_shift: i64,
+) -> Option<DungeonGeneratedData> {
     generate_for_family(game_data, dungeon_uuid, |id| {
-        crate::util::dungeon::generate_for_dungeon(game_data, id, enemy_level, given_xp)
+        crate::util::dungeon::generate_for_dungeon_with_loot_shift(
+            game_data,
+            id,
+            None,
+            crate::util::dungeon::EnemyLevels::Flat { level: enemy_level, given_xp },
+            loot_shift,
+        )
     })
 }
 
@@ -193,6 +219,29 @@ pub fn generate_for_event_dungeon_with_seed(
     generate_for_ids(event_dungeon_stage_ids(game_data, dungeon_uuid)?, |id| {
         crate::util::dungeon::generate_for_dungeon_levelled_with_seed(
             game_data, id, run_seed, levels,
+        )
+    })
+}
+
+/// An event run's generated data, seeded per run (`Some`) or not, with its loot
+/// rolled `loot_shift` levels above every enemy's and container's own level (#398,
+/// [`crate::features::loot_level::dungeon_loot_shift`]). Enemy levels and XP are
+/// [`generate_for_event_dungeon_with_seed`]'s.
+pub fn generate_for_event_dungeon_with_loot_shift(
+    game_data: &GameData,
+    dungeon_uuid: &Uuid,
+    run_seed: Option<u64>,
+    enemy_level: i64,
+    scaling: &QuestLevelScaling,
+    loot_shift: i64,
+) -> Option<DungeonGeneratedData> {
+    let levels = crate::util::dungeon::EnemyLevels::WithDeltas {
+        base: enemy_level,
+        scaling,
+    };
+    generate_for_ids(event_dungeon_stage_ids(game_data, dungeon_uuid)?, |id| {
+        crate::util::dungeon::generate_for_dungeon_with_loot_shift(
+            game_data, id, run_seed, levels, loot_shift,
         )
     })
 }

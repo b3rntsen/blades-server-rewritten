@@ -1895,3 +1895,6 @@ fn economy_audit_flags_unreachable_merchant_potions() {
     thin.level_pools.get_mut("9").unwrap().truncate(k);
     assert!(frozen_catalog(&thin, 9).is_some_and(|f| f.contains("frozen catalog")));
 }
+
+#[cfg(test)]
+mod report_398;

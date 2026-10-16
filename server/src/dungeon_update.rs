@@ -444,11 +444,13 @@ pub async fn dungeon_update(
 ///
 /// The enemy level and XP are carried over from the data being repaired, so a
 /// repair cannot quietly re-roll the run at a different difficulty, and existing
-/// rolls are never rewritten.
+/// rolls are never rewritten. The added stages' loot is rolled `loot_shift(level)`
+/// levels up, the character's #398 shift at the run's level.
 fn repair_variant_mismatch(
     game_data: &crate::GameData,
     current: &DungeonGeneratedData,
     actions: &[DungeonUpdateAction],
+    loot_shift: &dyn Fn(i64) -> i64,
 ) -> Option<DungeonGeneratedData> {
     let unknown = actions.iter().find_map(|a| match a {
         DungeonUpdateAction::EnemyKilled(k) => {
@@ -475,8 +477,13 @@ fn repair_variant_mismatch(
         .unwrap_or((1, 100));
 
     let entrypoint = blades_lib::util::quest::variant_family_entrypoint(game_data, &owner);
-    let family =
-        blades_lib::util::quest::generate_for_quest_dungeon(game_data, &entrypoint, level, xp)?;
+    let family = blades_lib::util::quest::generate_for_quest_dungeon_with_loot_shift(
+        game_data,
+        &entrypoint,
+        level,
+        xp,
+        loot_shift(level),
+    )?;
     let mut repaired = current.clone();
     blades_lib::util::quest::merge_dungeon_generated_data(&mut repaired, family);
     Some(repaired)
@@ -539,7 +546,13 @@ async fn handle_quest_dungeon_update(
             // dungeon; an ambiguous or unowned group is still discarded, because
             // guessing there would invent a dungeon the player is not in.
             if let Some(repaired) =
-                repair_variant_mismatch(&app_state.game_data, &generated_data, &body.actions)
+                repair_variant_mismatch(&app_state.game_data, &generated_data, &body.actions, &|level| {
+                    blades_lib::features::loot_level::dungeon_loot_shift(
+                        &app_state.static_data.quests_daily.level_scaling,
+                        i64::from(character_data.character.0.level),
+                        level,
+                    )
+                })
             {
                 log::info!(
                     "dungeon_update: character {character_id} is in a different dungeon \
@@ -564,6 +577,37 @@ async fn handle_quest_dungeon_update(
 
             let mut wallet = std::mem::take(&mut character_data.wallet.0);
 
+            // From level 49 a chest is minted at the level a level-100 character's
+            // would be (#398): a job's at the level-100 board's difficulty, any
+            // other dungeon's at the level-100 enemy level.
+            let character_level = character_data.character.0.level;
+            let is_job = if body
+                .actions
+                .iter()
+                .any(|a| matches!(a, DungeonUpdateAction::ChestCollected(_)))
+            {
+                use crate::schema::quests;
+                let info: Option<JsonDbWrapper<blades_lib::user_data::Quest>> = quests::table
+                    .filter(quests::id.eq(quest_id))
+                    .filter(quests::character_id.eq(character_id))
+                    .select(quests::info)
+                    .first(&mut conn)
+                    .await
+                    .optional()?;
+                info.is_some_and(|i| crate::quest::jobs_gen::is_job_row(&i.0))
+            } else {
+                false
+            };
+            let chest_loot_level = |level: u64| {
+                paid_chest_level(
+                    &app_state.static_data.quests_daily.level_scaling,
+                    &app_state.job_pools,
+                    character_level,
+                    is_job,
+                    level,
+                )
+            };
+
             let result = {
                 let currency_moved = process_dungeon_actions(
                     &body.actions,
@@ -572,6 +616,7 @@ async fn handle_quest_dungeon_update(
                     &mut character_data,
                     &mut wallet,
                     &mut inventory_modification_tracker,
+                    &chest_loot_level,
                 );
 
                 character_data.wallet.0 = wallet;
@@ -646,13 +691,18 @@ async fn handle_event_dungeon_update(
                 .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?;
 
             // At the instance row's level, the same data `enter` stores: only used to
-            // repair an attempt whose stored data is empty (below).
-            let (event_dungeon_settings_id, regenerated_data) = event_dungeon_data(
-                &app_state.game_data,
-                dungeon_id,
-                difficulty_level,
-                &app_state.static_data.quests_daily.level_scaling,
-            )?;
+            // repair an attempt whose stored data is empty (below), with the loot the
+            // character is paid at (#398).
+            let regenerate = |loot_shift: i64| {
+                event_dungeon_data(
+                    &app_state.game_data,
+                    dungeon_id,
+                    difficulty_level,
+                    &app_state.static_data.quests_daily.level_scaling,
+                    loot_shift,
+                )
+            };
+            let (event_dungeon_settings_id, _) = regenerate(0)?;
 
             // No game_data.events lookup here: the event template identifies the event,
             // while parsed quest data identifies the dungeon and its spawn groups.
@@ -696,7 +746,12 @@ async fn handle_event_dungeon_update(
                 // Attempts started before report #135's fix were generated using the
                 // event quest UUID, which is not a dungeon UUID, so all three maps
                 // were empty. Repair them in-place on their next update.
-                regenerated_data
+                regenerate(blades_lib::features::loot_level::dungeon_loot_shift(
+                    &app_state.static_data.quests_daily.level_scaling,
+                    i64::from(character_data.character.0.level),
+                    difficulty_level,
+                ))?
+                .1
             } else {
                 stored_generated_data
             };
@@ -749,6 +804,13 @@ async fn handle_event_dungeon_update(
                 &app_state.game_data,
                 &generated_data,
                 &body.actions,
+                &|level| {
+                    blades_lib::features::loot_level::dungeon_loot_shift(
+                        &app_state.static_data.quests_daily.level_scaling,
+                        i64::from(character_data.character.0.level),
+                        level,
+                    )
+                },
             ) {
                 Some(repaired) => {
                     log::info!(
@@ -777,6 +839,17 @@ async fn handle_event_dungeon_update(
 
             let mut wallet = std::mem::take(&mut character_data.wallet.0);
 
+            // From level 49 the chest is the level-100 character's (#398).
+            let character_level = character_data.character.0.level;
+            let chest_loot_level = |level: u64| {
+                paid_chest_level(
+                    &app_state.static_data.quests_daily.level_scaling,
+                    &app_state.job_pools,
+                    character_level,
+                    false,
+                    level,
+                )
+            };
             let currency_moved = process_dungeon_actions(
                 &body.actions,
                 &generated_data,
@@ -784,6 +857,7 @@ async fn handle_event_dungeon_update(
                 &mut character_data,
                 &mut wallet,
                 &mut inventory_modification_tracker,
+                &chest_loot_level,
             );
 
             // PUT THE WALLET BACK. `std::mem::take` above emptied
@@ -869,6 +943,51 @@ fn charge_stackable(
     }
 }
 
+/// The level a collected dungeon chest is minted at, before the #398 shift: the
+/// dungeon's own level, or for a story quest -- whose row carries retail's `-1`
+/// difficulty, so its dungeon was entered at level 1 -- the level its enemies were
+/// generated at.
+///
+/// Report #398: every story-quest chest reached the treasury as a level-1 chest,
+/// whatever the character's level. A Gold chest at level 1 pays about 3,000 gold
+/// and Iron and Steel gear, against about 8,200 gold and Glass, Dwarven and Ebony
+/// gear at 45-48 -- "the Gold chests only had low-value items".
+pub(crate) fn dungeon_chest_level(dungeon_level: u64, generated_data: &DungeonGeneratedData) -> u64 {
+    if dungeon_level > 1 {
+        return dungeon_level;
+    }
+    crate::dungeon::generated_enemy_level(generated_data).unwrap_or(dungeon_level).max(1)
+}
+
+/// The level a chest found in a dungeon of `level` is minted at for a character of
+/// `character_level` (#398): from level 49, the level the same chest has in the
+/// level-100 character's dungeon -- a job's at the level-100 board's difficulty
+/// ([`crate::quest::jobs_gen::loot_shift`]), a story quest's or event's at the
+/// level-100 enemy level ([`blades_lib::features::loot_level::dungeon_loot_shift`]).
+/// Unchanged below 49.
+pub(crate) fn paid_chest_level(
+    scaling: &blades_lib::static_data::QuestLevelScaling,
+    job_pools: &serde_json::Value,
+    character_level: u16,
+    is_job: bool,
+    level: u64,
+) -> u64 {
+    let shift = if is_job {
+        // Every job type shares the difficulty rows (pinned by a test).
+        crate::quest::jobs_gen::loot_shift(job_pools, 0, character_level)
+    } else {
+        blades_lib::features::loot_level::dungeon_loot_shift(
+            scaling,
+            i64::from(character_level),
+            level as i64,
+        )
+    };
+    level.saturating_add_signed(shift)
+}
+
+/// `chest_loot_level` maps a dungeon chest's level ([`dungeon_chest_level`]) to the
+/// level it is minted at: up by the dungeon's #398 loot shift for a character paid
+/// as level 100, unchanged otherwise.
 fn process_dungeon_actions(
     actions: &[DungeonUpdateAction],
     generated_data: &DungeonGeneratedData,
@@ -876,6 +995,7 @@ fn process_dungeon_actions(
     character_data: &mut CharacterDbEntryCharacterWalletInventory,
     wallet: &mut CompleteWallet,
     inventory_modification_tracker: &mut InventoryChangeTracker,
+    chest_loot_level: &dyn Fn(u64) -> u64,
 ) -> bool {
     // Was this dungeon generated before the server started rolling enemy loot?
     //
@@ -1042,11 +1162,15 @@ fn process_dungeon_actions(
                 } else {
                     chest_data.tier.max(1)
                 };
+                let chest_level = chest_loot_level(dungeon_chest_level(
+                    dungeon_state.dungeon_status.level,
+                    generated_data,
+                ));
                 let chest_id = character_data
                     .inventory
                     .0
                     .treasury
-                    .add_chest(tier, dungeon_state.dungeon_status.level);
+                    .add_chest(tier, chest_level);
                 inventory_modification_tracker
                     .modified_treasury
                     .added
@@ -1881,7 +2005,7 @@ mod tests {
         let mut chests_after = Vec::new();
         for (capture, req) in &requests {
             let mut tracker = InventoryChangeTracker::default();
-            process_dungeon_actions(&req.actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker);
+            process_dungeon_actions(&req.actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker, &|l| l);
             chests_after.push((*capture, character.inventory.0.treasury.chests().len()));
         }
 
@@ -2237,7 +2361,7 @@ mod event_kill_rewards_tests {
         let xp_before = character.character.0.experience;
         let mut wallet = CompleteWallet::default();
         let mut tracker = InventoryChangeTracker::default();
-        process_dungeon_actions(&req.actions, generated, &mut state, &mut character, &mut wallet, &mut tracker);
+        process_dungeon_actions(&req.actions, generated, &mut state, &mut character, &mut wallet, &mut tracker, &|l| l);
         let gold = wallet.0.get(&GOLD).map_or(0, |w| w.balance);
         (character.character.0.experience - xp_before, gold)
     }
@@ -2266,6 +2390,7 @@ mod event_kill_rewards_tests {
                 scaling,
                 row.quest_id,
                 0,
+                blades_lib::features::loot_level::dungeon_loot_shift(scaling, 89, level),
             )
             .unwrap();
             let enemies = attempt.enemy_generated_data.values().flatten().flatten().count() as u64;
@@ -2342,6 +2467,7 @@ mod event_kill_rewards_tests {
                 &mut character,
                 &mut wallet,
                 &mut tracker,
+                &|l| l,
             );
             let mut killed: Vec<usize> = state
                 .dungeon_status
@@ -2404,7 +2530,7 @@ mod report323_stage_repair_tests {
             blades_lib::util::dungeon::generate_for_dungeon_with_seed(&gd, &a, 99, 18, 63).unwrap();
         let b_group = *gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys().next().unwrap();
 
-        let repaired = repair_variant_mismatch(&gd, &first_stage_only, &kill_in(b_group))
+        let repaired = repair_variant_mismatch(&gd, &first_stage_only, &kill_in(b_group), &|_| 0)
             .expect("a kill in stage _B is repaired");
 
         for (group, rolls) in &first_stage_only.enemy_generated_data {
@@ -2435,7 +2561,7 @@ mod report323_stage_repair_tests {
         );
 
         // Once repaired, further `_B` kills are known: no second repair.
-        assert!(repair_variant_mismatch(&gd, &repaired, &kill_in(b_group)).is_none());
+        assert!(repair_variant_mismatch(&gd, &repaired, &kill_in(b_group), &|_| 0).is_none());
     }
 }
 
@@ -2517,7 +2643,7 @@ mod report328_corpse_loot_tests {
         let mut run = |actions: Vec<DungeonUpdateAction>| {
             let mut tracker = InventoryChangeTracker::default();
             let moved = process_dungeon_actions(
-                &actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker,
+                &actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker, &|l| l,
             );
             let mut reported: Vec<Uuid> =
                 tracker.modified_backpack.stackable_items.into_iter().collect();

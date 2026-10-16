@@ -4531,8 +4531,9 @@ mod tests {
             assert!(top.contains(&seventy), "level 49 rung 70 drew {seventy}");
             assert_ne!(seventy, quicksilver);
             toes += usize::from(seventy == giants_toe);
+            // #398: from 49 the rung chests are the level-100 character's.
             let fifty = rung_draw(run, 50).unwrap();
-            assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, 49));
+            assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, 100));
         }
         assert!(toes >= 8, "Giant's Toe on only {toes}/64 level-49 rung 70s");
 
@@ -4552,6 +4553,55 @@ mod tests {
                 "/end nonce {nonce}"
             );
         }
+    }
+
+    /// Report #398: from level 49 an Abyss run pays exactly what a level-100 run pays
+    /// for the same seed and kills — every rung (chests at level 100) and `/end` —
+    /// except rungs 190 and 490, where a level 49-59 character keeps #371's extra
+    /// Grand Soul Gem result on top of level 100's pool. Run from floor 149, where
+    /// both stand at difficulty 100. Levels 7, 45 and 100 keep their digests above.
+    #[test]
+    fn a_level_49_run_from_floor_149_pays_what_level_100_pays() {
+        let at_100 = payouts(100, 149, 4, DEEP_FLOOR_KILLS);
+        for level in [49u32, 60, 80] {
+            let at = payouts(level, 149, 4, DEEP_FLOOR_KILLS);
+            for (run, run_100) in at.iter().zip(&at_100) {
+                assert_eq!(run.1, run_100.1, "/end at level {level}");
+                for (rung, grant) in &run.0 {
+                    if level <= 59 && (*rung == 190 || *rung == 490) {
+                        continue;
+                    }
+                    if let Some(g100) = rung_draw(run_100, *rung) {
+                        assert_eq!(grant, g100, "rung {rung} at level {level}");
+                    }
+                }
+                for (rung, grant) in &run.0 {
+                    for chest in &grant.chests {
+                        assert_eq!(chest.level, 100, "rung {rung} chest at level {level}");
+                    }
+                }
+            }
+        }
+        // 190/490 at 49: level 100's pool plus the Grand gem, nothing else.
+        let id = Uuid::from_u128(0x398);
+        let mut pool_100 = std::collections::HashSet::new();
+        for nonce in 0..400u64 {
+            let seed = generate_run_seed(id, nonce);
+            for rung in [190u32, 490] {
+                pool_100.insert(serde_json::to_string(&abyss_rewards::future_reward_for_rung(rung, 100, seed)).unwrap());
+            }
+        }
+        let mut extra = std::collections::HashSet::new();
+        for nonce in 0..400u64 {
+            let seed = generate_run_seed(id, nonce);
+            for rung in [190u32, 490] {
+                let g = serde_json::to_string(&abyss_rewards::future_reward_for_rung(rung, 49, seed)).unwrap();
+                if !pool_100.contains(&g) {
+                    extra.insert(g);
+                }
+            }
+        }
+        assert!(extra.len() <= 1, "level 49 at 190/490 paid more than level 100's pool + one Grand gem: {extra:?}");
     }
 
     /// Report #383's retail end screens — level 92 and 95, floor 150, three kills;
@@ -4594,7 +4644,8 @@ mod tests {
                 let thirty_five = template_of(rung_draw(run, 35).unwrap()).unwrap();
                 assert!(rung_35.contains(&thirty_five), "level {level} rung 35 drew {thirty_five}");
                 let fifty = rung_draw(run, 50).unwrap();
-                assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, u64::from(level)));
+                // #398: from 49 the rung chest is the level-100 character's.
+                assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, 100));
                 let package: Vec<Uuid> = run
                     .1
                     .stackable_items
@@ -5032,7 +5083,7 @@ mod tests {
                 let (board, _) =
                     crate::quest::jobs_gen::generate(&pools, character_id, level as u16, day as i64, boundary, now);
                 for job in &board {
-                    let data = crate::quest::jobs_gen::generated_data_for_job(&gd, job, &scaling)
+                    let data = crate::quest::jobs_gen::generated_data_for_job(&gd, job, &scaling, 0)
                         .expect("the job reference dungeon resolves");
                     let (c, m) = material_corpses(&data, &materials);
                     jobs = (jobs.0 + c, jobs.1 + m);

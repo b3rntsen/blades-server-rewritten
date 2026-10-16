@@ -3635,7 +3635,10 @@ pub async fn grant_arena_season_awards(
                 // other Arena chest.
                 for chest in &mut reward.chests {
                     if chest.level == 0 {
-                        chest.level = entry.character.0.level as u64;
+                        // The recipient's paid-as level: 100 from level 49 (#398).
+                        chest.level = blades_lib::features::loot_level::effective_loot_level_u64(
+                            entry.character.0.level as u64,
+                        );
                     }
                 }
                 apply_reward(

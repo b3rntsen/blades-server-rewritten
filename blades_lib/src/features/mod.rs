@@ -18,6 +18,7 @@ pub mod gifts;
 pub mod global_shop;
 pub mod jewelry_grades;
 pub mod legendary_gear;
+pub mod loot_level;
 pub mod merchant;
 pub mod recipe_outputs;
 pub mod repair;

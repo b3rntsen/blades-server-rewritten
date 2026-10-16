@@ -1291,7 +1291,11 @@ impl EventQuestTemplate {
     /// `min_level` it has reached, or the lowest band below every threshold.
     /// From [`EVENT_TOP_BAND_FROM_LEVEL`] on it is always the top band, whatever
     /// threshold the data carries for it. `None` for a template without bands.
+    ///
+    /// `level` is the level the character is PAID as
+    /// ([`crate::features::loot_level::effective_loot_level`], #398).
     pub fn band_for_level(&self, level: i64) -> Option<&EventLevelBand> {
+        let level = crate::features::loot_level::effective_loot_level(level);
         let bands = || self.level_bands.iter().filter(|b| !b.rewards.is_empty());
         let reached = if level >= EVENT_TOP_BAND_FROM_LEVEL { i64::MAX } else { level };
         bands()
@@ -1302,7 +1306,9 @@ impl EventQuestTemplate {
 
     /// The `rewards[]` an instance minted for a character of `level` carries: its
     /// band's ladder, with each crafting material at `level`'s own step (#362).
+    /// From level 49 that is the level-100 character's ladder and step (#398).
     pub fn rewards_for_level(&self, level: i64) -> Vec<crate::economy::RewardGrant> {
+        let level = crate::features::loot_level::effective_loot_level(level);
         let mut out = self
             .band_for_level(level)
             .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone());
@@ -1314,8 +1320,10 @@ impl EventQuestTemplate {
     }
 
     /// The `finalReward` an instance minted for a character of `level` carries, its
-    /// material at `level`'s own step like the milestones'.
+    /// material at `level`'s own step like the milestones'. From level 49 that is
+    /// the level-100 character's (#398).
     pub fn final_reward_for_level(&self, level: i64) -> Option<crate::economy::RewardGrant> {
+        let level = crate::features::loot_level::effective_loot_level(level);
         let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
             None => self.final_reward.clone(),

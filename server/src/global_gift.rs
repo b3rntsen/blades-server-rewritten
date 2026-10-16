@@ -52,6 +52,8 @@ fn open_season_chests(
     key_prefix: &str,
 ) {
     let season_chests = std::mem::take(&mut reward.chests);
+    // From level 49, at the level-100 character's level (#398).
+    let character_level = blades_lib::features::loot_level::effective_loot_level_u64(character_level);
     for (index, chest) in season_chests.into_iter().enumerate() {
         let level = if chest.level == 0 { character_level } else { chest.level };
         let key = format!("{key_prefix}:{}:{index}", chest.tier);
@@ -516,7 +518,10 @@ pub async fn claim_global_gift(
             }
             for chest in &mut reward.chests {
                 if chest.level == 0 {
-                    chest.level = entry.character.0.level as u64;
+                    // The claimant's paid-as level: 100 from level 49 (#398).
+                    chest.level = blades_lib::features::loot_level::effective_loot_level_u64(
+                        entry.character.0.level as u64,
+                    );
                 }
             }
             let mut tracker = InventoryChangeTracker::default();
