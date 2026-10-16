@@ -36,7 +36,9 @@
         "generation.<buildingTypeId>.levelPools.<level>[]": {
           "bundleId": "a retail-observed shop_bundles id for this exact building level",
           "minQuantity/maxQuantity": "retail-observed per-open stock count range for this exact building level",
-          "weight": "observed frequency in the retail capture cell (used as the relative pick weight)"
+          "weight": "observed frequency in the retail capture cell (used as the relative pick weight)",
+          "_gapFill": "report #397: an APK potion inside the level's measured potion tier window that no captured retail catalog listed (rare draws, about 1% per kind per catalog); added by script/fill_shop_sampling_gaps.py, which shares the rare potion class's measured weight equally",
+          "_retailWeight": "the weight the retail fit gave a rare potion before script/fill_shop_sampling_gaps.py evened out its class (kept so the script can undo and redo itself)"
         }
       },
       "enchanterGate": "The Enchanter enchant-type gates (no Frost/Poison/Stamina/Magicka at L1) are modelled via tier: the gated (higher-grade) enchant bundles carry tier>=4, so a low-level Enchanter (tierCap 2) cannot roll them. Raising the shop level raises tierCap and unlocks them, matching retail's level-gated enchant families.",
@@ -8147,7 +8149,8 @@
           "refreshSeconds": 36000,
           "tierCap": 10,
           "tierCapLabel": "Mythical",
-          "_retailMeasuredStock": "108 retail catalogs, template db68b372-246d-47e4-b9dd-3199d2ca7be5; script/extract_shop_level_stock.py"
+          "_retailMeasuredStock": "108 retail catalogs, template db68b372-246d-47e4-b9dd-3199d2ca7be5; script/extract_shop_level_stock.py",
+          "_potionTailFill": "report #397: 12 unlisted tier 7-9 potions added; the rare potion class (27 listed + 12 added) shares retail's measured weight 559 at 14 each (script/fill_shop_sampling_gaps.py)"
         }
       },
       "merchantGold": {
@@ -8961,192 +8964,315 @@
           },
           {
             "bundleId": "02ddf06b-4e8c-4bc3-8185-fb7df774c836",
-            "weight": 36,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 5,
-            "_retailListed": "3/108"
+            "_retailListed": "3/108",
+            "_retailWeight": 36
           },
           {
             "bundleId": "0fb9c813-3544-4d9a-a44e-befcce967569",
-            "weight": 37,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 4,
-            "_retailListed": "3/108"
+            "_retailListed": "3/108",
+            "_retailWeight": 37
           },
           {
             "bundleId": "207ef7f6-0ebf-4563-97bf-eca5d7e13911",
-            "weight": 32,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 4,
-            "_retailListed": "3/108"
+            "_retailListed": "3/108",
+            "_retailWeight": 32
           },
           {
             "bundleId": "3bc241b5-6c5e-4d65-88ac-ee79fdcb1a1a",
-            "weight": 41,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 5,
-            "_retailListed": "3/108"
+            "_retailListed": "3/108",
+            "_retailWeight": 41
           },
           {
             "bundleId": "6b36d95d-b9e2-43cc-aa18-88cf402b7937",
-            "weight": 33,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 5,
-            "_retailListed": "3/108"
+            "_retailListed": "3/108",
+            "_retailWeight": 33
           },
           {
             "bundleId": "ee0ef15a-d2f4-46f2-865b-399ff7a91c21",
-            "weight": 35,
+            "weight": 14,
             "minQuantity": 2,
             "maxQuantity": 3,
-            "_retailListed": "3/108"
+            "_retailListed": "3/108",
+            "_retailWeight": 35
           },
           {
             "bundleId": "2210c67b-328e-48e5-a143-ad1a5714f59e",
-            "weight": 23,
+            "weight": 14,
             "minQuantity": 1,
             "maxQuantity": 1,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 23
           },
           {
             "bundleId": "56ea53b0-153e-4d1e-9cb8-30100f26746e",
-            "weight": 23,
+            "weight": 14,
             "minQuantity": 2,
             "maxQuantity": 4,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 23
           },
           {
             "bundleId": "60d06608-a51f-4a37-ba74-a61044fef12e",
-            "weight": 23,
+            "weight": 14,
             "minQuantity": 4,
             "maxQuantity": 5,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 23
           },
           {
             "bundleId": "66c473a5-52f5-423a-9199-384086519d13",
-            "weight": 24,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 4,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 24
           },
           {
             "bundleId": "72587e1a-39e3-48ba-a98b-27b046b96f8c",
-            "weight": 27,
+            "weight": 14,
             "minQuantity": 1,
             "maxQuantity": 2,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 27
           },
           {
             "bundleId": "8b10a4c8-730c-4f75-be14-cf95509f1b47",
-            "weight": 25,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 3,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 25
           },
           {
             "bundleId": "ecf6a999-18dd-4ccd-a2ed-80a7b31a9fcc",
-            "weight": 30,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 5,
-            "_retailListed": "2/108"
+            "_retailListed": "2/108",
+            "_retailWeight": 30
           },
           {
             "bundleId": "07889fc2-1e96-4306-8948-4c179102f433",
-            "weight": 11,
+            "weight": 14,
             "minQuantity": 4,
             "maxQuantity": 4,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 11
           },
           {
             "bundleId": "4c557f62-c70b-44cf-af89-39bdc00af1e3",
-            "weight": 12,
+            "weight": 14,
             "minQuantity": 1,
             "maxQuantity": 1,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 12
           },
           {
             "bundleId": "5ab78694-24f5-4bf8-a0c5-094354947053",
             "weight": 14,
             "minQuantity": 1,
             "maxQuantity": 1,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 14
           },
           {
             "bundleId": "6b2100f9-59ec-4e45-8c5d-29cf26e22998",
-            "weight": 11,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 3,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 11
           },
           {
             "bundleId": "78cb70ff-9fd8-4f7f-a898-52564afd8add",
-            "weight": 10,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 3,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 10
           },
           {
             "bundleId": "7a543ffa-507a-44d5-a732-42b89a05ab73",
-            "weight": 15,
+            "weight": 14,
             "minQuantity": 2,
             "maxQuantity": 2,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 15
           },
           {
             "bundleId": "86b3d8a7-16ea-4db5-a2a2-85db62c4ed22",
-            "weight": 11,
+            "weight": 14,
             "minQuantity": 1,
             "maxQuantity": 1,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 11
           },
           {
             "bundleId": "8a9c7d0f-60f3-44b0-acd0-79b984edc15f",
-            "weight": 13,
+            "weight": 14,
             "minQuantity": 2,
             "maxQuantity": 2,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 13
           },
           {
             "bundleId": "948ba969-f669-459b-9d77-ae21e9838625",
-            "weight": 13,
+            "weight": 14,
             "minQuantity": 4,
             "maxQuantity": 4,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 13
           },
           {
             "bundleId": "9a012169-1f6d-4356-b230-c9ed7e28d724",
-            "weight": 13,
+            "weight": 14,
             "minQuantity": 4,
             "maxQuantity": 4,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 13
           },
           {
             "bundleId": "d369d630-ed7d-4bc9-ba19-8469a586f8e6",
-            "weight": 11,
+            "weight": 14,
             "minQuantity": 2,
             "maxQuantity": 2,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 11
           },
           {
             "bundleId": "dabe0887-262e-4130-ac5c-1ad5b85b88d5",
-            "weight": 13,
+            "weight": 14,
             "minQuantity": 1,
             "maxQuantity": 1,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 13
           },
           {
             "bundleId": "e0116a32-8480-42fa-a40e-740424878a71",
-            "weight": 12,
+            "weight": 14,
             "minQuantity": 2,
             "maxQuantity": 2,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 12
           },
           {
             "bundleId": "fe82c152-6fd7-443d-bc7a-d2996ec54eb8",
-            "weight": 11,
+            "weight": 14,
             "minQuantity": 3,
             "maxQuantity": 3,
-            "_retailListed": "1/108"
+            "_retailListed": "1/108",
+            "_retailWeight": 11
+          },
+          {
+            "bundleId": "11603218-bb38-4f47-b721-32fb04093225",
+            "weight": 14,
+            "minQuantity": 3,
+            "maxQuantity": 5,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-7 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "44f78c79-ca72-4ae9-9c1b-4423baec27c1",
+            "weight": 14,
+            "minQuantity": 3,
+            "maxQuantity": 5,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-7 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "55183a20-371f-4e26-bd94-7eaf7a7c4913",
+            "weight": 14,
+            "minQuantity": 3,
+            "maxQuantity": 5,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-7 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "68dc8e66-d4f9-4f41-bc57-52b850e0005f",
+            "weight": 14,
+            "minQuantity": 3,
+            "maxQuantity": 5,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-7 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "6b34cb1d-bde3-4474-b0e2-5f6d4061f293",
+            "weight": 14,
+            "minQuantity": 3,
+            "maxQuantity": 5,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-7 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "6f6ce4e9-93ae-4aa2-8552-eb871a3f34c9",
+            "weight": 14,
+            "minQuantity": 1,
+            "maxQuantity": 3,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-9 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "7432e1ab-0121-431f-895a-0f16ba284f93",
+            "weight": 14,
+            "minQuantity": 2,
+            "maxQuantity": 4,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-8 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "8da4936d-b4ab-4e24-ac87-073928e840dd",
+            "weight": 14,
+            "minQuantity": 1,
+            "maxQuantity": 3,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-9 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "9c07230e-0057-43df-a312-2330cfbf9596",
+            "weight": 14,
+            "minQuantity": 1,
+            "maxQuantity": 3,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-9 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "a9be5d5f-24d4-4a72-b4ee-3f0c97128833",
+            "weight": 14,
+            "minQuantity": 1,
+            "maxQuantity": 3,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-9 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "e0ffce3a-5180-4cbe-b5d4-1ac8a7755970",
+            "weight": 14,
+            "minQuantity": 1,
+            "maxQuantity": 3,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-9 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
+          },
+          {
+            "bundleId": "fec18f17-f9e9-4966-bc7c-981ecd915bc7",
+            "weight": 14,
+            "minQuantity": 3,
+            "maxQuantity": 5,
+            "_retailListed": "0/108",
+            "_gapFill": "report #397: a tier-7 potion the APK sells; retail's level-9 rare potions (tiers 7-9) came up about once per 100 catalogs each, so 108 catalogs miss about a third of them by chance. Shares the rare class's weight."
           }
         ]
       }
