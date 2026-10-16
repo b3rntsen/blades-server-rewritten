@@ -1374,12 +1374,11 @@ pub async fn purchase_global_shop(
             // Chest is a tier-4 (Elder) chest, so from level 45 it pays retail's
             // high-level Elder gold and stackables like a treasury one (#378).
             let reward = {
-                blades_lib::features::store_bundles::roll_bundle_with(
+                blades_lib::features::store_bundles::roll_bundle_for_character(
                     &product_id,
-                    // From level 49 the level-100 buyer's chest (#398).
-                    blades_lib::features::loot_level::effective_loot_level_u64(u64::from(
-                        entry.character.0.level,
-                    )),
+                    // From level 49 the level-100 buyer's chest, keeping the buyer's
+                    // own gems for 49-99 (#398).
+                    u64::from(entry.character.0.level),
                     roll_nonce,
                     &entry.inventory.0.item_templates(),
                     globals

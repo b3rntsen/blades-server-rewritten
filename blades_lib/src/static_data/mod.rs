@@ -1307,8 +1307,19 @@ impl EventQuestTemplate {
     /// The `rewards[]` an instance minted for a character of `level` carries: its
     /// band's ladder, with each crafting material at `level`'s own step (#362).
     /// From level 49 that is the level-100 character's ladder and step (#398).
+    /// A 49-99 character keeps, per milestone, the gems its own level's ladder pays.
     pub fn rewards_for_level(&self, level: i64) -> Vec<crate::economy::RewardGrant> {
-        let level = crate::features::loot_level::effective_loot_level(level);
+        let mut out = self.rewards_at(crate::features::loot_level::effective_loot_level(level));
+        if crate::features::loot_level::keeps_own_gems(level) {
+            for (paid, own) in out.iter_mut().zip(self.rewards_at(level)) {
+                crate::features::loot_level::keep_own_gems(&mut paid.stackable_items, &own.stackable_items);
+            }
+        }
+        out
+    }
+
+    /// The ladder at exactly `level`'s band and step, without #398's mapping.
+    pub fn rewards_at(&self, level: i64) -> Vec<crate::economy::RewardGrant> {
         let mut out = self
             .band_for_level(level)
             .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone());
@@ -1323,7 +1334,17 @@ impl EventQuestTemplate {
     /// material at `level`'s own step like the milestones'. From level 49 that is
     /// the level-100 character's (#398).
     pub fn final_reward_for_level(&self, level: i64) -> Option<crate::economy::RewardGrant> {
-        let level = crate::features::loot_level::effective_loot_level(level);
+        let mut out = self.final_reward_at(crate::features::loot_level::effective_loot_level(level))?;
+        if crate::features::loot_level::keeps_own_gems(level) {
+            if let Some(own) = self.final_reward_at(level) {
+                crate::features::loot_level::keep_own_gems(&mut out.stackable_items, &own.stackable_items);
+            }
+        }
+        Some(out)
+    }
+
+    /// The final reward at exactly `level`'s band and step, without #398's mapping.
+    pub fn final_reward_at(&self, level: i64) -> Option<crate::economy::RewardGrant> {
         let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
             None => self.final_reward.clone(),

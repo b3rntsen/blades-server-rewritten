@@ -503,6 +503,28 @@ fn roll_loot_table_with_context(
     result_index: usize,
     enemy_level: i64,
 ) -> LootTableResult {
+    let mut out = roll_loot_table_at(ctx, spawn_id, table_id, result_index, enemy_level);
+    if ctx.loot_shift > 0 {
+        // #398: a 49-99 character keeps the gems its own level's roll pays.
+        let own = roll_loot_table_at(
+            LootSeedContext { loot_shift: 0, ..ctx },
+            spawn_id,
+            table_id,
+            result_index,
+            enemy_level,
+        );
+        crate::features::loot_level::keep_own_gems(&mut out.stackable_items, &own.stackable_items);
+    }
+    out
+}
+
+fn roll_loot_table_at(
+    ctx: LootSeedContext,
+    spawn_id: &Uuid,
+    table_id: &Uuid,
+    result_index: usize,
+    enemy_level: i64,
+) -> LootTableResult {
     let mut out = LootTableResult::default();
     let Some(results) = interactable_table_results(table_id, enemy_level + ctx.loot_shift) else {
         // A table we never observed stays empty, exactly as before.
@@ -772,6 +794,32 @@ fn roll_enemy_loot_with_context(
     enemy_index: usize,
     enemy_level: i64,
 ) -> HashMap<Uuid, LootTableResult> {
+    let mut out = roll_enemy_loot_at(ctx, spawn_group_id, spawner_index, enemy_index, enemy_level);
+    if ctx.loot_shift > 0 {
+        // #398: a 49-99 character keeps the gems its own level's roll pays, on top
+        // of the level-100 roll -- retail's level-100 tables pay almost none.
+        let own = roll_enemy_loot_at(
+            LootSeedContext { loot_shift: 0, ..ctx },
+            spawn_group_id,
+            spawner_index,
+            enemy_index,
+            enemy_level,
+        );
+        for (table, result) in own {
+            let paid = out.entry(table).or_default();
+            crate::features::loot_level::keep_own_gems(&mut paid.stackable_items, &result.stackable_items);
+        }
+    }
+    out
+}
+
+fn roll_enemy_loot_at(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    enemy_level: i64,
+) -> HashMap<Uuid, LootTableResult> {
     let mut rng = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index);
     let mut out = HashMap::new();
     // The enemy keeps its level; its loot is read at the level-100 character's (#398).
@@ -864,6 +912,18 @@ fn roll_enemy_loot_with_context(
             .stackable_items
             .entry(item)
             .or_default() += qty;
+    }
+    // #398: a 49-99 character's bonus is drawn at level 100; a gem its own level's
+    // draw would have paid is kept on top.
+    if let Some(level) = ctx.bonus_level.filter(|l| ctx.abyss && crate::features::loot_level::keeps_own_gems(*l)) {
+        if let Some((item, qty)) = roll_abyss_bonus_at(ctx, spawn_group_id, spawner_index, enemy_index, level) {
+            let mut own = HashMap::new();
+            own.insert(item, qty);
+            crate::features::loot_level::keep_own_gems(
+                &mut out.entry(Uuid::from_u128(GOLD_LOOT_TABLE_ID)).or_default().stackable_items,
+                &own,
+            );
+        }
     }
 
     out
@@ -1151,6 +1211,18 @@ fn roll_abyss_bonus(
     // Banded to the level the character is PAID as: a level-49 character finds what
     // a level-100 one does (#398).
     let level = crate::features::loot_level::effective_loot_level(ctx.bonus_level.filter(|_| ctx.abyss)?);
+    roll_abyss_bonus_at(ctx, spawn_group_id, spawner_index, enemy_index, level)
+}
+
+/// The bonus draw for one corpse at `level`, on the corpse's own bonus stream.
+fn roll_abyss_bonus_at(
+    ctx: LootSeedContext,
+    spawn_group_id: &Uuid,
+    spawner_index: usize,
+    enemy_index: usize,
+    level: i64,
+) -> Option<(Uuid, u64)> {
+    ctx.bonus_level.filter(|_| ctx.abyss)?;
     // Salted, so the stream is independent of the retail draws for this corpse.
     const SALT: u64 = 0x0383_ab55_b0b5_0383;
     let mut rng = LootRng(mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ SALT));

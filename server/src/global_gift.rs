@@ -52,12 +52,16 @@ fn open_season_chests(
     key_prefix: &str,
 ) {
     let season_chests = std::mem::take(&mut reward.chests);
-    // From level 49, at the level-100 character's level (#398).
+    // From level 49, at the level-100 character's level, keeping the gems of the
+    // character's own level (#398).
+    let own_level = character_level;
     let character_level = blades_lib::features::loot_level::effective_loot_level_u64(character_level);
     for (index, chest) in season_chests.into_iter().enumerate() {
         let level = if chest.level == 0 { character_level } else { chest.level };
         let key = format!("{key_prefix}:{}:{index}", chest.tier);
-        if let Some(mut loot) = chests::roll_loot(tables, chest.tier as i64, level, &key, owned) {
+        if let Some(mut loot) =
+            chests::roll_loot_for_character(tables, chest.tier as i64, level, &key, owned, own_level)
+        {
             for item in &mut loot.items {
                 item.id = Uuid::new_v4();
             }

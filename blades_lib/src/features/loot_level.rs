@@ -14,7 +14,55 @@
 //!
 //! Below 49 nothing changes: [`effective_loot_level`] is the identity there.
 
+use std::collections::HashMap;
+
+use uuid::Uuid;
+
 use crate::static_data::QuestLevelScaling;
+
+/// The gem materials (`Items.Name.*`, type 8): the jewellery and enchanting gems.
+/// Soul gems are not among them.
+pub const GEM_MATERIALS: [Uuid; 12] = [
+    Uuid::from_u128(0x89ece62c_9ff6_470a_a152_d45ef4e0c222), // Pearl
+    Uuid::from_u128(0x3ca59113_a093_4cc8_8389_0f578ad94851), // Topaz
+    Uuid::from_u128(0x9df9233f_e7b9_47e8_bc75_f37707917759), // Garnet
+    Uuid::from_u128(0x3ec6cf6f_d90e_4b76_bb7f_82da251ab5e5), // Amethyst
+    Uuid::from_u128(0xcf4b1b42_a736_4aa1_99b8_baca9f9c2276), // Ruby
+    Uuid::from_u128(0x014606cd_8898_4c1d_8029_63220a179c47), // Sapphire
+    Uuid::from_u128(0x4d1231be_d3fa_4282_81b2_0f7bed4aabff), // Emerald
+    Uuid::from_u128(0x16e102fb_b1c0_42de_8106_0aa27e77f7f0), // Diamond
+    Uuid::from_u128(0xab97efe1_bae9_4d16_8fd9_e05bad9ecb95), // Atronite
+    Uuid::from_u128(0x70f2c013_813e_4f63_8b29_7a54a13b5e58), // Faerite
+    Uuid::from_u128(0xc1abc963_c03c_4cd9_84d7_433ed8ab3877), // Arentine
+    Uuid::from_u128(0x91c40a5d_36b8_4ed9_9c07_209b52ebc732), // Firebreath Opal
+];
+
+pub fn is_gem_material(id: &Uuid) -> bool {
+    GEM_MATERIALS.contains(id)
+}
+
+/// Whether a character of `level` is paid level 100's loot PLUS the gem materials
+/// its own level would have paid: 49-99 (#398).
+///
+/// Retail's level-100 tables pay almost no gems (a level-100 Gold chest none, where
+/// one at 49 paid ~1.1 Emerald or Diamond). Paying 49-99 exactly as 100 would take
+/// those gems away, and HauDrauf's standing rule is that no reward is narrowed
+/// without asking him. So for these levels the gems of the character's own roll are
+/// kept on top of the level-100 roll (better of the two, per gem).
+pub fn keeps_own_gems(level: i64) -> bool {
+    (TOP_LOOT_FROM_LEVEL..TOP_LOOT_LEVEL).contains(&level)
+}
+
+/// Add to `paid` every gem material `own` pays more of: per gem, the larger count.
+/// Nothing else in `paid` changes.
+pub fn keep_own_gems(paid: &mut HashMap<Uuid, u64>, own: &HashMap<Uuid, u64>) {
+    for (id, n) in own {
+        if is_gem_material(id) {
+            let p = paid.entry(*id).or_insert(0);
+            *p = (*p).max(*n);
+        }
+    }
+}
 
 /// From this character level on, loot is rolled as for [`TOP_LOOT_LEVEL`] (#398).
 pub const TOP_LOOT_FROM_LEVEL: i64 = 49;

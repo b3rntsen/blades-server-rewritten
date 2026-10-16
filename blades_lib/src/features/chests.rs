@@ -391,6 +391,32 @@ pub fn roll_loot(
         })
 }
 
+/// [`roll_loot`] for a chest a character of `character_level` opens.
+///
+/// From level 49 a chest is minted at level 100 (#398), whose tables pay almost no
+/// gems. For a 49-99 character the gem materials a chest at the character's own
+/// level would have paid, rolled under the same key, are kept on top
+/// ([`crate::features::loot_level::keeps_own_gems`]). Otherwise exactly
+/// [`roll_loot`].
+pub fn roll_loot_for_character(
+    tables: &ChestLootTables,
+    tier: i64,
+    level: u64,
+    chest_key: &str,
+    owned: &HashSet<Uuid>,
+    character_level: u64,
+) -> Option<RewardGrant> {
+    use crate::features::loot_level::{keep_own_gems, keeps_own_gems};
+    let mut grant = roll_loot(tables, tier, level, chest_key, owned)?;
+    let own_level = level.min(character_level);
+    if keeps_own_gems(character_level as i64) && own_level != level {
+        if let Some(own) = roll_loot(tables, tier, own_level, chest_key, owned) {
+            keep_own_gems(&mut grant.stackable_items, &own.stackable_items);
+        }
+    }
+    Some(grant)
+}
+
 /// A Wooden, Silver or Gold chest's gear, generated around the retail piece
 /// [`compose_loot`] picked for each slot, as a Legendary chest's is (#368; #392
 /// audit).

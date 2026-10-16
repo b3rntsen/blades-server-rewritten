@@ -23,7 +23,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use blades_lib::economy::RewardGrant;
-use blades_lib::features::loot_level::{dungeon_loot_shift, effective_loot_level, effective_loot_level_u64};
+use blades_lib::features::loot_level::{dungeon_loot_shift, effective_loot_level, effective_loot_level_u64, is_gem_material};
 use blades_lib::features::{abyss_rewards, chests, store_bundles};
 use blades_lib::static_data::QuestLevelScaling;
 use blades_lib::user_data::DungeonGeneratedData;
@@ -117,6 +117,63 @@ fn enemy_levels(d: &DungeonGeneratedData) -> Vec<(String, i64, u64)> {
         .collect();
     out.sort();
     out
+}
+
+/// `v` without any gem material, and without a `stackableItems` left empty by that:
+/// what a 49-99 roll must share with level 100's. The gems are checked separately
+/// ([`gems_at_least`]): 49-99 keep their own level's gems on top (#398).
+fn no_gems(v: Value) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in m {
+                if k.parse::<Uuid>().is_ok_and(|id| is_gem_material(&id)) {
+                    continue;
+                }
+                let v = no_gems(v);
+                if k == "stackableItems" && v.as_object().is_some_and(|o| o.is_empty()) {
+                    continue;
+                }
+                out.insert(k, v);
+            }
+            Value::Object(out)
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(no_gems).collect()),
+        other => other,
+    }
+}
+
+fn no_gems_of<T: serde::Serialize>(t: &T) -> Value {
+    no_gems(serde_json::to_value(t).unwrap())
+}
+
+/// Every gem material anywhere in `v`, summed.
+fn gems_in(v: &Value) -> BTreeMap<Uuid, u64> {
+    fn walk(v: &Value, out: &mut BTreeMap<Uuid, u64>) {
+        match v {
+            Value::Object(m) => {
+                for (k, v) in m {
+                    match (k.parse::<Uuid>(), v.as_u64()) {
+                        (Ok(id), Some(n)) if is_gem_material(&id) => *out.entry(id).or_default() += n,
+                        _ => walk(v, out),
+                    }
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(v, &mut out);
+    out
+}
+
+/// `paid` holds at least as many of every gem material as `own`.
+fn gems_at_least<A: serde::Serialize, B: serde::Serialize>(paid: &A, own: &B) -> bool {
+    let paid = gems_in(&serde_json::to_value(paid).unwrap());
+    gems_in(&serde_json::to_value(own).unwrap())
+        .iter()
+        .all(|(id, n)| paid.get(id).copied().unwrap_or(0) >= *n)
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +279,7 @@ fn levels_below_49_are_unchanged() {
             for n in 0..20u64 {
                 digest_of(
                     &mut h,
-                    &store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), elder),
+                    &store_bundles::roll_bundle_for_character(&Uuid::from_u128(p), l as u64, n, &HashSet::new(), elder),
                 );
             }
         }
@@ -266,14 +323,14 @@ fn event_rewards_from_49_are_level_100s() {
     for tmpl in ctx.sd.event_quests.templates.values() {
         for l in PAID_AS_100 {
             assert_eq!(
-                serde_json::to_value(tmpl.rewards_for_level(l)).unwrap(),
-                serde_json::to_value(tmpl.rewards_for_level(100)).unwrap(),
+                no_gems_of(&tmpl.rewards_for_level(l)),
+                no_gems_of(&tmpl.rewards_for_level(100)),
                 "{} milestones at {l}",
                 tmpl.gld_quest_id
             );
             assert_eq!(
-                serde_json::to_value(tmpl.final_reward_for_level(l)).unwrap(),
-                serde_json::to_value(tmpl.final_reward_for_level(100)).unwrap(),
+                no_gems_of(&tmpl.final_reward_for_level(l)),
+                no_gems_of(&tmpl.final_reward_for_level(100)),
                 "{} final at {l}",
                 tmpl.gld_quest_id
             );
@@ -286,10 +343,7 @@ fn daily_rewards_from_49_are_level_100s() {
     let ctx = Ctx::load();
     for d in &ctx.sd.daily_rewards {
         for l in PAID_AS_100 {
-            assert_eq!(
-                serde_json::to_value(d.daily_reward_for_level(l as u16)).unwrap(),
-                serde_json::to_value(d.daily_reward_for_level(100)).unwrap(),
-            );
+            assert_eq!(no_gems_of(&d.daily_reward_for_level(l as u16)), no_gems_of(&d.daily_reward_for_level(100)));
         }
         for chest in d.daily_reward_for_level(49).chests {
             assert_eq!(chest.level, 100, "a level-49 daily chest is a level-100 chest");
@@ -315,6 +369,21 @@ fn no_daily_or_event_reward_is_worth_less_from_49() {
             assert!(paid >= unmapped(d, l), "daily {} at {l}: {paid} < {}", d.reward_uid, unmapped(d, l));
         }
     }
+    // Gems: no daily or event reward pays fewer of any gem material than at the
+    // character's own level.
+    for d in &ctx.sd.daily_rewards {
+        for l in 49..=99u16 {
+            let tier = d.level_tiers.iter().filter(|t| t.min_level <= l).max_by_key(|t| t.min_level);
+            let own = tier.map_or(&d.daily_reward, |t| &t.daily_reward);
+            assert!(gems_at_least(&d.daily_reward_for_level(l), own), "daily {} at {l}: fewer gems", d.reward_uid);
+        }
+    }
+    for tmpl in ctx.sd.event_quests.templates.values() {
+        for l in 49..=99i64 {
+            assert!(gems_at_least(&tmpl.rewards_for_level(l), &tmpl.rewards_at(l)), "event {} at {l}", tmpl.gld_quest_id);
+            assert!(gems_at_least(&tmpl.final_reward_for_level(l), &tmpl.final_reward_at(l)), "event {} final at {l}", tmpl.gld_quest_id);
+        }
+    }
     // Event milestones: the level-100 ladder is worth at least each level's own.
     for tmpl in ctx.sd.event_quests.templates.values() {
         let at_100: u64 = tmpl.rewards_for_level(100).iter().map(|r| value(&r.stackable_items)).sum();
@@ -334,14 +403,17 @@ fn abyss_rewards_from_49_are_level_100s() {
         for l in PAID_AS_100 {
             let l = l as u64;
             for score in [20.0, 40.0, 80.0, 200.0, 700.0] {
-                assert_eq!(abyss_rewards::end_package(score, l, seed), abyss_rewards::end_package(score, 100, seed));
+                assert_eq!(
+                    no_gems_of(&abyss_rewards::end_package(score, l, seed)),
+                    no_gems_of(&abyss_rewards::end_package(score, 100, seed))
+                );
             }
             for rung in abyss_rewards::ABYSS_LADDER {
                 let kept_grand = (190 == rung || 490 == rung) && l <= 59;
                 if !kept_grand {
                     assert_eq!(
-                        abyss_rewards::future_reward_for_rung(rung, l, seed),
-                        abyss_rewards::future_reward_for_rung(rung, 100, seed),
+                        no_gems_of(&abyss_rewards::future_reward_for_rung(rung, l, seed)),
+                        no_gems_of(&abyss_rewards::future_reward_for_rung(rung, 100, seed)),
                         "rung {rung} level {l}"
                     );
                 }
@@ -366,7 +438,7 @@ fn abyss_corpse_bonus_from_49_is_level_100s() {
             let at_100 = blades_lib::util::dungeon::generate_for_abyss_floor(&gd, d, seed, 100, Some(100));
             for l in PAID_AS_100 {
                 let at = blades_lib::util::dungeon::generate_for_abyss_floor(&gd, d, seed, 100, Some(l));
-                assert_eq!(serde_json::to_value(&at).unwrap(), serde_json::to_value(&at_100).unwrap());
+                assert_eq!(no_gems_of(&at), no_gems_of(&at_100));
             }
         }
     }
@@ -381,6 +453,7 @@ fn story_quest_loot_from_49_is_level_100s_and_enemies_stay() {
     let mut quests: Vec<&Uuid> = gd.quests.keys().collect();
     quests.sort();
     let mut compared = 0;
+    let mut kept_gems = 0;
     for q in quests {
         let Ok((_, Some(at_100))) = blades_lib::util::quest::generate_quest_data(&gd, *q, 100, &scaling) else {
             continue;
@@ -389,14 +462,20 @@ fn story_quest_loot_from_49_is_level_100s_and_enemies_stay() {
             let (quest, Some(at)) = blades_lib::util::quest::generate_quest_data(&gd, *q, l, &scaling).unwrap() else {
                 panic!("{q} lost its dungeon at {l}");
             };
-            assert_eq!(loot_of(&at), loot_of(&at_100), "quest {q} level {l}");
+            assert_eq!(no_gems(loot_of(&at)), no_gems(loot_of(&at_100)), "quest {q} level {l}");
             let e = scaling.enemy_level(l);
+            // Never fewer gems than the quest paid at the character's own level.
+            let dungeon = gd.quests[q].dungeon_info.as_ref().unwrap().dungeon_uuid;
+            let own = blades_lib::util::quest::generate_for_quest_dungeon(&gd, &dungeon, e, scaling.given_xp(e)).unwrap();
+            assert!(gems_at_least(&at, &own), "quest {q} level {l}: fewer gems than its own level");
+            kept_gems += usize::from(gems_in(&loot_of(&at)) != gems_in(&loot_of(&at_100)));
             assert_eq!(quest.difficulty_level, e);
             assert!(at.enemy_generated_data.values().flatten().flatten().all(|x| x.enemy_level == e && x.given_xp == scaling.given_xp(e)));
             compared += 1;
         }
     }
     assert!(compared > 100, "only {compared} quest dungeons compared");
+    assert!(kept_gems > 0, "no 49-99 quest kept a gem of its own level: the check does not discriminate");
 }
 
 /// Events: loot as level 100's run of the same seed; enemies at the row's level
@@ -411,8 +490,9 @@ fn event_dungeon_loot_from_49_is_level_100s_and_enemies_stay() {
             let Some(at_100) = event_dungeon(&gd, &scaling, &dungeon, seed, 100) else { continue };
             for l in PAID_AS_100 {
                 let at = event_dungeon(&gd, &scaling, &dungeon, seed, l).unwrap();
-                assert_eq!(loot_of(&at), loot_of(&at_100), "event {dungeon} level {l}");
+                assert_eq!(no_gems(loot_of(&at)), no_gems(loot_of(&at_100)), "event {dungeon} level {l}");
                 let unshifted = blades_lib::util::quest::generate_for_event_dungeon_with_seed(&gd, &dungeon, seed, scaling.enemy_level(l), &scaling).unwrap();
+                assert!(gems_at_least(&at, &unshifted), "event {dungeon} level {l}: fewer gems");
                 assert_eq!(enemy_levels(&at), enemy_levels(&unshifted), "event {dungeon} enemies moved at {l}");
             }
         }
@@ -456,9 +536,10 @@ fn job_rewards_from_49_are_level_100s_and_enemies_stay() {
                 assert_eq!(j["jobSetup"]["rewardGemCount"], j100["jobSetup"]["rewardGemCount"]);
                 let d = job_dungeon(&gd, &pools, j, l as u16).unwrap();
                 let d100 = job_dungeon(&gd, &pools, j100, 100).unwrap();
-                assert_eq!(loot_of(&d), loot_of(&d100), "job loot, char {ch} level {l}");
-                // The job's own difficulty and XP are untouched.
+                assert_eq!(no_gems(loot_of(&d)), no_gems(loot_of(&d100)), "job loot, char {ch} level {l}");
+                // The job's own difficulty and XP are untouched, and its gems kept.
                 let own = jobs_gen::generated_data_for_job(&gd, j, &crate::quest::shipped_scaling(), 0).unwrap();
+                assert!(gems_at_least(&d, &own), "job char {ch} level {l}: fewer gems");
                 assert_eq!(enemy_levels(&d), enemy_levels(&own));
                 assert_eq!(j["jobSetup"]["rewardXp"], serde_json::json!(jobs_gen::job_reward_xp(j["difficultyLevel"].as_i64().unwrap())));
             }
@@ -530,6 +611,66 @@ fn story_dungeon_chests_are_minted_at_the_dungeons_enemy_level() {
     assert!(before < 4_000 && after > 7_500, "Gold chest gold: level 1 {before}, level {level} {after}");
 }
 
+/// The coordinator's #398 follow-up: a level-100 Gold chest pays no gems, so a 49-99
+/// character opening its (level-100) chest keeps the gems a chest at its own level
+/// pays — per gem never fewer, everything else level 100's. Every tier, levels
+/// 49-99, the daily/gift (100) and dungeon (78) chest levels.
+#[test]
+fn treasury_chests_from_49_keep_the_characters_own_gems() {
+    let ctx = Ctx::load();
+    let t = &ctx.sd.chest_loots;
+    let none = HashSet::new();
+    for tier in [1i64, 2, 3, 4, 5] {
+        for l in (49..=99u64).step_by(5) {
+            for chest_level in [100u64, 78] {
+                for n in 0..30u64 {
+                    let key = format!("g:{tier}:{l}:{n}");
+                    let paid = chests::roll_loot_for_character(t, tier, chest_level, &key, &none, l).unwrap();
+                    let at = chests::roll_loot(t, tier, chest_level, &key, &none).unwrap();
+                    assert_eq!(no_gems_of(&paid), no_gems_of(&at), "tier {tier} level {l}: only gems may be added");
+                    let own = chests::roll_loot(t, tier, chest_level.min(l), &key, &none).unwrap();
+                    assert!(gems_at_least(&paid, &own), "tier {tier} level {l}: fewer gems than its own chest");
+                }
+            }
+        }
+    }
+    // Level 100 and below 49: exactly roll_loot.
+    for l in [1u64, 30, 48, 100] {
+        for n in 0..30u64 {
+            let key = format!("h:{l}:{n}");
+            assert_eq!(
+                serde_json::to_value(chests::roll_loot_for_character(t, 3, l, &key, &none, l)).unwrap(),
+                serde_json::to_value(chests::roll_loot(t, 3, l, &key, &none)).unwrap()
+            );
+        }
+    }
+    // And it discriminates: a level-100 Gold chest pays Faerite (~0.9 a chest) and
+    // never Emerald or Diamond; at 49 the chest keeps its own Emerald/Diamond too.
+    let (g49, g100) = (gold_chest_gems_per_chest(&ctx, 49), gold_chest_gems_per_chest(&ctx, 100));
+    assert!(g49 >= g100 + 0.8, "Gold chest gems: level 49 {g49}, level 100 {g100}");
+}
+
+/// Gem materials per Gold chest a character of `level` opens from a daily/gift
+/// chest (minted at its paid-as level), over 400 keys.
+fn gold_chest_gems_per_chest(ctx: &Ctx, level: u64) -> f64 {
+    let none = HashSet::new();
+    let total: u64 = (0..400u64)
+        .map(|n| {
+            let r = chests::roll_loot_for_character(
+                &ctx.sd.chest_loots,
+                3,
+                effective_loot_level_u64(level),
+                &format!("a398:{level}:{n}"),
+                &none,
+                level,
+            )
+            .unwrap();
+            gems_in(&serde_json::to_value(&r).unwrap()).values().sum::<u64>()
+        })
+        .sum();
+    total as f64 / 400.0
+}
+
 /// Store chests bought with gems, and season/gift chests: rolled at the level the
 /// buyer or claimant is paid as.
 #[test]
@@ -538,10 +679,12 @@ fn store_and_gift_chests_from_49_are_level_100s() {
     let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
     for (p, _) in super::STORE_CHESTS {
         for n in 0..40u64 {
-            let at_100 = store_bundles::roll_bundle_with(&Uuid::from_u128(p), 100, n, &HashSet::new(), elder);
+            let at_100 = store_bundles::roll_bundle_for_character(&Uuid::from_u128(p), 100, n, &HashSet::new(), elder);
             for l in PAID_AS_100 {
-                let at = store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), elder);
-                assert_eq!(serde_json::to_value(&at).unwrap(), serde_json::to_value(&at_100).unwrap());
+                let at = store_bundles::roll_bundle_for_character(&Uuid::from_u128(p), l as u64, n, &HashSet::new(), elder);
+                assert_eq!(no_gems_of(&at), no_gems_of(&at_100));
+                let own = store_bundles::roll_bundle_with(&Uuid::from_u128(p), l as u64, n, &HashSet::new(), elder);
+                assert!(gems_at_least(&at, &own), "store chest level {l}: fewer gems");
             }
         }
     }
@@ -554,8 +697,10 @@ fn store_and_gift_chests_from_49_are_level_100s() {
 // Part A report (ignored)
 // ---------------------------------------------------------------------------
 
-const GEMS: [&str; 9] =
-    ["Pearl", "Topaz", "Garnet", "Amethyst", "Ruby", "Sapphire", "Emerald", "Diamond", "FirebreathOpal"];
+const GEMS: [&str; 12] = [
+    "Pearl", "Topaz", "Garnet", "Amethyst", "Ruby", "Sapphire", "Emerald", "Diamond", "FirebreathOpal",
+    "Atronite", "Faerite", "Arentine",
+];
 const MATERIALS: [&str; 16] = [
     "Iron", "Steel", "Silver", "Orcish", "Dwarven", "Elven", "Glass", "Ebony", "Daedric", "Dragon",
     "Stalhrim", "Orichalcum", "Imperial", "Nordic", "Chitin", "Leather",
@@ -663,7 +808,7 @@ fn part_a() {
     let p = prices();
     let scaling = crate::quest::shipped_scaling();
     let pools = job_pools();
-    let levels = [45i64, 46, 47, 48, 49, 100];
+    let levels = [45i64, 46, 47, 48, 49, 60, 80, 100];
 
     for c in levels {
         // Gold chests at the level each source mints them for this character.
@@ -674,7 +819,7 @@ fn part_a() {
         ] {
             let mut t = Tally::default();
             for n in 0..400u64 {
-                if let Some(r) = chests::roll_loot(&ctx.sd.chest_loots, 3, lvl, &format!("a398:{c}:{n}"), &HashSet::new()) {
+                if let Some(r) = chests::roll_loot_for_character(&ctx.sd.chest_loots, 3, lvl, &format!("a398:{c}:{n}"), &HashSet::new(), c as u64) {
                     add_reward(&ctx, &mut t, &p, &r);
                 }
             }
@@ -720,3 +865,4 @@ fn part_a() {
         println!("EVENT REWARDS c={c}: sell/milestone={:.0} soul gems {soul:?}", evr.sell as f64 / evr.n.max(1) as f64);
     }
 }
+
