@@ -128,6 +128,13 @@ fn enemy_levels(d: &DungeonGeneratedData) -> Vec<(String, i64, u64)> {
 /// #398, through that commit's API (the job dungeon then took no loot shift; the
 /// event run was `generate_for_event_dungeon_with_seed`; the store chest was rolled
 /// at the raw level).
+///
+/// The #398 level curve ([`blades_lib::features::level_curve`]) then moved, on
+/// purpose, the sources it reshapes below 49: the Abyss floor's bonus material,
+/// story quests, event dungeons, jobs and treasury chests were re-pinned on its
+/// branch (the curve's own tests say what moved and what did not). Event rewards
+/// (already level-shaped by #333/#362, so the curve leaves them), daily rewards,
+/// the Abyss rewards and the store chests keep their fork/main 6933e04c digests.
 #[test]
 fn levels_below_49_are_unchanged() {
     let ctx = Ctx::load();
@@ -244,12 +251,12 @@ fn levels_below_49_are_unchanged() {
         ("events", 0x7445_3735_abb6_35b1),
         ("daily", 0x40d7_bed5_0a28_cc9a),
         ("abyss_rewards", 0xcbb0_1935_28c0_3bba),
-        ("abyss_floor", 0x57ca_1f7e_2bfe_f747),
-        ("quests", 0x1e88_fcc6_608a_b8c1),
-        ("event_dungeons", 0x7b34_bfa1_3352_e75a),
-        ("jobs", 0xaaa8_1f0b_d8d0_e39d),
+        ("abyss_floor", 0x0fc9_7a95_0aca_9d42),
+        ("quests", 0x2973_dd90_2ba1_5c45),
+        ("event_dungeons", 0x92ab_99b1_f059_9a3b),
+        ("jobs", 0x63de_efea_03d7_59bc),
         ("store", 0xb3b8_adde_182b_a5ca),
-        ("treasury", 0xfe7b_85af_c723_b9e0),
+        ("treasury", 0xdaed_4004_9099_d7dd),
     ];
     assert_eq!(got, pinned.to_vec(), "a source moved for a character below level 49");
 }

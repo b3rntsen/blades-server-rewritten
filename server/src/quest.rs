@@ -2360,6 +2360,33 @@ fn resolve_completion_reward(
     RewardGrant::default()
 }
 
+/// A story quest's fixed reward for a character of `level` (#398): below 49 the
+/// level curve ([`blades_lib::features::level_curve`]) moves its weapons, armour
+/// and shields to a tier of the level's window and replaces its faded crafting
+/// materials from retail's dungeon materials at that level. A town job pays gold
+/// or gems only and is left alone; so is every level from 49. Deterministic in the
+/// quest and the character, so a retried `/complete` pays the same.
+pub(crate) fn story_reward_at_level(
+    mut reward: RewardGrant,
+    gld_quest_id: Uuid,
+    character_id: Uuid,
+    level: i64,
+) -> RewardGrant {
+    if gld_quest_id == jobs_gen::JOB_SENTINEL_GLD || !blades_lib::features::level_curve::applies(level) {
+        return reward;
+    }
+    let (q, c) = (gld_quest_id.as_u128(), character_id.as_u128());
+    let seed = (q as u64) ^ ((q >> 64) as u64).rotate_left(21) ^ (c as u64).rotate_left(42) ^ ((c >> 64) as u64);
+    blades_lib::features::level_curve::reshape_grant(
+        &mut reward,
+        level,
+        blades_lib::util::dungeon::material_catalogue(level),
+        seed,
+        &|_| false,
+    );
+    reward
+}
+
 /// Add `extra` into `into`. Used for the last event milestone, which retail paid as
 /// the tier and the `finalReward` in a single `/complete` body.
 fn merge_reward(into: &mut RewardGrant, extra: &RewardGrant) {
@@ -2627,7 +2654,12 @@ pub(crate) async fn complete_quest_in_tx(
             .as_u64()
             .unwrap_or(0);
         (
-            resolve_completion_reward(static_data, quest_id, &quest_entry.info.0),
+            story_reward_at_level(
+                resolve_completion_reward(static_data, quest_id, &quest_entry.info.0),
+                quest_entry.info.0.gld_quest_id,
+                character_id,
+                i64::from(entry.character.0.level),
+            ),
             current_count + 1,
         )
     };

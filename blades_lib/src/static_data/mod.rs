@@ -1315,11 +1315,49 @@ impl EventQuestTemplate {
             .band_for_level(level)
             .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone());
         let slot = self.slot_items(false);
-        for tier in &mut out {
+        for (index, tier) in out.iter_mut().enumerate() {
             crate::features::event_materials::scale_to_level(tier, level, &slot);
             crate::features::loot_level::cap_event_soul_gems(&mut tier.stackable_items, real_level);
+            self.apply_level_curve(tier, level, &slot, index as u64);
         }
         out
+    }
+
+    /// The #398 level curve on one of this template's rewards for a character of
+    /// `level` 1-48 ([`crate::features::level_curve`]). An event reward is already
+    /// level-shaped by retail's own rules: its band (#333) and its ladder materials
+    /// (metals, gems, soul gems, potions), which step with the level (#362). Both
+    /// are left as they are, and so are its town materials (Lumber, Limestone):
+    /// retail paid them in event rewards at every level, 100 included (Lumber 410
+    /// at 26, 372 at 86 in the #324 captures), so fading them here would make a
+    /// level-48 reward worth more than the level-100 one every 49+ character gets
+    /// (#534). Any other crafting material that has faded (none in today's data)
+    /// is replaced from retail's dungeon materials at the level
+    /// ([`crate::util::dungeon::material_catalogue`]); a weapon, armour piece or
+    /// shield moves to the level's window. Deterministic in the template, the
+    /// reward and the level, so a minted instance and a re-mint agree.
+    fn apply_level_curve(
+        &self,
+        reward: &mut crate::economy::RewardGrant,
+        level: i64,
+        slot: &std::collections::HashSet<Uuid>,
+        index: u64,
+    ) {
+        if !crate::features::level_curve::applies(level) {
+            return;
+        }
+        let id = self.gld_quest_id.as_u128();
+        let seed = (id as u64) ^ ((id >> 64) as u64).rotate_left(29) ^ index.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (level as u64).rotate_left(47);
+        crate::features::level_curve::reshape_grant(
+            reward,
+            level,
+            crate::util::dungeon::material_catalogue(level),
+            seed,
+            &|item| {
+                crate::features::event_materials::ladder_for(item, slot).is_some()
+                    || crate::util::dungeon::TOWN_MATERIALS.contains(&item.as_u128())
+            },
+        );
     }
 
     /// The `finalReward` an instance minted for a character of `level` carries, its
@@ -1332,8 +1370,10 @@ impl EventQuestTemplate {
             Some(b) => b.final_reward.clone(),
             None => self.final_reward.clone(),
         }?;
-        crate::features::event_materials::scale_to_level(&mut out, level, &self.slot_items(true));
+        let slot = self.slot_items(true);
+        crate::features::event_materials::scale_to_level(&mut out, level, &slot);
         crate::features::loot_level::cap_event_soul_gems(&mut out.stackable_items, real_level);
+        self.apply_level_curve(&mut out, level, &slot, 0x0F17A1);
         Some(out)
     }
 

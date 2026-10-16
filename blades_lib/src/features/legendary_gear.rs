@@ -215,6 +215,73 @@ pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Optio
     })
 }
 
+/// The (required level, APK material tier, kind) of a non-jewellery loot-pool
+/// template: what the level curve (#398, [`super::level_curve`]) can move to
+/// another tier. `None` for a ring, a necklace or a template outside the pool.
+pub(crate) fn gear_tier_of(template: &Uuid) -> Option<(u64, u64)> {
+    pool()
+        .table
+        .templates
+        .get(template)
+        .filter(|t| !is_jewelry(&t.category))
+        .map(|t| (t.required_level, t.tier))
+}
+
+/// Every (required level, APK material tier) the loot pool has weapons, armour
+/// and shields at, ascending: Iron and Steel at 1, then one tier per unlock
+/// level (8, 13, 18, 23, 28, 33, 39, 45).
+pub(crate) fn gear_tiers() -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = pool()
+        .by_kind
+        .keys()
+        .filter(|(_, _, kind)| !is_jewelry(kind))
+        .map(|(r, t, _)| (*r, *t))
+        .collect();
+    out.dedup();
+    out
+}
+
+/// `shell` moved to material tier `(required_level, tier)` by the level curve
+/// (#398): the same kind of equipment (a sword stays a weapon, a helmet an
+/// armour piece of the same slot), a template of that kind at the new tier
+/// drawn uniformly, durability at the shell's tempering, and the shell's
+/// enchantment count and enchant tier re-rolled on the new template. `None`
+/// (keep the shell) for jewellery, a template outside the pool, or a tier the
+/// kind or enchantment cannot be made at.
+pub(crate) fn retier(shell: &Item, required_level: u64, tier: u64, seed: u64) -> Option<Item> {
+    let pool = pool();
+    let base = pool.table.templates.get(&shell.item_template_id)?;
+    if is_jewelry(&base.category) {
+        return None;
+    }
+    let candidates = pool
+        .by_kind
+        .get(&(required_level, tier, base.category.clone()))?;
+    let template_id = candidates[pick(seed ^ 0x3980_C0DE_5EED_0398, candidates.len())];
+    let template = &pool.table.templates[&template_id];
+    let durability = match &template.durability {
+        Some(levels) => *levels.get(shell.tempering_level.min(10) as usize)?,
+        None => shell.durability,
+    };
+    let enchanting = roll_enchanting(
+        template,
+        shell.properties.enchanting.len(),
+        shell.properties.enchanting.first().map_or(0, |e| e.tier),
+        seed ^ 0x0398_E7C4_A47D_0398,
+    )?;
+    Some(Item {
+        item_template_id: template_id,
+        grade: shell.grade,
+        tempering_level: shell.tempering_level,
+        durability,
+        properties: ItemPropertiesAll {
+            enchanting,
+            grading: shell.properties.grading.clone(),
+        },
+        arcane_tier: shell.arcane_tier,
+    })
+}
+
 /// The shell's GRADING tiers with the properties drawn afresh, uniformly and
 /// without repeats, from the ring or necklace grade list (#378). Anything else,
 /// or a table that did not load, keeps the shell's GRADING.

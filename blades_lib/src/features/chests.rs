@@ -364,6 +364,57 @@ pub fn roll_loot(
     chest_key: &str,
     owned: &HashSet<Uuid>,
 ) -> Option<RewardGrant> {
+    let mut grant = roll_retail_loot(tables, tier, level, chest_key, owned)?;
+    apply_level_curve(tables, tier, level, stable_nonce(chest_key), &mut grant);
+    Some(grant)
+}
+
+/// The #398 level curve on a chest of `level` 1-48, every tier
+/// ([`crate::features::level_curve`]): its weapons, armour and shields move to a
+/// tier of the level's window (artifacts and jewellery stay), and its faded
+/// crafting materials are replaced from the materials retail's chests of this
+/// tier paid at this level ([`neighbourhood`]; the Gold table's for the Elder and
+/// Legendary chests, which have no treasury table of their own below 54). Gold,
+/// soul gems, enchanting ingredients and every quantity stay.
+fn apply_level_curve(tables: &ChestLootTables, tier: i64, level: u64, nonce: u64, grant: &mut RewardGrant) {
+    use crate::features::level_curve;
+    let level = i64::try_from(level).unwrap_or(i64::MAX);
+    if !level_curve::applies(level) {
+        return;
+    }
+    let source = if (1..=3).contains(&tier) { tier as u64 } else { 3 };
+    let pool: Vec<level_curve::PoolStack> = tables
+        .pool_for(source)
+        .map(|(pool, _)| neighbourhood(pool, level.max(1) as u64))
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|s| s.reward.stackable_items.iter())
+        .filter(|(id, q)| **q > 0 && level_curve::is_curve_material(id))
+        .map(|(id, q)| (*id, *q, 1.0))
+        .collect();
+    let mut pool = pool;
+    pool.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    if level_curve::replacement_kinds(&pool, level) < level_curve::CHEST_POOL_MIN_KINDS {
+        // Thin: retail's dungeon materials at this level too, weighing as much
+        // in all as the chest's own.
+        let own: f64 = pool.iter().map(|p| p.2).sum::<f64>().max(1.0);
+        let catalogue = crate::util::dungeon::material_catalogue(level);
+        let theirs: f64 = catalogue.iter().map(|p| p.2).sum::<f64>().max(1.0);
+        pool.extend(catalogue.iter().map(|(id, q, n)| (*id, *q, n * own / theirs)));
+    }
+    let seed = crate::features::store_bundles::mix(nonce ^ 0x0398_C4E5_70C4_0398);
+    level_curve::reshape_grant(grant, level, &pool, seed, &|_| false);
+}
+
+/// [`roll_loot`] before the #398 level curve: what retail's tables pay. Public for
+/// the economy audit's before/after tables; the handlers call [`roll_loot`].
+pub fn roll_retail_loot(
+    tables: &ChestLootTables,
+    tier: i64,
+    level: u64,
+    chest_key: &str,
+    owned: &HashSet<Uuid>,
+) -> Option<RewardGrant> {
     if tier == TUTORIAL_FIRST_CHEST {
         let pool = tutorial_chest_loot();
         if !pool.is_empty() {
@@ -1013,9 +1064,11 @@ mod tests {
                     }
                     hit / n
                 };
+                // The retail composition; below 49 the #398 curve then reshapes it
+                // (`level_curve_reshapes_chest_materials`).
                 let ours: Vec<RewardGrant> = (0..rolls)
                     .map(|i| {
-                        roll_loot(&t, tier as i64, level, &format!("rate:{i}:{tier}:{level}"), &HashSet::new())
+                        roll_retail_loot(&t, tier as i64, level, &format!("rate:{i}:{tier}:{level}"), &HashSet::new())
                             .unwrap()
                     })
                     .collect();
@@ -1096,8 +1149,9 @@ mod tests {
         let t = committed();
         let quicksilver = Uuid::from_u128(0xe80bee76_f92c_4005_9eff_20d1e8c64d24);
         let rolls = 3000;
+        // The retail composition (below 49 the #398 curve reshapes it afterwards).
         let roll = |level: u64, i: usize| {
-            roll_loot(&t, 1, level, &format!("381-metal:{i}:{level}"), &HashSet::new()).unwrap()
+            roll_retail_loot(&t, 1, level, &format!("381-metal:{i}:{level}"), &HashSet::new()).unwrap()
         };
         // The unwidened composition, as live before this change: the control.
         let before = |level: u64, i: usize| {
@@ -1154,7 +1208,7 @@ mod tests {
             for level in [46u64, 100] {
                 for i in 0..200 {
                     let key = format!("381-metal:{i}:{level}");
-                    let now = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                    let now = roll_retail_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
                     let was = compose_loot(&t.tiers[&(tier as u64)], level, stable_nonce(&key)).unwrap();
                     assert_eq!(now.stackable_items, was.stackable_items, "tier {tier} L{level} chest {i} moved");
                 }
@@ -1334,6 +1388,54 @@ mod tests {
         }
     }
 
+    /// Report #398: the level curve on every chest tier at 1-48. Against the
+    /// retail roll of the same chest: the same gold, soul gems, enchanting
+    /// ingredients and item count; no crafting material that has faded out; every
+    /// weapon, armour piece and shield at a tier of the level's window. From 49
+    /// the two are the same chest.
+    #[test]
+    fn level_curve_reshapes_chest_materials() {
+        use crate::features::level_curve::{gear_tier_shares, is_curve_material, material_weight};
+        let t = committed();
+        let (mut stacks, mut faded) = (0usize, 0usize);
+        for tier in [-1i64, 1, 2, 3, 4, 5] {
+            for level in (1..=48u64).step_by(3).chain([48, 49, 60, 100]) {
+                let window: HashSet<u64> = gear_tier_shares(level as i64).into_iter().map(|(r, _)| r).collect();
+                for i in 0..40 {
+                    let key = format!("398:{tier}:{level}:{i}");
+                    let now = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                    let was = roll_retail_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
+                    if level >= 49 {
+                        assert_eq!(serde_json::to_value(&now).unwrap(), serde_json::to_value(&was).unwrap());
+                        continue;
+                    }
+                    assert_eq!(now.currencies, was.currencies, "tier {tier} L{level}: gold moved");
+                    let untouched = |r: &RewardGrant| {
+                        let mut v: Vec<(Uuid, u64)> =
+                            r.stackable_items.iter().filter(|(id, _)| !is_curve_material(id)).map(|(k, q)| (*k, *q)).collect();
+                        v.sort();
+                        v
+                    };
+                    assert_eq!(untouched(&now), untouched(&was), "tier {tier} L{level}: soul gems or enchanting moved");
+                    assert_eq!(now.items.len(), was.items.len());
+                    for id in now.stackable_items.keys().filter(|id| is_curve_material(id)) {
+                        stacks += 1;
+                        faded += usize::from(material_weight(id, level as i64) == 0.0);
+                    }
+                    for item in &now.items {
+                        if let Some((r, _)) = crate::features::legendary_gear::gear_tier_of(&item.item.item_template_id) {
+                            if !crate::features::store_bundles::is_artifact(&item.item.item_template_id) {
+                                assert!(window.contains(&r), "tier {tier} L{level}: tier {r} outside {window:?}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(stacks > 1_000, "{stacks}");
+        assert!(faded * 100 <= stacks, "{faded} faded-out stacks of {stacks}");
+    }
+
     /// The economy audit (#392): treasury chest gear repeated — a level-1 Wooden
     /// chest paid the same Hide Gauntlets every time, 1,088 Wooden items over ten
     /// levels were 26 instances. Now generated around the retail piece; every
@@ -1347,6 +1449,7 @@ mod tests {
                 let mut seen: HashMap<String, usize> = HashMap::new();
                 let mut items = 0usize;
                 let mut tiers_paid = HashSet::new();
+                let mut gear_tiers: HashSet<u64> = HashSet::new();
                 for i in 0..300 {
                     let key = format!("gear:{i}:{tier}:{level}");
                     let reward = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
@@ -1357,6 +1460,9 @@ mod tests {
                         items += 1;
                         assert_eq!(rule_broken(item), None, "tier {tier} L{level}: {item:?}");
                         tiers_paid.insert(required_level(&item.item_template_id));
+                        if !matches!(crate::features::legendary_gear::kind_of(&item.item_template_id), Some("ring" | "necklace")) {
+                            gear_tiers.extend(required_level(&item.item_template_id));
+                        }
                         *seen.entry(serde_json::to_string(item).unwrap()).or_insert(0) += 1;
                     }
                 }
@@ -1369,6 +1475,16 @@ mod tests {
                     top * 4 <= items,
                     "tier {tier} L{level}: one piece is {top} of {items} items"
                 );
+                // Below 49 the #398 level curve moves them to its window.
+                // Rings and necklaces are not moved.
+                if crate::features::level_curve::applies(level as i64) {
+                    let window: HashSet<u64> = crate::features::level_curve::gear_tier_shares(level as i64)
+                        .into_iter()
+                        .map(|(r, _)| r)
+                        .collect();
+                    assert!(gear_tiers.is_subset(&window), "tier {tier} L{level}: {gear_tiers:?} vs {window:?}");
+                    continue;
+                }
                 // The generator keeps the retail piece's material tier: only tiers
                 // the composed retail pieces could have are paid.
                 let (pool, _) = t.pool_for(tier as u64).unwrap();

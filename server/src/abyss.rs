@@ -4906,10 +4906,17 @@ mod tests {
                             let is_enchanting = ENCHANTING_INGREDIENTS.contains(&item.as_u128());
                             t.enchanting += usize::from(is_enchanting);
                             t.town += usize::from(TOWN_MATERIALS.contains(&item.as_u128()));
-                            assert!(
-                                abyss_bonus_candidates(i64::from(level), is_enchanting)
+                            // Below 49 the #398 level curve may replace a faded stack
+                            // with one of retail's dungeon materials at the level.
+                            let curved = blades_lib::features::level_curve::applies(i64::from(level))
+                                && blades_lib::util::dungeon::material_catalogue(i64::from(level))
                                     .iter()
-                                    .any(|c| c.0 == item && c.1 == qty),
+                                    .any(|c| c.0 == item && c.1 == qty);
+                            assert!(
+                                curved
+                                    || abyss_bonus_candidates(i64::from(level), is_enchanting)
+                                        .iter()
+                                        .any(|c| c.0 == item && c.1 == qty),
                                 "L{level}: {} x{qty} is not in the level's retail band",
                                 name(&item)
                             );
@@ -5022,6 +5029,14 @@ mod tests {
                 100.0 * t.town as f64 / t.bonus as f64,
                 100.0 * t.town as f64 / t.corpses as f64,
             );
+            // Below 49 the #398 level curve fades the town materials (all tier 1)
+            // instead: gone from 21 on.
+            if blades_lib::features::level_curve::applies(i64::from(level)) {
+                if blades_lib::features::level_curve::FADE_TOWN_MATERIALS && level >= 21 {
+                    assert_eq!(t.town, 0, "L{level}: a faded town material");
+                }
+                continue;
+            }
             // Three standard errors of the sampled share.
             let expected = town_share(&abyss_bonus_weight);
             let n = (t.bonus - t.enchanting) as f64;
@@ -5367,6 +5382,60 @@ mod tests {
         assert_eq!(run_initial_player_level(22, Some(43)), 22, "too far above");
         assert_eq!(run_initial_player_level(84, Some(1)), 84, "a level-100 EPL of 1 is a lie");
         assert_eq!(run_initial_player_level(84, Some(0)), 84);
+    }
+
+    /// Report #398, the level curve: the three mandatory Abyss runs. Level 7 from
+    /// floor 1 and level 45 from floor 149 are the levels the curve reaches (only
+    /// the #383 bonus material on Abyss floors; retail's Abyss corpse loot, the
+    /// rungs and `/end` are not curve sources); level 100 from floor 149 is past it
+    /// and is pinned byte for byte by `report_398_curve::levels_from_49_are_unchanged`.
+    /// Each run pays its rungs and its `/end` package, every floor generates, and
+    /// below 49 no corpse carries a material the curve has faded out.
+    #[test]
+    fn the_mandatory_runs_under_the_398_level_curve() {
+        use blades_lib::features::level_curve::{is_curve_material, material_weight};
+        let gd = game_data();
+        let sd = real_static_abyss();
+        let id = Uuid::parse_str(HAUDRAUF).unwrap();
+        for (level, start, kills) in [(7u32, 1u32, MIXED_KILLS), (45, 149, DEEP_FLOOR_KILLS), (100, 149, DEEP_FLOOR_KILLS)] {
+            let ipl = initial_player_level(&real_job_pools(), level);
+            let floors = served_run(ipl, start, 30, kills);
+            let (mut stacks, mut faded, mut ends) = (0usize, 0usize, 0usize);
+            for nonce in 0..8u64 {
+                let seed = generate_run_seed(id, nonce);
+                let (paid, end) = drive(level, ipl, seed, &floors);
+                assert!(!paid.is_empty(), "level {level} from {start}: no rung paid");
+                assert_eq!(end.stackable_items.len(), 1, "level {level} from {start}: /end pays its package");
+                ends += 1;
+                for slice in build_run_slices(&sd, seed, start, ipl, &ALL_QUESTS).iter().take(30) {
+                    let data = floor_generated_data(&gd, slice, seed, level)
+                        .unwrap_or_else(|| panic!("level {level}: floor {} did not generate", slice.floor_index));
+                    // The bonus stack itself (it shares its key with retail's Abyss
+                    // corpus loot, which is not a curve source), per corpse position.
+                    for (group, spawners) in &data.enemy_generated_data {
+                        for (spawner, enemies) in spawners.iter().enumerate() {
+                            for enemy in 0..enemies.len() {
+                                let bonus = blades_lib::util::dungeon::abyss_bonus_material(
+                                    &slice.dungeon_settings_id,
+                                    seed as u64,
+                                    group,
+                                    spawner,
+                                    enemy,
+                                    i64::from(level),
+                                );
+                                if let Some((item, _)) = bonus.filter(|(i, _)| is_curve_material(i)) {
+                                    stacks += 1;
+                                    faded += usize::from(material_weight(&item, i64::from(level)) == 0.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            println!("level {level} from floor {start}: {ends} runs, {stacks} bonus material stacks, {faded} faded");
+            assert!(stacks > 100, "level {level}: only {stacks} material stacks");
+            assert_eq!(faded, 0, "level {level} from {start}: a faded-out material on a corpse");
+        }
     }
 }
 

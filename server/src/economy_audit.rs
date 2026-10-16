@@ -166,14 +166,6 @@ const KNOWN_FAILURES: &[Known] = &[
                  the level CAN sell, not how often; widening it needs a model of the neighbouring levels \
                  (follow-up to #397, which fixed the level-9 Alchemist's rare potions).",
     },
-    Known {
-        subject: "chest:treasury:wooden",
-        check: Check::Validity,
-        contains: "requires level",
-        reason: "The Wooden table is thin (44 openings with an item), so a level-10 chest's neighbourhood \
-                 reaches openings at 20+ and pays Elven gear (+13; retail's own Wooden max is +10). Pinning \
-                 items to the level would NARROW what players get today: open question in the report.",
-    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1898,3 +1890,5 @@ fn economy_audit_flags_unreachable_merchant_potions() {
 
 #[cfg(test)]
 mod report_398;
+#[cfg(test)]
+mod report_398_curve;
