@@ -74,6 +74,7 @@ mod economy_audit;
 mod social;
 mod static_loader;
 mod status;
+mod testchar;
 mod town;
 mod town_construction;
 mod util;
@@ -762,6 +763,9 @@ async fn main() -> Result<()> {
                     .service(admin::list_alts)
                     .service(admin::switch_alt)
                     .service(admin::new_alt)
+                    .service(testchar::mark_test_character)
+                    .service(testchar::set_test_character_level)
+                    .service(testchar::list_test_characters)
                     .service(admin::set_ai_mimic)
                     .service(admin::list_ai_mimics)
                     .service(admin::get_arena_ranking_config)
