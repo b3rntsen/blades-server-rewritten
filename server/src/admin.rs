@@ -1254,6 +1254,17 @@ pub async fn import_character(
                         .await
                         .optional()?
                         .flatten();
+                    // An import that does not say which alt it is would land under
+                    // the live row's stamp. When that is an operator test alt, the
+                    // imported (real) character would inherit the test marker: off
+                    // every board, and open to the level-setter. Refused instead.
+                    if incoming_alt.is_none() {
+                        if let Some(live) = live_alt {
+                            if crate::testchar::any_test_alt(&mut conn, &[live]).await? {
+                                return Err(crate::testchar::import_into_test_alt_refusal());
+                            }
+                        }
+                    }
                     another_alt = import_is_another_alt(live_alt, incoming_alt);
                     let _ = snapshot_character_parking(
                         &mut conn,
@@ -2003,7 +2014,10 @@ fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
     // "(AI)" is already outside the whitelist; checked by name anyway, because
     // the reservation is a policy of ours that must not hinge on the game's
     // character set.
-    if !is_game_name(&name) || is_reserved_ai_name(&name) {
+    if !is_game_name(&name)
+        || is_reserved_ai_name(&name)
+        || crate::testchar::is_test_name(&name)
+    {
         return Err(());
     }
     Ok(name)
@@ -2042,7 +2056,9 @@ async fn rename_current_character(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    if is_reserved_ai_name(&previous_name) {
+    // An operator test character keeps its " (Test)" label: renaming would drop
+    // it, and the label is how players tell it is not a real one.
+    if is_reserved_ai_name(&previous_name) || crate::testchar::is_test_name(&previous_name) {
         return Err(BladeApiError::new(
             StatusCode::CONFLICT,
             IMPORT_SERVICE_ID,
@@ -4297,6 +4313,20 @@ mod tests {
             assert_eq!(err.status_code(), StatusCode::CONFLICT);
         }
 
+        /// A test character keeps its label: renaming would drop " (Test)".
+        #[actix_web::test]
+        async fn a_test_character_cannot_be_renamed_away_from_its_label() {
+            let mut conn = db!();
+            let (character_id, user_id) =
+                seed_character(&mut conn, serde_json::json!({"name":"HauDrauf (Test)"})).await;
+            let err = rename_current_character(&mut conn, character_id, user_id, "HauDrauf".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::CONFLICT);
+            assert_eq!(stored(&mut conn, character_id).await.character["name"], "HauDrauf (Test)");
+            assert!(normalise_current_character_name("Faker (Test)").is_err(), "nor can a player take it");
+        }
+
         #[actix_web::test]
         async fn success_updates_only_name_and_appends_reversible_audit() {
             let mut conn = db!();
@@ -5003,6 +5033,7 @@ mod tests {
                     .await
                     .unwrap();
             }
+            crate::testchar::apply_migration_for_tests(&mut conn).await;
             Some(conn)
         }
 
@@ -6701,6 +6732,98 @@ mod tests {
                         BoardRow { name: "Bryn".into(), guild_name: Some("Guild B".into()), score: 20, wins: 1 },
                     ]
                 );
+            }
+
+            /// An operator test alt (`crate::testchar`) is never on the
+            /// leaderboard — switched out (newest saved version) or live.
+            #[tokio::test]
+            async fn a_test_alt_is_not_on_the_leaderboard() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn (Test)","pvpTrophies":900}"#, alt_a)
+                    .await;
+                sql(&mut c, &format!(
+                    "UPDATE characters SET character = '{{\"name\":\"Aran\",\"pvpTrophies\":60}}' \
+                       WHERE id = '{cid}'; \
+                     INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                         VALUES ('{}', 9, 'test', 1000, 4000000000, 'active');",
+                    Uuid::new_v4()
+                ))
+                .await;
+                result(&mut c, cid, Some(alt_b), 2_000, 30).await;
+                async fn board(c: &mut AsyncPgConnection) -> Vec<String> {
+                    diesel::sql_query(format!(
+                        "{} SELECT name, guild_name, score, wins FROM ranked ORDER BY rank",
+                        crate::arena::leaderboards::RANKED_CTE
+                    ))
+                    .get_results::<BoardRow>(c)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.name)
+                    .collect()
+                }
+                // The control: unmarked, the parked alt outranks the live one.
+                assert_eq!(board(&mut c).await, ["Bryn (Test)", "Aran"]);
+
+                sql(&mut c, &format!(
+                    "INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ('{alt_b}', '{uid}', 't')"
+                ))
+                .await;
+                assert_eq!(board(&mut c).await, ["Aran"], "the saved test alt is off the board");
+
+                // Live: switch the test alt in.
+                sql(&mut c, &format!(
+                    "UPDATE characters SET source_alt_uuid = '{alt_b}', \
+                         character = '{{\"name\":\"Bryn (Test)\",\"pvpTrophies\":900}}' WHERE id = '{cid}'"
+                ))
+                .await;
+                assert!(board(&mut c).await.is_empty(), "the live test alt is off the board");
+            }
+
+            /// …and has no season standing: no placing, no award, no guild share.
+            #[tokio::test]
+            async fn a_test_alt_has_no_season_standing_award_or_guild_share() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                guilds(&mut c).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1)"
+                ))
+                .await;
+                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn (Test)","level":90}"#, alt_a).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 2)"
+                ))
+                .await;
+                result(&mut c, cid, Some(alt_a), 2_000, 30).await;
+                result(&mut c, cid, Some(alt_b), 2_001, 300).await;
+                let s = season(Uuid::new_v4(), "active");
+                let alts = |rows: &[season_store::StandingRow]| {
+                    rows.iter().map(|r| r.source_alt_uuid).collect::<Vec<_>>()
+                };
+                let before = season_store::freeze_standings(&mut c, &s).await.unwrap();
+                assert_eq!(alts(&before), [Some(alt_b), Some(alt_a)], "the control");
+
+                sql(&mut c, &format!(
+                    "INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ('{alt_b}', '{uid}', 't')"
+                ))
+                .await;
+                let standings = season_store::freeze_standings(&mut c, &s).await.unwrap();
+                assert_eq!(alts(&standings), [Some(alt_a)]);
+                assert_eq!(standings[0].rank, 1, "the real alt moves up into first");
+                let guilds = season_store::guild_standings_from(s.id, &standings);
+                assert_eq!(
+                    guilds.iter().map(|g| g.guild_id.as_str()).collect::<Vec<_>>(),
+                    ["ga"],
+                    "the test alt's guild gets no share"
+                );
+                let awards = season_store::awards_from(s.id, &standings, &guilds);
+                assert!(awards.iter().all(|a| a.source_alt_uuid == Some(alt_a)));
             }
 
             /// The migration's backfill: the alt that played a match is the label

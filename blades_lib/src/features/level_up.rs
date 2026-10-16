@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::economy::{GEMS, GOLD, RewardGrant};
-use crate::features::character_ops::{Attribute, apply_levelup};
+use crate::features::character_ops::{Attribute, MAX_ATTRIBUTE_POINT_LEVEL, apply_levelup};
 use crate::user_data::CompleteCharacter;
 
 #[derive(Deserialize, Clone, Debug)]
@@ -196,6 +196,105 @@ pub fn apply_level_up(
         experience_spent: spent,
         credited_currencies: credited,
         reward,
+    })
+}
+
+/// Why [`set_level`] refused.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SetLevelRefusal {
+    /// Outside `1..=max_level()`. Also what an empty table answers: with no
+    /// ladder there is no level that can be set consistently.
+    OutOfRange { level: u16, max: u16 },
+}
+
+/// What [`set_level`] did, for the caller's audit record.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct LevelSet {
+    pub from_level: u16,
+    pub to_level: u16,
+    pub from_experience: u64,
+    pub stamina_attribute_points: u32,
+    pub magicka_attribute_points: u32,
+    /// Learned and equipped abilities were cleared because the new level holds
+    /// fewer skill points than were available at the old one.
+    pub abilities_reset: bool,
+}
+
+impl LevelUpData {
+    /// Skill points earned on the way to `level`: the sum of every level's
+    /// `skill_points` from 2 up to it (level 1 is where a character starts, not a
+    /// level it earns).
+    pub fn skill_points_through(&self, level: u16) -> u64 {
+        (2..=u32::from(level))
+            .filter_map(|l| self.get_reward(l))
+            .map(|r| u64::from(r.skill_points))
+            .sum()
+    }
+}
+
+/// Put a character at `target` as if it had earned every level up to it — for
+/// operator TEST characters only (the server's `testchar` module). Never a
+/// player path: it bypasses the experience gate on purpose.
+///
+/// "As if earned" means the state [`apply_level_up`] leaves behind, level by
+/// level, without the rewards:
+///
+/// - `level` = `target`, `experience` = 0: the start of the level, which is what
+///   a level-up leaves when the banked experience exactly paid for it.
+/// - Attribute points total `min(target, 50) - 1` — the retail identity
+///   [`apply_levelup`] reproduces — split in the character's current
+///   stamina:magicka proportion (all stamina when it had none).
+/// - Abilities are kept when the level holds at least as many skill points as
+///   before. When it holds fewer (a lower level), the learned and equipped
+///   abilities are cleared exactly as a respec clears them, so the client never
+///   sees more points spent than the level has; the player re-learns them.
+/// - `globalShopOffers` is emptied: a level-up offer belongs to a level-up, and
+///   there was none.
+///
+/// NOT paid: the gold, gems and items each level credits. A test character's
+/// purse should not grow by setting its level, and the loot being tuned on it
+/// must not be confused with level-up payouts.
+pub fn set_level(
+    ch: &mut CompleteCharacter,
+    target: u16,
+    data: &LevelUpData,
+) -> Result<LevelSet, SetLevelRefusal> {
+    let max = data.max_level();
+    if target == 0 || target > max {
+        return Err(SetLevelRefusal::OutOfRange { level: target, max });
+    }
+    let from_level = ch.level;
+    let from_experience = ch.experience;
+
+    let total = u32::from(target.min(MAX_ATTRIBUTE_POINT_LEVEL)).saturating_sub(1);
+    let (stamina, magicka) = (ch.stamina_attribute_points, ch.magicka_attribute_points);
+    let current = u64::from(stamina) + u64::from(magicka);
+    let magicka = if current == 0 {
+        0
+    } else {
+        (u64::from(total) * u64::from(magicka) / current) as u32
+    };
+    ch.magicka_attribute_points = magicka;
+    ch.stamina_attribute_points = total - magicka;
+
+    let abilities_reset = data.skill_points_through(target) < data.skill_points_through(from_level);
+    if abilities_reset {
+        ch.abilities = serde_json::Value::Null;
+        ch.equipped_abilities = serde_json::Value::Null;
+    }
+
+    ch.level = target;
+    ch.experience = 0;
+    ch.global_shop_offers = serde_json::json!([]);
+    ch.version += 1;
+
+    Ok(LevelSet {
+        from_level,
+        to_level: target,
+        from_experience,
+        stamina_attribute_points: ch.stamina_attribute_points,
+        magicka_attribute_points: ch.magicka_attribute_points,
+        abilities_reset,
     })
 }
 
@@ -434,5 +533,88 @@ mod tests {
             apply_level_up(&mut ch, Attribute::Stamina, &none).expect("still ungated");
         }
         assert_eq!(ch.level, 58);
+    }
+    // ── set_level (operator test characters) ────────────────────────────────
+
+    /// THE CONTROL: levelling one step at a time through `apply_level_up` and
+    /// setting the level directly must land on the same attribute total, level and
+    /// (for a just-paid level) zero experience. If they disagree, `set_level` is
+    /// inventing a character the real path could never produce.
+    #[test]
+    fn set_level_lands_where_levelling_up_would() {
+        let data = table();
+        for target in [2u16, 10, 48, 50, 51, 77, 100] {
+            let mut walked = at(1, 0);
+            while walked.level < target {
+                walked.experience = data.cost_of_next_level(walked.level).unwrap();
+                apply_level_up(&mut walked, Attribute::Stamina, &data).unwrap();
+            }
+            let mut set = at(1, 0);
+            set_level(&mut set, target, &data).unwrap();
+            assert_eq!(set.level, walked.level, "level at {target}");
+            assert_eq!(set.experience, walked.experience, "experience at {target}");
+            assert_eq!(
+                set.stamina_attribute_points + set.magicka_attribute_points,
+                walked.stamina_attribute_points + walked.magicka_attribute_points,
+                "attribute total at {target}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_level_keeps_the_attribute_split_and_abilities_when_raising() {
+        let data = table();
+        let mut ch = at(48, 1234);
+        ch.stamina_attribute_points = 30;
+        ch.magicka_attribute_points = 17;
+        ch.abilities = serde_json::json!({"a": 1});
+        ch.equipped_abilities = serde_json::json!({"0": "a"});
+        let before_version = ch.version;
+        let done = set_level(&mut ch, 80, &data).unwrap();
+        assert_eq!((ch.level, ch.experience), (80, 0));
+        assert_eq!(ch.stamina_attribute_points + ch.magicka_attribute_points, 49);
+        assert!(ch.magicka_attribute_points >= 17, "the split follows the old proportion");
+        assert!(!done.abilities_reset);
+        assert_eq!(ch.abilities, serde_json::json!({"a": 1}), "abilities survive a raise");
+        assert_eq!(ch.global_shop_offers, serde_json::json!([]));
+        assert!(ch.version > before_version, "the client must see a new version");
+        assert_eq!((done.from_level, done.from_experience), (48, 1234));
+    }
+
+    #[test]
+    fn set_level_clears_abilities_only_when_the_level_holds_fewer_skill_points() {
+        let data = table();
+        let mut ch = at(48, 0);
+        ch.stamina_attribute_points = 47;
+        ch.abilities = serde_json::json!({"a": 3});
+        ch.equipped_abilities = serde_json::json!({"0": "a"});
+        let done = set_level(&mut ch, 20, &data).unwrap();
+        assert!(done.abilities_reset);
+        assert!(ch.abilities.is_null() && ch.equipped_abilities.is_null());
+        assert_eq!(ch.stamina_attribute_points, 19);
+
+        // 60 -> 55: both past the last skill point (level 50), nothing to take back.
+        let mut ch = at(60, 0);
+        ch.abilities = serde_json::json!({"a": 3});
+        assert!(!set_level(&mut ch, 55, &data).unwrap().abilities_reset);
+        assert_eq!(ch.abilities, serde_json::json!({"a": 3}));
+    }
+
+    #[test]
+    fn set_level_refuses_outside_the_ladder_and_changes_nothing() {
+        let data = table();
+        for bad in [0u16, data.max_level() + 1] {
+            let mut ch = at(48, 99);
+            assert_eq!(
+                set_level(&mut ch, bad, &data),
+                Err(SetLevelRefusal::OutOfRange { level: bad, max: data.max_level() })
+            );
+            assert_eq!((ch.level, ch.experience), (48, 99));
+        }
+        let mut ch = at(48, 99);
+        assert!(
+            set_level(&mut ch, 10, &LevelUpData::default()).is_err(),
+            "no table, no consistent level to set"
+        );
     }
 }

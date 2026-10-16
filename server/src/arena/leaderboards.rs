@@ -210,6 +210,10 @@ pub(crate) const RANKED_CTE: &str = "
                  OR c.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
                  OR c.character ->> 'pvpSeasonId' = s.id::text
               )
+              -- An operator test character never ranks (`crate::testchar`).
+              AND NOT EXISTS (
+                    SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = c.source_alt_uuid
+              )
             UNION ALL
             -- A switched-out alt keeps its own wins and its own guild: the
             -- membership parked in its newest version, while that guild exists.
@@ -244,6 +248,9 @@ pub(crate) const RANKED_CTE: &str = "
                         v.character ->> 'pvpSeasonId' IS NULL
                      OR v.character ->> 'pvpSeasonId' = '00000000-0000-0000-0000-000000000000'
                      OR v.character ->> 'pvpSeasonId' = s.id::text
+                  )
+                  AND NOT EXISTS (
+                        SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = v.source_alt_uuid
                   )
                 -- The NEWEST snapshot, not the best: an alt that lost cups after
                 -- its peak ranks on what it holds now. The > 0 filter is applied

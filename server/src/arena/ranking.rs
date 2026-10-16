@@ -762,6 +762,14 @@ struct H2hReplayRow {
 /// row (`source_alt_uuid` NULL) counts for the alt live now, as every other arena
 /// reader treats it; a character with no alt id is keyed by its own id. When the
 /// opponent's row is missing (one-sided audit), the opponent's live alt is used.
+///
+/// A match with an operator TEST alt on either side (`crate::testchar`) is
+/// not a row at all: the test alt gets no rating, and its opponent's rating is not
+/// moved by a fight against a character whose level was set by hand. Only the
+/// alt STAMPED on an audit row decides that, never the live-alt fallback: while
+/// a test alt is live, an old unstamped or one-sided match of the same account
+/// must still count for the real alt that fought it. (Every match recorded since
+/// alts were tracked is stamped at record time, so a test alt's fights are.)
 pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
     WITH sided AS ( \
          SELECT r.id, r.game_session_id, r.recorded_at, r.character_id, r.opponent_character_id, \
@@ -779,7 +787,16 @@ pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
                       LIMIT 1), \
                     (SELECT COALESCE(oc.source_alt_uuid, oc.id) \
                        FROM characters oc WHERE oc.id = r.opponent_character_id), \
-                    r.opponent_character_id) AS opponent_alt_key \
+                    r.opponent_character_id) AS opponent_alt_key, \
+                r.source_alt_uuid AS stamped_alt, \
+                (SELECT o.source_alt_uuid \
+                   FROM arena_match_results o \
+                  WHERE o.game_session_id = r.game_session_id \
+                    AND o.character_id = r.opponent_character_id \
+                    AND o.opponent_character_id = r.character_id \
+                    AND o.is_h2h = true \
+                  ORDER BY o.recorded_at, o.id \
+                  LIMIT 1) AS opponent_stamped_alt \
          FROM arena_match_results r \
          LEFT JOIN characters rc ON rc.id = r.character_id \
          WHERE r.opponent_character_id IS NOT NULL \
@@ -796,7 +813,7 @@ pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
                      THEN r.rounds_won ELSE r.rounds_lost END AS rounds_won, \
                 CASE WHEN r.character_id = LEAST(r.character_id, r.opponent_character_id) \
                      THEN r.rounds_lost ELSE r.rounds_won END AS rounds_lost, \
-                r.recorded_at, r.id, r.game_session_id \
+                r.recorded_at, r.id, r.game_session_id, r.stamped_alt, r.opponent_stamped_alt \
          FROM sided r \
          LEFT JOIN LATERAL ( \
              SELECT id FROM arena_seasons s \
@@ -809,6 +826,9 @@ pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
                 season_id, character_id, alt_key, opponent_character_id, opponent_alt_key, \
                 rounds_won, rounds_lost, recorded_at, id \
          FROM candidates \
+         WHERE NOT EXISTS (SELECT 1 FROM test_characters tc \
+                            WHERE tc.alt_uuid IN (candidates.stamped_alt, \
+                                                  candidates.opponent_stamped_alt)) \
          ORDER BY game_session_id, character_id, opponent_character_id, recorded_at, id \
      )";
 
@@ -823,7 +843,8 @@ pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
 /// leaderboard (`leaderboards::RANKED_CTE`) names it. A rating whose alt is
 /// neither live nor saved any more (deleted) is not listed. The guild is the one
 /// the alt itself is in: the live membership, or the one parked in its newest
-/// version while that guild exists.
+/// version while that guild exists. An operator test alt is never listed (the
+/// replay already gives it no rating; this keeps it off even if one existed).
 const H2H_BOARD_ENTRIES_SQL: &str = "\
     WITH entries AS ( \
          SELECT r.character_id, r.alt_key, r.rating, r.wins, r.losses, r.ties, r.matches, \
@@ -859,6 +880,7 @@ const H2H_BOARD_ENTRIES_SQL: &str = "\
          LEFT JOIN guilds g ON g.id = gm.guild_id \
          LEFT JOIN guilds pg ON pg.id::text = saved.parked_guild_id \
          WHERE r.matches >= $1 {SEASON_FILTER} \
+           AND NOT EXISTS (SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = r.alt_key) \
      ) \
      SELECT row_number() OVER (ORDER BY rating DESC, matches DESC, last_match_at ASC NULLS LAST, \
                                         character_id, alt_key) AS rank, \
@@ -1566,6 +1588,7 @@ mod tests {
                     diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
                 }
             }
+            crate::testchar::apply_migration_for_tests(&mut conn).await;
             Some(conn)
         }
 
@@ -1597,6 +1620,7 @@ mod tests {
             ] {
                 diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
             }
+            crate::testchar::apply_migration_for_tests(&mut conn).await;
             Some(conn)
         }
 
@@ -2206,6 +2230,64 @@ mod tests {
             );
             let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
             assert_eq!(all_time.len(), 3, "the all-time board is per alt as well");
+        }
+
+        /// An operator test alt (`crate::testchar`) is never rated: a fight
+        /// with one leaves both sides off the ratings, so it neither appears on the
+        /// Top 100 nor moves its opponent's rating. Other fights are untouched.
+        #[tokio::test]
+        async fn a_test_alt_is_not_rated_and_does_not_move_its_opponent() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — test-alt h2h exclusion not verified");
+                return;
+            };
+            let season = Uuid::from_u128(1000);
+            seed_season(&mut conn, season, 1_700_000_000, 1_700_086_400).await;
+            let (row_t, test_alt) = (Uuid::from_u128(0x10), Uuid::from_u128(0x1a));
+            let (row_r, real_alt) = (Uuid::from_u128(0x20), Uuid::from_u128(0x2a));
+            let (row_o, other_alt) = (Uuid::from_u128(0x30), Uuid::from_u128(0x3a));
+            seed_alt_character(&mut conn, row_t, Some(test_alt), "Tester (Test)").await;
+            seed_alt_character(&mut conn, row_r, Some(real_alt), "Real").await;
+            seed_alt_character(&mut conn, row_o, Some(other_alt), "Other").await;
+            // The test alt beats Real; Real beats Other.
+            seed_alt_match(&mut conn, Uuid::from_u128(1), (row_t, Some(test_alt)), (row_r, Some(real_alt)),
+                "2023-11-14 22:20:00+00", (2, 0)).await;
+            seed_alt_match(&mut conn, Uuid::from_u128(2), (row_r, Some(real_alt)), (row_o, Some(other_alt)),
+                "2023-11-14 22:30:00+00", (2, 0)).await;
+            let cfg = H2hRatingConfig::default();
+
+            // The control: unmarked, all three are rated.
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+            assert_eq!(h2h_board(&mut conn, Some(season), 1, 100).await.unwrap().len(), 3);
+            let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
+            let real_unmarked = all_time.iter().find(|e| e.alt_key == real_alt).unwrap().clone();
+
+            diesel::sql_query("INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ($1, $1, 't')")
+                .bind::<diesel::sql_types::Uuid, _>(test_alt)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            // Even before the rebuild, the board does not list the stale row.
+            let stale = h2h_board(&mut conn, Some(season), 1, 100).await.unwrap();
+            assert!(stale.iter().all(|e| e.alt_key != test_alt), "never listed");
+
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+            let rows = season_alt_rows(&mut conn, season).await;
+            assert!(rows.iter().all(|r| r.alt_key != test_alt), "no rating row at all");
+            let real = rows.iter().find(|r| r.alt_key == real_alt).unwrap();
+            assert_eq!((real.wins, real.losses, real.matches), (1, 0, 1), "only the real fight counts");
+            let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
+            assert_eq!(
+                all_time.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+                vec!["Real", "Other"]
+            );
+            let real_marked = all_time.iter().find(|e| e.alt_key == real_alt).unwrap();
+            assert!(
+                real_marked.rating > real_unmarked.rating,
+                "Real's loss to the test alt no longer costs rating ({} vs {})",
+                real_marked.rating,
+                real_unmarked.rating
+            );
         }
 
         /// Each side's alt comes from ITS OWN audit row: an opponent who has since

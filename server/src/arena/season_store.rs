@@ -263,7 +263,11 @@ pub const AWARD_BELONGS_TO_LIVE_ALT_SQL: &str = "(a.source_alt_uuid IS NULL \
 /// The guild is the one the alt itself is in: the live alt's membership row, or,
 /// for an alt switched out, the membership parked in its newest version — and
 /// only while that guild still exists.
-const FREEZE_STANDINGS_SQL: &str = "\
+///
+/// An operator test alt (`crate::testchar`) has no standing: it is not
+/// placed, not awarded, and adds nothing to its guild's season score or to
+/// `guilds.trophies` (`guild::recompute_guild_trophies` reads this).
+pub(crate) const FREEZE_STANDINGS_SQL: &str = "\
     WITH season_results AS ( \
          SELECT r.character_id, r.recorded_at, r.id, r.trophy_delta, r.win, \
                 COALESCE(r.source_alt_uuid, c.source_alt_uuid) AS alt \
@@ -314,6 +318,7 @@ const FREEZE_STANDINGS_SQL: &str = "\
      ) parked ON true \
      LEFT JOIN guilds pg ON pg.id = parked.guild_id \
      WHERE m.latest = 1 \
+       AND NOT EXISTS (SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = m.alt) \
      ORDER BY m.trophies DESC, m.matches DESC, c.id, m.alt";
 
 /// Live standings for every character that scored, best first.

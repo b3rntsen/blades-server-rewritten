@@ -417,7 +417,13 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 //
                 // Clamped at 0 for the same reason the character's own count is:
                 // retail cards bottom out at zero and never go negative.
-                if o.trophy_delta != 0 {
+                //
+                // An operator test alt adds nothing (`crate::testchar`): its cups
+                // were not earned, and this running total is the guild board until
+                // the next recompute from `FREEZE_STANDINGS_SQL`, which skips it too.
+                if o.trophy_delta != 0
+                    && !crate::testchar::live_alt_is_test(&mut conn, character_id).await?
+                {
                     use crate::schema::{guild_members, guilds};
                     let guild_of: Option<String> = guild_members::table
                         .filter(guild_members::character_id.eq(character_id))
@@ -791,6 +797,15 @@ async fn persist_h2h_rating_pair_locked(
     // Both humans are live at match end, so each plays as its live alt.
     let a_key = h2h_live_key(conn, character_id).await?;
     let b_key = h2h_live_key(conn, opponent_id).await?;
+    // Same rule as the replay (`H2H_REPLAY_ROWS_CTE`): a fight with an operator
+    // test alt on either side is not rated.
+    if crate::testchar::any_test_alt(conn, &[a_key.alt_key, b_key.alt_key]).await? {
+        log::info!(
+            "arena h2h rating: {:?} involves a test character; not rated",
+            outcome.game_session_id
+        );
+        return Ok(());
+    }
 
     let a = h2h_state(conn, a_key, cfg.start).await?;
     let b = h2h_state(conn, b_key, cfg.start).await?;
@@ -1119,6 +1134,7 @@ mod tests {
             diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
         }
         apply_h2h_per_alt_migration(&mut conn).await;
+        crate::testchar::apply_migration_for_tests(&mut conn).await;
         Some(conn)
     }
 
@@ -1540,5 +1556,79 @@ mod tests {
         ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
         assert_eq!(rows(&mut conn, "arena_h2h_ratings").await, live_all, "reconcile agrees");
         assert_eq!(rows(&mut conn, "arena_h2h_season_ratings").await, live_season);
+    }
+
+    /// The live increment skips a fight with an operator test alt
+    /// (`crate::testchar`), exactly as the replay does, so the two still
+    /// agree and the opponent's rating is not moved.
+    #[tokio::test]
+    async fn live_increment_does_not_rate_a_test_alt() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — test-alt h2h increment not verified");
+            return;
+        };
+        let cfg = ranking::H2hRatingConfig::default();
+        let (me, opp) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let (real_alt, test_alt) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
+        diesel::sql_query("INSERT INTO characters VALUES ($1, $2), ($3, NULL)")
+        .bind::<diesel::sql_types::Uuid, _>(me)
+        .bind::<diesel::sql_types::Uuid, _>(real_alt)
+        .bind::<diesel::sql_types::Uuid, _>(opp)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query("INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ($1, $1, 't')")
+            .bind::<diesel::sql_types::Uuid, _>(test_alt)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        async fn fight(conn: &mut AsyncPgConnection, cfg: &ranking::H2hRatingConfig, gsid: u128) {
+            let (me, opp) = (Uuid::from_u128(1), Uuid::from_u128(2));
+            let gs = Uuid::from_u128(gsid);
+            let mut mine = h2h_outcome(me, opp, gs, true);
+            mine.completed_at_secs += gsid as i64;
+            persist_h2h_audit_and_rating(conn, cfg, &mine, &applied(me), opp).await.unwrap();
+            let mut theirs = h2h_outcome(opp, me, gs, false);
+            theirs.completed_at_secs = mine.completed_at_secs;
+            persist_h2h_audit_and_rating(conn, cfg, &theirs, &applied(opp), me).await.unwrap();
+        }
+        #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
+        struct Row {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            alt_key: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            rating: i32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            matches: i32,
+        }
+        async fn all_time(conn: &mut AsyncPgConnection) -> Vec<Row> {
+            diesel::sql_query("SELECT alt_key, rating, matches FROM arena_h2h_ratings ORDER BY alt_key")
+                .get_results(conn)
+                .await
+                .unwrap()
+        }
+
+        // The control: the real alt's fight is rated.
+        fight(&mut conn, &cfg, 100).await;
+        let after_real = all_time(&mut conn).await;
+        assert_eq!(
+            after_real.iter().map(|r| (r.alt_key, r.matches)).collect::<Vec<_>>(),
+            vec![(opp, 1), (Uuid::from_u128(0xa), 1)]
+        );
+
+        // Switch the test alt in and fight again: nothing moves.
+        diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
+            .bind::<diesel::sql_types::Uuid, _>(test_alt)
+            .bind::<diesel::sql_types::Uuid, _>(me)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        fight(&mut conn, &cfg, 101).await;
+        assert_eq!(all_time(&mut conn).await, after_real, "no row for the test alt, opponent unmoved");
+
+        // The fight is still in the audit (it happened), and the rebuild agrees.
+        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+        assert_eq!(all_time(&mut conn).await, after_real, "reconcile agrees");
     }
 }
