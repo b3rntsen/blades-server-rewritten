@@ -1855,6 +1855,8 @@ impl MatchInstance {
                 next_chest_id = next_chest_id.saturating_add(1);
             }
             let mut inventory_chests = promotion_chests.clone();
+            // The meter chest(s) alone — retail's `reward.chests` (#401).
+            let mut meter_chests = Vec::new();
             let character_id = uuid::Uuid::parse_str(&f.loadout.character_uuid)
                 .unwrap_or_else(|_| uuid::Uuid::nil());
             let mut cycle_count = f.loadout.arena_chests_earned;
@@ -1883,11 +1885,13 @@ impl MatchInstance {
                     _ => {}
                 }
                 cycle_count = cycle_count.saturating_add(1);
-                inventory_chests.push(messages::MatchEndChest {
+                let chest = messages::MatchEndChest {
                     id: next_chest_id.to_string(),
                     tier: award.kind.tier(),
                     level,
-                });
+                };
+                meter_chests.push(chest.clone());
+                inventory_chests.push(chest);
                 next_chest_id = next_chest_id.saturating_add(1);
             }
             let inventory_stackable_items = promo
@@ -1925,10 +1929,6 @@ impl MatchInstance {
                 .loadout
                 .character_experience
                 .saturating_add(payout.character_xp.max(0) as u64);
-            let backpack_version = f
-                .loadout
-                .backpack_version
-                .saturating_add(u64::from(!inventory_stackable_items.is_empty()));
             let treasury_version = f
                 .loadout
                 .treasury_version
@@ -1967,6 +1967,23 @@ impl MatchInstance {
                 void_result || self.conceded_slot == Some(slot),
             );
             let gems = arena_bonus_rewards::match_gems(finish);
+
+            // The every-25th-fight weapon (owner-approved #390/#391), shown on THIS
+            // card and granted straight into the backpack (#401) rather than as a
+            // claimable gift. Only for a finished fight by a real player whose
+            // account count is known; the writer re-checks the count and grants
+            // exactly this instance.
+            let card_weapon = (finish.is_finished()
+                && !is_bot_slot[slot]
+                && crate::arena::arena_fight_gift::weapon_due_on_card(
+                    f.loadout.account_arena_fights,
+                ))
+            .then(|| crate::arena::arena_fight_gift::weapon_instance(uuid::Uuid::new_v4()));
+            // One backpack mutation, one version bump — whether it carried promotion
+            // stackables, the weapon, or both.
+            let backpack_version = f.loadout.backpack_version.saturating_add(u64::from(
+                !inventory_stackable_items.is_empty() || card_weapon.is_some(),
+            ));
             let promotion_gems: u64 = promo
                 .currencies
                 .iter()
@@ -1992,6 +2009,8 @@ impl MatchInstance {
                 treasury_version,
                 inventory_stackable_items,
                 inventory_chests,
+                reward_chests: meter_chests,
+                reward_items: card_weapon.iter().cloned().collect(),
                 pvp_trophies: post_trophies,
                 matchmaking_pvp_trophies: post_high_water,
                 challenge_rank: p.challenge_rank.max(1),
@@ -2050,6 +2069,21 @@ impl MatchInstance {
                     )
                 },
             );
+            if !reward.reward_chests.is_empty() || card_weapon.is_some() {
+                info!(
+                    "combat: op49 slot {slot} card rewards — meter chest(s) {:?}{}",
+                    reward.reward_chests.iter().map(|c| (&c.id, c.tier)).collect::<Vec<_>>(),
+                    card_weapon
+                        .as_ref()
+                        .map(|w| format!(
+                            ", fight-gift weapon {} ({}) at account fight #{}",
+                            w.id,
+                            w.item.item_template_id,
+                            f.loadout.account_arena_fights.unwrap_or(0) + 1
+                        ))
+                        .unwrap_or_default(),
+                );
+            }
             out.push((slot, frame));
 
             if void_result {
@@ -2099,6 +2133,7 @@ impl MatchInstance {
                     character_xp: payout.character_xp,
                     gems: gems as i64,
                     finished_fight: finish.is_finished(),
+                    card_weapon: card_weapon.clone(),
                     trophy_delta: if void_result { 0 } else { trophy_delta },
                     rounds_won,
                     rounds_lost,
@@ -4720,6 +4755,153 @@ pub(in crate::arena::combat) mod tests {
         );
         assert_eq!(m.phase(), FlowState::Finished, "match Finished after the terminal state");
         assert_eq!(m.match_state_for_test(), MatchState::DisconnectingPlayersAfterMatch);
+    }
+
+    /// Play a full 2-0 match (slot 0 wins both rounds) between two named fighters
+    /// and return each slot's op49 ResultsJSON. `meter` is each side's pre-match
+    /// `pvpChestMeter`, `fights` each account's finished arena fights before it.
+    fn two_nil_cards(
+        meter: [i64; 2],
+        fights: [Option<i64>; 2],
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        let now = Instant::now();
+        let mk = |name: &str, uuid: &str, meter: i64, fights: Option<i64>| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.into();
+            l.character_uuid = uuid.into();
+            l.profile_character_json = format!(
+                r#"{{"id":"{uuid}","name":"{name}","level":86,"pvpTrophies":700,"matchmakingPvpTrophies":2600,"pvpChestMeter":{meter}}}"#
+            );
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
+            l.backpack_version = 385_263;
+            l.treasury_version = 24_500;
+            l.next_treasury_chest_id = 47;
+            l.account_arena_fights = fights;
+            l
+        };
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![
+                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9", meter[0], fights[0]),
+                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49", meter[1], fights[1]),
+            ],
+            now,
+        );
+        let live = drive_to_live(&mut m, 2, now);
+        let (_d1, t1) = swing_until_death(&mut m, 0, live);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
+
+        let mut cards = std::collections::BTreeMap::new();
+        let step = Duration::from_millis(250);
+        for i in 1..=80u32 {
+            for (slot, b) in m.on_tick(2, t + step * i) {
+                if b.len() > 3 && b[1] == 0x36 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    if nd.int(3) == Some(49) {
+                        let v: serde_json::Value =
+                            serde_json::from_str(nd.string(13).unwrap()).unwrap();
+                        cards.insert(slot, v);
+                    }
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        assert_eq!(cards.len(), 2, "one op49 per player");
+        cards
+    }
+
+    /// Report #401 (2): the chest the eight-round meter pays must be ON THE CARD, as
+    /// retail's `reward.chests` — not only in the inventory change set. Retail s615
+    /// (Flappety, meter 6 → won 2 rounds → wrapped to 0) carried
+    /// `"reward":{"currencies":{…},"chests":[{"id":"47","tier":2,"level":86}],
+    /// "characterXp":499}`, the same chest in `inventory.treasury.chests`, an empty
+    /// `rewardNewLevelArena`, and `treasuryVersion` +1.
+    ///
+    /// Control: the loser, whose meter does not fill, gets no `reward.chests`.
+    #[test]
+    fn the_meter_chest_rides_reward_chests_on_the_card_like_retail() {
+        let cards = two_nil_cards([6, 6], [None, None]);
+        let win = &cards[&0];
+        assert_eq!(win["character"]["pvpChestMeter"], 0, "6 + 2 rounds wraps at 8");
+        let chests = win["reward"]["chests"].as_array().expect("reward.chests on the card");
+        assert_eq!(chests.len(), 1, "one meter chest");
+        assert_eq!(chests[0]["id"], "47", "the next free treasury id");
+        assert_eq!(chests[0]["level"], 86, "the character's level");
+        assert!(chests[0]["tier"].is_number());
+        assert_eq!(
+            win["inventory"]["treasury"]["chests"], win["reward"]["chests"],
+            "the same chest, same id, in the treasury change set"
+        );
+        assert_eq!(win["inventory"]["treasuryVersion"], 24_501);
+        assert_eq!(win["rewardNewLevelArena"], serde_json::json!({}), "not a promotion");
+        // Retail's key set for a match reward.
+        let mut keys: Vec<&str> =
+            win["reward"].as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["characterXp", "chests", "currencies"]);
+
+        let lose = &cards[&1];
+        assert_eq!(lose["character"]["pvpChestMeter"], 6, "no round won, no fill");
+        assert!(lose["reward"].get("chests").is_none(), "no meter chest for the loser");
+        assert!(lose["inventory"].get("treasury").is_none());
+        assert_eq!(lose["inventory"]["treasuryVersion"], 24_500);
+    }
+
+    /// Report #401 (1): the every-25th-fight weapon is shown on the 25th fight's own
+    /// card — `reward.items` plus the same instance in `inventory.backpack.items`,
+    /// with `backpackVersion` +1 — won or lost. Fights 24 and 26 carry nothing, and
+    /// an unknown count never promises a weapon.
+    #[test]
+    fn the_twenty_fifth_fight_carries_the_weapon_on_its_card() {
+        let weapon_of = |card: &serde_json::Value| card["reward"].get("items").cloned();
+
+        // Winner on fight 25, loser on fight 24.
+        let cards = two_nil_cards([0, 0], [Some(24), Some(23)]);
+        let win = &cards[&0];
+        let items = weapon_of(win).expect("the 25th fight's card carries the weapon");
+        let items = items.as_array().unwrap();
+        assert_eq!(items.len(), 1, "exactly one weapon");
+        let w = &items[0];
+        let template: uuid::Uuid = w["itemTemplateId"].as_str().unwrap().parse().unwrap();
+        assert!(
+            crate::arena::arena_fight_gift::DIVINE_STALHRIM_WEAPONS
+                .iter()
+                .any(|d| d.0 == template),
+            "a Divine Stalhrim weapon"
+        );
+        assert_eq!(w["arcaneTier"], 2, "Arcane II");
+        assert_eq!(w["temperingLevel"], 0);
+        assert!(w["id"].as_str().is_some_and(|id| id.parse::<uuid::Uuid>().is_ok()));
+        assert!(
+            w.get("properties")
+                .and_then(|p| p.get("ENCHANTING"))
+                .is_none_or(|e| e.as_array().is_some_and(|a| a.is_empty())),
+            "blank: no enchantments"
+        );
+        assert_eq!(
+            win["inventory"]["backpack"]["items"][0], *w,
+            "the same instance in the backpack diff"
+        );
+        assert_eq!(win["inventory"]["backpackVersion"], 385_264, "backpack version bumped once");
+
+        let lose = &cards[&1];
+        assert!(weapon_of(lose).is_none(), "fight 24 carries no weapon");
+        assert!(lose["inventory"].get("backpack").is_none());
+        assert_eq!(lose["inventory"]["backpackVersion"], 385_263);
+
+        // The LOSER on its 25th fight is paid too; the winner's 26th is not.
+        let cards = two_nil_cards([0, 0], [Some(25), Some(24)]);
+        assert!(weapon_of(&cards[&0]).is_none(), "fight 26 carries no weapon");
+        assert!(weapon_of(&cards[&1]).is_some(), "a lost 25th fight still pays");
+
+        // Unknown count: no promise on the card.
+        let cards = two_nil_cards([0, 0], [None, None]);
+        assert!(weapon_of(&cards[&0]).is_none() && weapon_of(&cards[&1]).is_none());
     }
 
     /// MATCH-END op49 (the victory CARD, `docs/arena-match-end-spec.md`): on the FINAL

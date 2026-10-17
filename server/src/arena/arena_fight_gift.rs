@@ -37,15 +37,32 @@
 //!
 //! # Delivery
 //!
-//! Through `globalgifts`, the only out-of-band grant channel the client has. Each
-//! gift is its own row in `arena_fight_gifts` whose id IS the `globalGiftId`, so
-//! every gift is a single item claimed on its own (a bulk item grant can hang the
-//! client). The id is advertised in `/announcements` under the edge's existing
-//! gift-bearing `gift/` namespace; the claim is handled by `global_gift.rs` like a
-//! season award, bound to the alt that fought the milestone fight.
+//! **On the match-end card, straight into the backpack** (HauDrauf, #401: "so
+//! people see it's connected to the fights"). The engine knows the account's
+//! pre-match count from the loadout ([`account_fights`], read at queue time), so
+//! on the milestone fight it mints the weapon instance ([`weapon_instance`]) and
+//! puts it in op49's `reward.items` plus the `inventory.backpack.items` change
+//! set with a bumped `backpackVersion` — the same `reward` block the client parses
+//! for every REST reward (`BaseRewardData`; chest `collect` answers carry
+//! `reward.items` the same way). The persistence writer then grants exactly that
+//! instance and records the milestone row already granted, so it is never
+//! advertised as a gift.
+//!
+//! The claimable `globalgifts` path stays for two cases: rows minted before this
+//! change (still pending, still claimable — `global_gift.rs`), and a milestone the
+//! card could not show (the pre-match count was unknown, or a concurrent fight on
+//! the same account moved it). Each such gift is its own row in
+//! `arena_fight_gifts` whose id IS the `globalGiftId`, advertised in
+//! `/announcements` under the edge's gift-bearing `gift/` namespace and claimed
+//! once by the alt that fought the milestone fight.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use anyhow::Result;
+use blades_lib::economy::RewardItem;
 use blades_lib::static_data::{GiftDef, GiftItem};
+use blades_lib::user_data::{Item, ItemPropertiesAll};
 use diesel::OptionalExtension;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use uuid::Uuid;
@@ -154,6 +171,93 @@ pub fn roll_weapon(gift_id: Uuid) -> GiftItem {
     }
 }
 
+/// The nine weapons' new (temper 0) max durability, installed once at startup
+/// from the server's durability table so the synchronous match-end card can
+/// build the same instance the writer persists.
+static WEAPON_DURABILITY: OnceLock<HashMap<Uuid, f64>> = OnceLock::new();
+
+/// Record the nine weapons' max durability from the loaded durability table.
+/// Idempotent: the first install wins.
+pub fn install_durability(repair: &blades_lib::features::repair::RepairData) {
+    let table = DIVINE_STALHRIM_WEAPONS
+        .iter()
+        .filter_map(|(divine, _, _)| Some((*divine, repair.max_durability(*divine, 0)?)))
+        .collect::<HashMap<_, _>>();
+    if table.len() != DIVINE_STALHRIM_WEAPONS.len() {
+        log::warn!(
+            "arena fight gift: durability known for {} of {} Divine Stalhrim weapons; the rest \
+             arrive at the game's default {}",
+            table.len(),
+            DIVINE_STALHRIM_WEAPONS.len(),
+            blades_lib::features::repair::DEFAULT_DURABILITY
+        );
+    }
+    let _ = WEAPON_DURABILITY.set(table);
+}
+
+fn weapon_durability(template: Uuid) -> f64 {
+    WEAPON_DURABILITY
+        .get()
+        .and_then(|t| t.get(&template).copied())
+        .unwrap_or(blades_lib::features::repair::DEFAULT_DURABILITY)
+}
+
+/// Whether the fight about to finish is the account's milestone fight, given the
+/// account's finished fights BEFORE it. `None` (count unknown) never is: the
+/// card must not promise a weapon the writer may not grant.
+pub fn weapon_due_on_card(fights_before: Option<i64>) -> bool {
+    fights_before.is_some_and(|n| n >= 0 && milestone_reached(n + 1))
+}
+
+/// The weapon instance a milestone fight pays, with `item_id` as both the
+/// instance id and the roll seed: new (temper 0, full durability), blank, Arcane
+/// II — the same instance [`FightGiftRow::gift_def`] + `build_gift_reward`
+/// produce for a claimed gift.
+pub fn weapon_instance(item_id: Uuid) -> RewardItem {
+    let roll = roll_weapon(item_id);
+    RewardItem {
+        id: item_id,
+        item: Item {
+            item_template_id: roll.item_template_id,
+            grade: None,
+            tempering_level: 0,
+            durability: weapon_durability(roll.item_template_id),
+            properties: ItemPropertiesAll {
+                enchanting: roll.enchanting,
+                ..ItemPropertiesAll::default()
+            },
+            arcane_tier: roll.arcane_tier,
+        },
+    }
+}
+
+fn gift_item_of(weapon: &RewardItem) -> GiftItem {
+    GiftItem {
+        item_template_id: weapon.item.item_template_id,
+        quantity: 1,
+        arcane_tier: weapon.item.arcane_tier,
+        enchanting: weapon.item.properties.enchanting.clone(),
+    }
+}
+
+/// The account's finished arena fights so far (0 before its first). Read at
+/// queue time into the loadout so the match-end card knows whether this fight
+/// is a milestone.
+pub async fn account_fights(conn: &mut AsyncPgConnection, user_id: Uuid) -> Result<i64> {
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        fights: i64,
+    }
+    let row: Option<Count> =
+        diesel::sql_query("SELECT fights FROM arena_account_fight_counts WHERE user_id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .get_result(conn)
+            .await
+            .optional()?;
+    Ok(row.map(|r| r.fights).unwrap_or(0))
+}
+
 /// One `arena_fight_gifts` row.
 #[derive(Debug, Clone, diesel::QueryableByName)]
 pub struct FightGiftRow {
@@ -200,12 +304,22 @@ impl FightGiftRow {
 pub struct FightTally {
     /// The account's fights after this one.
     pub fights: i64,
-    /// The gift minted by this fight, when it was a milestone.
+    /// A CLAIMABLE gift minted by this fight: a milestone the match-end card did
+    /// not show, delivered through `globalgifts` instead.
     pub gift: Option<(Uuid, GiftItem)>,
+    /// The weapon the match-end card showed, to be put straight into the
+    /// backpack by the caller (its milestone row is recorded already granted).
+    pub delivered: Option<RewardItem>,
 }
 
-/// Count one finished fight for `user_id` and, on a milestone, mint its gift for
-/// the character and alt that fought it.
+/// Count one finished fight for `user_id` and, on a milestone, mint its weapon
+/// for the character and alt that fought it.
+///
+/// `card_weapon` is the instance the op49 card showed, if it showed one. On a
+/// milestone it is recorded as granted and returned in
+/// [`FightTally::delivered`] for the caller to put in the backpack; without one,
+/// the milestone becomes a claimable gift as before. A card weapon on a fight
+/// that is NOT a milestone (a concurrent fight moved the count) is not granted.
 ///
 /// Called inside the match-reward transaction, as a nested transaction
 /// (savepoint) so a missing table cannot roll the reward back.
@@ -215,6 +329,7 @@ pub async fn record_finished_fight(
     character_id: Uuid,
     alt: Option<Uuid>,
     now_secs: i64,
+    card_weapon: Option<&RewardItem>,
 ) -> Result<FightTally> {
     #[derive(diesel::QueryableByName)]
     struct Count {
@@ -235,14 +350,21 @@ pub async fn record_finished_fight(
     .await?;
 
     if !milestone_reached(fights) {
-        return Ok(FightTally { fights, gift: None });
+        return Ok(FightTally { fights, gift: None, delivered: None });
     }
-    let gift_id = Uuid::new_v4();
-    let item = roll_weapon(gift_id);
+    // The card's weapon is delivered directly: its row is born granted, under the
+    // instance's own id. Otherwise a fresh claimable gift, exactly as before.
+    let (gift_id, item, granted_at) = match card_weapon {
+        Some(w) => (w.id, gift_item_of(w), Some(now_secs)),
+        None => {
+            let id = Uuid::new_v4();
+            (id, roll_weapon(id), None)
+        }
+    };
     let inserted = diesel::sql_query(
         "INSERT INTO arena_fight_gifts \
-         (id, user_id, character_id, source_alt_uuid, milestone, item, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7) \
+         (id, user_id, character_id, source_alt_uuid, milestone, item, created_at, granted_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
          ON CONFLICT (user_id, milestone) DO NOTHING",
     )
     .bind::<diesel::sql_types::Uuid, _>(gift_id)
@@ -252,11 +374,15 @@ pub async fn record_finished_fight(
     .bind::<diesel::sql_types::BigInt, _>(fights)
     .bind::<diesel::sql_types::Jsonb, _>(serde_json::to_value(&item)?)
     .bind::<diesel::sql_types::BigInt, _>(now_secs)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(granted_at)
     .execute(conn)
     .await?;
-    Ok(FightTally {
-        fights,
-        gift: (inserted == 1).then_some((gift_id, item)),
+    if inserted != 1 {
+        return Ok(FightTally { fights, gift: None, delivered: None });
+    }
+    Ok(match card_weapon {
+        Some(w) => FightTally { fights, gift: None, delivered: Some(w.clone()) },
+        None => FightTally { fights, gift: Some((gift_id, item)), delivered: None },
     })
 }
 
@@ -575,7 +701,7 @@ mod tests {
         let counted = conn
             .transaction::<_, anyhow::Error, _>(|c| {
                 async move {
-                    record_finished_fight(c, Uuid::from_u128(9), Uuid::from_u128(1), None, 1).await
+                    record_finished_fight(c, Uuid::from_u128(9), Uuid::from_u128(1), None, 1, None).await
                 }
                 .scope_boxed()
             })
@@ -618,10 +744,10 @@ mod tests {
         // 20 fights as alt A, interleaved with another account's 24.
         for n in 1..=24 {
             if n <= 20 {
-                let t = record_finished_fight(&mut conn, user, cid, Some(alt_a), n).await.unwrap();
+                let t = record_finished_fight(&mut conn, user, cid, Some(alt_a), n, None).await.unwrap();
                 assert_eq!((t.fights, t.gift.is_some()), (n, false));
             }
-            let t = record_finished_fight(&mut conn, other, other_cid, None, n).await.unwrap();
+            let t = record_finished_fight(&mut conn, other, other_cid, None, n, None).await.unwrap();
             assert!(t.gift.is_none());
         }
         // Switch alt (same character row, same account) and keep fighting.
@@ -632,12 +758,12 @@ mod tests {
             .await
             .unwrap();
         for n in 21..=24 {
-            let t = record_finished_fight(&mut conn, user, cid, Some(alt_b), n).await.unwrap();
+            let t = record_finished_fight(&mut conn, user, cid, Some(alt_b), n, None).await.unwrap();
             assert_eq!((t.fights, t.gift.is_some()), (n, false), "fight {n} as alt B");
         }
         assert!(gift_rows(&mut conn).await.is_empty(), "nothing before the 25th fight");
 
-        let t = record_finished_fight(&mut conn, user, cid, Some(alt_b), 25).await.unwrap();
+        let t = record_finished_fight(&mut conn, user, cid, Some(alt_b), 25, None).await.unwrap();
         assert_eq!(t.fights, 25, "alts share the account's count");
         let (gift_id, item) = t.gift.expect("the 25th fight mints a gift");
         assert!(DIVINE_STALHRIM_WEAPONS.iter().any(|w| w.0 == item.item_template_id));
@@ -651,7 +777,7 @@ mod tests {
         assert_eq!(rows[0].gift_def().unwrap().items[0].item_template_id, item.item_template_id);
 
         // The 26th fight mints nothing more; the other account is still at 24.
-        let t = record_finished_fight(&mut conn, user, cid, Some(alt_b), 26).await.unwrap();
+        let t = record_finished_fight(&mut conn, user, cid, Some(alt_b), 26, None).await.unwrap();
         assert!(t.gift.is_none());
         assert_eq!(gift_rows(&mut conn).await.len(), 1);
 
@@ -673,5 +799,82 @@ mod tests {
         assert!(mark_granted(&mut conn, gift_id, 99).await.unwrap());
         assert!(!mark_granted(&mut conn, gift_id, 100).await.unwrap(), "no second claim");
         assert_eq!(find(&mut conn, gift_id, cid, false).await.unwrap().unwrap().claim_count(), 1);
+    }
+
+    /// #401: the weapon the op49 card showed is DELIVERED on the milestone — its
+    /// row is born granted under the instance's id, so it is never advertised or
+    /// claimable — while fights 24 and 26 grant nothing even if a card claimed
+    /// one. A gift minted before this change (granted_at NULL) stays pending and
+    /// claims exactly once, untouched by later deliveries.
+    #[tokio::test]
+    async fn the_card_weapon_is_delivered_and_a_legacy_gift_still_claims() {
+        let Some(mut conn) = fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — fight-gift delivery SQL not verified");
+            return;
+        };
+        let user = Uuid::from_u128(1);
+        let cid = Uuid::from_u128(10);
+        diesel::sql_query("INSERT INTO users VALUES ($1)")
+            .bind::<diesel::sql_types::Uuid, _>(user)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query("INSERT INTO characters VALUES ($1, $2, NULL)")
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .bind::<diesel::sql_types::Uuid, _>(user)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        // Fights 1..=25 under the OLD flow (no card weapon): fight 25 mints the
+        // legacy claimable gift, as production did before this change.
+        assert_eq!(account_fights(&mut conn, user).await.unwrap(), 0, "no row yet");
+        for n in 1..=24 {
+            record_finished_fight(&mut conn, user, cid, None, n, None).await.unwrap();
+        }
+        assert_eq!(account_fights(&mut conn, user).await.unwrap(), 24);
+        assert!(!weapon_due_on_card(Some(23)), "fight 24 is not a milestone");
+        assert!(weapon_due_on_card(Some(24)), "fight 25 is");
+        assert!(!weapon_due_on_card(Some(25)), "fight 26 is not");
+        assert!(!weapon_due_on_card(None), "an unknown count never promises one");
+        let legacy = record_finished_fight(&mut conn, user, cid, None, 25, None).await.unwrap();
+        let (legacy_id, _) = legacy.gift.expect("the legacy claimable gift");
+        assert!(legacy.delivered.is_none());
+
+        // Fights 26..=49 with a (stale) card weapon each time: none is a
+        // milestone, so nothing is granted or recorded.
+        for n in 26..=49 {
+            let w = weapon_instance(Uuid::from_u128(1000 + n as u128));
+            let t = record_finished_fight(&mut conn, user, cid, None, n, Some(&w)).await.unwrap();
+            assert!(t.delivered.is_none() && t.gift.is_none(), "fight {n}: nothing");
+        }
+
+        // Fight 50 with the card's weapon: delivered, recorded as granted.
+        let shown = weapon_instance(Uuid::from_u128(50_000));
+        let t = record_finished_fight(&mut conn, user, cid, None, 50, Some(&shown)).await.unwrap();
+        assert_eq!(t.fights, 50);
+        assert_eq!(t.delivered.as_ref(), Some(&shown), "the card's very instance");
+        assert!(t.gift.is_none(), "not a claimable gift");
+        let rows = gift_rows(&mut conn).await;
+        assert_eq!(rows.len(), 2);
+        let delivered_row = rows.iter().find(|r| r.milestone == 50).unwrap();
+        assert_eq!(delivered_row.id, shown.id, "recorded under the instance id");
+        assert_eq!(delivered_row.granted_at, Some(50), "born granted");
+        assert_eq!(
+            delivered_row.gift_def().unwrap().items[0].item_template_id,
+            shown.item.item_template_id
+        );
+
+        // Only the legacy gift is advertised, and it still claims exactly once.
+        let pending = pending_for_live_alt(&mut conn, cid).await.unwrap();
+        assert_eq!(pending.iter().map(|g| g.id).collect::<Vec<_>>(), vec![legacy_id]);
+        assert!(find(&mut conn, legacy_id, cid, true).await.unwrap().is_some());
+        assert!(mark_granted(&mut conn, legacy_id, 99).await.unwrap(), "legacy gift claims");
+        assert!(!mark_granted(&mut conn, legacy_id, 100).await.unwrap(), "once");
+        assert!(
+            !mark_granted(&mut conn, shown.id, 101).await.unwrap(),
+            "delivered row is not claimable"
+        );
+        assert!(pending_for_live_alt(&mut conn, cid).await.unwrap().is_empty());
     }
 }

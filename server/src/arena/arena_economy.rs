@@ -72,6 +72,10 @@ pub struct MatchEconomyOutcome {
     /// was not voided as a no-show). Only a finished fight counts toward the
     /// per-account weapon gift ([`crate::arena::arena_fight_gift`]).
     pub finished_fight: bool,
+    /// The every-25th-fight weapon the op49 card showed (#401), to be granted
+    /// straight into the backpack when the account count confirms the milestone.
+    /// `None` on every other fight.
+    pub card_weapon: Option<blades_lib::economy::RewardItem>,
     /// Signed trophy swing (already Elo-weighted by the engine).
     pub trophy_delta: i64,
     /// Rounds this player won (drives the chest meter).
@@ -204,6 +208,19 @@ fn promotion_changes_backpack(promo: &arena_ladder::PromotionRewards) -> bool {
     !promo.stackable_items.is_empty()
 }
 
+/// Put the weapon the op49 card showed (#401) into the backpack, as the very
+/// instance the card listed — same id, same fields — so the client's inventory
+/// and the server's agree without a re-sync.
+fn deliver_card_weapon(
+    inventory: &mut blades_lib::user_data::CompleteInventory,
+    weapon: &blades_lib::economy::RewardItem,
+    tracker: &mut InventoryChangeTracker,
+) {
+    // `apply_reward`'s item branch, without a wallet or character to touch.
+    inventory.backpack.items.0.insert(weapon.id, weapon.item.clone());
+    tracker.modified_backpack.items.insert(weapon.id);
+}
+
 /// Apply one match outcome durably: PvP counters + wallet + XP + any promotion
 /// chests and fixed stackables. One transaction, row-locked, so two matches ending
 /// at the same instant for the same character cannot interleave.
@@ -328,7 +345,62 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     &mut entry.character.0,
                     &mut tracker,
                 );
-                if promotion_changes_backpack(&promo) {
+                let character_id = entry.id;
+                let user_id = entry.user_id;
+                // THE WEAPON GIFT (owner-approved #390/#391): count this finished
+                // fight on the ACCOUNT and, on every 25th, grant the weapon. In a
+                // nested transaction — a savepoint — so a failure (the table not yet
+                // migrated, say) rolls back only the count and never the reward
+                // above, which a failed statement in this transaction would.
+                //
+                // Done BEFORE the character row is written: the weapon the op49 card
+                // showed (#401) goes straight into this same backpack, under the same
+                // single `backpackVersion` bump the card advertised.
+                let fight_tally = if o.finished_fight {
+                    let now = o.completed_at_secs;
+                    let card_weapon = o.card_weapon.clone();
+                    let counted = conn
+                        .transaction::<_, anyhow::Error, _>(|conn| {
+                            async move {
+                                let alt = arena_fight_gift::live_alt(conn, character_id).await?;
+                                arena_fight_gift::record_finished_fight(
+                                    conn,
+                                    user_id,
+                                    character_id,
+                                    alt,
+                                    now,
+                                    card_weapon.as_ref(),
+                                )
+                                .await
+                            }
+                            .scope_boxed()
+                        })
+                        .await;
+                    match counted {
+                        Ok(tally) => Some(tally),
+                        Err(e) => {
+                            warn!(
+                                "arena fight gift: could not count the fight for account {user_id} \
+                                 (character {character_id}); the match REWARD IS SAFE: {e}"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                let delivered = fight_tally.as_ref().and_then(|t| t.delivered.clone());
+                if let Some(weapon) = &delivered {
+                    deliver_card_weapon(&mut entry.inventory.0, weapon, &mut tracker);
+                } else if o.card_weapon.is_some() {
+                    warn!(
+                        "arena fight gift: the op49 card showed a weapon to character {character_id} \
+                         but the account count ({:?}) did not confirm the milestone; not granted",
+                        fight_tally.as_ref().map(|t| t.fights)
+                    );
+                }
+                // One backpack mutation, one bump — as the op49 card advertised it.
+                if promotion_changes_backpack(&promo) || delivered.is_some() {
                     entry.inventory.0.backpack_version += 1;
                 }
                 if promotion_needs_loot_marker(&promo) {
@@ -392,8 +464,6 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
 
                 let post_trophies = entry.character.0.pvp_trophies;
                 let post_high_water = entry.character.0.matchmaking_pvp_trophies;
-                let character_id = entry.id;
-                let user_id = entry.user_id;
 
                 {
                     use crate::schema::characters;
@@ -442,43 +512,6 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                         .await?;
                     }
                 }
-
-                // THE WEAPON GIFT (owner-approved #390/#391): count this finished
-                // fight on the ACCOUNT and mint the gift on every 25th. In a nested
-                // transaction — a savepoint — so a failure (the table not yet
-                // migrated, say) rolls back only the count and never the reward
-                // above, which a failed statement in this transaction would.
-                let fight_tally = if o.finished_fight {
-                    let now = o.completed_at_secs;
-                    let counted = conn
-                        .transaction::<_, anyhow::Error, _>(|conn| {
-                            async move {
-                                let alt = arena_fight_gift::live_alt(conn, character_id).await?;
-                                arena_fight_gift::record_finished_fight(
-                                    conn,
-                                    user_id,
-                                    character_id,
-                                    alt,
-                                    now,
-                                )
-                                .await
-                            }
-                            .scope_boxed()
-                        })
-                        .await;
-                    match counted {
-                        Ok(tally) => Some(tally),
-                        Err(e) => {
-                            warn!(
-                                "arena fight gift: could not count the fight for account {user_id} \
-                                 (character {character_id}); the match REWARD IS SAFE: {e}"
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
 
                 Ok(Some(AppliedOutcome {
                     fight_tally,
@@ -536,6 +569,13 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
     );
 
     if let Some(tally) = &a.fight_tally {
+        if let Some(weapon) = &tally.delivered {
+            info!(
+                "arena fight gift: character {} reached account fight #{} — weapon {} ({}) \
+                 delivered into the backpack from the match-end card",
+                a.character_id, tally.fights, weapon.id, weapon.item.item_template_id,
+            );
+        }
         match &tally.gift {
             Some((gift_id, item)) => info!(
                 "arena fight gift: character {} reached account fight #{} — gift {gift_id} \
@@ -546,6 +586,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 item.arcane_tier,
                 item.enchanting.len(),
             ),
+            None if tally.delivered.is_some() => {}
             None => log::debug!(
                 "arena fight gift: character {} at account fight #{}",
                 a.character_id,
@@ -983,6 +1024,7 @@ mod tests {
             character_xp: 691,
             gems: 6,
             finished_fight: true,
+            card_weapon: None,
             trophy_delta: 30,
             rounds_won: 2,
             rounds_lost: 0,
@@ -1013,6 +1055,32 @@ mod tests {
                 .get(&Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()),
             Some(&3)
         );
+    }
+
+    /// #401: the weapon the card showed lands in the backpack as that exact
+    /// instance — same id, and the backpack item serializes to the card's
+    /// `inventory.backpack.items` entry — and is reported in the change set.
+    #[test]
+    fn the_card_weapon_lands_in_the_backpack_as_the_card_showed_it() {
+        use blades_lib::user_data as ud;
+        let mut inv = ud::CompleteInventory {
+            backpack: ud::Backpack::default(),
+            loadout: ud::Loadout::default(),
+            treasury: ud::Treasury::default(),
+            overflow_treasury: ud::Treasury::default(),
+            backpack_version: 7,
+            treasury_version: 3,
+        };
+        let weapon = crate::arena::arena_fight_gift::weapon_instance(Uuid::from_u128(25));
+        let mut tracker = InventoryChangeTracker::default();
+        deliver_card_weapon(&mut inv, &weapon, &mut tracker);
+
+        let held = inv.backpack.items.0.get(&weapon.id).expect("the weapon is in the backpack");
+        let mut as_card = serde_json::to_value(&weapon).unwrap();
+        as_card.as_object_mut().unwrap().remove("id");
+        assert_eq!(serde_json::to_value(held).unwrap(), as_card, "the card's instance, verbatim");
+        assert!(tracker.modified_backpack.items.contains(&weapon.id));
+        assert_eq!(inv.backpack_version, 7, "the writer bumps once, alongside promotions");
     }
 
     #[test]
@@ -1048,6 +1116,7 @@ mod tests {
             character_xp: 50,
             gems,
             finished_fight: gems > 0,
+            card_weapon: None,
             trophy_delta: 0,
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },
@@ -1186,6 +1255,7 @@ mod tests {
             character_xp: 0,
             gems: 0,
             finished_fight: true,
+            card_weapon: None,
             trophy_delta: if win { 24 } else { -24 },
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },
