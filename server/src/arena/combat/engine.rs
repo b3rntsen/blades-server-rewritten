@@ -450,6 +450,9 @@ pub struct MatchInstance {
     /// waiting to be adopted at the next between-rounds beat (report #232). See
     /// [`Self::stage_between_rounds_loadout`].
     staged_loadouts: Vec<Option<Loadout>>,
+    /// [`crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD`], held per match so
+    /// tests can exercise both delivery paths.
+    weapon_on_result_card: bool,
     /// The slot that ended the match by conceding — the exit button or an ENet
     /// departure — if one did. That side abandoned the fight: it keeps the
     /// recorded loss but is paid no arena Gems and the fight does not count
@@ -517,6 +520,7 @@ impl MatchInstance {
             interround_profile_round: None,
             interround_profiles_sent: vec![false; capacity],
             staged_loadouts: vec![None; capacity],
+            weapon_on_result_card: crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD,
             conceded_slot: None,
         }
     }
@@ -1970,10 +1974,12 @@ impl MatchInstance {
 
             // The every-25th-fight weapon (owner-approved #390/#391), shown on THIS
             // card and granted straight into the backpack (#401) rather than as a
-            // claimable gift. Only for a finished fight by a real player whose
-            // account count is known; the writer re-checks the count and grants
-            // exactly this instance.
-            let card_weapon = (finish.is_finished()
+            // claimable gift — only while `WEAPON_ON_RESULT_CARD` is on. Only for a
+            // finished fight by a real player whose account count is known; the
+            // writer re-checks the count and grants exactly this instance. With no
+            // card weapon the writer mints the claimable gift (#539).
+            let card_weapon = (self.weapon_on_result_card
+                && finish.is_finished()
                 && !is_bot_slot[slot]
                 && crate::arena::arena_fight_gift::weapon_due_on_card(
                     f.loadout.account_arena_fights,
@@ -4763,6 +4769,7 @@ pub(in crate::arena::combat) mod tests {
     fn two_nil_cards(
         meter: [i64; 2],
         fights: [Option<i64>; 2],
+        weapon_on_result_card: bool,
     ) -> std::collections::BTreeMap<usize, serde_json::Value> {
         let now = Instant::now();
         let mk = |name: &str, uuid: &str, meter: i64, fights: Option<i64>| {
@@ -4788,6 +4795,7 @@ pub(in crate::arena::combat) mod tests {
             ],
             now,
         );
+        m.weapon_on_result_card = weapon_on_result_card;
         let live = drive_to_live(&mut m, 2, now);
         let (_d1, t1) = swing_until_death(&mut m, 0, live);
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
@@ -4825,7 +4833,18 @@ pub(in crate::arena::combat) mod tests {
     /// Control: the loser, whose meter does not fill, gets no `reward.chests`.
     #[test]
     fn the_meter_chest_rides_reward_chests_on_the_card_like_retail() {
-        let cards = two_nil_cards([6, 6], [None, None]);
+        // Unconditional: the same under either weapon-delivery setting.
+        for flag in [false, true] {
+            let cards = two_nil_cards([6, 6], [Some(24), None], flag);
+            let win = &cards[&0];
+            let chests = win["reward"]["chests"].as_array().expect("reward.chests on the card");
+            assert_eq!(chests.len(), 1, "one meter chest (weapon flag {flag})");
+        }
+        let cards = two_nil_cards(
+            [6, 6],
+            [None, None],
+            crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD,
+        );
         let win = &cards[&0];
         assert_eq!(win["character"]["pvpChestMeter"], 0, "6 + 2 rounds wraps at 8");
         let chests = win["reward"]["chests"].as_array().expect("reward.chests on the card");
@@ -4852,16 +4871,16 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(lose["inventory"]["treasuryVersion"], 24_500);
     }
 
-    /// Report #401 (1): the every-25th-fight weapon is shown on the 25th fight's own
-    /// card — `reward.items` plus the same instance in `inventory.backpack.items`,
-    /// with `backpackVersion` +1 — won or lost. Fights 24 and 26 carry nothing, and
-    /// an unknown count never promises a weapon.
+    /// Report #401 (1), with `WEAPON_ON_RESULT_CARD` ON: the every-25th-fight weapon
+    /// is shown on the 25th fight's own card — `reward.items` plus the same instance
+    /// in `inventory.backpack.items`, with `backpackVersion` +1 — won or lost.
+    /// Fights 24 and 26 carry nothing, and an unknown count never promises a weapon.
     #[test]
     fn the_twenty_fifth_fight_carries_the_weapon_on_its_card() {
         let weapon_of = |card: &serde_json::Value| card["reward"].get("items").cloned();
 
         // Winner on fight 25, loser on fight 24.
-        let cards = two_nil_cards([0, 0], [Some(24), Some(23)]);
+        let cards = two_nil_cards([0, 0], [Some(24), Some(23)], true);
         let win = &cards[&0];
         let items = weapon_of(win).expect("the 25th fight's card carries the weapon");
         let items = items.as_array().unwrap();
@@ -4895,13 +4914,31 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(lose["inventory"]["backpackVersion"], 385_263);
 
         // The LOSER on its 25th fight is paid too; the winner's 26th is not.
-        let cards = two_nil_cards([0, 0], [Some(25), Some(24)]);
+        let cards = two_nil_cards([0, 0], [Some(25), Some(24)], true);
         assert!(weapon_of(&cards[&0]).is_none(), "fight 26 carries no weapon");
         assert!(weapon_of(&cards[&1]).is_some(), "a lost 25th fight still pays");
 
         // Unknown count: no promise on the card.
-        let cards = two_nil_cards([0, 0], [None, None]);
+        let cards = two_nil_cards([0, 0], [None, None], true);
         assert!(weapon_of(&cards[&0]).is_none() && weapon_of(&cards[&1]).is_none());
+    }
+
+    /// `WEAPON_ON_RESULT_CARD` OFF (the shipped default until a client check, #401):
+    /// the 25th fight's card is exactly #539's — no `reward.items`, no backpack diff,
+    /// no backpack bump — so the economy writer mints the claimable gift instead.
+    #[test]
+    fn with_the_flag_off_the_twenty_fifth_fight_card_carries_no_weapon() {
+        assert!(
+            !crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD,
+            "ships OFF until the client has been checked"
+        );
+        let cards = two_nil_cards([0, 0], [Some(24), Some(24)], false);
+        for slot in [0, 1] {
+            let card = &cards[&slot];
+            assert!(card["reward"].get("items").is_none(), "slot {slot}: no weapon on op49");
+            assert!(card["inventory"].get("backpack").is_none(), "slot {slot}: no backpack diff");
+            assert_eq!(card["inventory"]["backpackVersion"], 385_263, "slot {slot}: no bump");
+        }
     }
 
     /// MATCH-END op49 (the victory CARD, `docs/arena-match-end-spec.md`): on the FINAL

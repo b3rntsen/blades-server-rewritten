@@ -37,6 +37,10 @@
 //!
 //! # Delivery
 //!
+//! Behind [`WEAPON_ON_RESULT_CARD`] (off until a client check). When OFF, every
+//! milestone is a claimable `globalgifts` gift as described in the last paragraph
+//! below. When ON:
+//!
 //! **On the match-end card, straight into the backpack** (HauDrauf, #401: "so
 //! people see it's connected to the fights"). The engine knows the account's
 //! pre-match count from the loadout ([`account_fights`], read at queue time), so
@@ -66,6 +70,17 @@ use blades_lib::user_data::{Item, ItemPropertiesAll};
 use diesel::OptionalExtension;
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use uuid::Uuid;
+
+/// Whether the milestone weapon is shown on the fight's own op49 result card and
+/// granted straight into the backpack at match end (#401), instead of arriving
+/// as a claimable `globalgifts` gift (#539).
+///
+/// OFF until a client check: retail never put items on op49 — not one of 31
+/// reassembled retail cards carries `reward.items` — so whether the result screen
+/// renders (or survives) one is unproven. Enable after the 25th-fight card has
+/// been seen working on a real client (#401). While off, the card never carries
+/// the weapon and every milestone is minted as a claimable gift, exactly as #539.
+pub const WEAPON_ON_RESULT_CARD: bool = false;
 
 /// Finished arena fights per weapon gift, counted per account. Owner-approved
 /// deviation (#390/#391, 2026-10-16).
