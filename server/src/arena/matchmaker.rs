@@ -979,9 +979,9 @@ pub struct BotDraw {
 /// non-empty tier wins. Within a tier the gsid rotation is preserved, so variety
 /// across matches survives.
 ///
-/// It is a PREFERENCE, never a gate: if no tier has anybody — or the human's or the
-/// candidates' skill could not be read — it falls back to the full eligible set
-/// rather than refuse to start a match. An unfair bot beats no opponent at all,
+/// It is a PREFERENCE, never a gate: if no tier has anybody it falls back to the
+/// [`MIN_BOT_POOL`] nearest eligible bots (tracker #409), and if the human's skill
+/// could not be read, to the full eligible set, rather than refuse to start a match. An unfair bot beats no opponent at all,
 /// which is the same call `compatible` makes for humans.
 fn pick_bot_index(
     candidates: &[BotCandidate],
@@ -1065,8 +1065,27 @@ fn pick_bot_index(
             step: Some(step),
         });
     }
+    // Nobody inside even the widest step. Still take the NEAREST, not anyone.
+    //
+    // Tracker #409 (2026-10-17): a level-6 player drew roster bots at levels 81,
+    // 93 and 86 in a row while level-28, -40 and -43 ones were eligible, because
+    // this fallback rotated over the whole eligible set. Rank by level gap (then
+    // trophy gap, for rated rows) and rotate among the MIN_BOT_POOL closest, so
+    // variety survives without handing a beginner the strongest bot on the server.
+    // Rows whose skill could not be read sort last; with nobody readable the
+    // order is the pool's own, as before.
+    let mut nearest = eligible.clone();
+    nearest.sort_by_key(|&i| match candidates[i].2 {
+        Some(c) => (
+            0u8,
+            (h.level - c.level).abs(),
+            if candidates[i].3 { (h.trophies - c.trophies).abs() } else { 0 },
+        ),
+        None => (1u8, i32::MAX, i64::MAX),
+    });
+    nearest.truncate(MIN_BOT_POOL);
     Some(BotDraw {
-        index: rotate(&eligible),
+        index: rotate(&nearest),
         step: None,
     })
 }
@@ -2296,6 +2315,36 @@ mod bot_pick_tests {
                 .expect("the armed row is eligible");
             assert_eq!(index, 1, "drew the unarmed row");
         }
+    }
+
+    /// Tracker #409: with nobody inside any bracket step, the draw still takes
+    /// one of the nearest bots. The reported case: a level-6 player drew levels
+    /// 81, 93 and 86 while 28, 40 and 43 were eligible. Fails on the pre-fix code,
+    /// which rotated over the whole eligible set.
+    #[test]
+    fn out_of_bracket_draw_takes_the_nearest_bots() {
+        let levels = [81u16, 93, 28, 86, 40, 100, 43, 94];
+        let rows: Vec<_> = levels
+            .iter()
+            .map(|&l| {
+                let mut r = renderable_row(Uuid::new_v4());
+                r.character.0.level = l;
+                r.character.0.matchmaking_pvp_trophies = 0;
+                r
+            })
+            .collect();
+        let candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
+        let human = Some(Skill { level: 6, trophies: 32 });
+        let mut drawn = std::collections::BTreeSet::new();
+        for b in 0..=255u8 {
+            let mut bytes = [0u8; 16];
+            bytes[0] = b;
+            let d = super::pick_bot_index(&candidates, "", human, Uuid::from_bytes(bytes))
+                .expect("eligible bots exist");
+            assert!(d.step.is_none(), "nobody is inside a bracket step");
+            drawn.insert(levels[d.index]);
+        }
+        assert_eq!(drawn, [28u16, 40, 43].into_iter().collect(), "only the three nearest");
     }
 
     /// A bot opponent must be identifiable as one, in BOTH places the client
