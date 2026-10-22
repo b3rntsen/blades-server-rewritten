@@ -1911,10 +1911,12 @@ impl MatchInstance {
             // A new arena's Blades piece(s) (#319), on the card only behind
             // `ARENA_PROMOTION_ITEMS_ON_CARD` (default off). The durable grant in
             // `arena_economy` always happens; when shown, the ids match it.
+            let items_on_card = arena_ladder::promotion_items_on_card();
             let inventory_items = arena_ladder::card_promotion_items(
                 &promo,
                 character_id,
-                arena_ladder::promotion_items_on_card(),
+                f.loadout.pvp_season_id,
+                items_on_card,
             );
 
             // `rewardNewLevelArena` stays `{}` unless a rung paid a reward. The
@@ -1937,9 +1939,9 @@ impl MatchInstance {
             let backpack_version = f
                 .loadout
                 .backpack_version
-                .saturating_add(u64::from(
-                    !inventory_stackable_items.is_empty() || !inventory_items.is_empty(),
-                ));
+                // Never claim a version whose items the card hides (see
+                // `promotion_backpack_bumps`); the durable write uses the other half.
+                .saturating_add(arena_ladder::promotion_backpack_bumps(&promo, items_on_card).0);
             let treasury_version = f
                 .loadout
                 .treasury_version

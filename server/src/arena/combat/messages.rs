@@ -3164,6 +3164,7 @@ mod tests {
         let character = uuid::Uuid::from_u128(0x319);
         let gauntlets = crate::arena::arena_ladder::promotion_reward_item(
             character,
+            uuid::Uuid::from_u128(0x5ea5),
             &crate::arena::arena_ladder::PROMOTION_ITEMS[0],
         );
         let reward = MatchEndReward {

@@ -186,23 +186,50 @@ pub const PROMOTION_ITEMS: [PromotionItem; 6] = [
     PromotionItem { threshold: 2500, template_uuid: "f5159522-601a-4d4c-82d4-d059427c0c25", name: "Blades Helmet", durability_centi: 32_500 },
 ];
 
-/// The instance id of a promotion item for one character.
+/// The instance id of a promotion item for one character in one PvP season.
 ///
 /// Deterministic, because two places build the same item independently: the
 /// match-end card (`combat::engine`) and the durable write (`arena_economy`).
-/// A random id would put one id on the card and another in the backpack. One
-/// template per threshold per character, so the triple is unique.
-pub fn promotion_item_id(character_id: uuid::Uuid, item: &PromotionItem) -> uuid::Uuid {
+/// A random id would put one id on the card and another in the backpack.
+///
+/// The SEASON is part of the key. A rollover clears the promotion ledger, so a
+/// player re-crossing 1000 next season is granted the Gauntlets again; keyed on
+/// (character, rung, template) alone that second grant would reuse last season's
+/// id and `apply_reward`'s plain insert would overwrite the tempered, enchanted
+/// copy the player now owns — or put one instance id in both `equippedItems` and
+/// `backpack.items`, the shape that hangs the client. The durable path also skips
+/// an id the character already owns (`arena_economy::add_promotion_items`).
+pub fn promotion_item_id(
+    character_id: uuid::Uuid,
+    season_id: uuid::Uuid,
+    item: &PromotionItem,
+) -> uuid::Uuid {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(b"arena-promotion-item\0");
     h.update(character_id.as_bytes());
+    h.update(season_id.as_bytes());
     h.update(item.threshold.to_be_bytes());
     h.update(item.template_uuid.as_bytes());
     let digest = h.finalize();
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&digest[..16]);
     uuid::Uuid::new_v8(bytes)
+}
+
+/// How far one match moves `backpackVersion` for its promotion: `(card, durable)`.
+///
+/// The card must never claim a version whose item set it does not carry. With
+/// promotion items hidden from the card (the default), the card reports the
+/// bump for what it does carry (stackables) and the durable write moves one
+/// further for the hidden items — so the client's version stays BEHIND the
+/// server's and the next inventory load fetches them, instead of the client
+/// believing it is current at a version that includes items it never saw.
+pub fn promotion_backpack_bumps(promo: &PromotionRewards, items_on_card: bool) -> (u64, u64) {
+    let has_items = !promo.items.is_empty();
+    let card = u64::from(!promo.stackable_items.is_empty() || (has_items && items_on_card));
+    let hidden = u64::from(has_items && !items_on_card);
+    (card, card + hidden)
 }
 
 /// Whether the match-end card shows promotion items in its backpack change set.
@@ -228,6 +255,7 @@ pub fn promotion_items_on_card() -> bool {
 pub fn card_promotion_items(
     promo: &PromotionRewards,
     character_id: uuid::Uuid,
+    season_id: uuid::Uuid,
     on_card: bool,
 ) -> Vec<blades_lib::economy::RewardItem> {
     if !on_card {
@@ -236,17 +264,18 @@ pub fn card_promotion_items(
     promo
         .items
         .iter()
-        .map(|item| promotion_reward_item(character_id, item))
+        .map(|item| promotion_reward_item(character_id, season_id, item))
         .collect()
 }
 
 /// The backpack entry a promotion item becomes: retail's plain, un-tempered copy.
 pub fn promotion_reward_item(
     character_id: uuid::Uuid,
+    season_id: uuid::Uuid,
     item: &PromotionItem,
 ) -> blades_lib::economy::RewardItem {
     blades_lib::economy::RewardItem {
-        id: promotion_item_id(character_id, item),
+        id: promotion_item_id(character_id, season_id, item),
         item: blades_lib::user_data::Item {
             item_template_id: uuid::Uuid::parse_str(item.template_uuid)
                 .expect("PROMOTION_ITEMS holds valid UUIDs"),
@@ -850,15 +879,39 @@ mod tests {
     }
 
     #[test]
+    fn the_card_never_claims_a_backpack_version_holding_items_it_hides() {
+        // Arena 1 level 3 (stackables only): card and durable move together.
+        let stack_only = promotion_rewards(99, 100, 50);
+        assert_eq!(promotion_backpack_bumps(&stack_only, false), (1, 1));
+        // Arena 3 (Gauntlets, no stackables), card switch off: the card claims
+        // nothing; the durable write still moves past the hidden item.
+        let items_only = promotion_rewards(999, 1000, 50);
+        assert_eq!(promotion_backpack_bumps(&items_only, false), (0, 1));
+        assert_eq!(promotion_backpack_bumps(&items_only, true), (1, 1));
+        // One match crossing a stackable rung AND an item rung: the card's N+1
+        // carries the stackables only, so the server must be at N+2.
+        let both = promotion_rewards(95, 1000, 50);
+        assert!(!both.stackable_items.is_empty() && !both.items.is_empty());
+        assert_eq!(promotion_backpack_bumps(&both, false), (1, 2));
+        assert_eq!(promotion_backpack_bumps(&both, true), (1, 1));
+        // Nothing crossed: nothing moves.
+        assert_eq!(promotion_backpack_bumps(&promotion_rewards(10, 20, 50), false), (0, 0));
+    }
+
+    #[test]
     fn promotion_item_ids_are_stable_per_character_and_distinct() {
         let a = uuid::Uuid::from_u128(1);
         let b = uuid::Uuid::from_u128(2);
+        let s1 = uuid::Uuid::from_u128(0x51);
+        let s2 = uuid::Uuid::from_u128(0x52);
         let boots = &PROMOTION_ITEMS[2];
         let shield = &PROMOTION_ITEMS[3];
-        assert_eq!(promotion_item_id(a, boots), promotion_item_id(a, boots));
-        assert_ne!(promotion_item_id(a, boots), promotion_item_id(a, shield));
-        assert_ne!(promotion_item_id(a, boots), promotion_item_id(b, boots));
-        let item = promotion_reward_item(a, shield);
+        assert_eq!(promotion_item_id(a, s1, boots), promotion_item_id(a, s1, boots));
+        assert_ne!(promotion_item_id(a, s1, boots), promotion_item_id(a, s1, shield));
+        assert_ne!(promotion_item_id(a, s1, boots), promotion_item_id(b, s1, boots));
+        // A new season's re-grant is a NEW instance, never last season's id.
+        assert_ne!(promotion_item_id(a, s1, boots), promotion_item_id(a, s2, boots));
+        let item = promotion_reward_item(a, s1, shield);
         let v = serde_json::to_value(&item).unwrap();
         assert_eq!(v["itemTemplateId"], "d454df43-e765-449f-9a4d-8e807c36d023");
         assert_eq!(v["temperingLevel"], 0);

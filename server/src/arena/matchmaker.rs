@@ -631,6 +631,7 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     lo.character_experience = r.character.0.experience;
     lo.backpack_version = r.inventory.0.backpack_version;
     lo.treasury_version = r.inventory.0.treasury_version;
+    lo.pvp_season_id = r.character.0.pvp_season_id;
     lo.next_treasury_chest_id = r.inventory.0.treasury.next_chest_id();
     lo.stackable_counts = r.inventory.0.backpack.stackable_items.counts().collect();
     lo.arena_chests_earned = r.server_state.0.arena_chests_earned;
