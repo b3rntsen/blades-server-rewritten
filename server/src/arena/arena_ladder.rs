@@ -205,6 +205,41 @@ pub fn promotion_item_id(character_id: uuid::Uuid, item: &PromotionItem) -> uuid
     uuid::Uuid::new_v8(bytes)
 }
 
+/// Whether the match-end card shows promotion items in its backpack change set.
+///
+/// **Off by default.** Retail promotion cards carrying items were never captured,
+/// so whether the result screen survives `inventory.backpack.items` on op49 is
+/// unproven (the same reason #401 kept the 25-fight weapon off the card). With
+/// the switch off the items still land in the backpack durably, in the match's
+/// own transaction, and the client sees them on its next inventory load; the
+/// card simply says nothing about them. Turn it on with
+/// `ARENA_PROMOTION_ITEMS_ON_CARD=1` once an emulator promotion has been checked.
+pub fn promotion_items_on_card() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ARENA_PROMOTION_ITEMS_ON_CARD")
+            .map(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
+/// The promotion items the match-end card carries: all of them when
+/// `on_card`, none otherwise. The durable grant does not consult this.
+pub fn card_promotion_items(
+    promo: &PromotionRewards,
+    character_id: uuid::Uuid,
+    on_card: bool,
+) -> Vec<blades_lib::economy::RewardItem> {
+    if !on_card {
+        return Vec::new();
+    }
+    promo
+        .items
+        .iter()
+        .map(|item| promotion_reward_item(character_id, item))
+        .collect()
+}
+
 /// The backpack entry a promotion item becomes: retail's plain, un-tempered copy.
 pub fn promotion_reward_item(
     character_id: uuid::Uuid,

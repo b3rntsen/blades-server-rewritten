@@ -1908,13 +1908,14 @@ impl MatchInstance {
                 })
                 .collect::<Vec<_>>();
 
-            // A new arena's Blades piece(s) (#319). Same deterministic ids as the
-            // durable grant in `arena_economy`, so the card and the backpack agree.
-            let inventory_items = promo
-                .items
-                .iter()
-                .map(|item| arena_ladder::promotion_reward_item(character_id, item))
-                .collect::<Vec<_>>();
+            // A new arena's Blades piece(s) (#319), on the card only behind
+            // `ARENA_PROMOTION_ITEMS_ON_CARD` (default off). The durable grant in
+            // `arena_economy` always happens; when shown, the ids match it.
+            let inventory_items = arena_ladder::card_promotion_items(
+                &promo,
+                character_id,
+                arena_ladder::promotion_items_on_card(),
+            );
 
             // `rewardNewLevelArena` stays `{}` unless a rung paid a reward. The
             // populated shape is capture-derived (prod s168 / s460 / s607), not

@@ -1066,6 +1066,32 @@ mod tests {
         assert!(promotion_needs_loot_marker(&promo));
     }
 
+    /// With the card switch OFF (the default) the match-end card carries no
+    /// promotion items, while the durable grant still stages them; ON, the card
+    /// shows exactly the items, with exactly the ids, the backpack receives.
+    #[test]
+    fn card_switch_off_hides_promotion_items_but_the_backpack_still_gets_them() {
+        let character = Uuid::from_u128(0x319);
+        let promo = arena_ladder::promotion_rewards(2490, 2510, 50);
+
+        let mut reward = RewardGrant::default();
+        assert_eq!(add_promotion_items(&mut reward, &promo, character), 2);
+
+        let off = arena_ladder::card_promotion_items(&promo, character, false);
+        assert!(off.is_empty(), "switch off: nothing on the card");
+        assert_eq!(reward.items.len(), 2, "switch off: backpack still granted");
+
+        let on = arena_ladder::card_promotion_items(&promo, character, true);
+        assert_eq!(on, reward.items, "switch on: card == durable grant");
+    }
+
+    #[test]
+    fn the_card_switch_defaults_off() {
+        if std::env::var_os("ARENA_PROMOTION_ITEMS_ON_CARD").is_none() {
+            assert!(!arena_ladder::promotion_items_on_card());
+        }
+    }
+
     #[test]
     fn crossing_500_stages_premium_gems_for_durable_application() {
         let promo = arena_ladder::promotion_rewards(499, 500, 86);
