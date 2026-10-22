@@ -346,8 +346,30 @@ pub fn apply_equipment_updates(
         .collect();
     let written: std::collections::HashSet<Uuid> = accepted.iter().map(|(s, _)| *s).collect();
 
+    // Report #356: a slot whose target is the item ALREADY worn there is kept, not
+    // round-tripped through the backpack. The client fills every empty slot of a saved
+    // build with what is currently worn, so switching to an armour-only build sends the
+    // worn weapon, shield and jewellery back unchanged. Round-tripping them listed each
+    // one in `backpack.removedItems` — "this item left your backpack" for an item that
+    // was never in it. Retail did not: across the capture snapshot's 1,236 gear
+    // switches, 6,977 of 6,987 kept slots (368 of them the weapon) were echoed in
+    // `equippedItems` only, never in the backpack diff.
+    let kept: std::collections::HashSet<Uuid> = accepted
+        .iter()
+        .filter(|(slot, target)| {
+            target.is_some() && inv.loadout.equipped_items.0.get(slot).map(|e| e.id) == *target
+        })
+        .map(|(s, _)| *s)
+        .collect();
+    for slot in &kept {
+        tracker
+            .modified_loadout
+            .modified_equipped_items
+            .insert(*slot);
+    }
+
     // Phase 1: return whatever occupies each written slot to the backpack.
-    for (slot, _) in &accepted {
+    for (slot, _) in accepted.iter().filter(|(s, _)| !kept.contains(s)) {
         if let Some(prev) = inv.loadout.equipped_items.0.remove(slot) {
             tracker
                 .modified_loadout
@@ -359,7 +381,7 @@ pub fn apply_equipment_updates(
     }
 
     // Phase 2: equip every target.
-    for (slot, target) in &accepted {
+    for (slot, target) in accepted.iter().filter(|(s, _)| !kept.contains(s)) {
         let Some(item_id) = target else { continue };
         if let Some(item) = inv.backpack.items.0.remove(item_id) {
             // Instanced gear from the backpack (including an item phase 1 just
@@ -716,6 +738,70 @@ mod tests {
             update.backpack.items.0.is_empty(),
             "a ring served as a backpack item is what the client flags as new"
         );
+    }
+
+    /// Report #356 (SpaceMunk): "switching to a loadout containing only armour freezes
+    /// the game".
+    ///
+    /// The client fills a build's empty slots with what is worn now, so the switch to
+    /// an armour-only build names the worn weapon, shield and ring again and only the
+    /// armour changes. Retail's reply (capture 53184, a build saved with an empty
+    /// weapon and shield) listed only the CHANGED items in `backpack.removedItems`. We
+    /// round-tripped every slot through the backpack and so told the client that the
+    /// weapon in its hand had just left its backpack.
+    #[test]
+    fn an_armour_only_switch_reports_only_the_armour_in_the_backpack_diff() {
+        let gd = slot_test_game_data();
+        let slot = |s: &str| -> Uuid { s.parse().unwrap() };
+        let (weapon_slot, shield_slot, body_slot, ring_slot) = (
+            slot("417e79de-c810-42f8-8273-f9759df6ae25"),
+            slot("862605de-c67f-4bce-b527-4e5fb6f25162"),
+            slot("897a600c-91d6-4449-af09-173da88a907e"),
+            slot(RING_SLOT_1),
+        );
+        let (sword, shield, ring) = (Uuid::from_u128(0x5a), Uuid::from_u128(0x5b), Uuid::from_u128(0x5c));
+        let (old_cuirass, heavy_cuirass) = (Uuid::from_u128(0xc1), Uuid::from_u128(0xc2));
+
+        let mut inv = inv();
+        wear(&mut inv, weapon_slot, sword, WEAPON);
+        wear(&mut inv, shield_slot, shield, SHIELD);
+        wear(&mut inv, ring_slot, ring, RING);
+        wear(&mut inv, body_slot, old_cuirass, ARMOUR);
+        inv.backpack.items.0.insert(heavy_cuirass, item_of(ARMOUR));
+
+        let mut t = InventoryChangeTracker::default();
+        apply_equipment_updates(
+            &mut inv,
+            &HashMap::from([
+                (weapon_slot, Some(sword)),
+                (shield_slot, Some(shield)),
+                (ring_slot, Some(ring)),
+                (body_slot, Some(heavy_cuirass)),
+            ]),
+            &mut t,
+            Some(&gd),
+        );
+
+        assert_eq!(worn(&inv, weapon_slot), Some(sword));
+        assert_eq!(worn(&inv, shield_slot), Some(shield));
+        assert_eq!(worn(&inv, ring_slot), Some(ring));
+        assert_eq!(worn(&inv, body_slot), Some(heavy_cuirass));
+
+        let update = inv.generate_client_update(&t);
+        assert_eq!(
+            update.backpack.removed_items,
+            std::collections::HashSet::from([heavy_cuirass]),
+            "only the cuirass that left the backpack is reported removed"
+        );
+        assert_eq!(
+            update.backpack.items.0.keys().copied().collect::<std::collections::HashSet<_>>(),
+            std::collections::HashSet::from([old_cuirass]),
+            "only the cuirass taken off arrives in the backpack"
+        );
+        // Retail still echoes every requested slot in equippedItems (1,236 of 1,236).
+        assert_eq!(update.loadout.equipped_items.0.len(), 4);
+        assert_eq!(update.loadout.equipped_items.0[&weapon_slot].id, sword);
+        assert!(update.loadout.unequipped_item_slots.is_empty());
     }
 
     /// A one-way move (worn ring goes to the other ring slot, a backpack ring takes

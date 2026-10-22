@@ -283,6 +283,10 @@ pub struct Loadout {
 #[serde(rename_all = "camelCase")]
 pub struct LoadoutUpdate {
     pub equipped_items: EquippedItems,
+    /// Omitted when empty, as retail did (#356): of 3,669 `loadout` objects in the
+    /// capture snapshot's responses, 49 carried a non-empty `unequippedItemSlots` and
+    /// none an empty one.
+    #[serde(skip_serializing_if = "HashSet::is_empty")]
     pub unequipped_item_slots: HashSet<Uuid>,
     /// The full equipped-consumable list AFTER this update (echoed only when it changed
     /// this request), so the client's loadout diff sees the potion equip land. Omitted
@@ -510,9 +514,18 @@ mod wire_camelcase_tests {
         let j = serde_json::to_string(&bp).unwrap();
         assert!(j.contains("removedItems"), "BackpackUpdate not camelCase: {j}");
         assert!(!j.contains("removed_items"), "BackpackUpdate still snake: {j}");
-        let lo = LoadoutUpdate::default();
+        let mut lo = LoadoutUpdate::default();
+        lo.unequipped_item_slots.insert(uuid::Uuid::nil());
         let lj = serde_json::to_string(&lo).unwrap();
         assert!(lj.contains("equippedItems") && lj.contains("unequippedItemSlots"), "LoadoutUpdate not camelCase: {lj}");
+    }
+
+    /// #356: retail never served an empty `unequippedItemSlots` (0 of 3,669 loadout
+    /// objects); it left the key out.
+    #[test]
+    fn an_empty_unequipped_slot_list_is_left_out_like_retail() {
+        let lj = serde_json::to_string(&LoadoutUpdate::default()).unwrap();
+        assert_eq!(lj, r#"{"equippedItems":{}}"#);
     }
 
     /// A `Loadout` with NO equipped consumables must serialize WITHOUT the
