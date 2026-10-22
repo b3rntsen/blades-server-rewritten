@@ -53,6 +53,7 @@ pub const RING: u64 = 10;
 /// `ItemType` of a necklace ("jewelry" in the client's enum).
 pub const NECKLACE: u64 = 11;
 
+#[cfg(test)]
 pub use blades_lib::features::jewelry_grades::{JEWELRY_GRADES, JEWELRY_PROPERTY_COUNT_PERCENT};
 
 /// The GRADING tiers (`_providedBonuses`) of one randomly graded ring or
@@ -86,6 +87,9 @@ fn pool(item_type: u64) -> Option<Vec<Uuid>> {
 
 /// Whether a ring (`RING`) or necklace (`NECKLACE`) can carry GRADING property
 /// `id` — i.e. it is on that slot's APK list. `false` for any other item type.
+/// Only the economy audit and shop tests check this; live rolls draw from
+/// [`pool`] directly.
+#[cfg(test)]
 pub fn slot_allows(item_type: u64, id: Uuid) -> bool {
     pool(item_type).is_some_and(|p| p.contains(&id))
 }

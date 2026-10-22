@@ -1646,9 +1646,7 @@ pub async fn put_arena_ranking_config(
 #[diesel(table_name = crate::schema::arena_ranking_config)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct RankingConfigRow {
-    pub id: Uuid,
     pub version: i32,
-    pub config: JsonDbWrapper<Value>,
     pub updated_by: Option<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub note: Option<String>,
