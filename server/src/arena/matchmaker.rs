@@ -488,12 +488,40 @@ async fn record_match_resolved(
 }
 
 /// Load a player's combat loadout (equipped abilities + weapon damage enchants)
-/// from their character row. **NOT called from the matchmaker path** — awaiting it
-/// inline on the single matchmaker actor hung all matchmaking (see `resolve`).
-/// Re-enable only OFF the actor: a spawned task, a bounded `tokio::time::timeout`,
-/// and/or a per-user cache, so a slow `characters` query can't stall matches.
-#[allow(dead_code)]
+/// from their character row. Awaited on the matchmaker actor only under a bounded
+/// `tokio::time::timeout` per player: awaiting it unbounded once hung all
+/// matchmaking (see `resolve`).
+///
+/// With `arena_fight_gift::WEAPON_ON_RESULT_CARD` on, also reads the account's
+/// finished-fight count, so the match-end card can show the every-25th-fight
+/// weapon. A failed read leaves it unknown and the milestone falls back to a
+/// claimable gift.
 async fn load_loadout(
+    db: &Option<DbPool>,
+    user_id: Uuid,
+    character_id: Option<Uuid>,
+) -> crate::arena::combat::Loadout {
+    let mut lo = load_character_loadout(db, user_id, character_id).await;
+    // Only the result-card delivery needs the count (#401); while it is off the
+    // milestone is decided by the writer alone, as in #539.
+    if lo.character_uuid.is_empty() || !crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD {
+        return lo;
+    }
+    if let Some(db) = db
+        && let Ok(mut conn) = db.get().await
+    {
+        match crate::arena::arena_fight_gift::account_fights(&mut conn, user_id).await {
+            Ok(n) => lo.account_arena_fights = Some(n),
+            Err(e) => warn!(
+                "matchmaker: account fight count for user {user_id} unreadable ({e}); \
+                 a weapon milestone this match becomes a claimable gift"
+            ),
+        }
+    }
+    lo
+}
+
+async fn load_character_loadout(
     db: &Option<DbPool>,
     user_id: Uuid,
     character_id: Option<Uuid>,

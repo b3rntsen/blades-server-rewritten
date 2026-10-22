@@ -442,6 +442,9 @@ async fn main() -> Result<()> {
             // Without it the victory card's gold / XP / trophies are wire-only and
             // vanish the moment the client re-syncs from REST.
             arena::arena_economy::install(db_pool.clone());
+            // The match-end card builds the every-25th-fight weapon synchronously,
+            // so it reads the nine weapons' durability from here, not the AppState.
+            arena::arena_fight_gift::install_durability(&repair_data);
             arena::ranking::spawn_h2h_reconcile_task(db_pool.clone());
 
             let arena_import_token = std::env::var("ARENA_IMPORT_TOKEN").ok();
