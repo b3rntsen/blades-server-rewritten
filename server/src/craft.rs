@@ -500,7 +500,7 @@ async fn start_craft(
         // The enchant is rolled HERE, once, and stored in the job's results;
         // `/finish` only collects what is stored, so re-requesting it cannot
         // re-roll (and a second `/finish` 404s — the job is gone).
-        let mutated = apply_item_mod(
+        let mut mutated = apply_item_mod(
             &existing,
             tempering_level,
             recipe_id,
@@ -509,6 +509,9 @@ async fn start_craft(
             game_items,
             &mut rand::rng(),
         );
+        if tempering_level > 0 {
+            restore_tempered_condition(&mut mutated, repair_data);
+        }
         entry.inventory.0.backpack_version += 1;
         let reward_item = RewardItem {
             id: item_id,
@@ -848,6 +851,13 @@ async fn collect_craft(
     // permanently uncollectable craft.
     let (_, repaired_results) = repaired_craft_fields(&job, static_data, repair_data);
     let mut reward = reward_from_results(&repaired_results);
+    // A temper started before #419 was fixed stored the item at its OLD condition;
+    // collecting it must still hand it back whole.
+    if job.crafting_type_id == item_mod_crafting_type(1) {
+        for r in &mut reward.items {
+            restore_tempered_condition(&mut r.item, repair_data);
+        }
+    }
     remint_colliding_reward_ids(&mut reward, &entry.inventory.0);
     let town_xp = craft_town_xp(&job, &reward);
 
@@ -1599,6 +1609,25 @@ fn remint_result_item_ids(mut results: Value) -> Value {
     results
 }
 
+/// A tempered item comes back at FULL condition for its NEW level (tracker #419).
+///
+/// Max durability climbs with the temper level (`item_durability.json`, from the APK's
+/// `ItemTemperProperties._maxDurability`), so keeping the old durability left every
+/// tempered item below its new maximum — "needs repair" straight off the bench. All 13
+/// captured retail temper results (levels +1 to +10) carry exactly the table's maximum
+/// at the new level; the three this server answered before the fix carried the old value.
+///
+/// A template the table does not know keeps its durability: there is no maximum to
+/// restore to, and inventing one could lower it.
+fn restore_tempered_condition(item: &mut Item, repair_data: &RepairData) {
+    if item.tempering_level == 0 {
+        return;
+    }
+    if let Some(max) = repair_data.max_durability(item.item_template_id, item.tempering_level) {
+        item.durability = max;
+    }
+}
+
 /// Apply a temper or enchant to an existing item, returning the mutated copy.
 ///
 /// - `tempering_level > 0` → **temper**: set `temperingLevel`, keeping everything else
@@ -1933,6 +1962,45 @@ mod tests {
         );
         assert_eq!(out.durability, 300.0);
         assert_eq!(out.item_template_id, existing.item_template_id);
+    }
+
+    /// Tracker #419, against retail's own numbers: capture 129863 tempered template
+    /// `01d19d80-…` to +5 and got 416.875 back; capture 225292 tempered `cdbabba6-…` to +1
+    /// and got 51.76 (the table's 51.7599983…). Worn or unworn going in, the item
+    /// leaves the bench at the new level's maximum.
+    #[test]
+    fn a_tempered_item_leaves_the_bench_at_full_condition() {
+        let rd = repair_data_from_deploy();
+        for (template, level, retail) in [
+            ("01d19d80-cd29-4afc-80d1-0d8ff4a0219f", 5, 416.875),
+            ("cdbabba6-a6a2-46ed-a086-93d77acc274a", 1, 51.76),
+        ] {
+            let Some(max) = rd.max_durability(uuid(template), level) else {
+                panic!("{template} missing from item_durability.json");
+            };
+            assert!(
+                (max - retail).abs() < 1e-3,
+                "{template}: table {max} vs retail {retail}"
+            );
+            for before in [rd.max_durability(uuid(template), level - 1).unwrap(), 1.0] {
+                let mut item = Item {
+                    item_template_id: uuid(template),
+                    tempering_level: level,
+                    durability: before,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: ItemPropertiesAll::default(),
+                };
+                restore_tempered_condition(&mut item, rd);
+                assert_eq!(item.durability, max, "{template} +{level} from {before}");
+                assert!(!rd.needs_repair(&item));
+            }
+        }
+
+        // No row in the table: nothing to restore to, so leave it alone.
+        let mut unknown = item_with(3, vec![]);
+        restore_tempered_condition(&mut unknown, rd);
+        assert_eq!(unknown.durability, 300.0);
     }
 
     /// The captured-outcome fallback (a recipe the APK tables lack) still applies an
@@ -5448,6 +5516,134 @@ mod tests {
             let job = &after.server_state.0.craft_jobs[0];
             assert_eq!(job.crafting_type_id, item_mod_crafting_type(10));
             assert_eq!(job.results["items"][0]["temperingLevel"], 10);
+        }
+
+        /// The template behind this server's own pre-fix temper captures (343548 /
+        /// 343555): a +9 temper came back at 388.125 against a new maximum of 560.
+        const TEMPER_419_TEMPLATE: &str = "0e24274c-1f9f-4a75-b724-59237776a6f5";
+
+        /// Put a +8 item of [`TEMPER_419_TEMPLATE`] in the seeded backpack, unworn
+        /// (full condition at +8, which is 487.5).
+        async fn seed_plus_eight(conn: &mut AsyncPgConnection, s: &Seeded) -> f64 {
+            let full_at_8 = repair_data_from_deploy()
+                .max_durability(uuid(TEMPER_419_TEMPLATE), 8)
+                .expect("template is in item_durability.json");
+            let mut row = stored(conn, s).await;
+            row.inventory.0.backpack.items.0.insert(
+                s.item_id,
+                Item {
+                    item_template_id: uuid(TEMPER_419_TEMPLATE),
+                    tempering_level: 8,
+                    durability: full_at_8,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: ItemPropertiesAll::default(),
+                },
+            );
+            write_back(conn, row).await.unwrap();
+            full_at_8
+        }
+
+        /// Tracker report #419: "Tempering an item completes but the resulting item
+        /// requires repair." An unworn +8 item tempered to +9 must come back at the
+        /// +9 maximum — in the start response, the stored job, and the backpack after
+        /// collecting — exactly as all 13 captured retail temper results do.
+        #[tokio::test]
+        async fn a_tempered_item_comes_back_at_full_condition_for_its_new_level() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 0).await;
+            let full_at_8 = seed_plus_eight(&mut conn, &s).await;
+            let full_at_9 = rd.max_durability(uuid(TEMPER_419_TEMPLATE), 9).unwrap();
+            assert!(
+                full_at_9 > full_at_8,
+                "the ladder climbs: {full_at_8} -> {full_at_9}"
+            );
+
+            let resp = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 9),
+            )
+            .await
+            .expect("temper starts");
+            let shown = &resp.craft["results"]["items"][0];
+            assert_eq!(shown["temperingLevel"], 9);
+            assert_eq!(shown["durability"].as_f64(), Some(full_at_9));
+
+            let craft_id = stored(&mut conn, &s).await.server_state.0.craft_jobs[0].id;
+            collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("finish");
+            let row = stored(&mut conn, &s).await;
+            let item = &row.inventory.0.backpack.items.0[&s.item_id];
+            assert_eq!(item.tempering_level, 9);
+            assert_eq!(item.durability, full_at_9);
+            assert!(!rd.needs_repair(item), "a fresh temper must not need repair");
+        }
+
+        /// A temper started BEFORE the fix stored the item at its old condition.
+        /// Collecting it after the deploy must still hand it back whole.
+        #[tokio::test]
+        async fn a_temper_stored_before_the_fix_still_collects_at_full_condition() {
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 0).await;
+            let full_at_8 = seed_plus_eight(&mut conn, &s).await;
+            let full_at_9 = rd.max_durability(uuid(TEMPER_419_TEMPLATE), 9).unwrap();
+
+            // What the pre-fix server stored: the item pulled out of the backpack,
+            // level raised, durability untouched.
+            let mut row = stored(&mut conn, &s).await;
+            let mut item = row.inventory.0.backpack.items.0.remove(&s.item_id).unwrap();
+            item.tempering_level = 9;
+            assert_eq!(item.durability, full_at_8);
+            let craft_id = Uuid::new_v4();
+            row.server_state.0.craft_jobs.push(CraftJob {
+                id: craft_id,
+                recipe_id: Uuid::new_v4(),
+                building_id: Uuid::new_v4(),
+                crafting_type_id: item_mod_crafting_type(9),
+                completed_at_ms: 0,
+                results: serde_json::json!({
+                    "items": [RewardItem { id: s.item_id, item }]
+                }),
+                ..healthy_temper_job()
+            });
+            write_back(&mut conn, row).await.unwrap();
+
+            collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("finish");
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(
+                row.inventory.0.backpack.items.0[&s.item_id].durability,
+                full_at_9
+            );
         }
 
         /// Credit a seeded character with exactly the APK inputs of `recipes`.
