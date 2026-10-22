@@ -4355,8 +4355,6 @@ mod tests {
         assert!(f.tracked_statuses(t0).is_empty());
     }
 
-    use super::*;
-
     /// **The layout is pinned to real captured words, because nothing else was.**
     ///
     /// Health and Magicka sat swapped in `PackedStats` for the whole life of the

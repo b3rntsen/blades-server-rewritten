@@ -784,6 +784,11 @@ pub(crate) fn product_town_xp(
 /// here. An entry whose bucket is not one this function handles makes the whole
 /// offer ungrantable rather than being dropped: a partial grant is a silent
 /// short-change, and the player paid.
+///
+/// Test-only convenience: it rolls with default (empty) enchanting tables. The
+/// live purchase path, [`purchase_reward`], calls
+/// [`grant_from_offer_contents_with_enchanting`] with the real ones.
+#[cfg(test)]
 fn grant_from_offer_contents(
     contents: Option<&OfferContents>,
     repair_data: &blades_lib::features::repair::RepairData,
