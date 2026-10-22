@@ -217,19 +217,52 @@ pub fn promotion_item_id(
     uuid::Uuid::new_v8(bytes)
 }
 
-/// How far one match moves `backpackVersion` for its promotion: `(card, durable)`.
+/// How far one match moves `backpackVersion`: `(card, durable)`.
 ///
-/// The card must never claim a version whose item set it does not carry. With
-/// promotion items hidden from the card (the default), the card reports the
-/// bump for what it does carry (stackables) and the durable write moves one
-/// further for the hidden items — so the client's version stays BEHIND the
-/// server's and the next inventory load fetches them, instead of the client
-/// believing it is current at a version that includes items it never saw.
-pub fn promotion_backpack_bumps(promo: &PromotionRewards, items_on_card: bool) -> (u64, u64) {
-    let has_items = !promo.items.is_empty();
-    let card = u64::from(!promo.stackable_items.is_empty() || (has_items && items_on_card));
-    let hidden = u64::from(has_items && !items_on_card);
-    (card, card + hidden)
+/// `card_backpack_change` — the op49 card carries a backpack change (promotion
+/// stackables, the #401 card weapon, or promotion items when the card shows
+/// them): one bump, on the card and in the database alike, exactly as post-#544.
+/// `hidden_promotion_items` — promotion items were granted that the card does
+/// NOT show (the default): the database moves one further, so the card never
+/// claims a version holding items it did not carry. The client stays behind the
+/// server and fetches them on its next inventory load, instead of believing it
+/// is current at a version that includes items it never saw.
+pub fn backpack_bumps(card_backpack_change: bool, hidden_promotion_items: bool) -> (u64, u64) {
+    let card = u64::from(card_backpack_change);
+    (card, card + u64::from(hidden_promotion_items))
+}
+
+/// The promotion items still to grant for a crossing: every crossed rung's
+/// pieces, minus any whose id the character already holds. Shared by the card
+/// and the durable write so both apply the same owned-skip.
+pub fn promotion_items_to_grant(
+    promo: &PromotionRewards,
+    character_id: uuid::Uuid,
+    season_id: uuid::Uuid,
+    owned: impl Fn(&uuid::Uuid) -> bool,
+) -> Vec<blades_lib::economy::RewardItem> {
+    promo
+        .items
+        .iter()
+        .map(|item| promotion_reward_item(character_id, season_id, item))
+        .filter(|granted| !owned(&granted.id))
+        .collect()
+}
+
+/// Which of this season's promotion-item ids the character already holds, in
+/// the backpack or equipped. Computed at queue time for the card's owned-skip.
+pub fn owned_promotion_item_ids(
+    character_id: uuid::Uuid,
+    season_id: uuid::Uuid,
+    inventory: &blades_lib::user_data::CompleteInventory,
+) -> std::collections::HashSet<uuid::Uuid> {
+    PROMOTION_ITEMS
+        .iter()
+        .map(|item| promotion_item_id(character_id, season_id, item))
+        .filter(|id| {
+            blades_lib::features::character_ops::owned_gear_item(inventory, id).is_some()
+        })
+        .collect()
 }
 
 /// Whether the match-end card shows promotion items in its backpack change set.
@@ -250,22 +283,20 @@ pub fn promotion_items_on_card() -> bool {
     })
 }
 
-/// The promotion items the match-end card carries: all of them when
-/// `on_card`, none otherwise. The durable grant does not consult this.
+/// The promotion items the match-end card carries: the grantable ones (not
+/// already owned, same rule as the durable write) when `on_card`, none
+/// otherwise.
 pub fn card_promotion_items(
     promo: &PromotionRewards,
     character_id: uuid::Uuid,
     season_id: uuid::Uuid,
+    owned_ids: &std::collections::HashSet<uuid::Uuid>,
     on_card: bool,
 ) -> Vec<blades_lib::economy::RewardItem> {
     if !on_card {
         return Vec::new();
     }
-    promo
-        .items
-        .iter()
-        .map(|item| promotion_reward_item(character_id, season_id, item))
-        .collect()
+    promotion_items_to_grant(promo, character_id, season_id, |id| owned_ids.contains(id))
 }
 
 /// The backpack entry a promotion item becomes: retail's plain, un-tempered copy.
@@ -880,22 +911,32 @@ mod tests {
 
     #[test]
     fn the_card_never_claims_a_backpack_version_holding_items_it_hides() {
-        // Arena 1 level 3 (stackables only): card and durable move together.
-        let stack_only = promotion_rewards(99, 100, 50);
-        assert_eq!(promotion_backpack_bumps(&stack_only, false), (1, 1));
-        // Arena 3 (Gauntlets, no stackables), card switch off: the card claims
-        // nothing; the durable write still moves past the hidden item.
-        let items_only = promotion_rewards(999, 1000, 50);
-        assert_eq!(promotion_backpack_bumps(&items_only, false), (0, 1));
-        assert_eq!(promotion_backpack_bumps(&items_only, true), (1, 1));
-        // One match crossing a stackable rung AND an item rung: the card's N+1
-        // carries the stackables only, so the server must be at N+2.
-        let both = promotion_rewards(95, 1000, 50);
-        assert!(!both.stackable_items.is_empty() && !both.items.is_empty());
-        assert_eq!(promotion_backpack_bumps(&both, false), (1, 2));
-        assert_eq!(promotion_backpack_bumps(&both, true), (1, 1));
-        // Nothing crossed: nothing moves.
-        assert_eq!(promotion_backpack_bumps(&promotion_rewards(10, 20, 50), false), (0, 0));
+        // Stackables or the #401 weapon only: card and database move together,
+        // exactly as post-#544 main.
+        assert_eq!(backpack_bumps(true, false), (1, 1));
+        // Promotion items hidden from the card, nothing else: the card claims
+        // nothing; the database still moves past the hidden items.
+        assert_eq!(backpack_bumps(false, true), (0, 1));
+        // A stackable rung (or the weapon) AND hidden items in one match: the
+        // card's N+1 carries only what it shows, so the server is at N+2.
+        assert_eq!(backpack_bumps(true, true), (1, 2));
+        // Nothing changed: nothing moves.
+        assert_eq!(backpack_bumps(false, false), (0, 0));
+    }
+
+    #[test]
+    fn the_card_and_the_durable_write_skip_the_same_owned_ids() {
+        let character = uuid::Uuid::from_u128(7);
+        let season = uuid::Uuid::from_u128(0x5ea5);
+        let promo = promotion_rewards(1990, 2010, 50); // Boots + Shield
+        let boots_id = promotion_item_id(character, season, &PROMOTION_ITEMS[2]);
+        let owned = std::collections::HashSet::from([boots_id]);
+        let card = card_promotion_items(&promo, character, season, &owned, true);
+        let durable = promotion_items_to_grant(&promo, character, season, |id| owned.contains(id));
+        assert_eq!(card, durable);
+        assert_eq!(card.len(), 1);
+        assert_ne!(card[0].id, boots_id, "an owned id never appears on the card");
+        assert!(card_promotion_items(&promo, character, season, &owned, false).is_empty());
     }
 
     #[test]

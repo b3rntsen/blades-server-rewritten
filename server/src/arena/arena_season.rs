@@ -153,15 +153,6 @@ pub fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// The scoring model in force right now.
-///
-/// Falls back to [`ScoringVariant::Shipped`] outside any configured season, so
-/// the arena keeps paying retail-shaped trophies between seasons instead of
-/// silently changing behaviour at midnight.
-pub fn active_scoring() -> ScoringVariant {
-    season_at(now_unix()).map(|s| s.scoring).unwrap_or(ScoringVariant::Shipped)
-}
-
 /// The season live at `now` (unix seconds), if any.
 ///
 /// Returns `None` before the first season opens, so the arena runs unseasoned

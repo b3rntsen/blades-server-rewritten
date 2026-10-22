@@ -784,6 +784,11 @@ pub(crate) fn product_town_xp(
 /// here. An entry whose bucket is not one this function handles makes the whole
 /// offer ungrantable rather than being dropped: a partial grant is a silent
 /// short-change, and the player paid.
+///
+/// Test-only convenience: it rolls with default (empty) enchanting tables. The
+/// live purchase path, [`purchase_reward`], calls
+/// [`grant_from_offer_contents_with_enchanting`] with the real ones.
+#[cfg(test)]
 fn grant_from_offer_contents(
     contents: Option<&OfferContents>,
     repair_data: &blades_lib::features::repair::RepairData,
@@ -939,7 +944,11 @@ fn grant_from_offer_contents_with_enchanting(
                     arcane_tier: (entry.arcane_tier > 0).then_some(entry.arcane_tier),
                     properties: properties.clone(),
                 };
-                if !enchanting.secondary_tables.is_empty() {
+                // A THEMED ring or necklace (APK-authored GRADING, e.g. "Ebony
+                // Faerite Ring: Frostbite, Ice Spike, Blizzard Armor") is sold
+                // exactly as authored — see `is_themed_jewelry`. Only the rest is
+                // re-rolled.
+                if !enchanting.secondary_tables.is_empty() && !is_themed_jewelry(entry) {
                     let tier = entry
                         .enchanting
                         .iter()
@@ -984,6 +993,30 @@ fn grant_from_offer_contents_with_enchanting(
         return None;
     }
     Some(reward)
+}
+
+/// Whether an offer entry is a THEMED ring or necklace: one the APK authors a
+/// fixed GRADING set for (tracker #403). Such an offer is sold exactly as
+/// authored — that GRADING, `grade` = the sum of its tiers, and its authored
+/// ENCHANTING — on every purchase. Only gear that does not wear (jewellery) is
+/// ever graded (#220), so a non-empty authored GRADING already names jewellery.
+///
+/// Evidence, APK and retail (2026-10-16):
+/// * The APK's `ItemEnhancementCatalog` authors GRADING for 21 Sigil offers and
+///   leaves it EMPTY for every `_Arcane01/02` one; the editor names spell the
+///   theme out (`..._EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch`).
+/// * Every retail purchase of a themed offer we hold matches the authored set
+///   exactly, GRADING ids and tiers and ENCHANTING alike: `dac59a1a` (Frostbite /
+///   Ice Spike / Blizzard Armor), `579141c5` (Power Attack / Dodging Strike /
+///   Quick Strikes, AbsStm) and `fc8f44dd` (Armsman, FortMgcRegen) in
+///   `global_shop_grants.json` — 3 of 3, 8 GRADING and 5 ENCHANTING properties,
+///   pinned by `retail_themed_grants_are_the_authored_sets`.
+/// * f69663f2 (#386 era), which started re-rolling these, generalised from the
+///   three randomised jewellery BUNDLES (251 grants, all distinct); its own
+///   provenance records 0 named Sigil jewellery purchases in that snapshot
+///   (`jewelry_roll_ranges.json`).
+pub(crate) fn is_themed_jewelry(entry: &blades_lib::static_data::OfferContentEntry) -> bool {
+    !entry.grading.is_empty()
 }
 
 /// The GRADING one purchase of an arcane item with no authored grading gets.
@@ -2801,10 +2834,13 @@ mod offer_contents_fallback {
         );
     }
 
-    /// Sigil-store jewelry with authored fixed enchantments must roll a fresh set
-    /// per purchase. The template/offer stay fixed; ENCHANTING/GRADING do not.
+    /// Tracker #403: a THEMED Sigil ring — APK-authored GRADING and ENCHANTING —
+    /// is sold exactly as authored on every purchase, as retail sold it (its one
+    /// captured retail grant is that set). This test asserted the opposite until
+    /// #403: f69663f2 generalised "retail rolled every jewel" from the randomised
+    /// jewellery bundles, never from a named offer.
     #[test]
-    fn sigil_jewelry_rolls_per_purchase_inside_the_measured_count_range() {
+    fn a_themed_sigil_ring_keeps_its_authored_properties_every_purchase() {
         let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let sd = crate::static_loader::load(&dir);
         let rd = repair_data();
@@ -2815,14 +2851,17 @@ mod offer_contents_fallback {
             .expect("Ebony Faerite Ring offer present");
         let authored = &contents.contents[0];
         assert_eq!(authored.item_template_id, EBONY_FAERITE_RING);
-        assert_eq!(
-            authored.enchanting.len(),
-            3,
-            "fixture must be the fixed-secondary offer"
+        assert_eq!(authored.enchanting.len(), 3, "fixture must be the fixed-secondary offer");
+        assert!(
+            !sd.enchanting.secondary_tables.is_empty(),
+            "the prod path (reroll_sigil_jewelry) needs the real enchanting tables"
         );
-
-        let mut seen = std::collections::HashSet::new();
-        for nonce in 0..40 {
+        let props = |v: &[blades_lib::static_data::PropertyRef]| {
+            v.iter()
+                .map(|p| blades_lib::user_data::ItemSingleProperty { id: p.id, tier: p.tier })
+                .collect::<Vec<_>>()
+        };
+        for nonce in 0..200 {
             let reward = grant_from_offer_contents_with_enchanting(
                 Some(contents),
                 &rd,
@@ -2833,21 +2872,10 @@ mod offer_contents_fallback {
             .expect("Sigil jewelry offer grantable");
             let item = &reward.items[0].item;
             assert_eq!(item.item_template_id, EBONY_FAERITE_RING);
-            assert_eq!(
-                item.properties.enchanting.len(),
-                authored.enchanting.len(),
-                "roll must stay inside the offer's measured/authored count"
-            );
-            assert!((1..=6).contains(&item.grade.unwrap()), "grade range");
-            seen.insert(format!(
-                "{:?}|{:?}",
-                item.properties.enchanting, item.properties.grading
-            ));
+            assert_eq!(item.properties.grading, props(&authored.grading), "purchase {nonce}");
+            assert_eq!(item.properties.enchanting, props(&authored.enchanting), "purchase {nonce}");
+            assert_eq!(item.grade, Some(4), "grade = 1 + 1 + 2");
         }
-        assert!(
-            seen.len() > 1,
-            "same offer returned one frozen jewelry roll"
-        );
     }
 
     /// Negative control: the jewelry roll path must not touch non-jewelry Sigil gear.
@@ -4023,6 +4051,10 @@ mod report353_store_prestige {
 /// so every buyer got that one recorded necklace — same grade, same GRADING —
 /// on every purchase. Prod held 21 purchases of it across four characters, each
 /// a copy of the capture.
+///
+/// #403 narrowed this: of the six captured jewellery products #386 re-rolled,
+/// three are THEMED (APK-authored GRADING) and retail sold each exactly as
+/// authored, so they are fixed again. Only the three arcane ones roll.
 #[cfg(test)]
 mod report_386_captured_jewelry_rolls {
     use super::*;
@@ -4030,18 +4062,23 @@ mod report_386_captured_jewelry_rolls {
 
     /// Ebony Faerite Necklace of Assured Imbuement — the reporter's offer.
     const ARCANE_NECKLACE_OFFER: Uuid = Uuid::from_u128(0x79995d29_eac2_49a3_bfec_ce9e547b98de);
-    /// Ebony Faerite Necklace (Armsman, Fortify Magicka Regen): TWO authored
-    /// enchantments, also captured.
-    const TWO_ENCHANT_NECKLACE_OFFER: Uuid =
-        Uuid::from_u128(0xfc8f44dd_d4cf_48b8_b8b2_77eaaa0643b8);
-    /// Every non-randomised product whose captured grant shadowed a jewellery roll.
-    const CAPTURED_ROLLED_JEWELRY: [&str; 6] = [
-        "579141c5-4960-4280-9b29-98b8a88f9dfe",
-        "79995d29-eac2-49a3-bfec-ce9e547b98de",
-        "812ea9ef-c2af-406b-9b93-1897db4a6879",
-        "dac59a1a-7f22-4306-9117-fa90d44aee3d",
-        "e87d0348-84ee-48be-a19e-6201b38e4b74",
-        "fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8",
+    /// The captured ARCANE jewellery products: the APK leaves their GRADING
+    /// empty, so retail rolled it and so do we.
+    const CAPTURED_ROLLED_JEWELRY: [&str; 3] = [
+        "79995d29-eac2-49a3-bfec-ce9e547b98de", // EbonyFaeriteNecklace_Arcane02
+        "812ea9ef-c2af-406b-9b93-1897db4a6879", // EbonyFaeriteRing_Arcane02
+        "e87d0348-84ee-48be-a19e-6201b38e4b74", // GoldRubyRing_Arcane02
+    ];
+    /// Tracker #403: the THEMED jewellery products retail evidence covers. #386
+    /// listed them with the arcane three, but each is an APK-authored set and
+    /// its one captured RETAIL purchase (`global_shop_grants.json`, mined from
+    /// prod's `api_captures` up to 2026-07-01 by `build-shop-static.py`) is that
+    /// exact set — GRADING ids, tiers and ENCHANTING. The "21 identical copies"
+    /// in #386 were our server's purchases, not retail's.
+    const RETAIL_THEMED_JEWELRY: [(&str, &str); 3] = [
+        ("579141c5-4960-4280-9b29-98b8a88f9dfe", "EbonyFaeriteRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm"),
+        ("dac59a1a-7f22-4306-9117-fa90d44aee3d", "EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch"),
+        ("fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8", "EbonyFaeriteNecklace_Armsman_FortMgcRegen"),
     ];
     const CHAR_A: Uuid = Uuid::from_u128(0x489620db_7f90_4a03_bb7c_f7e92a9c73cb);
     const CHAR_B: Uuid = Uuid::from_u128(0xf7817aa6_5892_4794_871e_9b51a475a606);
@@ -4075,12 +4112,6 @@ mod report_386_captured_jewelry_rolls {
             "{:?}|{:?}|{:?}",
             item.grade, item.properties.grading, item.properties.enchanting
         )
-    }
-
-    fn enchant_set(item: &blades_lib::user_data::Item) -> Vec<Uuid> {
-        let mut ids: Vec<Uuid> = item.properties.enchanting.iter().map(|p| p.id).collect();
-        ids.sort_unstable();
-        ids
     }
 
     /// The defect itself, as a before/after: the captured grant is one fixed
@@ -4129,46 +4160,78 @@ mod report_386_captured_jewelry_rolls {
         );
     }
 
-    /// The named two-enchantment necklace: exactly two enchantments every time,
-    /// and the pair varies from purchase to purchase.
-    #[test]
-    fn a_two_enchantment_necklace_rolls_a_fresh_pair_each_purchase() {
-        let sd = sd();
-        let authored = &sd.global_shop_offer_contents[&TWO_ENCHANT_NECKLACE_OFFER].contents[0];
-        assert_eq!(authored.enchanting.len(), 2, "fixture: the two-enchantment offer");
-        let captured = captured_grant_for_product(sd, TWO_ENCHANT_NECKLACE_OFFER)
-            .expect("fixture: captured");
-        assert_eq!(captured.items[0].item.properties.enchanting.len(), 2);
+    fn sorted_props(v: &[blades_lib::user_data::ItemSingleProperty]) -> Vec<(Uuid, u64)> {
+        let mut out: Vec<(Uuid, u64)> = v.iter().map(|p| (p.id, p.tier)).collect();
+        out.sort_unstable();
+        out
+    }
 
-        let mut pairs = HashSet::new();
-        for n in 0..PURCHASES {
-            let item = buy(TWO_ENCHANT_NECKLACE_OFFER, CHAR_A, n);
-            assert_eq!(
-                item.properties.enchanting.len(),
-                2,
-                "purchase {n}: the authored count of enchantments"
-            );
-            let ids = enchant_set(&item);
-            assert_ne!(ids[0], ids[1], "purchase {n}: one enchantment twice");
-            assert!(item.grade.is_some(), "purchase {n}: ungraded necklace");
-            pairs.insert(ids);
+    /// #403, the evidence itself: every captured retail purchase of a themed
+    /// offer is exactly the APK-authored set. If a refreshed capture ever shows
+    /// one that is not, this fails and `is_themed_jewelry` must be revisited.
+    #[test]
+    fn retail_themed_grants_are_the_authored_sets() {
+        let sd = sd();
+        for (raw, name) in RETAIL_THEMED_JEWELRY {
+            let product = Uuid::parse_str(raw).unwrap();
+            let c = &sd.global_shop_offer_contents[&product];
+            let authored = &c.contents[0];
+            assert!(is_themed_jewelry(authored), "{name}: authored GRADING");
+            let retail = &sd.global_shop_grants[&product].items[0].item;
+            let auth = |v: &[blades_lib::static_data::PropertyRef]| {
+                let mut out: Vec<(Uuid, u64)> = v.iter().map(|p| (p.id, p.tier)).collect();
+                out.sort_unstable();
+                out
+            };
+            assert_eq!(sorted_props(&retail.properties.grading), auth(&authored.grading), "{name}: GRADING");
+            assert_eq!(sorted_props(&retail.properties.enchanting), auth(&authored.enchanting), "{name}: ENCHANTING");
+            assert_eq!(retail.grade, Some(authored.grading.iter().map(|p| p.tier).sum()), "{name}: grade");
         }
-        eprintln!(
-            "#386 two-enchantment necklace: {} distinct pairs in {PURCHASES} purchases (captured clone: 1)",
-            pairs.len()
-        );
-        assert!(
-            pairs.len() as u64 >= PURCHASES / 4,
-            "only {} distinct enchantment pairs in {PURCHASES} purchases",
-            pairs.len()
-        );
+    }
+
+    /// #403: every themed offer — all APK-authored GRADING, not only the three
+    /// retail purchases cover — yields its authored set on each of 200 purchases
+    /// by several characters, grade = sum of tiers.
+    #[test]
+    fn every_themed_offer_sells_its_fixed_set_over_200_purchases() {
+        let sd = sd();
+        let themed: Vec<Uuid> = sd
+            .global_shop_offer_contents
+            .iter()
+            .filter(|(_, c)| c.contents.iter().any(is_themed_jewelry))
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(themed.len(), 21, "the APK authors GRADING for 21 Sigil jewellery offers");
+        for product in themed {
+            let authored = &sd.global_shop_offer_contents[&product].contents[0];
+            let want_grading: Vec<(Uuid, u64)> = {
+                let mut v: Vec<_> = authored.grading.iter().map(|p| (p.id, p.tier)).collect();
+                v.sort_unstable();
+                v
+            };
+            let want_ench: Vec<(Uuid, u64)> = {
+                let mut v: Vec<_> = authored.enchanting.iter().map(|p| (p.id, p.tier)).collect();
+                v.sort_unstable();
+                v
+            };
+            let want_grade: u64 = authored.grading.iter().map(|p| p.tier).sum();
+            for n in 0..200u64 {
+                let who = if n % 2 == 0 { CHAR_A } else { CHAR_B };
+                let item = buy(product, who, n / 2);
+                assert_eq!(item.item_template_id, authored.item_template_id, "{product}");
+                assert_eq!(sorted_props(&item.properties.grading), want_grading, "{product}: purchase {n}");
+                assert_eq!(sorted_props(&item.properties.enchanting), want_ench, "{product}: purchase {n}");
+                assert_eq!(item.grade, Some(want_grade), "{product}: purchase {n}");
+                assert_eq!(item.durability, 0.0, "jewellery never wears");
+            }
+        }
     }
 
     /// Suspect 2 of the report: the nonce was only the purchase count, so every
     /// player's n-th purchase was the same item as everyone else's.
     #[test]
     fn two_characters_walk_different_sequences() {
-        for product in [ARCANE_NECKLACE_OFFER, TWO_ENCHANT_NECKLACE_OFFER] {
+        for product in [ARCANE_NECKLACE_OFFER] {
             let a: Vec<String> = (0..20).map(|n| roll_key(&buy(product, CHAR_A, n))).collect();
             let b: Vec<String> = (0..20).map(|n| roll_key(&buy(product, CHAR_B, n))).collect();
             let same = a.iter().zip(&b).filter(|(x, y)| x == y).count();
@@ -4861,14 +4924,18 @@ mod report_393_sigil_jewelry_property_count {
         }
     }
 
-    /// #393: Sigil jewellery whose grading the shop re-rolls although the offer
-    /// is not an arcane needs-roll one (`reroll_sigil_jewelry`) follows the split
-    /// too. Fixed templates stay out.
+    /// #393 tested a split on "Sigil jewellery whose grading the shop re-rolls
+    /// although the offer is not an arcane needs-roll one". After #403 there is
+    /// no such offer: every single-jewel offer is arcane (rolled, the split
+    /// above), THEMED (authored GRADING, sold as authored) or a fixed template.
+    /// A new offer outside those three would be rolled by `reroll_sigil_jewelry`
+    /// without any evidence for it, so this fails until it is classified.
     #[test]
-    fn other_rerolled_sigil_jewels_follow_the_split() {
+    fn every_sigil_jewel_is_arcane_themed_or_fixed() {
         let sd = sd();
         let items = item_table();
-        let mut products = Vec::new();
+        let mut unclassified = Vec::new();
+        let (mut arcane, mut themed, mut fixed) = (0, 0, 0);
         for (id, c) in &sd.global_shop_offer_contents {
             if c.contents.len() != 1 {
                 continue;
@@ -4877,45 +4944,23 @@ mod report_393_sigil_jewelry_property_count {
             let Some(t) = items.get(&e.item_template_id).map(|i| i.r#type) else {
                 continue;
             };
-            if matches!(t, RING | NECKLACE)
-                && !(e.arcane_tier > 0 && e.grading.is_empty())
-                && !crate::fixed_templates::has_mandatory_properties(e.item_template_id)
-            {
-                products.push((*id, t));
+            if !matches!(t, RING | NECKLACE) {
+                continue;
+            }
+            if crate::fixed_templates::has_mandatory_properties(e.item_template_id) {
+                fixed += 1;
+            } else if is_themed_jewelry(e) {
+                themed += 1;
+            } else if e.arcane_tier > 0 {
+                arcane += 1;
+            } else {
+                unclassified.push(*id);
             }
         }
-        assert!(!products.is_empty(), "no re-rolled Sigil jewels found");
-        let mut count = [0u64; 4];
-        let per = 2400 / products.len() as u64 + 1;
-        for (product, slot) in &products {
-            for i in 0..per {
-                let buyer = Uuid::from_u128(0x3930_0000_0000_4000_8000_0000_0000_1000 + u128::from(i % 40));
-                let Some(r) = purchase_reward(
-                    sd,
-                    &repair_data(),
-                    items,
-                    *product,
-                    purchase_roll_nonce(i / 40, buyer, None),
-                ) else {
-                    break;
-                };
-                for it in &r.items {
-                    if items.get(&it.item.item_template_id).map(|i| i.r#type) == Some(*slot) {
-                        count[check(&it.item, *slot)] += 1;
-                    }
-                }
-            }
-        }
-        let n: u64 = count.iter().sum();
-        eprintln!("#393 re-rolled Sigil jewels ({} offers): {count:?} of {n}", products.len());
-        assert!(n >= 2000, "only {n} re-rolled Sigil jewels sampled");
-        for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
-            let got = count[props] as f64 * 100.0 / n as f64;
-            assert!(
-                (got - f64::from(pct)).abs() <= 3.0,
-                "{props} properties {got:.1}% (want {pct}%)"
-            );
-        }
+        eprintln!("Sigil jewels: {arcane} arcane, {themed} themed, {fixed} fixed");
+        assert_eq!(themed, 21, "the APK authors GRADING for 21 Sigil jewellery offers");
+        assert!(arcane > 0 && fixed > 0, "control: both other classes exist");
+        assert!(unclassified.is_empty(), "jewellery offers with no rule: {unclassified:?}");
     }
 }
 

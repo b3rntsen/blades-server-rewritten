@@ -649,6 +649,9 @@ pub fn apply_h2h_match_by_season<K: Ord + Copy>(
     }
 }
 
+/// Unseasoned replay. Live reconcile uses [`replay_h2h_ratings_by_season`]
+/// (whose `all_time` map is this); kept for the replay-order test.
+#[cfg(test)]
 pub fn replay_h2h_ratings<K, I>(config: &H2hRatingConfig, rows: I) -> BTreeMap<K, H2hRatingState>
 where
     K: Ord + Copy,

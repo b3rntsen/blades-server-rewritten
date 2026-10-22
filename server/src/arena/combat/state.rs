@@ -1116,6 +1116,9 @@ pub struct Loadout {
     /// `character.pvpSeasonId` at queue time — part of a promotion item's id, so
     /// the card shows the id the durable grant will write (#319).
     pub pvp_season_id: uuid::Uuid,
+    /// This season's promotion-item ids the character already holds — the card
+    /// applies the same owned-skip as the durable grant (#319).
+    pub owned_promotion_item_ids: std::collections::HashSet<uuid::Uuid>,
     pub next_treasury_chest_id: u64,
     pub stackable_counts: HashMap<uuid::Uuid, u64>,
     /// Hidden, season-independent position in the shipped 100-chest PvP cycle.
@@ -1123,6 +1126,11 @@ pub struct Loadout {
     pub arena_last_elder_one_chest_at_secs: i64,
     pub arena_last_elder_two_chest_at_secs: i64,
     pub arena_last_legendary_chest_at_secs: i64,
+    /// The account's finished arena fights BEFORE this match
+    /// (`arena_account_fight_counts`), read at queue time. Lets the match-end card
+    /// show the every-25th-fight weapon (#390/#391, #401). `None` when unknown —
+    /// bots, the starter loadout, or a failed read — and then the card shows none.
+    pub account_arena_fights: Option<i64>,
     /// The REST sequence echoed by retail's match-end card.
     pub current_request_index: i64,
     /// The client's own `HideHelmet` avatar toggle, as reported by its c2s op61
@@ -2158,12 +2166,15 @@ impl Fighter {
     ///
     /// `next` is rebuilt from the player's own `characters` row after the client's
     /// `POST /loadouts/current`, i.e. the same server-authoritative source as the
-    /// match-start loadout. Two fields are match state rather than character state and
-    /// are carried over: the RMS request index the match-end card echoes, and the
-    /// hide-helmet flag the client set in this match (op61).
+    /// match-start loadout. Three fields are match state rather than character state and
+    /// are carried over: the RMS request index the match-end card echoes, the
+    /// hide-helmet flag the client set in this match (op61), and the account's
+    /// pre-match fight count the card's weapon gift is decided on.
     pub fn adopt_between_rounds_loadout(&mut self, mut next: Loadout) {
         next.current_request_index = self.loadout.current_request_index;
         next.hide_helmet = self.loadout.hide_helmet;
+        // Read at queue time, not off the character row: the rebuilt loadout has none.
+        next.account_arena_fights = self.loadout.account_arena_fights;
         let (max_health, max_stamina, max_magicka) = max_pools_for(&next);
         self.max_health = max_health;
         self.max_stamina = max_stamina;
@@ -4357,8 +4368,6 @@ mod tests {
         }
         assert!(f.tracked_statuses(t0).is_empty());
     }
-
-    use super::*;
 
     /// **The layout is pinned to real captured words, because nothing else was.**
     ///

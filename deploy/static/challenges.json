@@ -1,5 +1,7 @@
 [
   {
+    "lockedAtPlayerLevel": 16,
+    "name": "Challenge_DealDamage_Shock_02_Common",
     "objective": {
       "_location": 1,
       "_quota": 800.0,
@@ -8,6 +10,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
@@ -16,6 +19,8 @@
     "templateId": "55a4da36-1f45-43d8-8641-ee75768faa53"
   },
   {
+    "lockedAtPlayerLevel": 16,
+    "name": "Challenge_Perform4HitCombos_02_Jobs_Uncommon",
     "objective": {
       "_location": 1,
       "_quota": 2.0,
@@ -24,6 +29,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
@@ -32,6 +38,8 @@
     "templateId": "8ec2b1a1-62f2-476b-b323-53bade2ab7a5"
   },
   {
+    "lockedAtPlayerLevel": 20,
+    "name": "Challenge_DefeatSkeever_4",
     "objective": {
       "_location": 1,
       "_quota": 13.0,
@@ -40,14 +48,18 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 15,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 700
       }
     },
+    "targetEnemyGroup": "fe6ca800-ea7e-4fd7-a0ef-d1547da6ec5b",
     "templateId": "48efabe0-2138-42f6-9aa7-1d53a4751a1e"
   },
   {
+    "lockedAtPlayerLevel": 16,
+    "name": "Challenge_PerformCriticalHits_02_Common",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -56,6 +68,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 500
@@ -64,6 +77,8 @@
     "templateId": "0bdbeccf-1797-4c42-a005-4c4a2b44e0a0"
   },
   {
+    "lockedAtPlayerLevel": 11,
+    "name": "Challenge_PerformCriticalHits_01_Common",
     "objective": {
       "_location": 1,
       "_quota": 9.0,
@@ -72,6 +87,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 0,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 300
@@ -80,6 +96,8 @@
     "templateId": "8925740e-046b-4e7a-b418-a17bd83e035c"
   },
   {
+    "lockedAtPlayerLevel": 6,
+    "name": "Challenge_DefeatEnemies_1",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -88,6 +106,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 0,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 200
@@ -96,6 +115,8 @@
     "templateId": "d5631e1c-2698-4bb1-8e15-52433da096e4"
   },
   {
+    "lockedAtPlayerLevel": 11,
+    "name": "Challenge_CollectChests_01_Common",
     "objective": {
       "_location": 1,
       "_quota": 2.0,
@@ -104,6 +125,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 0,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 300
@@ -112,6 +134,8 @@
     "templateId": "86b4119e-6a1b-4bb4-89d6-2184d63a0495"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_AbyssCompleteFloors_Rare",
     "objective": {
       "_location": 1,
       "_quota": 8.0,
@@ -120,6 +144,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 1,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
@@ -128,6 +153,8 @@
     "templateId": "b7c78c4d-1b4a-4183-92c1-6bd5610c763b"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_PerformAbility_PowerAttack_03",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -136,6 +163,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 700
@@ -144,6 +172,8 @@
     "templateId": "25de9dc4-dd7e-474a-bf6c-4ff84ff9d4bf"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_Perform3HitCombos_15_Abyss_Uncommon",
     "objective": {
       "_location": 1,
       "_quota": 6.0,
@@ -152,6 +182,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 76,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
@@ -160,6 +191,8 @@
     "templateId": "cb497c2f-9354-4545-a3d1-bfdab358579f"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_CollectChests_15_Common",
     "objective": {
       "_location": 1,
       "_quota": 5.0,
@@ -168,6 +201,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 76,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 4250
@@ -176,6 +210,8 @@
     "templateId": "ba98f140-5dbb-4b58-b7f2-66c080651d8d"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_DefeatEnemies_10_Greatsword",
     "objective": {
       "_location": 1,
       "_quota": 13.0,
@@ -184,6 +220,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 50,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2500
@@ -192,6 +229,8 @@
     "templateId": "a09fa115-7a05-4da3-b59e-a05508e09ad8"
   },
   {
+    "lockedAtPlayerLevel": 11,
+    "name": "Challenge_DealDamage_01_Common",
     "objective": {
       "_location": 1,
       "_quota": 2850.0,
@@ -200,6 +239,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 0,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 400
@@ -208,6 +248,8 @@
     "templateId": "cc5c53f6-b5fb-4a7d-840b-6fa3b5e37bd1"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_FindInstantConsumable_Legendary",
     "objective": {
       "_location": 1,
       "_quota": 16.0,
@@ -216,6 +258,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 1,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 10
@@ -224,6 +267,8 @@
     "templateId": "69e9255f-9607-4f0b-8068-091527200dc7"
   },
   {
+    "lockedAtPlayerLevel": 11,
+    "name": "Challenge_DefeatEnemies_2",
     "objective": {
       "_location": 1,
       "_quota": 14.0,
@@ -232,6 +277,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 6,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 500
@@ -240,6 +286,8 @@
     "templateId": "915ef03b-37e0-43ef-a1ab-78fc30d8451a"
   },
   {
+    "lockedAtPlayerLevel": 11,
+    "name": "Challenge_DefeatEnemies_2_Job",
     "objective": {
       "_location": 1,
       "_quota": 7.0,
@@ -248,6 +296,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 6,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 400
@@ -256,6 +305,8 @@
     "templateId": "62bdd9ce-151b-457d-b729-0b4106cea8e3"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_Perform5HitCombos_Epic",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -264,6 +315,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 1,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 6
@@ -272,6 +324,8 @@
     "templateId": "3a5372b4-ef82-4c6b-89f7-030912def84c"
   },
   {
+    "lockedAtPlayerLevel": 11,
+    "name": "Challenge_DealDamage_01_Rare",
     "objective": {
       "_location": 1,
       "_quota": 3800.0,
@@ -280,6 +334,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 0,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
@@ -288,6 +343,8 @@
     "templateId": "08c90e81-fd9b-46ef-811c-0cbc796937e1"
   },
   {
+    "lockedAtPlayerLevel": 41,
+    "name": "Challenge_Perform4HitCombos_07_Common",
     "objective": {
       "_location": 1,
       "_quota": 3.0,
@@ -296,6 +353,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 36,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1250
@@ -304,6 +362,8 @@
     "templateId": "37369d52-10b6-4099-9b09-bb19dd1c8c79"
   },
   {
+    "lockedAtPlayerLevel": 41,
+    "name": "Challenge_DealDamage_Slashing_07_Common",
     "objective": {
       "_location": 1,
       "_quota": 11500.0,
@@ -312,6 +372,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 36,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1250
@@ -320,6 +381,8 @@
     "templateId": "dbd575e6-e475-4d99-974f-83c1d8b7cd09"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_PerformAbility_HarryingBash_03",
     "objective": {
       "_location": 1,
       "_quota": 6.0,
@@ -328,6 +391,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 700
@@ -336,6 +400,8 @@
     "templateId": "6a8a7f7c-0b89-4b9d-b5e3-76eae17631f5"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_AbyssCompleteFloors_Uncommon",
     "objective": {
       "_location": 1,
       "_quota": 5.0,
@@ -344,6 +410,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 1,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
@@ -352,6 +419,8 @@
     "templateId": "7fa1f11d-fbfa-4d39-b090-25b18517668b"
   },
   {
+    "lockedAtPlayerLevel": 41,
+    "name": "Challenge_Perform3HitCombos_07_Common",
     "objective": {
       "_location": 1,
       "_quota": 5.0,
@@ -360,6 +429,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 36,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1250
@@ -368,6 +438,8 @@
     "templateId": "4b7c50c4-fca7-4412-968c-a1d9df8c65b8"
   },
   {
+    "lockedAtPlayerLevel": 16,
+    "name": "Challenge_AbyssCompleteFloors_02_Common",
     "objective": {
       "_location": 1,
       "_quota": 2.0,
@@ -376,6 +448,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 500
@@ -384,6 +457,8 @@
     "templateId": "d7cd68e9-53d2-4283-b601-360cd342ee86"
   },
   {
+    "lockedAtPlayerLevel": 21,
+    "name": "Challenge_PerformCriticalHits_03_Common",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -392,6 +467,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 16,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
@@ -400,6 +476,8 @@
     "templateId": "1f171dd8-8136-4224-9a37-f028e3ea47a4"
   },
   {
+    "lockedAtPlayerLevel": 21,
+    "name": "Challenge_CollectChests_03_Common",
     "objective": {
       "_location": 1,
       "_quota": 2.0,
@@ -408,6 +486,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 16,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
@@ -416,6 +495,8 @@
     "templateId": "52b1c9b9-f49e-4ec4-8bd4-28379b060088"
   },
   {
+    "lockedAtPlayerLevel": 21,
+    "name": "Challenge_DealDamage_Fire_03_Common",
     "objective": {
       "_location": 1,
       "_quota": 1300.0,
@@ -424,6 +505,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 16,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
@@ -432,6 +514,8 @@
     "templateId": "a1dc0feb-eab1-4ad5-a476-92065101b85a"
   },
   {
+    "lockedAtPlayerLevel": 41,
+    "name": "Challenge_CollectChests_07_Common",
     "objective": {
       "_location": 1,
       "_quota": 4.0,
@@ -440,6 +524,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 36,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1750
@@ -448,6 +533,8 @@
     "templateId": "7f5954de-640b-454a-955c-5e1ac4657909"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_TUTORIAL_CraftDecoration",
     "objective": {
       "_location": 1,
       "_quota": 1.0,
@@ -456,6 +543,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 0,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 2
@@ -464,6 +552,8 @@
     "templateId": "bce21d12-8f3b-444b-ad1f-740478f1d0cf"
   },
   {
+    "lockedAtPlayerLevel": 46,
+    "name": "Challenge_DealDamage_Slashing_08_Common",
     "objective": {
       "_location": 1,
       "_quota": 12500.0,
@@ -472,6 +562,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 41,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2250
@@ -480,6 +571,8 @@
     "templateId": "6a41201f-f343-424b-bd4a-d8dc589b34df"
   },
   {
+    "lockedAtPlayerLevel": 26,
+    "name": "Challenge_DealDamage_Slashing+_04_Common",
     "objective": {
       "_location": 1,
       "_quota": 1450.0,
@@ -488,6 +581,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 800
@@ -496,6 +590,8 @@
     "templateId": "0bbadea3-24cd-46a3-96fd-7e92fe1e9541"
   },
   {
+    "lockedAtPlayerLevel": 26,
+    "name": "Challenge_PerformCriticalHits_04_Common",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -504,6 +600,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 750
@@ -512,6 +609,8 @@
     "templateId": "87178258-a19b-474f-8871-efc07d0f3dec"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_PerformCriticalHits_Slashing_Rare",
     "objective": {
       "_location": 1,
       "_quota": 25.0,
@@ -520,6 +619,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 1,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 4
@@ -528,6 +628,8 @@
     "templateId": "af9d0633-ce19-481b-95d9-5a7752b8cd47"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_DefeatEnemies_10_Warhammer",
     "objective": {
       "_location": 1,
       "_quota": 12.0,
@@ -536,6 +638,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 50,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2250
@@ -544,6 +647,8 @@
     "templateId": "50ded8e1-10a8-485e-882e-f8b071f4251d"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_DealDamage_Bashing_15_Common",
     "objective": {
       "_location": 1,
       "_quota": 24500.0,
@@ -552,6 +657,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 76,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 5000
@@ -560,6 +666,8 @@
     "templateId": "4a4bdf52-9c56-4e43-b4be-58bffb6b047c"
   },
   {
+    "lockedAtPlayerLevel": 26,
+    "name": "Challenge_AbyssCompleteFloors_04_Common",
     "objective": {
       "_location": 1,
       "_quota": 4.0,
@@ -568,6 +676,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 750
@@ -576,6 +685,8 @@
     "templateId": "078eb667-6ca1-4d8b-901b-ba5208e46232"
   },
   {
+    "lockedAtPlayerLevel": 26,
+    "name": "Challenge_Perform3HitCombos_04_Common",
     "objective": {
       "_location": 1,
       "_quota": 4.0,
@@ -584,6 +695,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 850
@@ -592,6 +704,8 @@
     "templateId": "57e7c6a4-8db6-4bd1-b6d1-473907d5cb71"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_PerformAbility_HarryingBash_04",
     "objective": {
       "_location": 1,
       "_quota": 8.0,
@@ -600,6 +714,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 800
@@ -608,6 +723,8 @@
     "templateId": "90eaac75-9b4a-49d2-9a48-f54fb981f67d"
   },
   {
+    "lockedAtPlayerLevel": 46,
+    "name": "Challenge_Repair_08_Common",
     "objective": {
       "_location": 1,
       "_quota": 6.0,
@@ -616,6 +733,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 41,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 1750
@@ -624,6 +742,8 @@
     "templateId": "9f2f5d39-a15d-465e-9530-40b827102a3b"
   },
   {
+    "lockedAtPlayerLevel": 46,
+    "name": "Challenge_PerformCriticalHits_08_Common",
     "objective": {
       "_location": 1,
       "_quota": 20.0,
@@ -632,6 +752,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 41,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2000
@@ -640,6 +761,8 @@
     "templateId": "f454bf63-ee36-4830-9fd7-f869fc919eed"
   },
   {
+    "lockedAtPlayerLevel": 26,
+    "name": "Challenge_Repair_04_Common",
     "objective": {
       "_location": 1,
       "_quota": 4.0,
@@ -648,6 +771,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 850
@@ -656,6 +780,8 @@
     "templateId": "943cb600-8795-44bf-af33-5565203b1ac2"
   },
   {
+    "lockedAtPlayerLevel": 31,
+    "name": "Challenge_CollectChests_05_Common",
     "objective": {
       "_location": 1,
       "_quota": 2.0,
@@ -664,6 +790,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 26,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 950
@@ -672,6 +799,8 @@
     "templateId": "b2e8cd6b-610a-499f-a9e4-22181aad208e"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_PerformAbility_Skullcrusher_03",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -680,6 +809,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 600
@@ -688,6 +818,8 @@
     "templateId": "f99b8abf-8b87-4825-b966-46af328d642b"
   },
   {
+    "lockedAtPlayerLevel": 0,
+    "name": "Challenge_Salvage_Legendary",
     "objective": {
       "_location": 1,
       "_quota": 10.0,
@@ -696,6 +828,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 1,
     "reward": {
       "currencies": {
         "470c8f58-a8dd-4c07-8c92-843b785e1139": 10
@@ -704,6 +837,8 @@
     "templateId": "78826178-9291-4255-a204-6ac312affda5"
   },
   {
+    "lockedAtPlayerLevel": 46,
+    "name": "Challenge_DealDamage_Poison_08_Common",
     "objective": {
       "_location": 1,
       "_quota": 2750.0,
@@ -712,6 +847,7 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredPlayerLevel": 41,
     "reward": {
       "currencies": {
         "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2": 2000

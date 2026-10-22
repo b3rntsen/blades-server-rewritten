@@ -321,8 +321,10 @@ pub enum JoinAdmission {
 /// Why an admission attempt was refused.
 ///
 /// One-to-one with il2cpp `enum CanJoinGuildResult` (dump.cs:540987), minus its
-/// `Success`. The discriminants are retail's, and [`JoinRefusal::error_code`]
-/// reports them so a client (or a log) can tell the cases apart.
+/// `Success`. The discriminants are retail's (pinned by a test through
+/// [`JoinRefusal::error_code`]). They are NOT the wire error code:
+/// `guild::join_refusal_wire` maps each refusal to a code the client's error
+/// table knows (an unknown one rebooted the game).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JoinRefusal {
     AlreadyHasGuild = 1,
@@ -341,6 +343,9 @@ pub enum JoinRefusal {
 }
 
 impl JoinRefusal {
+    /// The retail `CanJoinGuildResult` ordinal. Test-only: the wire code comes
+    /// from `guild::join_refusal_wire`.
+    #[cfg(test)]
     pub fn error_code(self) -> u64 {
         self as u64
     }

@@ -202,6 +202,7 @@ pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<
 
     let mut stackable_items = compose_stackables(&near, stacks, mix(seed ^ 0x381_5EED_C4E5_7381));
     settle_enchanting(&mut stackable_items, pool, level, mix(seed ^ 0x0E4C_4A47_0381_0381));
+    restock_stackables(&near, &mut stackable_items, mix(seed ^ 0x0404_C4E5_7E3B_7404));
     let mut grant = RewardGrant {
         currencies: base.reward.currencies.clone(),
         stackable_items,
@@ -344,6 +345,46 @@ fn settle_enchanting(
     let source = draw(&nearest(paid, level), mix(seed ^ 0x5EED_E4C4_A475_0381));
     for (id, q) in &source.reward.stackable_items {
         if ENCHANTING_INGREDIENTS.contains(id) {
+            stacks.insert(*id, *q);
+        }
+    }
+}
+
+/// Every retail chest held at least one stackable that is not an enchanting
+/// ingredient: 729 of 729 tier 1-3 openings. Ours did not always (#404).
+///
+/// THE BUG. [`compose_stackables`] may replace every material of the shape
+/// opening with an enchanting ingredient, and [`settle_enchanting`] then strips
+/// them all when the chest's enchanting roll says none. About 0.5-3.5% of Wooden
+/// chests (by level) came out holding gold and gems only, and the response
+/// carried no `stackableItems` at all. The one such chest opened on prod in four
+/// days (2026-10-16, 538 bytes, the smallest of 418 opens) froze the client on the
+/// first story quest's loot screen; every other open was followed by the client's
+/// next request within seconds.
+///
+/// THE FIX. Such a chest takes the non-enchanting stackables of one retail
+/// opening from the same neighbourhood: a set retail paid at this level. The
+/// enchanting decision already made is left as it was.
+fn restock_stackables(
+    near: &[&ChestLootSample],
+    stacks: &mut std::collections::HashMap<Uuid, u64>,
+    seed: u64,
+) {
+    let plain = |id: &Uuid| !ENCHANTING_INGREDIENTS.contains(id);
+    if stacks.keys().any(plain) {
+        return;
+    }
+    let donors: Vec<&ChestLootSample> = near
+        .iter()
+        .copied()
+        .filter(|s| s.reward.stackable_items.keys().any(plain))
+        .collect();
+    if donors.is_empty() {
+        return;
+    }
+    let donor = draw(&donors, seed);
+    for (id, q) in &donor.reward.stackable_items {
+        if plain(id) {
             stacks.insert(*id, *q);
         }
     }
@@ -1418,5 +1459,70 @@ mod tests {
                 assert!(tiers_paid.is_subset(&retail), "tier {tier} L{level}: {tiers_paid:?} vs {retail:?}");
             }
         }
+    }
+
+    // ---- #404: a chest always holds a stackable --------------------------------
+
+    /// The chest that froze report #404's first story quest: the second Wooden chest
+    /// (`chests/2`, level 2, treasury version 6) of character 3170b1d3. It rolled
+    /// gold and gems only, and the response carried no `stackableItems`.
+    #[test]
+    fn report_404_first_quest_chest_holds_a_stackable() {
+        let t = committed();
+        let key = "3170b1d3-47ff-49bc-926c-45009ec0a15a:2:1:2:6";
+        let g = roll_loot(&t, 1, 2, key, &HashSet::new()).expect("rolls");
+        assert!(
+            g.stackable_items.keys().any(|id| !ENCHANTING_INGREDIENTS.contains(id)),
+            "{key} paid no stackable but enchanting ones: {:?}",
+            g.stackable_items
+        );
+        assert!(serde_json::to_value(&g).unwrap().get("stackableItems").is_some());
+    }
+
+    /// Retail: 729 of 729 tier 1-3 openings held a stackable other than an
+    /// enchanting ingredient. Ours must too, at every level.
+    #[test]
+    fn no_chest_pays_currencies_only() {
+        let t = committed();
+        for tier in [1i64, 2, 3] {
+            for level in (1..=100u64).step_by(3) {
+                for k in 0..300 {
+                    let key = format!("404:{tier}:{level}:{k}");
+                    let g = roll_loot(&t, tier, level, &key, &HashSet::new()).expect("rolls");
+                    assert!(
+                        g.stackable_items.keys().any(|id| !ENCHANTING_INGREDIENTS.contains(id)),
+                        "tier {tier} L{level} {key}: {:?}",
+                        g.stackable_items
+                    );
+                }
+            }
+        }
+    }
+
+    /// The enchanting share is decided before the restock and is left as it was:
+    /// restocking only ever adds non-enchanting stackables.
+    #[test]
+    fn restock_never_adds_an_enchanting_ingredient() {
+        let a = ChestLootSample {
+            chest_level: 1,
+            reward: RewardGrant {
+                stackable_items: HashMap::from([
+                    (ENCHANTING_INGREDIENTS[0], 3),
+                    (Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5), 5),
+                ]),
+                ..Default::default()
+            },
+        };
+        let mut stacks = HashMap::new();
+        restock_stackables(&[&a], &mut stacks, 7);
+        assert_eq!(
+            stacks,
+            HashMap::from([(Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5), 5)])
+        );
+        // A chest that already holds a plain stackable is untouched.
+        let mut kept = HashMap::from([(Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef), 1)]);
+        let before = kept.clone();
+        restock_stackables(&[&a], &mut kept, 7);
+        assert_eq!(kept, before);
     }
 }

@@ -249,16 +249,19 @@ fn levels_below_49_are_unchanged() {
     // materials in 5, 10 or 20 (abyss_rewards, abyss_floor, quests,
     // event_dungeons, jobs, store, treasury; not `events` while
     // EVENT_LADDER_STACKS_FIXED is off, which pays exactly as before that change).
+    // #404 re-pins treasury: a Wooden chest that rolled no stackable but
+    // enchanting ingredients now takes a retail opening's stackables.
     let pinned: [(&str, u64); 9] = [
         ("events", 0x5351_4151_1ca6_22e9),
         ("daily", 0x8d8e_2e5c_0659_5552),
-        ("abyss_rewards", 0x132f_4e45_fafe_3e7b),
+        // #407 (HauDrauf, 2026-10-17) re-pins abyss_rewards: `/end` soul gems are 3 to 7.
+        ("abyss_rewards", 0x1bd6_397f_a2cf_4dae),
         ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),
         ("quests", 0x3f01_52cb_5eef_d622),
         ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
         ("jobs", 0x0e71_0932_2f7b_96e5),
         ("store", 0x6bfe_d561_3f10_831a),
-        ("treasury", 0x4dab_8f09_4476_e0c4),
+        ("treasury", 0x7aed_eaec_5032_d6b1),
     ];
     assert_eq!(got, pinned.to_vec(), "a source moved for a character below level 49");
 }

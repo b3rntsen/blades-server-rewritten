@@ -4406,8 +4406,8 @@ mod tests {
     /// the level 20-59 band's retail packages are all materials. Driven the same way
     /// as the level-100 and level-7 runs above, from his deepest floor (149) and from
     /// his own level (floor 48): `/end` still pays the floors' gold and one package
-    /// stack, and about half of those stacks are 1-3 Grand Soul Gems ("from level 39
-    /// to 45, 3 Grand at the end"), never Glorious or Transcendent.
+    /// stack, and about half of those stacks are Grand Soul Gems ("from level 39
+    /// to 45, 3 Grand at the end"; 3-7 of them since #407), never Glorious or Transcendent.
     #[test]
     fn a_level_43_run_is_paid_soul_gems_at_end_sometimes() {
         const SEPHORIS: &str = "f7817aa6-5892-4794-871e-9b51a475a606";
@@ -4427,7 +4427,8 @@ mod tests {
                 let (template, count) = end.stackable_items.iter().next().unwrap();
                 if *template == grand {
                     gem_ends += 1;
-                    assert!((1..=3).contains(count), "start {start}: {count} Grand gems");
+                    // HauDrauf, #407: 3 to 7 (it was 1-3).
+                    assert!(abyss_rewards::END_SOUL_GEM_COUNT.contains(count), "start {start}: {count} Grand gems");
                 }
                 assert_ne!(template.to_string(), abyss_rewards::TRANSCENDENT_SOUL_GEM);
                 assert_ne!(template.to_string(), GLORIOUS);
@@ -4488,7 +4489,9 @@ mod tests {
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// `/end` materials are 20; everything else is pinned unchanged by
     /// [`abyss_runs_move_only_what_388_moves`].
-    const LEVEL_100_FROM_149_DIGEST: u64 = 0x4ad3_6d93_21ea_342b;
+    /// Re-pinned by #407 (HauDrauf, 2026-10-17): its `/end` soul gems are 3 to 7;
+    /// everything else is pinned unchanged by [`abyss_runs_move_only_what_407_moves`].
+    const LEVEL_100_FROM_149_DIGEST: u64 = 0xcf8b_4b70_b467_bfb6;
 
     /// Level 7 from floor 1: unchanged, rung by rung, for the same seeds.
     #[test]
@@ -4500,7 +4503,9 @@ mod tests {
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// `/end` materials are 20; everything else is pinned unchanged by
     /// [`abyss_runs_move_only_what_388_moves`].
-    const LEVEL_7_FROM_1_DIGEST: u64 = 0xb328_ce32_4938_8da8;
+    /// Re-pinned by #407 (HauDrauf, 2026-10-17): its `/end` soul gems are 3 to 7;
+    /// everything else is pinned unchanged by [`abyss_runs_move_only_what_407_moves`].
+    const LEVEL_7_FROM_1_DIGEST: u64 = 0x9e72_4b46_4b92_47e7;
 
     /// Sephoris, level 45, from floor 149: below 49, so unchanged — rung 70 is still
     /// the level 34-40 captures' Nightshade, Chaurus Chitin, Quicksilver or Malachite,
@@ -4519,7 +4524,9 @@ mod tests {
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// soul gems are the three best and its `/end` materials 20. Everything else
     /// is pinned unchanged by [`abyss_runs_move_only_what_388_moves`].
-    const LEVEL_45_FROM_149_DIGEST: u64 = 0xda47_87ed_3ba7_8d89;
+    /// Re-pinned by #407 (HauDrauf, 2026-10-17): its `/end` soul gems are 3 to 7;
+    /// everything else is pinned unchanged by [`abyss_runs_move_only_what_407_moves`].
+    const LEVEL_45_FROM_149_DIGEST: u64 = 0x3275_357d_1f5a_769c;
 
     /// [`payout_digest`] blind to what #388 (owner-approved deviation from retail,
     /// 2026-10-16) moves in a run: every soul gem taken out (the three best at
@@ -4572,6 +4579,64 @@ mod tests {
                 assert!(!paid.is_empty(), "the runs pay soul gems");
                 assert!(paid.iter().all(|id| soul_gems[7..].contains(id)), "{paid:?}");
             }
+        }
+    }
+
+    /// [`payout_digest`] blind to what #407 moves in a run: the count of every soul
+    /// gem `/end` pays is zeroed. Rungs, `/end` materials, and which gem kind `/end`
+    /// pays (and whether it pays one) all still count.
+    fn payout_digest_407_blind(runs: &[Payout]) -> u64 {
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        let mut runs = runs.to_vec();
+        for (_, end) in &mut runs {
+            for (id, q) in end.stackable_items.iter_mut() {
+                if soul_gems.contains(id) {
+                    *q = 0;
+                }
+            }
+        }
+        payout_digest(&runs)
+    }
+
+    /// #407 (HauDrauf, 2026-10-17), the three mandatory runs: level 7 from floor 1,
+    /// and levels 45 and 100 from floor 149 pay everything exactly as before but for
+    /// the `/end` soul-gem count (the blind digests were taken on the commit before
+    /// it), and every `/end` soul-gem stack is 3 to 7.
+    #[test]
+    fn abyss_runs_move_only_what_407_moves() {
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        for (level, start, count, kills, blind) in [
+            (7u32, 1u32, 30usize, MIXED_KILLS, 0x2f20_6b6d_cfe3_5242_u64),
+            (45, 149, 4, DEEP_FLOOR_KILLS, 0x74c9_d235_fd2a_9a71),
+            (100, 149, 4, DEEP_FLOOR_KILLS, 0xbf70_0091_a7e2_266a),
+        ] {
+            let runs = payouts(level, start, count, kills);
+            assert_eq!(payout_digest_407_blind(&runs), blind, "level {level} from floor {start}");
+            for (_, end) in &runs {
+                for (id, q) in &end.stackable_items {
+                    if soul_gems.contains(id) {
+                        assert!(
+                            abyss_rewards::END_SOUL_GEM_COUNT.contains(q),
+                            "level {level}: /end paid {q} soul gems"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Prints the #407-blind digests (`--ignored --nocapture`), to pin them on the
+    /// commit before #407.
+    #[test]
+    #[ignore]
+    fn print_407_blind_digests() {
+        for (level, start, count, kills) in [
+            (7u32, 1u32, 30usize, MIXED_KILLS),
+            (45, 149, 4, DEEP_FLOOR_KILLS),
+            (100, 149, 4, DEEP_FLOOR_KILLS),
+        ] {
+            let runs = payouts(level, start, count, kills);
+            println!("407-blind level {level} from {start}: {:#018x}", payout_digest_407_blind(&runs));
         }
     }
 

@@ -126,8 +126,8 @@ Rolls per subject and level: **500**. Levels: 1, 10, 20, 30, 40, 45, 49, 60, 80,
 
 | Subject | Generator | Levels | Rolls | Status | Findings | Notes |
 |---|---|---|---:|---|---|---|
-| Tutorial first chest (tier -1) | chests::roll_loot (POST /chests/{id}/collect) | 1 | 500 | PASS | - | scripted retail bundle (3 recorded openings): fixed by definition; 3/500 distinct rewards, 3 distinct item instances in 500 items |
-| Wooden chest (tier 1) | chests::roll_loot (POST /chests/{id}/collect) | 1,10,20,30,40,45,49,60,80,100 | 500 | FLAG | **Level fit**: IronBar is 79% of metal stacks at L1 (92/117; 6 kinds paid at this level)<br>**Validity** (known): ElvenArmor: requires level 23 at character level 10 (retail paid at most +10) (2/113 items at L10)<br>**Validity** (known): ElvenBattleaxe: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenBoots: requires level 23 at character level 10 (retail paid at most +10) (2/113 items at L10)<br>**Validity** (known): ElvenDagger: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenGauntlets: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenLightHammer: requires level 23 at character level 10 (retail paid at most +10) (2/113 items at L10)<br>**Validity** (known): ElvenLongsword: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenShield: requires level 23 at character level 10 (retail paid at most +10) (5/113 items at L10)<br>**Validity** (known): ElvenWarAxe: requires level 23 at character level 10 (retail paid at most +10) (4/113 items at L10)<br>**Validity** (known): ElvenWarhammer: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): QuicksilverGauntlets: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): QuicksilverHelmet: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): QuicksilverShield: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Level fit**: 51/113 items (45%) require more than level 12 at L10<br>**Level fit**: MoonstoneOre is 62% of metal stacks at L10 (112/180; 11 kinds paid at this level)<br>**Level fit**: 54/177 items (31%) require more than level 22 at L20<br>**Level fit**: QuickSilverIngot is 76% of metal stacks at L40 (113/148; 9 kinds paid at this level)<br>**Coverage**: tier 1 (req. level) gear: 19/42 APK loot-pool templates reached<br>**Coverage**: tier 18 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 23 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 28 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 33 (req. level) gear: 19/21 APK loot-pool templates reached | 4745/5000 distinct rewards, 470 distinct item instances in 1088 items |
+| Tutorial first chest (tier -1) | chests::roll_loot (POST /chests/{id}/collect) | 1 | 500 | PASS | - | scripted retail bundle (3 recorded openings): fixed by definition; 45/500 distinct rewards, 3 distinct item instances in 500 items |
+| Wooden chest (tier 1) | chests::roll_loot (POST /chests/{id}/collect) | 1,10,20,30,40,45,49,60,80,100 | 500 | FLAG | **Level fit**: IronBar is 79% of metal stacks at L1 (92/117; 6 kinds paid at this level)<br>**Validity** (known): ElvenArmor: requires level 23 at character level 10 (retail paid at most +10) (2/113 items at L10)<br>**Validity** (known): ElvenBattleaxe: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenBoots: requires level 23 at character level 10 (retail paid at most +10) (2/113 items at L10)<br>**Validity** (known): ElvenDagger: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenGauntlets: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenLightHammer: requires level 23 at character level 10 (retail paid at most +10) (2/113 items at L10)<br>**Validity** (known): ElvenLongsword: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): ElvenShield: requires level 23 at character level 10 (retail paid at most +10) (5/113 items at L10)<br>**Validity** (known): ElvenWarAxe: requires level 23 at character level 10 (retail paid at most +10) (4/113 items at L10)<br>**Validity** (known): ElvenWarhammer: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): QuicksilverGauntlets: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): QuicksilverHelmet: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Validity** (known): QuicksilverShield: requires level 23 at character level 10 (retail paid at most +10) (1/113 items at L10)<br>**Level fit**: 51/113 items (45%) require more than level 12 at L10<br>**Level fit**: MoonstoneOre is 62% of metal stacks at L10 (112/180; 11 kinds paid at this level)<br>**Level fit**: 54/177 items (31%) require more than level 22 at L20<br>**Level fit**: QuickSilverIngot is 76% of metal stacks at L40 (113/148; 9 kinds paid at this level)<br>**Coverage**: tier 1 (req. level) gear: 19/42 APK loot-pool templates reached<br>**Coverage**: tier 18 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 23 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 28 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 33 (req. level) gear: 19/21 APK loot-pool templates reached | 4936/5000 distinct rewards, 470 distinct item instances in 1088 items |
 | Silver chest (tier 2) | chests::roll_loot (POST /chests/{id}/collect) | 1,10,20,30,40,45,49,60,80,100 | 500 | WARN | **Level fit**: 153/500 items (31%) require more than level 12 at L10<br>**Level fit**: 122/500 items (24%) require more than level 22 at L20<br>**Level fit**: MalachiteIngot is 67% of metal stacks at L40 (50/75; 9 kinds paid at this level)<br>**Level fit**: MalachiteIngot is 65% of metal stacks at L45 (41/63; 9 kinds paid at this level)<br>**Level fit**: MalachiteIngot is 69% of metal stacks at L49 (44/64; 8 kinds paid at this level)<br>**Level fit**: StalhrimIngot is 66% of metal stacks at L60 (79/120; 8 kinds paid at this level)<br>**Level fit**: StalhrimIngot is 63% of metal stacks at L100 (114/182; 8 kinds paid at this level)<br>**Coverage**: tier 1 (req. level) gear: 41/42 APK loot-pool templates reached<br>**Coverage**: tier 8 (req. level) gear: 20/21 APK loot-pool templates reached<br>**Coverage**: tier 13 (req. level) gear: 19/21 APK loot-pool templates reached<br>**Coverage**: tier 23 (req. level) gear: 20/21 APK loot-pool templates reached<br>**Coverage**: tier 28 (req. level) gear: 20/21 APK loot-pool templates reached<br>**Coverage**: tier 33 (req. level) gear: 15/21 APK loot-pool templates reached | 5000/5000 distinct rewards, 2895 distinct item instances in 5000 items |
 | Gold chest (tier 3) | chests::roll_loot (POST /chests/{id}/collect) | 1,10,20,30,40,45,49,60,80,100 | 500 | WARN | **Level fit**: 189/1000 items (19%) require more than level 3 at L1<br>**Level fit**: OrichalcumIngot is 77% of metal stacks at L10 (141/184; 11 kinds paid at this level)<br>**Level fit**: 180/1002 items (18%) require more than level 22 at L20<br>**Level fit**: OrichalcumIngot is 100% of metal stacks at L20 (112/112; 11 kinds paid at this level)<br>**Level fit**: EbonyIngot is 64% of metal stacks at L45 (120/188; 9 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L80 (30/30; 8 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L100 (35/35; 8 kinds paid at this level)<br>**Coverage**: tier 1 (req. level) gear: 41/42 APK loot-pool templates reached<br>**Coverage**: tier 13 (req. level) gear: 20/21 APK loot-pool templates reached<br>**Coverage**: tier 23 (req. level) gear: 20/21 APK loot-pool templates reached<br>**Coverage**: tier 39 (req. level) gear: 16/21 APK loot-pool templates reached | 5000/5000 distinct rewards, 6486 distinct item instances in 10005 items |
 | Elder chest (tier 4) | chests::roll_loot (POST /chests/{id}/collect) | 1,10,20,30,40,45,49,60,80,100 | 500 | WARN | **Level fit**: SteelIngot is 90% of metal stacks at L1 (252/280; 6 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L45 (48/48; 9 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L49 (40/40; 8 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L60 (39/39; 8 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L80 (49/49; 8 kinds paid at this level)<br>**Level fit**: DragonBone is 100% of metal stacks at L100 (44/44; 8 kinds paid at this level)<br>**Coverage**: tier 1 (req. level) gear: 21/42 APK loot-pool templates reached<br>**Coverage**: tier 8 (req. level) gear: 20/21 APK loot-pool templates reached<br>**Coverage**: tier 45 (req. level) gear: 20/21 APK loot-pool templates reached | 5000/5000 distinct rewards, 8068 distinct item instances in 10040 items |
@@ -195,7 +195,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_Armor_DwarvenMailGauntlets_Temp04_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_DwarvenBattleaxe_Temp04_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineEbonyGreatsword | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_GoldRubyRing_PowerAttackQuickStrikes_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 483 distinct item instances |
+| SigilShop_Jewelry_GoldRubyRing_PowerAttackQuickStrikes_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Shield_DaedricLightShield_Arcane01 | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_ChitinGauntlets_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 1-14 sells ChitinGauntlets (requires 8); authored that way; 1 distinct item instances |
 | SigilShop_DivineQuicksilverHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -215,7 +215,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineGlassGauntlets | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_SilverLightHammer_Arcane01 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 1-14 sells SilverLightHammer (requires 8); authored that way; 1 distinct item instances |
 | SigilShop_Weapon_DragonboneHandAxe_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyDiamondRing_FireballConsumingInfernoWallOfFire_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 472 distinct item instances |
+| SigilShop_Jewelry_EbonyDiamondRing_FireballConsumingInfernoWallOfFire_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineDwarvenHandAxe | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_QuicksilverHelmet_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_ChaurusGauntlets_Temp04_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -256,7 +256,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineDaedricShield | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_SilverBattleaxe_Arcane01 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 1-14 sells SilverBattleaxe (requires 8); authored that way; 1 distinct item instances |
 | IAP_HealingPack_01 | global_shop::purchase_reward, APK offer contents |  |
-| SigilShop_Jewelry_GoldSapphireRing_FrostbiteIceSpike_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 472 distinct item instances |
+| SigilShop_Jewelry_GoldSapphireRing_FrostbiteIceSpike_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewel_Atronite | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_SoulGem_Grand | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_LTUltimate_PoisonLongsword | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 25-55 sells LTUltimate.PoisonLongsword (requires 30); authored that way; 1 distinct item instances |
@@ -264,7 +264,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | DecoOffer_M_Stele1_2019-02-10 00:00_2019-02-13 23:59 | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_Weapon_DragonboneGreatsword_Arcane02 | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Ultimate_MagickaGauntlets | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 35-100 sells MagickaGauntlets (requires 45); authored that way; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyDiamondRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm | global_shop::purchase_reward, jewellery rolled per purchase | 500 distinct item instances |
+| SigilShop_Jewelry_EbonyDiamondRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_DragonboneBattleaxe_Arcane02 | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | EmoteOffer_Guffaw_2019-12-14 00:00_2019-12-15 23:59 | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_Weapon_DaedricMace_Temp04_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -294,7 +294,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineDaedricPlateBoots | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineChaurusShield | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineSilverWarhammer | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_GoldRubyRing_LightningBoltDelayedLightningBolt_AbsMgc | global_shop::purchase_reward, jewellery rolled per purchase | 499 distinct item instances |
+| SigilShop_Jewelry_GoldRubyRing_LightningBoltDelayedLightningBolt_AbsMgc | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewelry_EbonyAtroniteRing_Arcane01 | global_shop::purchase_reward, jewellery rolled per purchase | 474 distinct item instances |
 | SigilShop_DivineIronBoots | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Shield_DragonscaleShield_Temp08_PowBlock | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -302,7 +302,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_Weapon_OrcishBattleaxe_Temp08_StmDmg | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineDaedricMailHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineElvenGauntlets | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyAtroniteRing_ShieldBashDodgingStrikeQuickStrikes_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 477 distinct item instances |
+| SigilShop_Jewelry_EbonyAtroniteRing_ShieldBashDodgingStrikeQuickStrikes_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewel_Topaz | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_Jewelry_SilverAmethystNecklace_Arcane02 | global_shop::purchase_reward, jewellery rolled per purchase | APK gate 1-19 sells Jewelry.Necklace.SilverAmethyst (requires 13); authored that way; 431 distinct item instances |
 | SigilShop_DivineIronHandAxe | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -311,7 +311,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_Armor_DaedricMailHelmet_Arcane01 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_EffectIngredients_AllIngredients | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_DivineChitinHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_GoldSapphireNecklace_Barbarian_FortStmRegen | global_shop::purchase_reward, jewellery rolled per purchase | 499 distinct item instances |
+| SigilShop_Jewelry_GoldSapphireNecklace_Barbarian_FortStmRegen | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineOrcishScaledShield | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_DragonboneDagger_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_EffectIngredients_FrostSalts | global_shop::purchase_reward, captured retail grant (fixed) |  |
@@ -358,15 +358,15 @@ Offers the client lists at each character level (live in the replayed calendar A
 | GemPack04_d_HeroicBlacksmith | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | IAP_ElementalPack_03 | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_DivineSteelHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyFaeriteRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm | global_shop::purchase_reward, jewellery rolled per purchase | 500 distinct item instances |
+| SigilShop_Jewelry_EbonyFaeriteRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewel_Faerite | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_Shield_OrcishShield_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyAtroniteNecklace_Barbarian_FortStmRegen | global_shop::purchase_reward, jewellery rolled per purchase | 500 distinct item instances |
+| SigilShop_Jewelry_EbonyAtroniteNecklace_Barbarian_FortStmRegen | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_OrcishPlateArmor_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Gold_30k | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_DivineSilverHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewelry_GoldSapphireRing_Arcane01 | global_shop::purchase_reward, jewellery rolled per purchase | 469 distinct item instances |
-| SigilShop_Jewelry_EbonyAtroniteRing_LightningBoltDelayedLightningBoltThunderstorm_AbsMgc | global_shop::purchase_reward, jewellery rolled per purchase | 498 distinct item instances |
+| SigilShop_Jewelry_EbonyAtroniteRing_LightningBoltDelayedLightningBoltThunderstorm_AbsMgc | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineOrcishGreatsword | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineOrcishWarhammer | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewel_Garnet | global_shop::purchase_reward, APK offer contents |  |
@@ -386,7 +386,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineOrcishShield | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_DwarvenLongsword_Temp08_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewelry_GoldRubyNecklace_Arcane01 | global_shop::purchase_reward, jewellery rolled per purchase | 421 distinct item instances |
-| SigilShop_Jewelry_GoldEmeraldNecklace_Armsman_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 422 distinct item instances |
+| SigilShop_Jewelry_GoldEmeraldNecklace_Armsman_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineIronGauntlets | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_OrcishScaleBoots_Temp06_FortMgc | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineSteelWarAxe | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -485,7 +485,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_TownMaterials_Limestone_x100 | global_shop::purchase_reward, APK offer contents |  |
 | GemPack03_c_ExpertArchitect | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | IAP_ElementalPack_01 | global_shop::purchase_reward, APK offer contents |  |
-| SigilShop_Jewelry_SilverAmethystNecklace_Armsman_FortMgcRegen | global_shop::purchase_reward, jewellery rolled per purchase | APK gate 1-19 sells Jewelry.Necklace.SilverAmethyst (requires 13); authored that way; 499 distinct item instances |
+| SigilShop_Jewelry_SilverAmethystNecklace_Armsman_FortMgcRegen | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; APK gate 1-19 sells Jewelry.Necklace.SilverAmethyst (requires 13); authored that way; 1 distinct item instances |
 | SigilShop_DivineGlassWarhammer | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_SoulGem_Bundle_Transcendent | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_TownMaterials_Limestone_x200 | global_shop::purchase_reward, captured retail grant (fixed) |  |
@@ -535,8 +535,8 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_LTUltimate_OffensiveSpellsRing | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 25-55 sells LTUltimate.OffensiveSpellsRing (requires 30); authored that way; 1 distinct item instances |
 | SigilShop_DivineChaurusHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_TownMaterials_Lumber_x240 | global_shop::purchase_reward, APK offer contents |  |
-| SigilShop_Jewelry_SilverAmethystRing_PowerAttackDodgingStrike_AbsStm | global_shop::purchase_reward, jewellery rolled per purchase | APK gate 1-19 sells Jewelry.Ring.SilverAmethyst (requires 13); authored that way; 499 distinct item instances |
-| SigilShop_Jewelry_GoldEmeraldRing_PoisonCloudBlind_AbsMgc | global_shop::purchase_reward, jewellery rolled per purchase | 500 distinct item instances |
+| SigilShop_Jewelry_SilverAmethystRing_PowerAttackDodgingStrike_AbsStm | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; APK gate 1-19 sells Jewelry.Ring.SilverAmethyst (requires 13); authored that way; 1 distinct item instances |
+| SigilShop_Jewelry_GoldEmeraldRing_PoisonCloudBlind_AbsMgc | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Gold_55k | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_TownMaterials_Lumber_x30 | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_DivineOrcishScaleGauntlets | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -550,7 +550,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineEbonyHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Gold_45k | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_Weapon_EbonyLightHammer_Temp06_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_GoldRubyNecklace_Scout_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 419 distinct item instances |
+| SigilShop_Jewelry_GoldRubyNecklace_Scout_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineEbonyWarhammer | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineSteelMace | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineIronDagger | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -560,7 +560,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineDaedricLongsword | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Jewelry_GoldRubyRing_Arcane01 | global_shop::purchase_reward, jewellery rolled per purchase | 471 distinct item instances |
 | SigilShop_Ultimate_AkaviriSunderblade | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 35-100 sells AkaviriSunderblade (requires 45); authored that way; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyDiamondNecklace_Scout_FortMgcRegen | global_shop::purchase_reward, jewellery rolled per purchase | 494 distinct item instances |
+| SigilShop_Jewelry_EbonyDiamondNecklace_Scout_FortMgcRegen | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | DecoOffer_M_FullSpire_2019-05-17 00:00_2019-05-20 23:59 | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_Ultimate_RingOfFrost | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; APK gate 35-100 sells RingOfFrost (requires 45); authored that way; 1 distinct item instances |
 | SigilShop_Ultimate_StaminaShield | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; APK gate 35-100 sells StaminaShield (requires 45); authored that way; 1 distinct item instances |
@@ -612,7 +612,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_Jewelry_GoldEmeraldNecklace_Arcane01 | global_shop::purchase_reward, jewellery rolled per purchase | 424 distinct item instances |
 | SigilShop_Armor_StalhrimHelmet_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineDwarvenGreatsword | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_SilverAmethystRing_FireballConsumingInferno_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | APK gate 1-19 sells Jewelry.Ring.SilverAmethyst (requires 13); authored that way; 460 distinct item instances |
+| SigilShop_Jewelry_SilverAmethystRing_FireballConsumingInferno_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; APK gate 1-19 sells Jewelry.Ring.SilverAmethyst (requires 13); authored that way; 1 distinct item instances |
 | SigilShop_DivineHideBoots | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | GemPack04_b_JourneymanBlacksmith | global_shop::purchase_reward, captured retail grant (fixed) |  |
 | SigilShop_Weapon_SilverGreatsword_Temp06_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 1-14 sells SilverGreatsword (requires 8); authored that way; 1 distinct item instances |
@@ -626,7 +626,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineDwarvenPlateBoots | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_OrcishPlateHelmet_Temp04_NoEnch | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_SoulGem_Petty | global_shop::purchase_reward, captured retail grant (fixed) |  |
-| SigilShop_Jewelry_GoldEmeraldRing_ShieldBashQuickStrikes_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 478 distinct item instances |
+| SigilShop_Jewelry_GoldEmeraldRing_ShieldBashQuickStrikes_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_SilverArmor_Temp06_FortMgc | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; APK gate 1-14 sells SilverArmor (requires 8); authored that way; 1 distinct item instances |
 | SigilShop_Armor_OrcishScaleGauntlets_Arcane01 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_TownMaterials_Copper_x20 | global_shop::purchase_reward, captured retail grant (fixed) |  |
@@ -655,7 +655,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | IAP_HealingPack_02 | global_shop::purchase_reward, APK offer contents |  |
 | SigilShop_DivineDaedricWarAxe | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Ultimate_Stormkiss | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; APK gate 35-100 sells Stormkiss (requires 45); authored that way; 1 distinct item instances |
-| SigilShop_Jewelry_EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch | global_shop::purchase_reward, jewellery rolled per purchase | 477 distinct item instances |
+| SigilShop_Jewelry_EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Shield_StalhrimShield_Temp06_PowBlock | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_ElvenBattleaxe_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_QuicksilverBoots_Temp06_FortMgc | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -701,7 +701,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineEbonyGauntlets | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineChaurusArmor | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_DragonboneWarAxe_Temp06_NoEnch | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
-| SigilShop_Jewelry_GoldSapphireRing_ShieldBashDodgingStrike_AbsStm | global_shop::purchase_reward, jewellery rolled per purchase | 498 distinct item instances |
+| SigilShop_Jewelry_GoldSapphireRing_ShieldBashDodgingStrike_AbsStm | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_GlassBattleaxe_Temp08_PhyBlockPiercing | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineDwarvenPlateHelmet | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Shield_ChaurusShield_Arcane02 | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
@@ -722,7 +722,7 @@ Offers the client lists at each character level (live in the replayed calendar A
 | SigilShop_DivineLeatherGauntlets | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Armor_ElvenArmor_Arcane02 | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | IAP_ElementalPack_04 | global_shop::purchase_reward, captured retail grant (fixed) |  |
-| SigilShop_Jewelry_EbonyFaeriteNecklace_Armsman_FortMgcRegen | global_shop::purchase_reward, jewellery rolled per purchase | 496 distinct item instances |
+| SigilShop_Jewelry_EbonyFaeriteNecklace_Armsman_FortMgcRegen | global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineIronGreatsword | global_shop::purchase_reward, APK offer contents | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_DivineSilverDagger | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |
 | SigilShop_Weapon_DaedricDagger_Temp08_Combo | global_shop::purchase_reward, captured retail grant (fixed) | fixed by its APK definition; 1 distinct item instances |

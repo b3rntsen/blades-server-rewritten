@@ -162,6 +162,7 @@ struct LoadedGuildMemberRow {
 }
 
 impl LoadedGuildMemberRow {
+    #[cfg(test)]
     fn from_stored(row: GuildMemberRow) -> Self {
         Self {
             guild_id: row.guild_id,

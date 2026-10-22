@@ -1488,6 +1488,26 @@ pub struct MatchEndReward {
     /// the durable grant writes.
     pub inventory_items: Vec<blades_lib::economy::RewardItem>,
     pub inventory_chests: Vec<MatchEndChest>,
+    /// The chests the MATCH itself paid — the PvP chest meter's chest(s) — as
+    /// retail's `reward.chests`. Promotion chests are NOT here: they ride
+    /// `rewardNewLevelArena.chests`. Every chest listed here is also in
+    /// [`Self::inventory_chests`] under the same id.
+    ///
+    /// Capture-proven (#401): every retail card whose match completed the eight-round
+    /// meter carries it here — s460 flapdroid `{"id":"4","tier":3,"level":8}` (next to
+    /// promotion chests 2/3 in `rewardNewLevelArena`), s615 Flappety
+    /// `{"id":"46","tier":3,"level":86}` and `{"id":"47","tier":2,"level":86}` with an
+    /// empty `rewardNewLevelArena`. The card's chest-meter reward is drawn from it
+    /// (`MatchParticipantEndDetails.MatchRewards.ChestRewardsList`); with the chest
+    /// only in the inventory change set the meter chest landed in the treasury but
+    /// never appeared on the card.
+    pub reward_chests: Vec<MatchEndChest>,
+    /// Instanced items the match paid, as `reward.items` — the same `reward` block
+    /// shape every REST reward uses (chest `collect` answers carry `reward.items`).
+    /// Each is also listed in the inventory change set's `backpack.items`. Only the
+    /// owner-approved every-25th-fight weapon (#390/#391, #401) uses it; retail's
+    /// match `reward` never carried items, so an empty list keeps the card retail.
+    pub reward_items: Vec<blades_lib::economy::RewardItem>,
     /// The recipient's VISIBLE trophy count, post-match (`character.pvpTrophies`).
     pub pvp_trophies: i64,
     /// The matchmaking-internal trophies, post-match (`character.matchmakingPvpTrophies`).
@@ -1533,6 +1553,8 @@ impl Default for MatchEndReward {
             inventory_stackable_items: Vec::new(),
             inventory_items: Vec::new(),
             inventory_chests: Vec::new(),
+            reward_chests: Vec::new(),
+            reward_items: Vec::new(),
             pvp_trophies: 0,
             matchmaking_pvp_trophies: 0,
             challenge_rank: 1,
@@ -1630,11 +1652,18 @@ pub fn results_json(
     inventory.insert("treasuryVersion".into(), json!(reward.treasury_version));
     inventory.insert("loadout".into(), loadout);
     let mut backpack = serde_json::Map::new();
+    // The #401 card weapon first, then any promotion items shown on the card
+    // (#319, behind ARENA_PROMOTION_ITEMS_ON_CARD) — one `items` list.
+    let backpack_items = reward
+        .reward_items
+        .iter()
+        .chain(reward.inventory_items.iter())
+        .collect::<Vec<_>>();
+    if !backpack_items.is_empty() {
+        backpack.insert("items".into(), json!(backpack_items));
+    }
     if !reward.inventory_stackable_items.is_empty() {
         backpack.insert("stackableItems".into(), json!(reward.inventory_stackable_items));
-    }
-    if !reward.inventory_items.is_empty() {
-        backpack.insert("items".into(), json!(reward.inventory_items));
     }
     if !backpack.is_empty() {
         inventory.insert("backpack".into(), Value::Object(backpack));
@@ -1659,13 +1688,22 @@ pub fn results_json(
         wallet.push(json!({ "currencyId": gems_currency, "balance": balance }));
     }
 
+    // Retail's match `reward`: currencies, the meter chest(s) when the meter
+    // filled, and XP. `items` only for the owner-approved weapon gift.
+    let mut match_reward = serde_json::Map::new();
+    match_reward.insert("currencies".into(), Value::Object(currencies));
+    if !reward.reward_chests.is_empty() {
+        match_reward.insert("chests".into(), json!(reward.reward_chests));
+    }
+    if !reward.reward_items.is_empty() {
+        match_reward.insert("items".into(), json!(reward.reward_items));
+    }
+    match_reward.insert("characterXp".into(), json!(reward.character_xp));
+
     json!({
         "characterId": recipient_char_uuid,
         "character": character,
-        "reward": {
-            "currencies": Value::Object(currencies),
-            "characterXp": reward.character_xp,
-        },
+        "reward": Value::Object(match_reward),
         "rewardNewLevelArena": reward.reward_new_level_arena,
         "currentRequestIndex": request_index,
         "inventory": Value::Object(inventory),
@@ -3106,9 +3144,11 @@ mod tests {
     }
 
     /// Retail s460 crossed the 100- and 150-cup rungs on the same 2-0 win that
-    /// filled its eight-round meter. The promotion object carried ids 2/3, while
-    /// the inventory change set carried those plus the meter chest id 4. Omitting
-    /// that inventory delta suppresses all three arrival animations.
+    /// filled its eight-round meter. The promotion object carried ids 2/3, the
+    /// match `reward` carried the meter chest id 4 (`reward.chests`, #401), and
+    /// the inventory change set carried all three. Omitting that inventory delta
+    /// suppresses all three arrival animations; omitting `reward.chests` leaves
+    /// the meter chest off the card.
     #[test]
     fn promotion_and_meter_chests_share_exact_ids_in_the_inventory_diff() {
         let promotion_chests = vec![
@@ -3116,8 +3156,10 @@ mod tests {
             MatchEndChest { id: "3".into(), tier: 2, level: 8 },
         ];
         let mut inventory_chests = promotion_chests.clone();
-        inventory_chests.push(MatchEndChest { id: "4".into(), tier: 3, level: 8 });
+        let meter_chest = MatchEndChest { id: "4".into(), tier: 3, level: 8 };
+        inventory_chests.push(meter_chest.clone());
         let reward = MatchEndReward {
+            reward_chests: vec![meter_chest],
             gold: 1263,
             character_xp: 58,
             wallet_gold: 12_345,
@@ -3150,6 +3192,12 @@ mod tests {
         assert_eq!(value["inventory"]["treasury"]["chests"][0]["id"], "2");
         assert_eq!(value["inventory"]["treasury"]["chests"][1]["id"], "3");
         assert_eq!(value["inventory"]["treasury"]["chests"][2]["id"], "4");
+        // Retail s460, verbatim: the meter chest in the MATCH reward only.
+        assert_eq!(
+            value["reward"]["chests"],
+            serde_json::json!([{ "id": "4", "tier": 3, "level": 8 }])
+        );
+        assert_eq!(value["rewardNewLevelArena"]["chests"].as_array().unwrap().len(), 2);
         assert_eq!(value["inventory"]["backpackVersion"], 226);
         assert_eq!(value["inventory"]["treasuryVersion"], 30);
         assert_eq!(value["inventory"]["backpack"]["stackableItems"][0]["count"], 17);
@@ -3195,6 +3243,79 @@ mod tests {
             1,
         ))
         .unwrap();
+        assert!(plain["inventory"].get("backpack").is_none());
+    }
+
+    /// Retail s615 (Flappety, frame 4936655): a meter-only fill, no promotion. The
+    /// card's `reward` and `inventory` blocks, verbatim apart from the gold amount
+    /// and the omitted loadout/backpack items, so the shape is pinned to retail's.
+    #[test]
+    fn a_meter_only_card_matches_retail_s615() {
+        let chest = MatchEndChest { id: "47".into(), tier: 2, level: 86 };
+        let reward = MatchEndReward {
+            gold: 12_999,
+            character_xp: 499,
+            backpack_version: 385_264,
+            treasury_version: 24_501,
+            inventory_chests: vec![chest.clone()],
+            reward_chests: vec![chest],
+            ..Default::default()
+        };
+        let v: serde_json::Value = serde_json::from_str(&results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "{}",
+            r#"{"equippedItems":{}}"#,
+            &reward,
+            0,
+        ))
+        .unwrap();
+        assert_eq!(
+            v["reward"],
+            serde_json::json!({
+                "currencies": { ARENA_GOLD_CURRENCY_UUID: 12_999 },
+                "chests": [{ "id": "47", "tier": 2, "level": 86 }],
+                "characterXp": 499,
+            })
+        );
+        assert_eq!(v["rewardNewLevelArena"], serde_json::json!({}));
+        assert_eq!(
+            v["inventory"]["treasury"],
+            serde_json::json!({ "chests": [{ "id": "47", "tier": 2, "level": 86 }] })
+        );
+        assert_eq!(v["inventory"]["treasuryVersion"], 24_501);
+    }
+
+    /// The weapon gift (#401) rides `reward.items` and the backpack change set as
+    /// one instance, next to any promotion stackables; with no weapon the card has
+    /// neither key (retail's match reward never carried items).
+    #[test]
+    fn a_reward_item_rides_reward_items_and_the_backpack_diff() {
+        let weapon = crate::arena::arena_fight_gift::weapon_instance(uuid::Uuid::from_u128(77));
+        let reward = MatchEndReward {
+            backpack_version: 10,
+            reward_items: vec![weapon.clone()],
+            inventory_stackable_items: vec![MatchEndStackableItem {
+                item_template_id: "b81952e0-c3c8-4a5c-92c0-8215d3eb71af".into(),
+                count: 3,
+            }],
+            ..Default::default()
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&results_json("a", "{}", "{}", &reward, 0)).unwrap();
+        let shown = serde_json::to_value(&weapon).unwrap();
+        assert_eq!(v["reward"]["items"], serde_json::json!([shown.clone()]));
+        assert_eq!(v["inventory"]["backpack"]["items"], serde_json::json!([shown]));
+        assert_eq!(v["inventory"]["backpack"]["stackableItems"][0]["count"], 3);
+
+        let plain: serde_json::Value = serde_json::from_str(&results_json(
+            "a",
+            "{}",
+            "{}",
+            &MatchEndReward::default(),
+            0,
+        ))
+        .unwrap();
+        assert!(plain["reward"].get("items").is_none() && plain["reward"].get("chests").is_none());
         assert!(plain["inventory"].get("backpack").is_none());
     }
 

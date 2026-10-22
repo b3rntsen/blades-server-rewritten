@@ -7,9 +7,7 @@ use actix_web::{
 };
 use blades_lib::game_data::GameData;
 use blades_lib::static_data::QuestLevelScaling;
-use blades_lib::util::dungeon::{
-    generate_for_dungeon, generate_for_dungeon_with_seed, run_loot_seed,
-};
+use blades_lib::util::dungeon::run_loot_seed;
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, DungeonGeneratedData,
     DungeonGeneratedDataWithId, DungeonState, DungeonStatus, ObjectiveStatus, Quest, QuestStatus,
@@ -2413,6 +2411,7 @@ mod exit_request_parsing {
 mod event_run_lifecycle_db {
     use super::*;
     use actix_web::ResponseError;
+    use blades_lib::util::dungeon::generate_for_dungeon;
     use blades_lib::static_data::StaticData;
     use blades_lib::user_data::{Backpack, CompleteInventory, CompleteWallet, Loadout, Treasury};
     use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
