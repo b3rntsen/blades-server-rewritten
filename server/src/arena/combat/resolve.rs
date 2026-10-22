@@ -537,6 +537,15 @@ pub fn on_c2s_input(
         );
         return Vec::new();
     }
+    // Tracker #418: a refused ability cast is logged with its reason — `info` for a
+    // human, `debug` for a bot. This only observes; the gates below still decide.
+    if let Some(ea) = input::parse_execute_ability(user_data) {
+        if let Some(reason) =
+            super::cast_refusal_log::input_gate_refusal(combat, sender, &ea.ability_uuid, now)
+        {
+            super::cast_refusal_log::log_refusal(combat, sender, &ea.ability_uuid, None, &reason);
+        }
+    }
     // Combat resolves ONLY in the live round (StateTimeout). During Connecting /
     // Spawning / BackendMatchCreated the inbound op54s are round-start handshake
     // traffic (the client's PlayerLoadoutReady upload, op55, op58) — resolving them as
@@ -1062,7 +1071,7 @@ pub fn on_c2s_input(
 /// `_blockDuration`, because a bash IS a guard plus a strike (see the shield gate in
 /// [`resolve_ability_cast`]). They derive from `ShieldBashAbility`, whose
 /// `get_DamageSource@0x1f49388` is 11 (ShieldManeuver).
-fn is_shield_bash(ability_uuid: &str, level: u8) -> bool {
+pub(super) fn is_shield_bash(ability_uuid: &str, level: u8) -> bool {
     super::gamedata::ability(ability_uuid).is_some_and(|a| !a.enemy_only)
         && super::gamedata::ability_rank_clamped(ability_uuid, level as u16)
             .is_some_and(|r| r.block_duration().is_some_and(|v| v > 0.0))
@@ -1464,17 +1473,6 @@ pub(super) fn resolve_ability_cast(
     ea: &input::ExecuteAbility,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    // Cooldown gate (per ability instance).
-    if let Some(&until) = combat.fighters[sender].cooldowns.get(&ea.ability_uuid) {
-        if now < until {
-            debug!(
-                "combat: slot {sender} ability {} on cooldown",
-                ea.ability_uuid
-            );
-            return Vec::new();
-        }
-    }
-
     // Look up the ability tag and level from the equipped loadout (needed for cost +
     // tag routing below; default to level=1/Generic for unrecognised abilities).
     let (level, tag) = combat.fighters[sender]
@@ -1506,33 +1504,26 @@ pub(super) fn resolve_ability_cast(
             (1, tag)
         });
 
-    // `Actor.CanCast`'s state gate (07-D7): Dead, Reckless Fury and the current actor
+    // THE GATES, in order — all classified by `cast_refusal_log::cast_gate_refusal`
+    // (tracker #418), which is the single decision and also names the reason in the
+    // log: `info` for a human, `debug` for a bot.
+    //
+    // 1. Cooldown (per ability instance).
+    //
+    // 2. `Actor.CanCast`'s state gate (07-D7): Dead, Reckless Fury and the current actor
     // state can refuse a cast, with the shipped Quick tag skipping only the state
     // check. This used to run for bots only, leaving human players able to server-cast
     // non-Quick spells during Charging/swing beats/maneuvers even though the client
     // gate would have refused them. Human maneuvers keep the existing maneuver timing
     // path: tests below pin Recovery→Maneuver combo chaining and high-block
     // interruption, while the player report is about spells remaining castable.
-    if sender >= combat.expected_peers || tag != super::state::AbilityTag::Maneuver {
-        if let Some(reason) =
-            super::interrupts::cast_refusal(&combat.fighters[sender], &ea.ability_uuid, now)
-        {
-            debug!(
-                "combat: slot {sender} ability {} refused by CanCast ({reason:?})",
-                ea.ability_uuid
-            );
-            return Vec::new();
-        }
-    }
-
-    // Resource gate (spec §1, bug 2): reject the cast (no effect, no cooldown set,
+    //
+    // 3. Resource gate (spec §1, bug 2): reject the cast (no effect, no cooldown set,
     // no damage) if the caster lacks the required stamina (maneuvers) or magicka
     // (spells).  `ability_cost` returns APK-authoritative costs; unknown UUIDs
     // return (0,0) — no gate applies (backward-compatible: unrecognised spells still
     // fire). The rank (1-based, from the equipped level) drives the linear cost ramp.
-    let (stam_cost, mag_cost) = tables::ability_cost(&ea.ability_uuid, level);
-    let short_of_stamina = stam_cost > 0 && combat.fighters[sender].stamina < stam_cost;
-    let short_of_magicka = mag_cost > 0 && combat.fighters[sender].magicka < mag_cost;
+    //
     // A SHIELD BASH needs a shield. There is no `requiresShield` field anywhere in
     // the shipped data — the precondition lives in the client's
     // `ShieldBashAbility.CanBeCast` — so it is keyed off the one thing that IS
@@ -1545,24 +1536,31 @@ pub(super) fn resolve_ability_cast(
     // — Guardbreaker correctly does not, it is a weapon maneuver — plus the
     // enemy-only ShieldOfMania, which is excluded because an enemy's loadout does not
     // model a shield and gating it would silently disarm the AI.
-    let needs_shield = is_shield_bash(&ea.ability_uuid, level);
-    let no_shield = needs_shield && !combat.fighters[sender].loadout.has_shield;
-    if short_of_stamina || short_of_magicka || no_shield {
-        if no_shield {
-            debug!(
-                "combat: slot {sender} ability {} REJECTED — a bash needs a shield",
-                ea.ability_uuid,
-            );
-        } else if short_of_stamina {
-            debug!(
-                "combat: slot {sender} ability {} REJECTED — insufficient stamina ({} < {} required)",
-                ea.ability_uuid, combat.fighters[sender].stamina, stam_cost,
-            );
-        } else {
-            debug!(
-                "combat: slot {sender} ability {} REJECTED — insufficient magicka ({} < {} required)",
-                ea.ability_uuid, combat.fighters[sender].magicka, mag_cost,
-            );
+    let (stam_cost, mag_cost) = tables::ability_cost(&ea.ability_uuid, level);
+    if let Some(reason) = super::cast_refusal_log::cast_gate_refusal(
+        combat,
+        sender,
+        &ea.ability_uuid,
+        level,
+        tag,
+        now,
+    ) {
+        use super::cast_refusal_log::CastRefusalReason;
+        super::cast_refusal_log::log_refusal(
+            combat,
+            sender,
+            &ea.ability_uuid,
+            Some((level, tag)),
+            &reason,
+        );
+        if !matches!(
+            reason,
+            CastRefusalReason::NoShield
+                | CastRefusalReason::InsufficientStamina { .. }
+                | CastRefusalReason::InsufficientMagicka { .. }
+        ) {
+            // Cooldown / CanCast: refused silently, as before.
+            return Vec::new();
         }
         // Report #109: a rejection used to `return Vec::new()` — the server sent
         // NOTHING back. No op65, so the caster's HUD bars never moved, and no
