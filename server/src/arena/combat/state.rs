@@ -1113,6 +1113,12 @@ pub struct Loadout {
     pub character_experience: u64,
     pub backpack_version: u64,
     pub treasury_version: u64,
+    /// `character.pvpSeasonId` at queue time — part of a promotion item's id, so
+    /// the card shows the id the durable grant will write (#319).
+    pub pvp_season_id: uuid::Uuid,
+    /// This season's promotion-item ids the character already holds — the card
+    /// applies the same owned-skip as the durable grant (#319).
+    pub owned_promotion_item_ids: std::collections::HashSet<uuid::Uuid>,
     pub next_treasury_chest_id: u64,
     pub stackable_counts: HashMap<uuid::Uuid, u64>,
     /// Hidden, season-independent position in the shipped 100-chest PvP cycle.

@@ -1916,6 +1916,27 @@ impl MatchInstance {
                 })
                 .collect::<Vec<_>>();
 
+            // A new arena's Blades piece(s) (#319), on the card only behind
+            // `ARENA_PROMOTION_ITEMS_ON_CARD` (default off). The durable grant in
+            // `arena_economy` always happens; when shown, the ids match it.
+            let items_on_card = arena_ladder::promotion_items_on_card();
+            let inventory_items = arena_ladder::card_promotion_items(
+                &promo,
+                character_id,
+                f.loadout.pvp_season_id,
+                &f.loadout.owned_promotion_item_ids,
+                items_on_card,
+            );
+            // Promotion items the durable write grants but this card hides.
+            let hidden_promotion_items = !items_on_card
+                && !arena_ladder::promotion_items_to_grant(
+                    &promo,
+                    character_id,
+                    f.loadout.pvp_season_id,
+                    |id| f.loadout.owned_promotion_item_ids.contains(id),
+                )
+                .is_empty();
+
             // `rewardNewLevelArena` stays `{}` unless a rung paid a reward. The
             // populated shape is capture-derived (prod s168 / s460 / s607), not
             // authored: each chest carries the rung's `chest_rarity` as `tier` and the
@@ -1986,10 +2007,17 @@ impl MatchInstance {
                 ))
             .then(|| crate::arena::arena_fight_gift::weapon_instance(uuid::Uuid::new_v4()));
             // One backpack mutation, one version bump — whether it carried promotion
-            // stackables, the weapon, or both.
-            let backpack_version = f.loadout.backpack_version.saturating_add(u64::from(
-                !inventory_stackable_items.is_empty() || card_weapon.is_some(),
-            ));
+            // stackables, the weapon, promotion items (when shown), or several.
+            // Promotion items the card hides move only the DATABASE version
+            // (`arena_ladder::backpack_bumps`), so this card never claims a
+            // version holding items it did not carry (#319).
+            let (card_bump, _) = arena_ladder::backpack_bumps(
+                !inventory_stackable_items.is_empty()
+                    || card_weapon.is_some()
+                    || !inventory_items.is_empty(),
+                hidden_promotion_items,
+            );
+            let backpack_version = f.loadout.backpack_version.saturating_add(card_bump);
             let promotion_gems: u64 = promo
                 .currencies
                 .iter()
@@ -2014,6 +2042,7 @@ impl MatchInstance {
                 backpack_version,
                 treasury_version,
                 inventory_stackable_items,
+                inventory_items,
                 inventory_chests,
                 reward_chests: meter_chests,
                 reward_items: card_weapon.iter().cloned().collect(),

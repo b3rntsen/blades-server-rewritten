@@ -179,6 +179,34 @@ fn add_promotion_currencies(
     promo.currencies.iter().map(|(_, n)| n).sum()
 }
 
+/// Add the crossed rungs' fixed items (the Blades set, #319) to the same
+/// `RewardGrant`. Ids come from [`arena_ladder::promotion_item_id`] (character,
+/// season, rung, template), so they are the ids the match-end card shows.
+///
+/// An id the character already holds — in the backpack or equipped — is skipped,
+/// never re-inserted: `apply_reward` is a plain insert, so a repeat would
+/// overwrite a tempered copy or duplicate an equipped instance id.
+fn add_promotion_items(
+    reward: &mut RewardGrant,
+    promo: &arena_ladder::PromotionRewards,
+    character_id: Uuid,
+    season_id: Uuid,
+    inventory: &blades_lib::user_data::CompleteInventory,
+) -> u64 {
+    let grant = arena_ladder::promotion_items_to_grant(promo, character_id, season_id, |id| {
+        blades_lib::features::character_ops::owned_gear_item(inventory, id).is_some()
+    });
+    if grant.len() < promo.items.len() {
+        warn!(
+            "arena economy: character {character_id} already owns {} of this crossing's promotion item(s); not re-granted",
+            promo.items.len() - grant.len(),
+        );
+    }
+    let added = grant.len() as u64;
+    reward.items.extend(grant);
+    added
+}
+
 /// The match's own reward — gold, XP and the arena Gems — before promotion loot
 /// and the Arena Giveaway are added to it.
 fn match_reward_grant(o: &MatchEconomyOutcome) -> RewardGrant {
@@ -202,10 +230,6 @@ fn match_reward_grant(o: &MatchEconomyOutcome) -> RewardGrant {
 
 fn promotion_needs_loot_marker(promo: &arena_ladder::PromotionRewards) -> bool {
     !promo.loot_thresholds.is_empty()
-}
-
-fn promotion_changes_backpack(promo: &arena_ladder::PromotionRewards) -> bool {
-    !promo.stackable_items.is_empty()
 }
 
 /// Put the weapon the op49 card showed (#401) into the backpack, as the very
@@ -317,6 +341,13 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 let mut reward = match_reward_grant(&o);
                 let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
                 let promotion_currencies = add_promotion_currencies(&mut reward, &promo);
+                let promotion_items = add_promotion_items(
+                    &mut reward,
+                    &promo,
+                    entry.id,
+                    entry.character.0.pvp_season_id,
+                    &entry.inventory.0,
+                );
 
                 // Arena Giveaway. Retail's banner promised Gems for turning up inside
                 // a two-hour Saturday window — "Join them during that time and earn
@@ -399,10 +430,19 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                         fight_tally.as_ref().map(|t| t.fights)
                     );
                 }
-                // One backpack mutation, one bump — as the op49 card advertised it.
-                if promotion_changes_backpack(&promo) || delivered.is_some() {
-                    entry.inventory.0.backpack_version += 1;
-                }
+                // One bump for the backpack change the op49 card advertised (promotion
+                // stackables, the card weapon, promotion items when the card shows
+                // them), plus one more for promotion items the card hid — so the card
+                // never claims a version holding items it did not carry (#319,
+                // `arena_ladder::backpack_bumps`).
+                let items_on_card = arena_ladder::promotion_items_on_card();
+                let (_, durable_bump) = arena_ladder::backpack_bumps(
+                    !promo.stackable_items.is_empty()
+                        || delivered.is_some()
+                        || (items_on_card && promotion_items > 0),
+                    !items_on_card && promotion_items > 0,
+                );
+                entry.inventory.0.backpack_version += durable_bump;
                 if promotion_needs_loot_marker(&promo) {
                     entry
                         .server_state
@@ -526,6 +566,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     granted,
                     promotion_stackables,
                     promotion_currencies,
+                    promotion_items,
                 }))
             }
             .scope_boxed()
@@ -537,7 +578,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
 
     info!(
         "arena economy: persisted {} for L{} character {} — gold {:+}, xp {:+}, gems {:+}, \
-         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}{}",
+         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}{}{}",
         if outcome.win { "WIN" } else { "LOSS" },
         outcome.level,
         a.character_id,
@@ -563,6 +604,11 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         },
         if a.promotion_currencies > 0 {
             format!(", {} promotion currency", a.promotion_currencies)
+        } else {
+            String::new()
+        },
+        if a.promotion_items > 0 {
+            format!(", {} promotion item(s)", a.promotion_items)
         } else {
             String::new()
         },
@@ -993,6 +1039,7 @@ struct AppliedOutcome {
     granted: usize,
     promotion_stackables: u64,
     promotion_currencies: u64,
+    promotion_items: u64,
     /// Gems paid by an open Arena Giveaway window, 0 when none was running.
     giveaway_gems: i64,
     /// The account's fight count after this match and any weapon gift it minted;
@@ -1057,6 +1104,118 @@ mod tests {
         );
     }
 
+    const SEASON_1: Uuid = Uuid::from_u128(0x5ea5_0001);
+    const SEASON_2: Uuid = Uuid::from_u128(0x5ea5_0002);
+
+    fn empty_inventory() -> blades_lib::user_data::CompleteInventory {
+        blades_lib::user_data::CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 0,
+            treasury_version: 0,
+        }
+    }
+
+    #[test]
+    fn crossing_2000_stages_the_blades_boots_and_shield_into_the_backpack() {
+        // #319: the durable grant carries the same ids the card shows.
+        let character = Uuid::from_u128(0x319);
+        let promo = arena_ladder::promotion_rewards(1990, 2010, 50);
+        let mut reward = RewardGrant::default();
+        let inv = empty_inventory();
+        assert_eq!(add_promotion_items(&mut reward, &promo, character, SEASON_1, &inv), 2);
+        let templates = reward
+            .items
+            .iter()
+            .map(|i| i.item.item_template_id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            templates,
+            vec![
+                "31e8ee1f-076b-46d9-b8ff-8d4f87faa244",
+                "d454df43-e765-449f-9a4d-8e807c36d023"
+            ]
+        );
+        for (granted, item) in reward.items.iter().zip(&promo.items) {
+            assert_eq!(granted.id, arena_ladder::promotion_item_id(character, SEASON_1, item));
+            assert_eq!(granted.item.tempering_level, 0);
+        }
+        assert!(promotion_needs_loot_marker(&promo));
+    }
+
+    /// Review of #550: a season rollover clears the promotion ledger, so the
+    /// player re-crosses 1000 and is granted the Gauntlets again. That second
+    /// grant must be a NEW instance: it must not overwrite the copy they
+    /// tempered and enchanted, and must not reuse the id of the copy they have
+    /// equipped. A replay within one season grants nothing.
+    #[test]
+    fn a_regrant_after_a_season_reset_never_touches_the_owned_copy() {
+        let character = Uuid::from_u128(0x319);
+        let promo = arena_ladder::promotion_rewards(999, 1000, 50);
+        let mut wallet = blades_lib::user_data::CompleteWallet::default();
+        let mut ch = blades_lib::user_data::CompleteCharacter::default();
+        let mut inv = empty_inventory();
+
+        // Season 1: granted, then tempered + enchanted and equipped.
+        let mut first = RewardGrant::default();
+        assert_eq!(add_promotion_items(&mut first, &promo, character, SEASON_1, &inv), 1);
+        let first_id = first.items[0].id;
+        let mut tracker = InventoryChangeTracker::default();
+        apply_reward(&first, &mut wallet, &mut inv, &mut ch, &mut tracker);
+        let mut owned = inv.backpack.items.0.remove(&first_id).unwrap();
+        owned.tempering_level = 10;
+        let slot = Uuid::from_u128(0x5107);
+        inv.loadout.equipped_items.0.insert(
+            slot,
+            blades_lib::user_data::SingleEquippedItem { id: first_id, slot, item: owned },
+        );
+
+        // Same season again (a replayed write): nothing is re-granted.
+        let mut replay = RewardGrant::default();
+        assert_eq!(add_promotion_items(&mut replay, &promo, character, SEASON_1, &inv), 0);
+        assert!(replay.items.is_empty());
+
+        // Season 2: a fresh instance; the equipped, tempered copy is untouched
+        // and no id appears in both equippedItems and backpack.items.
+        let mut second = RewardGrant::default();
+        assert_eq!(add_promotion_items(&mut second, &promo, character, SEASON_2, &inv), 1);
+        assert_ne!(second.items[0].id, first_id);
+        apply_reward(&second, &mut wallet, &mut inv, &mut ch, &mut tracker);
+        assert!(!inv.backpack.items.0.contains_key(&first_id));
+        assert_eq!(inv.loadout.equipped_items.0[&slot].item.tempering_level, 10);
+        assert_eq!(inv.backpack.items.0[&second.items[0].id].tempering_level, 0);
+    }
+
+    /// With the card switch OFF (the default) the match-end card carries no
+    /// promotion items, while the durable grant still stages them; ON, the card
+    /// shows exactly the items, with exactly the ids, the backpack receives.
+    #[test]
+    fn card_switch_off_hides_promotion_items_but_the_backpack_still_gets_them() {
+        let character = Uuid::from_u128(0x319);
+        let promo = arena_ladder::promotion_rewards(2490, 2510, 50);
+
+        let mut reward = RewardGrant::default();
+        let inv = empty_inventory();
+        assert_eq!(add_promotion_items(&mut reward, &promo, character, SEASON_1, &inv), 2);
+
+        let owned = arena_ladder::owned_promotion_item_ids(character, SEASON_1, &inv);
+        let off = arena_ladder::card_promotion_items(&promo, character, SEASON_1, &owned, false);
+        assert!(off.is_empty(), "switch off: nothing on the card");
+        assert_eq!(reward.items.len(), 2, "switch off: backpack still granted");
+
+        let on = arena_ladder::card_promotion_items(&promo, character, SEASON_1, &owned, true);
+        assert_eq!(on, reward.items, "switch on: card == durable grant");
+    }
+
+    #[test]
+    fn the_card_switch_defaults_off() {
+        if std::env::var_os("ARENA_PROMOTION_ITEMS_ON_CARD").is_none() {
+            assert!(!arena_ladder::promotion_items_on_card());
+        }
+    }
+
     /// #401: the weapon the card showed lands in the backpack as that exact
     /// instance — same id, and the backpack item serializes to the card's
     /// `inventory.backpack.items` entry — and is reported in the change set.
@@ -1095,7 +1254,7 @@ mod tests {
             "gem-only arena promotions still need the durable per-threshold marker"
         );
         assert!(
-            !promotion_changes_backpack(&promo),
+            promo.stackable_items.is_empty() && promo.items.is_empty(),
             "wallet-only promotion loot must not bump the backpack version"
         );
 
@@ -1236,6 +1395,7 @@ mod tests {
             granted: 0,
             promotion_stackables: 0,
             promotion_currencies: 0,
+            promotion_items: 0,
             giveaway_gems: 0,
             fight_tally: None,
         }

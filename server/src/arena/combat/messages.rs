@@ -1482,6 +1482,11 @@ pub struct MatchEndReward {
     /// Post-count stackables and newly-created chests in the match-end inventory
     /// change set. These are what trigger the visible promotion/chest arrivals.
     pub inventory_stackable_items: Vec<MatchEndStackableItem>,
+    /// New instanced items in the backpack change set — a new arena's Blades
+    /// piece(s) (#319). Retail's standard backpack `items` shape
+    /// (`{id, itemTemplateId, temperingLevel, durability, ...}`), with the same ids
+    /// the durable grant writes.
+    pub inventory_items: Vec<blades_lib::economy::RewardItem>,
     pub inventory_chests: Vec<MatchEndChest>,
     /// The chests the MATCH itself paid — the PvP chest meter's chest(s) — as
     /// retail's `reward.chests`. Promotion chests are NOT here: they ride
@@ -1546,6 +1551,7 @@ impl Default for MatchEndReward {
             backpack_version: 0,
             treasury_version: 0,
             inventory_stackable_items: Vec::new(),
+            inventory_items: Vec::new(),
             inventory_chests: Vec::new(),
             reward_chests: Vec::new(),
             reward_items: Vec::new(),
@@ -1646,8 +1652,15 @@ pub fn results_json(
     inventory.insert("treasuryVersion".into(), json!(reward.treasury_version));
     inventory.insert("loadout".into(), loadout);
     let mut backpack = serde_json::Map::new();
-    if !reward.reward_items.is_empty() {
-        backpack.insert("items".into(), json!(reward.reward_items));
+    // The #401 card weapon first, then any promotion items shown on the card
+    // (#319, behind ARENA_PROMOTION_ITEMS_ON_CARD) — one `items` list.
+    let backpack_items = reward
+        .reward_items
+        .iter()
+        .chain(reward.inventory_items.iter())
+        .collect::<Vec<_>>();
+    if !backpack_items.is_empty() {
+        backpack.insert("items".into(), json!(backpack_items));
     }
     if !reward.inventory_stackable_items.is_empty() {
         backpack.insert("stackableItems".into(), json!(reward.inventory_stackable_items));
@@ -3190,6 +3203,47 @@ mod tests {
         assert_eq!(value["inventory"]["backpack"]["stackableItems"][0]["count"], 17);
         assert_eq!(value["character"]["experience"], 456);
         assert_eq!(value["currentRequestIndex"], 91);
+    }
+
+    /// #319: a new arena's Blades piece arrives in the backpack change set, in
+    /// retail's backpack `items` shape, beside any stackables.
+    #[test]
+    fn promotion_items_ride_the_backpack_change_set() {
+        let character = uuid::Uuid::from_u128(0x319);
+        let gauntlets = crate::arena::arena_ladder::promotion_reward_item(
+            character,
+            uuid::Uuid::from_u128(0x5ea5),
+            &crate::arena::arena_ladder::PROMOTION_ITEMS[0],
+        );
+        let reward = MatchEndReward {
+            backpack_version: 12,
+            inventory_items: vec![gauntlets.clone()],
+            ..Default::default()
+        };
+        let value: serde_json::Value = serde_json::from_str(&results_json(
+            "aaaaaaaa-0000-0000-0000-000000000000",
+            r#"{"experience":1}"#,
+            r#"{"equippedItems":{}}"#,
+            &reward,
+            1,
+        ))
+        .unwrap();
+        let items = &value["inventory"]["backpack"]["items"];
+        assert_eq!(items[0]["id"], gauntlets.id.to_string());
+        assert_eq!(items[0]["itemTemplateId"], "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b");
+        assert_eq!(items[0]["temperingLevel"], 0);
+        assert_eq!(items[0]["durability"], 325.0);
+        assert!(value["inventory"]["backpack"].get("stackableItems").is_none());
+        // An ordinary match still sends no backpack block at all.
+        let plain: serde_json::Value = serde_json::from_str(&results_json(
+            "aaaaaaaa-0000-0000-0000-000000000000",
+            r#"{"experience":1}"#,
+            r#"{"equippedItems":{}}"#,
+            &MatchEndReward::default(),
+            1,
+        ))
+        .unwrap();
+        assert!(plain["inventory"].get("backpack").is_none());
     }
 
     /// Retail s615 (Flappety, frame 4936655): a meter-only fill, no promotion. The
