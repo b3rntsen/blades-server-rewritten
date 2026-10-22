@@ -911,6 +911,26 @@ fn row_has_customization(r: &CharacterDbEntryCharacterWalletInventory) -> bool {
         .unwrap_or(false)
 }
 
+/// True iff a loaded `characters` row has anything equipped.
+///
+/// Tracker #409 (2026-10-17): a new player's first Arena fight was against a
+/// level-1 AI with an EMPTY loadout — no weapon, no armour. The client draws such
+/// a fighter bare-handed, and with no weapon there is no wind-up to read, so the
+/// player cannot see when to raise the shield. The roster row ("cfff") was an
+/// unplayed starter shell; 13 players drew it 39 times in 30 days. Retail never
+/// matched anyone against an unequipped fighter, because every real opponent had
+/// at least the tutorial gear on.
+fn row_has_gear(r: &CharacterDbEntryCharacterWalletInventory) -> bool {
+    !r.inventory.0.loadout.equipped_items.0.is_empty()
+}
+
+/// A row a bot may be built from: it renders (customization) and it is armed
+/// (gear). Every bot-eligibility check goes through this one predicate so the
+/// draw and the recent-opponent guard cannot disagree about who is eligible.
+fn row_is_presentable(r: &CharacterDbEntryCharacterWalletInventory) -> bool {
+    row_has_customization(r) && row_has_gear(r)
+}
+
 /// The strength of a loaded `characters` row, for the bot draw's bracket.
 ///
 /// Reads the SAME two fields `load_skill` reads for a queueing human —
@@ -987,9 +1007,9 @@ pub struct BotDraw {
 /// non-empty tier wins. Within a tier the gsid rotation is preserved, so variety
 /// across matches survives.
 ///
-/// It is a PREFERENCE, never a gate: if no tier has anybody — or the human's or the
-/// candidates' skill could not be read — it falls back to the full eligible set
-/// rather than refuse to start a match. An unfair bot beats no opponent at all,
+/// It is a PREFERENCE, never a gate: if no tier has anybody it falls back to the
+/// [`MIN_BOT_POOL`] nearest eligible bots (tracker #409), and if the human's skill
+/// could not be read, to the full eligible set, rather than refuse to start a match. An unfair bot beats no opponent at all,
 /// which is the same call `compatible` makes for humans.
 fn pick_bot_index(
     candidates: &[BotCandidate],
@@ -1073,8 +1093,27 @@ fn pick_bot_index(
             step: Some(step),
         });
     }
+    // Nobody inside even the widest step. Still take the NEAREST, not anyone.
+    //
+    // Tracker #409 (2026-10-17): a level-6 player drew roster bots at levels 81,
+    // 93 and 86 in a row while level-28, -40 and -43 ones were eligible, because
+    // this fallback rotated over the whole eligible set. Rank by level gap (then
+    // trophy gap, for rated rows) and rotate among the MIN_BOT_POOL closest, so
+    // variety survives without handing a beginner the strongest bot on the server.
+    // Rows whose skill could not be read sort last; with nobody readable the
+    // order is the pool's own, as before.
+    let mut nearest = eligible.clone();
+    nearest.sort_by_key(|&i| match candidates[i].2 {
+        Some(c) => (
+            0u8,
+            (h.level - c.level).abs(),
+            if candidates[i].3 { (h.trophies - c.trophies).abs() } else { 0 },
+        ),
+        None => (1u8, i32::MAX, i64::MAX),
+    });
+    nearest.truncate(MIN_BOT_POOL);
     Some(BotDraw {
-        index: rotate(&eligible),
+        index: rotate(&nearest),
         step: None,
     })
 }
@@ -1190,7 +1229,7 @@ fn apply_recent_bot_avoidance(
     }
     let eligible = rows
         .iter()
-        .filter(|r| row_has_customization(r) && !is_self_match(human_char_uuid, &r.id.to_string()))
+        .filter(|r| row_is_presentable(r) && !is_self_match(human_char_uuid, &r.id.to_string()))
         .count();
     if eligible <= avoid_recent {
         return;
@@ -1363,8 +1402,8 @@ async fn pick_bot_loadout(
     // Two preferences collided and the roster silently won. The bracket is the one
     // the player feels, so when the roster cannot satisfy it, widen to the whole
     // character pool and take a bracketed opponent from there. Completeness is not
-    // sacrificed: the wider pool goes through the same `row_has_customization`
-    // filter, so an unrenderable character still cannot be drawn.
+    // sacrificed: the wider pool goes through the same `row_is_presentable`
+    // filter, so an unrenderable or unarmed character still cannot be drawn.
     //
     // Only ever a widening — if the wider pool has nobody bracketed either, the
     // roster draw stands.
@@ -1495,7 +1534,7 @@ fn should_widen(source: BotRosterSource, human: Option<Skill>, draw: Option<BotD
 fn candidate_of_row(r: &CharacterDbEntryCharacterWalletInventory) -> BotCandidate {
     (
         r.id.to_string(),
-        row_has_customization(r),
+        row_is_presentable(r),
         skill_of_row(r),
         is_rated(r),
     )
@@ -2224,6 +2263,21 @@ mod human_priority_tests {
 mod bot_pick_tests {
     use super::*;
 
+    /// One equipped item, so a test row counts as armed (`row_has_gear`).
+    fn one_equipped_item() -> blades_lib::user_data::Loadout {
+        let slot = Uuid::new_v4();
+        let item: blades_lib::user_data::SingleEquippedItem =
+            serde_json::from_value(serde_json::json!({
+                "id": Uuid::new_v4(),
+                "slot": slot,
+                "itemTemplateId": Uuid::new_v4(),
+            }))
+            .expect("a minimal equipped item deserializes");
+        let mut loadout = blades_lib::user_data::Loadout::default();
+        loadout.equipped_items.0.insert(slot, item);
+        loadout
+    }
+
     fn renderable_row(id: Uuid) -> CharacterDbEntryCharacterWalletInventory {
         use crate::json_db::JsonDbWrapper;
         let mut character = blades_lib::user_data::CompleteCharacter::default();
@@ -2241,7 +2295,7 @@ mod bot_pick_tests {
             wallet: JsonDbWrapper(Default::default()),
             inventory: JsonDbWrapper(blades_lib::user_data::CompleteInventory {
                 backpack: Default::default(),
-                loadout: Default::default(),
+                loadout: one_equipped_item(),
                 treasury: Default::default(),
                 overflow_treasury: Default::default(),
                 backpack_version: 1,
@@ -2249,6 +2303,76 @@ mod bot_pick_tests {
             }),
             server_state: JsonDbWrapper(Default::default()),
         }
+    }
+
+    /// Tracker #409: an unequipped character is never drawn as a bot, even when
+    /// it is the only one inside the bracket. Fails on the pre-fix code, which
+    /// only asked for customization.
+    #[test]
+    fn an_unarmed_character_is_not_bot_eligible() {
+        let armed = renderable_row(Uuid::new_v4());
+        let mut naked = renderable_row(Uuid::new_v4());
+        naked.inventory.0.loadout = Default::default();
+
+        assert!(row_is_presentable(&armed));
+        assert!(
+            !row_is_presentable(&naked),
+            "an empty loadout must not be eligible"
+        );
+        assert!(candidate_of_row(&armed).1);
+        assert!(
+            !candidate_of_row(&naked).1,
+            "the draw sees the same verdict"
+        );
+    }
+
+    /// The draw itself, not just the predicate: with an armed and an unarmed row
+    /// side by side, every gsid picks the armed one.
+    #[test]
+    fn the_draw_never_lands_on_the_unarmed_row() {
+        let armed = renderable_row(Uuid::new_v4());
+        let mut naked = renderable_row(Uuid::new_v4());
+        naked.inventory.0.loadout = Default::default();
+        let candidates = vec![candidate_of_row(&naked), candidate_of_row(&armed)];
+        let human = Some(Skill {
+            level: 50,
+            trophies: 500,
+        });
+        for _ in 0..64 {
+            let index = pick_bot_index(&candidates, "", human, Uuid::new_v4())
+                .expect("the armed row is eligible");
+            assert_eq!(index, 1, "drew the unarmed row");
+        }
+    }
+
+    /// Tracker #409: with nobody inside any bracket step, the draw still takes
+    /// one of the nearest bots. The reported case: a level-6 player drew levels
+    /// 81, 93 and 86 while 28, 40 and 43 were eligible. Fails on the pre-fix code,
+    /// which rotated over the whole eligible set.
+    #[test]
+    fn out_of_bracket_draw_takes_the_nearest_bots() {
+        let levels = [81u16, 93, 28, 86, 40, 100, 43, 94];
+        let rows: Vec<_> = levels
+            .iter()
+            .map(|&l| {
+                let mut r = renderable_row(Uuid::new_v4());
+                r.character.0.level = l;
+                r.character.0.matchmaking_pvp_trophies = 0;
+                r
+            })
+            .collect();
+        let candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
+        let human = Some(Skill { level: 6, trophies: 32 });
+        let mut drawn = std::collections::BTreeSet::new();
+        for b in 0..=255u8 {
+            let mut bytes = [0u8; 16];
+            bytes[0] = b;
+            let d = super::pick_bot_index(&candidates, "", human, Uuid::from_bytes(bytes))
+                .expect("eligible bots exist");
+            assert!(d.step.is_none(), "nobody is inside a bracket step");
+            drawn.insert(levels[d.index]);
+        }
+        assert_eq!(drawn, [28u16, 40, 43].into_iter().collect(), "only the three nearest");
     }
 
     /// A bot opponent must be identifiable as one, in BOTH places the client
