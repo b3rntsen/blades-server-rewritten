@@ -13,6 +13,17 @@ pub struct ExecuteAbility {
     pub ability_uuid: String,
 }
 
+/// A cheap byte-level pre-check for [`parse_execute_ability`]: carrier `0x36` and the
+/// `56, 3, 37` + 36-byte-string tail the parser requires. No NetData decode, so it
+/// can run on every inbound frame; `false` means the full parser would return `None`.
+pub fn looks_like_execute_ability(user_data: &[u8]) -> bool {
+    user_data.get(1) == Some(&0x36)
+        && user_data.len() >= 2 + 5 + 36
+        && user_data
+            .windows(5)
+            .any(|w| w == [56, 3, 37, 0x24, 0x00])
+}
+
 /// Detect + decode a `RequestExecuteAbility` (37) in a carrier-54 c2s `user_data`.
 /// The body is NetData (`arena-combat-reference.md` §op37):
 /// `{0:Int AvatarId, 1:Byte Avatar, 2:Byte Autonomous, 3:Byte 37,

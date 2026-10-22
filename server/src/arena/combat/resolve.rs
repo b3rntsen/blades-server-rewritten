@@ -537,20 +537,12 @@ pub fn on_c2s_input(
         );
         return Vec::new();
     }
-    // Tracker #418: a refused ability cast is logged with its reason — `info` for a
-    // human, `debug` for a bot. This only observes; the gates below still decide.
-    if let Some(ea) = input::parse_execute_ability(user_data) {
-        if let Some(reason) =
-            super::cast_refusal_log::input_gate_refusal(combat, sender, &ea.ability_uuid, now)
-        {
-            super::cast_refusal_log::log_refusal(combat, sender, &ea.ability_uuid, None, &reason);
-        }
-    }
     // Combat resolves ONLY in the live round (StateTimeout). During Connecting /
     // Spawning / BackendMatchCreated the inbound op54s are round-start handshake
     // traffic (the client's PlayerLoadoutReady upload, op55, op58) — resolving them as
     // swings would inject phantom damage before the fight.
     if !matches!(combat.phase, FlowState::StateTimeout) {
+        super::cast_refusal_log::log_input_gate_refusal(combat, sender, user_data, now);
         return Vec::new();
     }
     // Op46 `PlayerCombatInputActivate` uses carrier `0x2e` (its own GameMessageId byte),
@@ -790,6 +782,11 @@ pub fn on_c2s_input(
         }
     }
 
+    // Tracker #418: name the reason a pre-gate below refuses an ability cast — `info`
+    // for a human, `debug` for a bot. Observe-only; the gates still decide. Placed
+    // after the reconcile loop (a lapsed paralysis is already cleared) and after the
+    // gmid-47 pointer stream has returned.
+    super::cast_refusal_log::log_input_gate_refusal(combat, sender, user_data, now);
     let Some(target_slot) = combat.opponent_of(sender) else {
         debug!("combat: slot {sender} input ignored — solo/bot match, no opponent");
         return Vec::new();
@@ -1108,7 +1105,7 @@ const RECOVERY_STRIKES_UUID: &str = "e08f95de-85bb-4829-ba7e-cf45bc6fb422";
 /// on an 11-session count that pooled op37 with op38 and counted duplicated rows; its
 /// Ward 0/70 was a sampling artefact (about 1.6 in-window uses were expected there).
 /// Reported by Taheen (#113, dodges) and #228 (spells doing nothing at full magicka).
-fn performable_while_staggered(ability_uuid: &str) -> bool {
+pub(super) fn performable_while_staggered(ability_uuid: &str) -> bool {
     super::interrupts::is_quick(ability_uuid)
 }
 

@@ -15,7 +15,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use log::{debug, info};
+use log::{debug, info, log_enabled, Level};
 
 use super::interrupts::{self, CastRefusal};
 use super::state::{AbilityTag, ActorStateType, FlowState, MatchCombat};
@@ -126,7 +126,7 @@ pub fn input_gate_refusal(
     if caster.is_paralyzed() {
         return Some(CastRefusalReason::Paralyzed);
     }
-    if caster.is_staggered(now) && !interrupts::is_quick(ability_uuid) {
+    if caster.is_staggered(now) && !super::resolve::performable_while_staggered(ability_uuid) {
         let remaining_ms = caster.staggered_until.map_or(0, |t| ms_until(now, t));
         return Some(CastRefusalReason::Staggered { remaining_ms });
     }
@@ -230,6 +230,19 @@ pub fn is_human(combat: &MatchCombat, slot: usize) -> bool {
     slot < combat.expected_peers
 }
 
+// Test seam: every refusal `log_refusal` was asked to log, on this thread, so a test
+// can see what the resolver reported without capturing the global logger.
+#[cfg(test)]
+thread_local! {
+    static LOGGED: std::cell::RefCell<Vec<(usize, CastRefusalReason)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn take_logged() -> Vec<(usize, CastRefusalReason)> {
+    LOGGED.with(|l| std::mem::take(&mut *l.borrow_mut()))
+}
+
 /// Log one refusal: `info` for a human player, `debug` for a bot.
 pub fn log_refusal(
     combat: &MatchCombat,
@@ -238,11 +251,34 @@ pub fn log_refusal(
     rank_tag: Option<(u8, AbilityTag)>,
     reason: &CastRefusalReason,
 ) {
-    let line = refusal_line(combat, sender, ability_uuid, rank_tag, reason);
+    #[cfg(test)]
+    LOGGED.with(|l| l.borrow_mut().push((sender, *reason)));
     if is_human(combat, sender) {
-        info!("{line}");
-    } else {
-        debug!("{line}");
+        info!(
+            "{}",
+            refusal_line(combat, sender, ability_uuid, rank_tag, reason)
+        );
+    } else if log_enabled!(Level::Debug) {
+        // Bots retry casts every tick; don't format a line nobody records.
+        debug!(
+            "{}",
+            refusal_line(combat, sender, ability_uuid, rank_tag, reason)
+        );
+    }
+}
+
+/// The input pre-gate hook for `resolve::on_c2s_input`: if `user_data` is an ability
+/// cast that [`input_gate_refusal`] refuses, log it via [`log_refusal`]. The op37
+/// shape is checked on raw bytes first, so other frames cost no NetData decode.
+pub fn log_input_gate_refusal(combat: &MatchCombat, sender: usize, user_data: &[u8], now: Instant) {
+    if !super::input::looks_like_execute_ability(user_data) {
+        return;
+    }
+    let Some(ea) = super::input::parse_execute_ability(user_data) else {
+        return;
+    };
+    if let Some(reason) = input_gate_refusal(combat, sender, &ea.ability_uuid, now) {
+        log_refusal(combat, sender, &ea.ability_uuid, None, &reason);
     }
 }
 
@@ -487,7 +523,13 @@ mod tests {
                 .or_else(|| cast_gate_refusal(&c, 0, re, 1, AbilityTag::ResistElements, now))
                 .unwrap_or_else(|| panic!("{code}: classifier passed the cast"));
             assert_eq!(reason.code(), code);
+            take_logged();
             assert!(cast(&mut c).is_empty(), "{code}: the resolver must refuse");
+            assert_eq!(
+                take_logged(),
+                vec![(0, reason)],
+                "{code}: exactly one refusal is reported, with the classified reason"
+            );
         }
 
         // Short of magicka: refused, but the caster's pools are re-stated (#109).
@@ -500,7 +542,9 @@ mod tests {
             cast_gate_refusal(&c, 0, re, 1, AbilityTag::ResistElements, now).map(|r| r.code()),
             Some("insufficient_magicka")
         );
+        take_logged();
         let out = cast(&mut c);
+        assert_eq!(take_logged().len(), 1);
         assert!(!out.is_empty());
         assert!(out
             .iter()
@@ -510,11 +554,69 @@ mod tests {
         // Control: the passing state casts.
         let mut c = combat(now, 2);
         equip(&mut c, re, 1, AbilityTag::ResistElements);
+        take_logged();
         let out = cast(&mut c);
+        assert_eq!(
+            take_logged(),
+            vec![],
+            "a successful cast reports no refusal"
+        );
         assert!(out
             .iter()
             .any(|(_, f)| messages::user_message_gmid(f) != Some(65)));
         assert!(c.fighters[0].magicka < 100_000, "the cast was paid for");
+    }
+
+    #[test]
+    fn op37_byte_precheck_agrees_with_the_parser() {
+        use super::super::{input, messages};
+        let frame = messages::request_execute_ability(7, uuid_of("ResistElements"));
+        assert!(input::looks_like_execute_ability(&frame));
+        assert!(input::parse_execute_ability(&frame).is_some());
+        // Same frame relabelled as another gmid (e.g. 47, the pointer stream).
+        let pos = frame
+            .windows(5)
+            .position(|w| w == [56, 3, 37, 0x24, 0x00])
+            .expect("op37 tail present");
+        let mut other = frame.clone();
+        other[pos + 2] = 47;
+        assert!(!input::looks_like_execute_ability(&other));
+        assert!(input::parse_execute_ability(&other).is_none());
+        assert!(!input::looks_like_execute_ability(&[0x84, 0x36, 1, 2, 3]));
+    }
+
+    /// A lapsed paralysis must not be reported: the hook runs after the resolver's
+    /// reconcile loop, and the cast then goes through.
+    #[test]
+    fn a_lapsed_paralysis_is_not_reported_and_the_cast_goes_through() {
+        use super::super::{messages, resolve};
+        let now = Instant::now();
+        let re = uuid_of("ResistElements");
+        let mut c = combat(now, 2);
+        equip(&mut c, re, 1, AbilityTag::ResistElements);
+        let past = now - Duration::from_secs(30);
+        c.fighters[0].paralyze_secs = 1.0;
+        c.fighters[0].set_actor_state(ActorStateType::Paralyzed, past);
+        // Before reconcile the state still reads Paralyzed (the stale view the hook
+        // must not log from).
+        assert_eq!(
+            input_gate_refusal(&c, 0, re, now),
+            Some(CastRefusalReason::Paralyzed)
+        );
+        let frame = messages::request_execute_ability(c.fighters[0].net_object_id, re);
+        take_logged();
+        let out = resolve::on_c2s_input(&mut c, 0, &frame, now);
+        assert_eq!(
+            take_logged(),
+            vec![],
+            "nothing reported for a cast that succeeds"
+        );
+        assert!(
+            !out.is_empty(),
+            "the cast goes through once paralysis lapses"
+        );
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Idle);
+        assert_eq!(input_gate_refusal(&c, 0, re, now), None);
     }
 
     #[test]
