@@ -262,6 +262,9 @@ pub const END_PACKAGE_MIN_SCORE: f64 = 10.0;
 ///
 /// FROM LEVEL 49 the package is the top band's, drawn as at level 100 (report #383,
 /// [`TOP_BAND_FROM_LEVEL`]): Glorious gems and the Transcendent upgrade included.
+///
+/// HOW MANY (report #407): whatever the draws above make of the count, a soul-gem
+/// stack `/end` pays holds 3 to 7 gems, uniformly — [`END_SOUL_GEM_COUNT`].
 pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
     let mut grant = end_package_drawn(score, character_level, run_seed);
     // The three best soul gems at 45-48 (owner-approved deviation from retail, #388).
@@ -272,7 +275,23 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
     );
     // Its materials are always 20 (owner-approved deviation from retail, #388).
     crate::features::beginner_economy::size_abyss_end_materials(&mut grant.stackable_items);
+    // Its soul gems are 3 to 7 (HauDrauf, #407) — the count only.
+    size_end_soul_gems(&mut grant.stackable_items, run_seed);
     grant
+}
+
+/// Every soul-gem stack in an `/end` package re-counted, uniformly in
+/// [`END_SOUL_GEM_COUNT`], from its own roll — so the kind drawn, and whether gems
+/// are paid at all, never move. Anything that is not a soul-gem stack is untouched.
+fn size_end_soul_gems(stacks: &mut HashMap<Uuid, u64>, run_seed: i64) {
+    if !is_soul_gem_stack(stacks) {
+        return;
+    }
+    let (low, high) = (*END_SOUL_GEM_COUNT.start(), *END_SOUL_GEM_COUNT.end());
+    for (id, count) in stacks.iter_mut() {
+        let roll = mix((run_seed as u64) ^ 0x407_5017_6E45 ^ (id.as_u128() as u64));
+        *count = low + roll % (high - low + 1);
+    }
 }
 
 /// [`end_package`] as drawn, before #388's soul gems.
@@ -338,6 +357,16 @@ fn end_package_drawn(score: f64, character_level: u64, run_seed: i64) -> RewardG
     }
     grant
 }
+
+/// How many soul gems an `/end` soul-gem stack holds: 3 to 7, uniformly.
+///
+/// HauDrauf, trusted retail player, tracker #407 (2026-10-17): "The number of soul
+/// gems at the end of the Abyss should be 3 to 7." It replaces every count the
+/// draws above produce (1-3 Grand at 39-44, 1-7 at 45-48, the captures' 4-6, the
+/// screenshots' and the Transcendent upgrade's 4-7) — the KIND, and how often a
+/// run pays gems at all, are drawn exactly as before. Only `/end`: the rungs and
+/// the rest of the game keep their own counts.
+pub const END_SOUL_GEM_COUNT: std::ops::RangeInclusive<u64> = 3..=7;
 
 /// The character levels whose `/end` soul gems follow retail screenshots rather
 /// than the captures (report #371) — see [`mid_level_soul_gems`]. It ended at 59;
@@ -1077,11 +1106,11 @@ mod tests {
                 gems += 1;
                 if item == uuid(TRANSCENDENT_SOUL_GEM) {
                     transcendent += 1;
-                    assert!((4..=7).contains(&count), "seed {seed}: {count} transcendent, reported up to 7");
+                    assert!(END_SOUL_GEM_COUNT.contains(&count), "seed {seed}: {count} transcendent, #407: 3 to 7");
                     counts.insert(count);
                 } else {
                     assert!(paid_kinds.contains(&item), "seed {seed}: a gem retail never paid: {item}");
-                    assert!((4..=6).contains(&count), "seed {seed}: {count} gems, retail paid 4-6");
+                    assert!(END_SOUL_GEM_COUNT.contains(&count), "seed {seed}: {count} gems, #407: 3 to 7");
                 }
                 kinds.insert(item);
             }
@@ -1093,7 +1122,7 @@ mod tests {
         // five is upgraded to 4-7 Transcendent: 3/8 + 5/8 × 1/5 = 1/2.
         let upgraded = f64::from(transcendent) / f64::from(gems);
         assert!((0.46..=0.54).contains(&upgraded), "transcendent on {upgraded:.3} of gem stacks");
-        assert_eq!(counts, (4..=7).collect(), "4 to 7 transcendent gems");
+        assert_eq!(counts, END_SOUL_GEM_COUNT.collect(), "3 to 7 transcendent gems (#407)");
     }
 
     /// Every gem stack `/end` pays a character of `level` over `runs` seeds, as
@@ -1114,7 +1143,8 @@ mod tests {
     /// Report #371: a level-43 character (Sephoris) was never paid a soul gem at
     /// `/end`, because the six retail packages below level 60 are all materials.
     /// The reporter: "from level 39 to 45, 3 Grand at the end". Levels 39-44 now
-    /// get 1-3 Grand on half their runs, and their band's retail material otherwise.
+    /// get Grand on half their runs (3-7 of them since #407), and their band's
+    /// retail material otherwise.
     #[test]
     fn levels_39_to_44_are_paid_up_to_three_grand_soul_gems() {
         let grand = uuid(ALL_SOUL_GEMS[GRAND]);
@@ -1131,7 +1161,7 @@ mod tests {
             let (gems, n) = end_gems(level, runs);
             let counts: std::collections::BTreeSet<u64> = gems.iter().map(|g| g.1).collect();
             assert!(gems.iter().all(|g| g.0 == grand), "level {level}: {gems:?}");
-            assert_eq!(counts, (1..=3).collect(), "level {level}: 1 to 3 Grand");
+            assert_eq!(counts, END_SOUL_GEM_COUNT.collect(), "level {level}: 3 to 7 Grand (#407)");
             let rate = n as f64 / runs as f64;
             assert!((0.45..=0.55).contains(&rate), "level {level}: gems on {rate:.3} of runs");
             for seed in 0..2_000 {
@@ -1155,7 +1185,7 @@ mod tests {
             let (gems, n) = end_gems(level, 10_000);
             assert!(gems.iter().all(|g| kinds.contains(&g.0)), "level {level}: {gems:?}");
             let counts: std::collections::BTreeSet<u64> = gems.iter().map(|g| g.1).collect();
-            assert_eq!(counts, (1..=7).collect(), "level {level}: 1 to 7 gems");
+            assert_eq!(counts, END_SOUL_GEM_COUNT.collect(), "level {level}: 3 to 7 gems (#407)");
             let seen: std::collections::HashSet<Uuid> = gems.iter().map(|g| g.0).collect();
             assert_eq!(seen.len(), 3, "level {level}: all three kinds come up");
             assert!((4_500..=5_500).contains(&n), "level {level}: {n} gem runs in 10000");
@@ -1170,6 +1200,32 @@ mod tests {
                 })
             });
             assert!(single_grand, "level {level}: retail's single Grand never comes up");
+        }
+    }
+
+    /// Report #407 (HauDrauf, 2026-10-17): "The number of soul gems at the end of
+    /// the Abyss should be 3 to 7." At every character level 1-100, every soul-gem
+    /// stack `/end` pays holds 3 to 7, each count comes up, and about one in five
+    /// stacks holds each.
+    #[test]
+    fn every_end_soul_gem_stack_is_three_to_seven_at_every_level() {
+        let all_gems = ALL_SOUL_GEMS.map(uuid);
+        let mut counts = std::collections::BTreeMap::<u64, u64>::new();
+        for level in 1..=100u64 {
+            for seed in 0..400i64 {
+                for (id, count) in end_package(100.0, level, seed).stackable_items {
+                    if all_gems.contains(&id) {
+                        assert!(END_SOUL_GEM_COUNT.contains(&count), "level {level} seed {seed}: {count} gems");
+                        *counts.entry(count).or_default() += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(counts.keys().copied().collect::<Vec<_>>(), END_SOUL_GEM_COUNT.collect::<Vec<_>>());
+        let stacks: u64 = counts.values().sum();
+        for (count, n) in &counts {
+            let share = *n as f64 / stacks as f64;
+            assert!((0.18..=0.22).contains(&share), "{count} gems on {share:.3} of {stacks} stacks");
         }
     }
 
