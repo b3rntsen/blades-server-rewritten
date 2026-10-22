@@ -1908,6 +1908,14 @@ impl MatchInstance {
                 })
                 .collect::<Vec<_>>();
 
+            // A new arena's Blades piece(s) (#319). Same deterministic ids as the
+            // durable grant in `arena_economy`, so the card and the backpack agree.
+            let inventory_items = promo
+                .items
+                .iter()
+                .map(|item| arena_ladder::promotion_reward_item(character_id, item))
+                .collect::<Vec<_>>();
+
             // `rewardNewLevelArena` stays `{}` unless a rung paid a reward. The
             // populated shape is capture-derived (prod s168 / s460 / s607), not
             // authored: each chest carries the rung's `chest_rarity` as `tier` and the
@@ -1928,7 +1936,9 @@ impl MatchInstance {
             let backpack_version = f
                 .loadout
                 .backpack_version
-                .saturating_add(u64::from(!inventory_stackable_items.is_empty()));
+                .saturating_add(u64::from(
+                    !inventory_stackable_items.is_empty() || !inventory_items.is_empty(),
+                ));
             let treasury_version = f
                 .loadout
                 .treasury_version
@@ -1991,6 +2001,7 @@ impl MatchInstance {
                 backpack_version,
                 treasury_version,
                 inventory_stackable_items,
+                inventory_items,
                 inventory_chests,
                 pvp_trophies: post_trophies,
                 matchmaking_pvp_trophies: post_high_water,

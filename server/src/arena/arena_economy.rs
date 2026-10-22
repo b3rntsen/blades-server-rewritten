@@ -175,6 +175,22 @@ fn add_promotion_currencies(
     promo.currencies.iter().map(|(_, n)| n).sum()
 }
 
+/// Add the crossed rungs' fixed items (the Blades set, #319) to the same
+/// `RewardGrant`. Ids come from [`arena_ladder::promotion_item_id`], so they are
+/// the ids the match-end card already showed.
+fn add_promotion_items(
+    reward: &mut RewardGrant,
+    promo: &arena_ladder::PromotionRewards,
+    character_id: Uuid,
+) -> u64 {
+    for item in &promo.items {
+        reward
+            .items
+            .push(arena_ladder::promotion_reward_item(character_id, item));
+    }
+    promo.items.len() as u64
+}
+
 /// The match's own reward — gold, XP and the arena Gems — before promotion loot
 /// and the Arena Giveaway are added to it.
 fn match_reward_grant(o: &MatchEconomyOutcome) -> RewardGrant {
@@ -201,7 +217,7 @@ fn promotion_needs_loot_marker(promo: &arena_ladder::PromotionRewards) -> bool {
 }
 
 fn promotion_changes_backpack(promo: &arena_ladder::PromotionRewards) -> bool {
-    !promo.stackable_items.is_empty()
+    !promo.stackable_items.is_empty() || !promo.items.is_empty()
 }
 
 /// Apply one match outcome durably: PvP counters + wallet + XP + any promotion
@@ -300,6 +316,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 let mut reward = match_reward_grant(&o);
                 let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
                 let promotion_currencies = add_promotion_currencies(&mut reward, &promo);
+                let promotion_items = add_promotion_items(&mut reward, &promo, entry.id);
 
                 // Arena Giveaway. Retail's banner promised Gems for turning up inside
                 // a two-hour Saturday window — "Join them during that time and earn
@@ -493,6 +510,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     granted,
                     promotion_stackables,
                     promotion_currencies,
+                    promotion_items,
                 }))
             }
             .scope_boxed()
@@ -504,7 +522,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
 
     info!(
         "arena economy: persisted {} for L{} character {} — gold {:+}, xp {:+}, gems {:+}, \
-         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}{}",
+         trophies {} -> {} ({:+}), high-water {}, arena {}/{}, meter {}{}{}{}{}",
         if outcome.win { "WIN" } else { "LOSS" },
         outcome.level,
         a.character_id,
@@ -530,6 +548,11 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
         },
         if a.promotion_currencies > 0 {
             format!(", {} promotion currency", a.promotion_currencies)
+        } else {
+            String::new()
+        },
+        if a.promotion_items > 0 {
+            format!(", {} promotion item(s)", a.promotion_items)
         } else {
             String::new()
         },
@@ -952,6 +975,7 @@ struct AppliedOutcome {
     granted: usize,
     promotion_stackables: u64,
     promotion_currencies: u64,
+    promotion_items: u64,
     /// Gems paid by an open Arena Giveaway window, 0 when none was running.
     giveaway_gems: i64,
     /// The account's fight count after this match and any weapon gift it minted;
@@ -1013,6 +1037,33 @@ mod tests {
                 .get(&Uuid::parse_str("d94bab85-53d5-4c9c-a637-acd94fc66c98").unwrap()),
             Some(&3)
         );
+    }
+
+    #[test]
+    fn crossing_2000_stages_the_blades_boots_and_shield_into_the_backpack() {
+        // #319: the durable grant carries the same ids the card shows.
+        let character = Uuid::from_u128(0x319);
+        let promo = arena_ladder::promotion_rewards(1990, 2010, 50);
+        let mut reward = RewardGrant::default();
+        assert_eq!(add_promotion_items(&mut reward, &promo, character), 2);
+        let templates = reward
+            .items
+            .iter()
+            .map(|i| i.item.item_template_id.to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            templates,
+            vec![
+                "31e8ee1f-076b-46d9-b8ff-8d4f87faa244",
+                "d454df43-e765-449f-9a4d-8e807c36d023"
+            ]
+        );
+        for (granted, item) in reward.items.iter().zip(&promo.items) {
+            assert_eq!(granted.id, arena_ladder::promotion_item_id(character, item));
+            assert_eq!(granted.item.tempering_level, 0);
+        }
+        assert!(promotion_changes_backpack(&promo));
+        assert!(promotion_needs_loot_marker(&promo));
     }
 
     #[test]
@@ -1167,6 +1218,7 @@ mod tests {
             granted: 0,
             promotion_stackables: 0,
             promotion_currencies: 0,
+            promotion_items: 0,
             giveaway_gems: 0,
             fight_tally: None,
         }

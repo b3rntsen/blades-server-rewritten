@@ -143,6 +143,87 @@ pub const ARENA_LADDER: [ArenaTier; 46] = [
 ];
 
 
+/// One fixed item a ladder rung grants once, the first time it is reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromotionItem {
+    /// The rung's `required_trophy_count` — which promotion granted it.
+    pub threshold: i64,
+    pub template_uuid: &'static str,
+    /// For logs and tests only; the client names the item from its template.
+    pub name: &'static str,
+    /// The template's `maxDurability` at temper 0 — what retail's un-tempered
+    /// copies carry (`durability: 325.0` on every captured temper-0 Blades
+    /// Armor/Gauntlets/Helmet; 243.75 is the Sword's own maximum). Stored in
+    /// hundredths so the table can stay `Eq`.
+    pub durability_centi: u32,
+}
+
+/// `_rewardsOnceReached[]._itemsList` — the Blades set the new arenas grant
+/// (tracker #319). `[Class 1 — shipped game data]`, read straight from the APK's
+/// `Matchmaking` ScriptableObject (both copies, path ids 220 and 763, agree):
+///
+/// ```text
+/// arena_03 level 1 (1000) chest 4 + Blades Gauntlets
+/// arena_04 level 1 (1500) chest 4 + Blades Armor, chest 4
+/// arena_05 level 1 (2000) chest 4 + Blades Boots + Blades Shield, chest 4
+/// arena_06 level 1 (2500) chest 5 + Blades Sword + Blades Helmet
+/// ```
+///
+/// Each item is quantity 1 with no enhancement (`_itemEnhancementPointer` is
+/// "0"). These were missing from the server because `loot.json`'s extractor
+/// (`x_loot.py`) read the item's UID off the entry itself instead of off its
+/// `_itemTemplatePointer`, so every `items` list came out empty — only the
+/// chests survived into [`ARENA_LADDER`].
+///
+/// The six templates carry `lootWeight: 0`: no random table ever drops them,
+/// so before this a player could not get the set at all.
+pub const PROMOTION_ITEMS: [PromotionItem; 6] = [
+    PromotionItem { threshold: 1000, template_uuid: "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b", name: "Blades Gauntlets", durability_centi: 32_500 },
+    PromotionItem { threshold: 1500, template_uuid: "38d48d68-684e-4394-996b-e0922b2a7f8a", name: "Blades Armor", durability_centi: 32_500 },
+    PromotionItem { threshold: 2000, template_uuid: "31e8ee1f-076b-46d9-b8ff-8d4f87faa244", name: "Blades Boots", durability_centi: 32_500 },
+    PromotionItem { threshold: 2000, template_uuid: "d454df43-e765-449f-9a4d-8e807c36d023", name: "Blades Shield", durability_centi: 32_500 },
+    PromotionItem { threshold: 2500, template_uuid: "9a7e526e-00c3-4ed5-8df4-b774bcc0c873", name: "Blades Sword", durability_centi: 24_375 },
+    PromotionItem { threshold: 2500, template_uuid: "f5159522-601a-4d4c-82d4-d059427c0c25", name: "Blades Helmet", durability_centi: 32_500 },
+];
+
+/// The instance id of a promotion item for one character.
+///
+/// Deterministic, because two places build the same item independently: the
+/// match-end card (`combat::engine`) and the durable write (`arena_economy`).
+/// A random id would put one id on the card and another in the backpack. One
+/// template per threshold per character, so the triple is unique.
+pub fn promotion_item_id(character_id: uuid::Uuid, item: &PromotionItem) -> uuid::Uuid {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"arena-promotion-item\0");
+    h.update(character_id.as_bytes());
+    h.update(item.threshold.to_be_bytes());
+    h.update(item.template_uuid.as_bytes());
+    let digest = h.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Uuid::new_v8(bytes)
+}
+
+/// The backpack entry a promotion item becomes: retail's plain, un-tempered copy.
+pub fn promotion_reward_item(
+    character_id: uuid::Uuid,
+    item: &PromotionItem,
+) -> blades_lib::economy::RewardItem {
+    blades_lib::economy::RewardItem {
+        id: promotion_item_id(character_id, item),
+        item: blades_lib::user_data::Item {
+            item_template_id: uuid::Uuid::parse_str(item.template_uuid)
+                .expect("PROMOTION_ITEMS holds valid UUIDs"),
+            grade: None,
+            tempering_level: 0,
+            durability: f64::from(item.durability_centi) / 100.0,
+            properties: Default::default(),
+            arcane_tier: None,
+        },
+    }
+}
+
 /// `pvp_match_rewards.chest_meter_capacity` from `loot.json` (Class 1).
 ///
 /// The victory card's `character.pvpChestMeter` counts **rounds won**, not
@@ -323,7 +404,10 @@ pub struct PromotionRewards {
     /// Fixed, guaranteed currencies from each crossed rung's shipped loot table,
     /// aggregated by currency UUID.
     pub currencies: Vec<(&'static str, u64)>,
-    /// Trophy thresholds with fixed loot in `stackable_items`/`currencies`,
+    /// Fixed instanced items (the Blades set, [`PROMOTION_ITEMS`]) from each
+    /// crossed rung, in ladder order.
+    pub items: Vec<&'static PromotionItem>,
+    /// Trophy thresholds with fixed loot in `stackable_items`/`currencies`/`items`,
     /// retained for the server-only idempotency ledger.
     pub loot_thresholds: Vec<i64>,
     /// The tier the player ends up on, if it changed.
@@ -332,7 +416,10 @@ pub struct PromotionRewards {
 
 impl PromotionRewards {
     pub fn is_empty(&self) -> bool {
-        self.chests.is_empty() && self.stackable_items.is_empty() && self.currencies.is_empty()
+        self.chests.is_empty()
+            && self.stackable_items.is_empty()
+            && self.currencies.is_empty()
+            && self.items.is_empty()
     }
 }
 
@@ -376,12 +463,18 @@ pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_lev
     let mut stackable_items = BTreeMap::new();
     let mut currencies = BTreeMap::new();
     let mut loot_thresholds = Vec::new();
+    let mut items = Vec::new();
     for tier in &crossed {
         let fixed = super::arena_promotion_loot::stackables_for(tier.loot_table, character_level);
         let fixed_currencies = super::arena_promotion_loot::currencies_for(tier.loot_table, character_level);
-        if !fixed.is_empty() || !fixed_currencies.is_empty() {
+        let fixed_items = PROMOTION_ITEMS
+            .iter()
+            .filter(|i| i.threshold == tier.required_trophies)
+            .collect::<Vec<_>>();
+        if !fixed.is_empty() || !fixed_currencies.is_empty() || !fixed_items.is_empty() {
             loot_thresholds.push(tier.required_trophies);
         }
+        items.extend(fixed_items);
         for item in fixed {
             *stackable_items.entry(item.template_uuid).or_insert(0) += item.quantity;
         }
@@ -401,6 +494,7 @@ pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_lev
         chests,
         stackable_items: stackable_items.into_iter().collect(),
         currencies: currencies.into_iter().collect(),
+        items,
         loot_thresholds,
         new_tier: crossed.last().copied().copied(),
     }
@@ -670,6 +764,70 @@ mod tests {
         // No crossing -> empty (the card ships `rewardNewLevelArena: {}`).
         assert!(promotion_rewards(817, 847, 86).is_empty());
         assert!(promotion_rewards(847, 800, 86).is_empty());
+    }
+
+    /// #319: the new arenas grant the Blades set — shipped in the APK's
+    /// `Matchmaking` asset, absent from the server until now.
+    #[test]
+    fn new_arenas_grant_the_blades_set_like_retail() {
+        let names = |p: &PromotionRewards| p.items.iter().map(|i| i.name).collect::<Vec<_>>();
+        // Arena 2 is chest-only in retail too.
+        assert!(promotion_rewards(499, 500, 50).items.is_empty());
+        assert_eq!(names(&promotion_rewards(999, 1000, 50)), vec!["Blades Gauntlets"]);
+        assert_eq!(names(&promotion_rewards(1499, 1500, 50)), vec!["Blades Armor"]);
+        assert_eq!(
+            names(&promotion_rewards(1999, 2000, 50)),
+            vec!["Blades Boots", "Blades Shield"]
+        );
+        assert_eq!(
+            names(&promotion_rewards(2499, 2500, 50)),
+            vec!["Blades Sword", "Blades Helmet"]
+        );
+        // The chests the same rungs carry are unchanged.
+        assert_eq!(promotion_rewards(1999, 2000, 50).chests, vec![(4, 50), (4, 50)]);
+        // Each item rung is recorded in the idempotency ledger.
+        assert!(promotion_rewards(999, 1000, 50).loot_thresholds.contains(&1000));
+        // Two arenas crossed in one payout grant both arenas' pieces.
+        assert_eq!(
+            names(&promotion_rewards(990, 1510, 50)),
+            vec!["Blades Gauntlets", "Blades Armor"]
+        );
+        // Not crossing an arena line grants nothing new.
+        assert!(promotion_rewards(1000, 1049, 50).items.is_empty());
+    }
+
+    #[test]
+    fn every_blades_piece_is_granted_exactly_once_across_the_ladder() {
+        let p = promotion_rewards(0, 2500, 50);
+        let mut got = p.items.iter().map(|i| i.template_uuid).collect::<Vec<_>>();
+        got.sort();
+        let mut want = PROMOTION_ITEMS.iter().map(|i| i.template_uuid).collect::<Vec<_>>();
+        want.sort();
+        assert_eq!(got, want);
+        for i in PROMOTION_ITEMS {
+            uuid::Uuid::parse_str(i.template_uuid).unwrap();
+            assert!(
+                ARENA_LADDER.iter().any(|t| t.level == 1 && t.required_trophies == i.threshold),
+                "{} must sit on an arena's first rung",
+                i.name
+            );
+        }
+    }
+
+    #[test]
+    fn promotion_item_ids_are_stable_per_character_and_distinct() {
+        let a = uuid::Uuid::from_u128(1);
+        let b = uuid::Uuid::from_u128(2);
+        let boots = &PROMOTION_ITEMS[2];
+        let shield = &PROMOTION_ITEMS[3];
+        assert_eq!(promotion_item_id(a, boots), promotion_item_id(a, boots));
+        assert_ne!(promotion_item_id(a, boots), promotion_item_id(a, shield));
+        assert_ne!(promotion_item_id(a, boots), promotion_item_id(b, boots));
+        let item = promotion_reward_item(a, shield);
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(v["itemTemplateId"], "d454df43-e765-449f-9a4d-8e807c36d023");
+        assert_eq!(v["temperingLevel"], 0);
+        assert_eq!(v["durability"], 325.0);
     }
 
     #[test]
