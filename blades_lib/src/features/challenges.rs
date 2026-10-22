@@ -93,13 +93,38 @@ pub struct ChallengeObjective {
 }
 
 /// A challenge template (the capture-derived pool the active set is generated from):
-/// the objective shape (incl. its `_quota`) and the reward it pays.
+/// the objective shape (incl. its `_quota`), the reward it pays, and who retail
+/// offered it to.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ChallengeTemplate {
     pub template_id: Uuid,
     pub objective: ChallengeObjective,
     pub reward: RewardGrant,
+    /// Retail's `ChallengeSelector._requiredPlayerLevel`: the lowest level the
+    /// challenge is offered at (0 = no lower bound). Report #406.
+    #[serde(default)]
+    pub required_player_level: u16,
+    /// Retail's `ChallengeSelector._lockedAtPlayerLevel`: the level from which it
+    /// is no longer offered (0 = no upper bound). Report #406.
+    #[serde(default)]
+    pub locked_at_player_level: u16,
+    /// The enemy group a `DefeatChallengeData` asks the player to kill, if any
+    /// (`Challenge_DefeatSkeever_4` → Skeevers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_enemy_group: Option<Uuid>,
+}
+
+impl ChallengeTemplate {
+    /// Whether retail offered this challenge to a character of `level`: its
+    /// selector's player-level band, `[required, lockedAt)` with 0 meaning no
+    /// bound (report #406). `Challenge_DefeatSkeever_4` is
+    /// `ChallengeSelector_PlayerLevel_15-19`, so a level-65 character is never
+    /// sent hunting Skeevers, which only spawn in low-level content.
+    pub fn offered_at(&self, level: u16) -> bool {
+        level >= self.required_player_level
+            && (self.locked_at_player_level == 0 || level < self.locked_at_player_level)
+    }
 }
 
 /// A live per-character challenge instance — persisted in `server_state` and returned
@@ -172,6 +197,60 @@ pub fn rotate_indices(pool_len: usize, cursor: usize, count: usize) -> Vec<usize
     (0..count).map(|i| (cursor + i) % pool_len).collect()
 }
 
+/// The pool indices to hand a character of `level` for `free` empty slots, and
+/// the cursor to resume from.
+///
+/// Walks the pool round-robin from `cursor` (the rotation the set always used)
+/// and takes the next templates offered at `level` ([`ChallengeTemplate::offered_at`])
+/// that are neither in `held` nor already taken. One lap at most: when fewer
+/// than `free` templates qualify the set stays short rather than repeating one.
+/// The cursor moves past the last template taken, so the rotation carries on.
+pub fn pick_templates(
+    pool: &[ChallengeTemplate],
+    cursor: usize,
+    level: u16,
+    held: &[Uuid],
+    free: usize,
+) -> (Vec<usize>, usize) {
+    let mut picked: Vec<usize> = Vec::new();
+    let mut next = cursor;
+    for step in 0..pool.len() {
+        if picked.len() >= free {
+            break;
+        }
+        let idx = (cursor + step) % pool.len();
+        let t = &pool[idx];
+        if t.offered_at(level)
+            && !held.contains(&t.template_id)
+            && !picked.iter().any(|&i| pool[i].template_id == t.template_id)
+        {
+            picked.push(idx);
+            next = cursor.wrapping_add(step + 1);
+        }
+    }
+    (picked, next)
+}
+
+/// Whether an active challenge should be retired for a character of `level`
+/// (report #406): its template is no longer offered at that level and the
+/// player has made no progress on it.
+///
+/// Retail offered a challenge only inside its level band but let one already
+/// held run on until its category expired; the capture shows 23 of 196
+/// held challenges a few levels past their band and none below it. This
+/// server has no expiry, so an out-of-band challenge was held for good: Lloyd
+/// (level 65) has carried `Challenge_DefeatSkeever_4` since 2026-09-25. One
+/// with progress is kept, so nothing earned is taken away. A template no longer
+/// in the pool is kept too: there is nothing to judge it by.
+pub fn retire_out_of_band(c: &ChallengeInstance, pool: &[ChallengeTemplate], level: u16) -> bool {
+    c.status == ChallengeStatus::Active
+        && c.progress <= 0.0
+        && pool
+            .iter()
+            .find(|t| t.template_id == c.template_id)
+            .is_some_and(|t| !t.offered_at(level))
+}
+
 /// Clamp a client-reported absolute progress to `[0, quota]`.
 pub fn clamp_progress(progress: f64, quota: f64) -> f64 {
     progress.clamp(0.0, quota)
@@ -198,6 +277,9 @@ mod tests {
                 currencies: HashMap::from([(GOLD, 300)]),
                 ..Default::default()
             },
+            required_player_level: 0,
+            locked_at_player_level: 0,
+            target_enemy_group: None,
         }
     }
 
@@ -277,6 +359,98 @@ mod tests {
             after += paid.currencies[&GEMS];
         }
         assert_eq!((before, after), (46, 92 + 2 * 167), "pool gems: 46 retail; 92 doubled + 167 from gold, doubled");
+    }
+
+    fn shipped_pool() -> Vec<ChallengeTemplate> {
+        let raw = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/challenges.json")).unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    const SKEEVER_4: Uuid = Uuid::from_u128(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e);
+    /// LLoyd's level on prod when he filed #406.
+    const LLOYD_LEVEL: u16 = 65;
+
+    /// #406: the shipped pool carries retail's `ChallengeSelector` bands. The
+    /// Skeever hunt is `ChallengeSelector_PlayerLevel_15-19`.
+    #[test]
+    fn report_406_skeever_hunt_is_offered_only_at_levels_15_to_19() {
+        let pool = shipped_pool();
+        let skeever = pool.iter().find(|t| t.template_id == SKEEVER_4).expect("Challenge_DefeatSkeever_4");
+        assert_eq!((skeever.required_player_level, skeever.locked_at_player_level), (15, 20));
+        let offered: Vec<u16> = (1..=100).filter(|&l| skeever.offered_at(l)).collect();
+        assert_eq!(offered, (15..=19).collect::<Vec<_>>());
+        assert!(!skeever.offered_at(LLOYD_LEVEL));
+        for t in &pool {
+            assert!(
+                t.locked_at_player_level == 0 || t.required_player_level < t.locked_at_player_level,
+                "{} has an empty band",
+                t.template_id
+            );
+        }
+    }
+
+    /// #406: at every level 1..=100 and every rotation cursor, a full set of
+    /// distinct templates is handed out, each offered at that level, and the
+    /// Skeever hunt never reaches Lloyd's level.
+    #[test]
+    fn report_406_every_level_gets_a_full_set_of_templates_offered_at_it() {
+        let pool = shipped_pool();
+        for level in 1..=100u16 {
+            for cursor in 0..pool.len() {
+                let (picked, next) = pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+                assert_eq!(picked.len(), ACTIVE_CHALLENGE_COUNT, "level {level} cursor {cursor}");
+                let mut ids: Vec<Uuid> = picked.iter().map(|&i| pool[i].template_id).collect();
+                assert!(picked.iter().all(|&i| pool[i].offered_at(level)), "level {level}");
+                ids.sort();
+                ids.dedup();
+                assert_eq!(ids.len(), ACTIVE_CHALLENGE_COUNT, "duplicates at level {level}");
+                assert!(next > cursor, "the cursor advances");
+                if level == LLOYD_LEVEL {
+                    assert!(!ids.contains(&SKEEVER_4), "Skeever hunt offered at level {level}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pick_skips_held_templates_and_never_repeats_when_the_pool_is_short() {
+        let mut a = template(1.0);
+        a.template_id = Uuid::from_u128(1);
+        let mut b = template(1.0);
+        b.template_id = Uuid::from_u128(2);
+        let mut c = template(1.0);
+        c.template_id = Uuid::from_u128(3);
+        c.required_player_level = 15;
+        c.locked_at_player_level = 20;
+        let pool = vec![a, b, c];
+        let (picked, next) = pick_templates(&pool, 0, 30, &[Uuid::from_u128(1)], 4);
+        assert_eq!(picked, vec![1], "a is held and c is out of band: the set stays short");
+        assert_eq!(next, 2, "resume after the last template taken");
+        let (picked, _) = pick_templates(&pool, 2, 17, &[], 4);
+        assert_eq!(picked, vec![2, 0, 1]);
+        assert_eq!(pick_templates(&[], 0, 17, &[], 4), (vec![], 0));
+    }
+
+    /// #406: LLoyd's held set on prod (2026-10-17). The zero-progress Skeever
+    /// hunt and level-1-10 critical hits are retired at level 65; a challenge
+    /// with progress, or with a template the pool no longer has, is kept.
+    #[test]
+    fn report_406_retires_zero_progress_challenges_outside_the_band() {
+        let pool = shipped_pool();
+        let held = |tid: u128, progress: f64| {
+            let t = pool.iter().find(|t| t.template_id == Uuid::from_u128(tid)).unwrap();
+            let mut c = ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
+            c.progress = progress;
+            c
+        };
+        let skeever = held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 0.0);
+        assert!(retire_out_of_band(&skeever, &pool, LLOYD_LEVEL));
+        assert!(!retire_out_of_band(&skeever, &pool, 17), "in band at 17");
+        assert!(retire_out_of_band(&held(0x8925740e_046b_4e7a_b418_a17bd83e035c, 0.0), &pool, LLOYD_LEVEL));
+        assert!(!retire_out_of_band(&held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 3.0), &pool, LLOYD_LEVEL), "progress is kept");
+        let mut unknown = skeever.clone();
+        unknown.template_id = Uuid::from_u128(0xdead);
+        assert!(!retire_out_of_band(&unknown, &pool, LLOYD_LEVEL), "no template, no judgement");
     }
 
     #[test]

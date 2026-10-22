@@ -82,9 +82,11 @@ fn sync_rewards(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
 }
 
 /// Drop terminal (completed/abandoned) challenges and refill the active set back up
-/// to [`ACTIVE_CHALLENGE_COUNT`] from the template pool (advancing the cursor). The
-/// server mints the fresh instance/objective UUIDs (this crate has no uuid-v4).
-fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
+/// to [`ACTIVE_CHALLENGE_COUNT`] from the templates offered at the character's
+/// `level` (report #406: retail's `ChallengeSelector` level band), advancing the
+/// cursor. The server mints the fresh instance/objective UUIDs (this crate has
+/// no uuid-v4).
+fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
     state
         .active
         .retain(|c| c.status == ChallengeStatus::Active);
@@ -92,10 +94,12 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
         return;
     }
     sync_rewards(state, pool);
+    let free = ACTIVE_CHALLENGE_COUNT.saturating_sub(state.active.len());
+    let held: Vec<Uuid> = state.active.iter().map(|c| c.template_id).collect();
+    let (picked, cursor) = challenges::pick_templates(pool, state.cursor % pool.len(), level, &held, free);
+    state.cursor = cursor;
     let (secs, ms) = (now_secs(), now_ms());
-    while state.active.len() < ACTIVE_CHALLENGE_COUNT {
-        let idx = state.cursor % pool.len();
-        state.cursor = state.cursor.wrapping_add(1);
+    for idx in picked {
         state.active.push(ChallengeInstance::from_template(
             &pool[idx],
             Uuid::new_v4(),
@@ -104,6 +108,16 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
             ms,
         ));
     }
+}
+
+/// Retire the active challenges a character of `level` can no longer be offered
+/// and has not started (report #406), so [`refill`] replaces them. Only on the
+/// list call, whose response is the client's whole set: a challenge retired
+/// anywhere else would still be on the client's screen.
+fn retire_out_of_band(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
+    state
+        .active
+        .retain(|c| !challenges::retire_out_of_band(c, pool, level));
 }
 
 #[derive(Serialize)]
@@ -135,7 +149,10 @@ pub async fn get_challenges(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            refill(&mut entry.server_state.0.challenges, &globals.static_data.challenge_templates);
+            let pool = &globals.static_data.challenge_templates;
+            let level = entry.character.0.level;
+            retire_out_of_band(&mut entry.server_state.0.challenges, pool, level);
+            refill(&mut entry.server_state.0.challenges, pool, level);
             let active = entry.server_state.0.challenges.active.clone();
             let character = entry.character.0.clone();
             write_back(&mut conn, entry).await?;
@@ -293,7 +310,8 @@ async fn resolve(
             }
 
             // Drop the resolved challenge and refill the active set.
-            refill(&mut entry.server_state.0.challenges, &globals.static_data.challenge_templates);
+            let level = entry.character.0.level;
+            refill(&mut entry.server_state.0.challenges, &globals.static_data.challenge_templates, level);
 
             let character = entry.character.0.clone();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
@@ -351,9 +369,89 @@ mod tests {
             assert_eq!(state.active[0].reward.currencies, HashMap::from([(GEMS, 6)]), "750 gold = 3 gems, doubled");
             assert_eq!(category_id_for_reward(&state.active[0].reward), GEM_CATEGORY_ID);
         }
-        refill(&mut state, &pool);
+        refill(&mut state, &pool, 30);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         assert!(state.active.iter().all(|c| c.reward.currencies.keys().all(|k| *k == GEMS)));
+    }
+
+    /// The enemy family a `targetEnemyGroup` challenge asks for, as the job
+    /// generator knows it. Every enemy-target template in the pool must be here.
+    fn job_family_of_group(group: Uuid) -> Option<&'static str> {
+        match group.to_string().as_str() {
+            // EnemyGroup "Skeevers" -> the Skeever family.
+            "fe6ca800-ea7e-4fd7-a0ef-d1547da6ec5b" => Some("31be99a6-8557-4e9b-81e6-5503f900b7d2"),
+            _ => None,
+        }
+    }
+
+    /// #406: for every level 1..=100, every enemy challenge the server can hand
+    /// out names a family that spawns at that level (the job generator's own
+    /// family table), and LLoyd (level 65) is never sent hunting Skeevers.
+    #[test]
+    fn report_406_offered_enemy_challenges_spawn_at_the_characters_level() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pool = crate::static_loader::load(&dir).challenge_templates;
+        let targets: Vec<&ChallengeTemplate> = pool.iter().filter(|t| t.target_enemy_group.is_some()).collect();
+        assert!(!targets.is_empty(), "the pool has an enemy-target challenge to check");
+        for level in 1..=100u16 {
+            for cursor in 0..pool.len() {
+                let mut state = ChallengeState { active: vec![], cursor, points: 0 };
+                refill(&mut state, &pool, level);
+                assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT, "level {level}");
+                for c in &state.active {
+                    let t = pool.iter().find(|t| t.template_id == c.template_id).unwrap();
+                    let Some(group) = t.target_enemy_group else { continue };
+                    let family = job_family_of_group(group).unwrap_or_else(|| panic!("no family for group {group}"));
+                    let f = crate::quest::jobs_gen::JOB_FAMILIES.iter().find(|f| f.id == family).unwrap();
+                    assert!(
+                        (f.min_level..=f.max_level).contains(&(level as i64)),
+                        "level {level}: {} asks for a family that spawns at {}..={}",
+                        t.template_id,
+                        f.min_level,
+                        f.max_level
+                    );
+                }
+                if level == 65 {
+                    assert!(state.active.iter().all(|c| t_is_not_skeever(c)), "Skeevers offered at 65");
+                }
+            }
+        }
+    }
+
+    fn t_is_not_skeever(c: &ChallengeInstance) -> bool {
+        c.template_id != Uuid::from_u128(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e)
+    }
+
+    /// #406: LLoyd's stored set (prod, 2026-10-17) on the next list call. The
+    /// four are all untouched and none is offered at 65 (the Skeever hunt is
+    /// 15-19, the rest 1-15), so all four are replaced with ones that are.
+    #[test]
+    fn report_406_lloyds_stored_set_is_rederived_on_the_next_list() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pool = crate::static_loader::load(&dir).challenge_templates;
+        let stored = |tid: u128| {
+            let t = pool.iter().find(|t| t.template_id == Uuid::from_u128(tid)).unwrap();
+            ChallengeInstance::from_template(t, Uuid::new_v4(), Uuid::new_v4(), 0, 0)
+        };
+        let mut state = ChallengeState {
+            active: vec![
+                stored(0x8ec2b1a1_62f2_476b_b323_53bade2ab7a5), // Perform4HitCombos_02, 11-15
+                stored(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e), // DefeatSkeever_4, 15-19
+                stored(0x8925740e_046b_4e7a_b418_a17bd83e035c), // PerformCriticalHits_01, 1-10
+                stored(0xd5631e1c_2698_4bb1_8e15_52433da096e4), // DefeatEnemies_1, 1-5
+            ],
+            cursor: 6,
+            points: 0,
+        };
+        retire_out_of_band(&mut state, &pool, 65);
+        assert!(state.active.is_empty(), "all four are out of band at 65 and untouched");
+        refill(&mut state, &pool, 65);
+        assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
+        for c in &state.active {
+            let t = pool.iter().find(|t| t.template_id == c.template_id).unwrap();
+            assert!(t.offered_at(65), "{}", c.template_id);
+            assert!(c.reward.currencies.keys().all(|k| *k == GEMS), "#388 gems-only reward kept");
+        }
     }
 }
 
