@@ -12,14 +12,23 @@ name: Checks
 
 on:
   pull_request:
+  # The workflow-guard job only. `pull_request_target` runs THIS file as it is on
+  # main, not the PR's copy, so a PR cannot remove the guard that is judging it.
+  # labeled/unlabeled re-run it when a maintainer applies the override label.
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# pull_request_target runs carry the BASE ref (refs/heads/main), so keyed on
+# github.ref they would share a group with a manual run on main and could cancel
+# it. They get a per-PR group that is never cancelled: a cancelled guard run is
+# exactly how a stale review label would survive a push.
 concurrency:
-  group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request_target' && format('workflow-guard-{0}', github.event.pull_request.number) || format('checks-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'pull_request_target' }}
 
 jobs:
   # deploy/*.sh is not covered by `cargo test`, and it is the half of this repo
@@ -28,6 +37,7 @@ jobs:
   # no reason for it to stay a manual step nobody remembers.
   shell:
     name: deploy scripts
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -50,8 +60,49 @@ jobs:
       - name: arena.sh static
         run: deploy/test-arena-static.sh
 
+      - name: workflow-change guard tests
+        run: bash .github/scripts/test-workflow-change-guard.sh
+
+  # Fails a PR that adds, changes, renames or deletes anything CI or an editor
+  # executes (.github/workflows|actions|scripts/, any .vscode/, or a
+  # tasks.json / settings.json / *.code-workspace that adds `runOn`), unless an
+  # admin or maintainer applied the `workflow-change-reviewed` label. A push
+  # after that removes the label again. Logic and reasoning:
+  # .github/scripts/workflow-change-guard.sh.
+  #
+  # SECURITY: this repo is public, so the PR may come from anyone, and
+  # pull_request_target hands this job a write token even for a fork. It is
+  # safe only because it NEVER checks out or runs pull-request code: the
+  # checkout below is the base branch (the default for this event), and the
+  # PR's file list and diffs are read through the API as data. Do not add
+  # `ref:` to it. Same rule as cla.yml.
+  workflow-guard:
+    name: workflow & editor-automation guard
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # list the PR's files, read its labels and their history, and remove the
+      # review label when new commits land.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_ACTION: ${{ github.event.action }}
+        run: bash .github/scripts/workflow-change-guard.sh
+
   test:
     name: cargo test --workspace
+    if: github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
