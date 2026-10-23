@@ -188,6 +188,12 @@ services:
       # normal empty-starter bot (no opponent profile). Does NOT affect a real PvP pair.
       # Recreate the container to apply (no rebuild needed). See matchmaker.rs / config.rs.
       ARENA_DEBUG_GHOST: ${ARENA_DEBUG_GHOST:-}
+      # Match-end card switches (#401, #319). Empty/unset = off. Each puts items in
+      # the op49 result card's backpack change set, which retail never did; both were
+      # checked on a real client against a local server on 2026-10-23 (card renders,
+      # lobby returns, items in inventory, clean relaunch). Recreate to apply.
+      ARENA_WEAPON_ON_RESULT_CARD: ${ARENA_WEAPON_ON_RESULT_CARD:-}
+      ARENA_PROMOTION_ITEMS_ON_CARD: ${ARENA_PROMOTION_ITEMS_ON_CARD:-}
       RUST_LOG: ${RUST_LOG:-info}
       # The DB password reaches the server through the ENVIRONMENT, never as a
       # command-line argument: argv lands in /proc/<pid>/cmdline, which any

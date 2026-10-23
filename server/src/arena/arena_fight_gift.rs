@@ -37,7 +37,7 @@
 //!
 //! # Delivery
 //!
-//! Behind [`WEAPON_ON_RESULT_CARD`] (off until a client check). When OFF, every
+//! Behind [`weapon_on_result_card`] (`ARENA_WEAPON_ON_RESULT_CARD`, off until a client check). When OFF, every
 //! milestone is a claimable `globalgifts` gift as described in the last paragraph
 //! below. When ON:
 //!
@@ -80,7 +80,18 @@ use uuid::Uuid;
 /// renders (or survives) one is unproven. Enable after the 25th-fight card has
 /// been seen working on a real client (#401). While off, the card never carries
 /// the weapon and every milestone is minted as a claimable gift, exactly as #539.
-pub const WEAPON_ON_RESULT_CARD: bool = false;
+///
+/// Read once from `ARENA_WEAPON_ON_RESULT_CARD` (`1`/`true`/`on`/`yes`), like
+/// `arena_ladder::promotion_items_on_card`, so the owner can turn it on with an
+/// env line instead of a rebuild. Unset = off.
+pub fn weapon_on_result_card() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("ARENA_WEAPON_ON_RESULT_CARD")
+            .map(|v| matches!(v.trim(), "1" | "true" | "on" | "yes"))
+            .unwrap_or(false)
+    })
+}
 
 /// Finished arena fights per weapon gift, counted per account. Owner-approved
 /// deviation (#390/#391, 2026-10-16).
