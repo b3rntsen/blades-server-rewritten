@@ -215,10 +215,12 @@ pub async fn start_abyss(
             // NOT the character level: the client scores and shows everything against
             // its own Effective Player Level (#294) — the number its analytics report as
             // `gear_rating` when we have it, else the retail estimate (#360).
+            let reported_epl = session.session.gear_rating(character_id);
             let player_level = run_initial_player_level(
                 initial_player_level(&app_state.job_pools, character_level),
-                session.session.gear_rating(character_id),
+                reported_epl,
             );
+            let client_epl_reported = is_client_epl(reported_epl, player_level);
             // A fresh seed per RUN, not per character (#294: "I always get the same
             // two rewards"). Persisted on the run, so /current, /update and /end of
             // this run all resolve the same draws.
@@ -255,6 +257,7 @@ pub async fn start_abyss(
                 killed_enemies: Default::default(),
                 collected_enemy_loot: Default::default(),
                 granted_future_rewards: Default::default(),
+                client_epl_reported,
             };
 
             // The gauge's reward ladder is keyed to the CHARACTER level, as on `/update`.
@@ -535,6 +538,7 @@ pub async fn update_abyss(
                 if run.character_level == 0 {
                     run.character_level = character_level;
                 }
+                reconcile_client_epl(run, session.session.gear_rating(character_id));
                 let enemy_loot = collect_enemy_loot(&app_state.game_data, run, &body.actions);
                 let looted_inventory = enemy_loot
                     .iter()
@@ -1181,6 +1185,31 @@ fn run_initial_player_level(estimate: u32, reported: Option<u32>) -> u32 {
         .unwrap_or(estimate)
 }
 
+/// Whether a run's `initial_player_level` is the client's own reported EPL — then the
+/// server scores its kills exactly as the client does (#8) — rather than the estimate,
+/// which a report outside [`REPORTED_EPL_BAND`] also falls back to.
+fn is_client_epl(reported: Option<u32>, initial_player_level: u32) -> bool {
+    reported == Some(initial_player_level)
+}
+
+/// Drop a run back onto the never-ahead margin, for good, once the client's EPL may no
+/// longer be the one it started at.
+///
+/// The client does not keep the `/start` EPL: `AbyssController.NotifyStart` (RVA
+/// 0x1C80170) rewrites `_initialPlayerLevel` (`str w20, [x19, 0xd0]`) from
+/// `GameplayManager.EffectivePlayerLevel` on every level load, reloads included, and
+/// does not persist it. A level-up or a gear change mid-run therefore moves the
+/// client's scoring, and exact scoring tolerates no drift: one level is enough for
+/// the server to pay a rung before the client's gauge reaches it, the #312 stall.
+/// So exact scoring holds only while the session still reports the run's EPL; a new
+/// report, or none (a relaunched client has not sent one yet), ends it. Never turned
+/// back on: an early rung cannot be taken back, a late one only toasts twice (#8).
+fn reconcile_client_epl(run: &mut AbyssRun, reported: Option<u32>) {
+    if run.client_epl_reported && !is_client_epl(reported, run.initial_player_level) {
+        run.client_epl_reported = false;
+    }
+}
+
 /// How many floors one run is served with — retail's length for every start floor.
 const RUN_FLOORS: u32 = 150;
 
@@ -1579,6 +1608,7 @@ fn apply_actions(
                     static_abyss,
                     slice,
                     run.initial_player_level,
+                    run.client_epl_reported,
                     Some(kill.spawn_group_id),
                     1,
                 );
@@ -1737,16 +1767,32 @@ fn never_ahead_kill_score(
 /// The enemy level is the slice's own `difficulty_level` — the value the server itself
 /// wrote into that floor's generated data, so it is authoritative and not client input.
 /// With no slice (a run whose floor pointer is past the end) nothing scores.
+///
+/// `client_epl_reported`: `initial_player_level` is the EPL the client itself reported,
+/// so the kill is booked exactly as `AbyssController.NotifyEnemyKill` books it. A run on
+/// the server's estimate keeps the [`never_ahead_kill_score`] margin instead, which
+/// trails the client on near-level floors. Trailing is not free (#8): until the
+/// `reward` arrives, every `NotifyLeavingCombat` -> `UpdateRewards` (RVA 0x1C8158C)
+/// appends the advertised reward to `_previousRewardsPendingUIConsumption` again, with
+/// no guard, and `NotifyOfPreviousRewards` (RVA 0x1C82A64) then shows one
+/// "+19 Quicksilver Ingot" per copy — the same rung toasted twice or three times,
+/// paid once. Exact scoring is only safe while the client's EPL has not moved since
+/// `/start`; the client re-reads it on every level load ([`reconcile_client_epl`]).
 fn kills_score(
     static_abyss: &blades_lib::static_data::AbyssStaticData,
     slice: Option<&AbyssSliceEntry>,
     initial_player_level: u32,
+    client_epl_reported: bool,
     spawn_group_id: Option<Uuid>,
     count: usize,
 ) -> f64 {
     let Some(slice) = slice else { return 0.0 };
     let level_delta = slice.difficulty_level as i32 - initial_player_level as i32;
-    let per_kill = never_ahead_kill_score(static_abyss, level_delta) as f64;
+    let per_kill = if client_epl_reported {
+        static_abyss.kill_score(level_delta)
+    } else {
+        never_ahead_kill_score(static_abyss, level_delta)
+    } as f64;
     // The server must cross each gauge rung on the kill the client does (#312). Scored
     // at 1.0 everywhere it ran ahead on critter floors; scored at the floor's lowest
     // multiplier it ran behind on mixed ones, leaving the client's gauge pinned full.
@@ -2209,6 +2255,7 @@ mod tests {
             killed_enemies: Default::default(),
             collected_enemy_loot: Default::default(),
             granted_future_rewards: Default::default(),
+            client_epl_reported: false,
         }
     }
 
@@ -2454,10 +2501,10 @@ mod tests {
             enemy_killed: false,
         };
         // One kill on a floor whose difficulty equals the run's starting level.
-        assert_eq!(kills_score(&sd, Some(&slice), 40, None, 1), 10.0);
+        assert_eq!(kills_score(&sd, Some(&slice), 40, false, None, 1), 10.0);
         // Three kills → 30, where the old code gave 3.
-        assert_eq!(kills_score(&sd, Some(&slice), 40, None, 3), 30.0);
-        assert_eq!(kills_score(&sd, None, 40, None, 3), 0.0, "no slice → no score");
+        assert_eq!(kills_score(&sd, Some(&slice), 40, false, None, 3), 30.0);
+        assert_eq!(kills_score(&sd, None, 40, false, None, 3), 0.0, "no slice → no score");
     }
 
     /// The kill-score tables are level-scaled in both directions and flat-tailed.
@@ -3625,8 +3672,34 @@ mod tests {
     /// Replay a captured run kill by kill, one `/update` per kill as retail sent them,
     /// and return `(kill number, rungs that update paid)` for every paying update.
     fn replay(ipl: u32, floors: &[(u32, &str, u32, &[&str])]) -> Vec<(usize, Vec<u32>)> {
+        replay_with(ipl, false, floors)
+    }
+
+    /// [`replay`] for a run whose `ipl` is the client's own reported EPL (#8).
+    fn replay_with(
+        ipl: u32,
+        client_epl_reported: bool,
+        floors: &[(u32, &str, u32, &[&str])],
+    ) -> Vec<(usize, Vec<u32>)> {
+        replay_reporting(ipl, client_epl_reported, floors, None)
+    }
+
+    /// [`replay_with`], with the session reporting `session_epl` on every `/update`
+    /// (the handler's [`reconcile_client_epl`] step); `None` skips that step.
+    fn replay_reporting(
+        ipl: u32,
+        client_epl_reported: bool,
+        floors: &[(u32, &str, u32, &[&str])],
+        session_epl: Option<Option<u32>>,
+    ) -> Vec<(usize, Vec<u32>)> {
         let mut run = run_from(&floors.iter().map(|f| (f.0, f.2)).collect::<Vec<_>>(), ipl);
+        run.client_epl_reported = client_epl_reported;
         run.current_floor_index = 0;
+        let reconcile = |run: &mut AbyssRun| {
+            if let Some(reported) = session_epl {
+                reconcile_client_epl(run, reported);
+            }
+        };
         for (slice, floor) in run.slices.iter_mut().zip(floors) {
             slice.dungeon_settings_id = Uuid::parse_str(floor.1).unwrap();
             slice.completed = false;
@@ -3644,6 +3717,7 @@ mod tests {
                     "type": "enemy_killed", "spawnGroupId": group, "spawnerIndex": 0,
                     "enemyIndex": 0, "xpReward": 0.0, "time": kill_no
                 }]));
+                reconcile(&mut run);
                 if update(&mut run, &mut player, &action, &mut tracker).is_some() {
                     let mut rungs: Vec<u32> =
                         run.granted_future_rewards.difference(&before).copied().collect();
@@ -5466,12 +5540,12 @@ mod tests {
                 assert_eq!(ipl, reported);
                 for start in [1, 5, 10, ipl.saturating_sub(4).max(1), ipl] {
                     let floors = served_run(ipl, start, 14, MIXED_KILLS);
-                    let server = replay(ipl, &floors);
+                    let server = replay_with(ipl, true, &floors);
                     let client = client_gauge(reported, &floors);
                     let (early, lag) = early_and_lag(&server, &client);
                     let case = format!("level {level}, EPL {reported}, start {start}: server {server:?} client {client:?}");
                     assert!(early.is_empty(), "paid ahead {early:?} -- {case}");
-                    assert!(lag <= 3, "lag {lag} -- {case}");
+                    assert_eq!(lag, 0, "lag {lag} -- {case}");
                     // At most the rung the client crossed on the last kills is still due.
                     assert!(unpaid(&server, &client).len() <= 1, "{case}");
                 }
@@ -5490,13 +5564,174 @@ mod tests {
             assert_eq!(ipl, reported);
             let floors = level_100_run_from_149(ipl);
             assert!(floors.iter().all(|f| f.2 == 100), "{floors:?}");
-            let server = replay(ipl, &floors);
+            let server = replay_with(ipl, true, &floors);
             assert_eq!(server, client_gauge(reported, &floors), "reported EPL {reported}");
             if reported + 7 <= 100 {
                 // Delta >= 7: the flat tail, 30 a kill, rungs 35..360 in twelve kills.
                 assert_eq!(server.len(), 7, "reported EPL {reported}: {server:?}");
             }
         }
+    }
+
+    // ── #8: a rung paid after the client's gauge reached it is toasted twice ─────
+
+    /// How many times the client toasts each rung's reward, by the client code:
+    /// `NotifyLeavingCombat` -> `UpdateRewards` (RVA 0x1C8158C) appends the advertised
+    /// reward to `_previousRewardsPendingUIConsumption` whenever the gauge is past the
+    /// rung, and nothing clears that until a response carries `reward`;
+    /// `NotifyOfPreviousRewards` (RVA 0x1C82A64) then shows one side notification per
+    /// entry. One combat per kill (the replays here), so a rung the server pays `n`
+    /// kills after the client reached it is toasted `n + 1` times.
+    fn client_toasts(server: &[(usize, Vec<u32>)], client: &[(usize, Vec<u32>)]) -> Vec<(u32, usize)> {
+        client
+            .iter()
+            .flat_map(|(reached, rungs)| rungs.iter().map(move |rung| (*reached, *rung)))
+            .filter_map(|(reached, rung)| {
+                let paid = server.iter().find(|(_, paid)| paid.contains(&rung))?.0;
+                Some((rung, paid.saturating_sub(reached) + 1))
+            })
+            .collect()
+    }
+
+    /// THE REPORT (#8, Михаил's video, 2026-10-20): a level-48 character whose client
+    /// reports EPL 52 starts the Abyss at floor 52 — the floor the menu recommends —
+    /// and every few rungs the reward is toasted twice ("+19 Quicksilver Ingot" x2),
+    /// though it is paid once. Floors 52-59 are difficulty 52, 54, 56, 58, 62, ...: the
+    /// near-level ramp of the kill-score table (10, 15, 24, 40, 30), where the margin
+    /// booked each kill a step lower (10, 12, 19, 30) and the server paid rungs kills
+    /// after the client's gauge reached them. Scored at the reported EPL, every rung is
+    /// paid on the very kill the client reaches it, so it is toasted once.
+    #[test]
+    fn a_level_48_run_from_floor_52_toasts_every_rung_once() {
+        let estimate = initial_player_level(&real_job_pools(), 48);
+        let ipl = run_initial_player_level(estimate, Some(52));
+        assert_eq!(ipl, 52);
+        assert!(is_client_epl(Some(52), ipl));
+        let floors = served_run(ipl, 52, 8, MIXED_KILLS);
+        assert_eq!(
+            floors.iter().map(|f| (f.0, f.2)).collect::<Vec<_>>()[..4],
+            [(52, 52), (53, 54), (54, 56), (55, 58)],
+            "the near-level ramp"
+        );
+        let client = client_gauge(52, &floors);
+        assert!(client.len() >= 5, "the run climbs several rungs: {client:?}");
+
+        // NEGATIVE CONTROL: the margin the run used to be scored with toasts some rung
+        // twice or more — the video.
+        let trailing = replay_with(ipl, false, &floors);
+        assert!(
+            client_toasts(&trailing, &client).iter().any(|(_, toasts)| *toasts > 1),
+            "the margin trails the client: server {trailing:?} client {client:?}"
+        );
+
+        let server = replay_with(ipl, true, &floors);
+        assert_eq!(server, client, "every rung paid on the client's kill");
+        assert!(client_toasts(&server, &client).iter().all(|(_, toasts)| *toasts == 1));
+    }
+
+    /// Every character level, every reported EPL in the band around its estimate, and
+    /// starts from floor 1 through the near-level ramp to the deep end (floor 149, where
+    /// a level-100 run is difficulty 100 throughout — #468's regression floor): a run
+    /// scored at the reported EPL pays each rung on exactly the kill the client's gauge
+    /// reaches it. Never ahead (#312) and never behind (#8).
+    #[test]
+    fn runs_at_a_reported_epl_pay_every_rung_on_the_clients_kill_at_every_depth() {
+        let pools = real_job_pools();
+        for level in [9u32, 20, 48, 50, 66, 100] {
+            let estimate = initial_player_level(&pools, level);
+            for reported in [estimate.saturating_sub(6).max(1), estimate.saturating_sub(3).max(1), estimate, estimate + 1, estimate + 4] {
+                let ipl = run_initial_player_level(estimate, Some(reported));
+                assert!(is_client_epl(Some(reported), ipl));
+                for start in [1, ipl.saturating_sub(10).max(1), ipl.saturating_sub(3).max(1), ipl, ipl + 3, 149] {
+                    for kills in [MIXED_KILLS, DEEP_FLOOR_KILLS] {
+                        let floors = served_run(ipl, start, 10, kills);
+                        let server = replay_with(ipl, true, &floors);
+                        let client = client_gauge(reported, &floors);
+                        assert_eq!(server, client, "level {level}, EPL {reported}, start {start}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The client re-reads its EPL on every level load (`NotifyStart`, RVA 0x1C80170),
+    /// so a level-up or gear change mid-run plus a reload moves its scoring off the
+    /// `/start` value. A run started at reported EPL `r` whose client then scores at
+    /// `r - 1` or `r + 1` — and whose session now reports that, or nothing (a relaunch)
+    /// — must never be paid ahead (within the margin's one level, as for the estimate): [`reconcile_client_epl`] drops it onto the
+    /// margin. NEGATIVE CONTROL: without that step, exact scoring at the stale EPL pays
+    /// some rung before the client's gauge reaches it (#312's stall).
+    #[test]
+    fn a_client_whose_epl_drifts_mid_run_is_never_paid_ahead() {
+        let pools = real_job_pools();
+        let mut control_early = Vec::new();
+        for level in [20u32, 48, 50, 66, 94, 100] {
+            let reported = initial_player_level(&pools, level);
+            for start in [reported.saturating_sub(3).max(1), reported, reported + 3, 149] {
+                for kills in [MIXED_KILLS, DEEP_FLOOR_KILLS] {
+                    let floors = served_run(reported, start, 10, kills);
+                    for drifted in [reported - 1, reported + 1] {
+                        let client = client_gauge(drifted, &floors);
+                        for session in [Some(drifted), None] {
+                            let server = replay_reporting(reported, true, &floors, Some(session));
+                            let (early, lag) = early_and_lag(&server, &client);
+                            let case = format!(
+                                "level {level}, start {start}, EPL {reported} -> {drifted}, session {session:?}"
+                            );
+                            assert!(early.is_empty(), "paid ahead {early:?} -- {case}");
+                            assert!(lag <= MAX_LAG_KILLS, "lag {lag} -- {case}");
+                        }
+                        let stale = replay_with(reported, true, &floors);
+                        let (early, _) = early_and_lag(&stale, &client);
+                        if !early.is_empty() {
+                            control_early.push((level, start, drifted, early));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            !control_early.is_empty(),
+            "the control must show that exact scoring at a stale EPL pays ahead"
+        );
+    }
+
+    /// While the session keeps reporting the run's EPL, exact scoring stays on; the
+    /// first different report (or none) turns it off, and it never comes back.
+    #[test]
+    fn exact_scoring_ends_for_good_on_the_first_different_report() {
+        let mut run = run_from(&[(1, 52)], 52);
+        run.client_epl_reported = true;
+        reconcile_client_epl(&mut run, Some(52));
+        assert!(run.client_epl_reported);
+        reconcile_client_epl(&mut run, Some(53));
+        assert!(!run.client_epl_reported);
+        reconcile_client_epl(&mut run, Some(52));
+        assert!(!run.client_epl_reported, "never turned back on");
+
+        let mut relaunched = run_from(&[(1, 52)], 52);
+        relaunched.client_epl_reported = true;
+        reconcile_client_epl(&mut relaunched, None);
+        assert!(!relaunched.client_epl_reported, "a relaunched client has not reported");
+    }
+
+    /// A report outside the band is not the client's EPL: the run falls back to the
+    /// estimate and keeps the never-ahead margin.
+    #[test]
+    fn an_out_of_band_report_keeps_the_margin() {
+        let ipl = run_initial_player_level(22, Some(43));
+        assert_eq!(ipl, 22);
+        assert!(!is_client_epl(Some(43), ipl));
+        assert!(!is_client_epl(None, ipl));
+        // A run stored before #8 deserializes onto the margin.
+        let mut legacy = serde_json::to_value(&run_from(&[(1, 22)], 22)).unwrap();
+        assert!(legacy.get("clientEplReported").is_none(), "false is not stored");
+        legacy.as_object_mut().unwrap().remove("clientEplReported");
+        let legacy: AbyssRun = serde_json::from_value(legacy).unwrap();
+        assert!(!legacy.client_epl_reported);
+        let mut reported = run_from(&[(1, 22)], 22);
+        reported.client_epl_reported = true;
+        assert_eq!(serde_json::to_value(&reported).unwrap()["clientEplReported"], true);
     }
 
     #[test]

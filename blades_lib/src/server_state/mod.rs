@@ -71,6 +71,12 @@ pub struct AbyssRun {
     /// a new run starts empty, as retail's gauge restarts at rung 35 every run.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub granted_future_rewards: BTreeSet<u32>,
+    /// `initial_player_level` is the Effective Player Level the client's own
+    /// analytics reported (`gear_rating`), not the server's estimate. The server
+    /// then scores kills exactly as the client does instead of trailing it by a
+    /// safety margin (#8). False on a run started before this field existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub client_epl_reported: bool,
 }
 
 /// An in-progress craft job, persisted in `server_state.craft_jobs`. Created by
