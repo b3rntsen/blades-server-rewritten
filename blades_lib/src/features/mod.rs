@@ -21,6 +21,7 @@ pub mod jewelry_grades;
 pub mod legendary_gear;
 pub mod loot_level;
 pub mod merchant;
+pub mod recipe_durations;
 pub mod recipe_outputs;
 pub mod repair;
 pub mod revive;
