@@ -482,6 +482,9 @@ async fn start_craft(
     // onto whatever the last craft had put there (report #229).
     let job_id = Uuid::new_v4();
 
+    // The enchant roll's log line (tracker #415), emitted once the job is written.
+    let mut enchant_roll_log: Option<String> = None;
+
     let (results, crafting_type_id, duration_ms) = if let Some(item_id) = item_id {
         // ── temper / enchant: modify an existing backpack item ──
         let existing = remove_backpack_item(&mut entry.inventory.0, item_id, &mut tracker)
@@ -511,6 +514,16 @@ async fn start_craft(
         );
         if tempering_level > 0 {
             restore_tempered_condition(&mut mutated, repair_data);
+        } else {
+            // Read off the item the roll produced; the RNG is not touched again.
+            enchant_roll_log = enchant_roll_log_line(
+                character_id,
+                existing.item_template_id,
+                recipe_id,
+                existing.arcane_tier,
+                &mutated.properties.enchanting,
+                &static_data.enchanting,
+            );
         }
         entry.inventory.0.backpack_version += 1;
         let reward_item = RewardItem {
@@ -693,6 +706,9 @@ async fn start_craft(
     let inventory = entry.inventory.0.generate_client_update(&tracker);
     let wallet = entry.wallet.0.clone();
     write_back(conn, entry).await?;
+    if let Some(line) = enchant_roll_log {
+        log::info!("{line}");
+    }
 
     Ok(CreateCraftResponse {
         craft: craft_wire,
@@ -1721,6 +1737,48 @@ fn roll_enchant<R: Rng + ?Sized>(
     out
 }
 
+/// One `info` line per [`roll_enchant`] roll, so the odds can be checked against
+/// `enchanting.json` from journald (tracker #415). Pure: it reads the roll's RESULT
+/// (`rolled` = primary, then the secondaries in draw order) and never re-rolls.
+///
+/// `table` is the index into `secondaryTables`, and `item_type` / `weapon_type` /
+/// `slot` are that table's own keys (a table with `slot=0` serves every slot), so a
+/// tally keys on `table=`. `count` is the number of secondaries rolled, which is the
+/// drawn count unless the table's pool ran dry first.
+///
+/// `None` when [`roll_enchant`] did not produce the result: the recipe is not in the
+/// APK tables, so the enchant came from a captured outcome instead.
+fn enchant_roll_log_line(
+    character_id: Uuid,
+    item_template_id: Uuid,
+    recipe_id: Uuid,
+    arcane_tier: Option<u64>,
+    rolled: &[ItemSingleProperty],
+    enchanting: &EnchantingData,
+) -> Option<String> {
+    fn opt<T: std::fmt::Display>(v: Option<T>) -> String {
+        v.map_or_else(|| "none".to_string(), |v| v.to_string())
+    }
+    let recipe = enchanting.recipes.get(&recipe_id)?;
+    let table_index = enchanting.templates.get(&item_template_id).copied();
+    let table = table_index.and_then(|i| enchanting.secondary_tables.get(i));
+    let secondaries: Vec<String> = rolled.iter().skip(1).map(|p| p.id.to_string()).collect();
+    Some(format!(
+        "enchant rolled: character={character_id} template={item_template_id} \
+         recipe={recipe_id} table={} item_type={} weapon_type={} slot={} primary={} \
+         tier={} arcane_tier={} count={} secondaries=[{}]",
+        opt(table.and(table_index)),
+        opt(table.and_then(|t| t.item_type)),
+        opt(table.and_then(|t| t.weapon_type)),
+        opt(table.and_then(|t| t.equipment_slot)),
+        recipe.property,
+        recipe.tier,
+        opt(arcane_tier),
+        secondaries.len(),
+        secondaries.join(","),
+    ))
+}
+
 /// Index drawn in proportion to `weights` (non-positive weights never win); `None` when
 /// nothing has positive weight.
 fn weighted_index<R: Rng + ?Sized>(rng: &mut R, weights: &[f64]) -> Option<usize> {
@@ -1940,6 +1998,143 @@ mod tests {
             arcane_tier,
             properties: ItemPropertiesAll::default(),
         }
+    }
+
+    /// Tracker #415: logging the roll must not change it. Pinned against the output
+    /// of `roll_enchant` BEFORE the log line existed — same seed, same properties,
+    /// same next RNG draw (so nothing after the roll is shifted either).
+    #[test]
+    fn roll_enchant_sequence_is_unchanged_by_the_roll_log() {
+        let e = deploy_enchanting();
+        let recipe = &e.recipes[&uuid(MAGICKA_DAMAGE_T10)];
+        let table = e.table_for(&uuid(MADNESS_BATTLEAXE));
+        let primary = "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417";
+        let s1 = "8f372d6d-2620-42ab-809b-edb4d5d1e528";
+        let s2 = "a869f868-c23f-45bb-9159-d62b42236a4a";
+        let cases: [(Option<u64>, u64, &[&str], u64); 4] = [
+            (None, 1, &[primary, s1, s2], 3238990930839348691),
+            (None, 2, &[primary], 323696506357721662),
+            (Some(2), 1, &[primary, s1, s2], 3238990930839348691),
+            (Some(1), 1, &[primary, s1], 7894741264938617306),
+        ];
+        for (arcane, seed, want, want_next) in cases {
+            let mut rng = seeded(seed);
+            let out = roll_enchant(&mut rng, recipe, table, arcane, e);
+            let ids: Vec<String> = out.iter().map(|p| p.id.to_string()).collect();
+            assert_eq!(ids, want, "arcane {arcane:?} seed {seed}");
+            assert!(out.iter().all(|p| p.tier == 10));
+            assert_eq!(
+                rng.random::<u64>(),
+                want_next,
+                "arcane {arcane:?} seed {seed}"
+            );
+        }
+
+        // 1000 seeds: the secondary-count histogram and a digest of every result and
+        // of the draw after it, as recorded before the change.
+        let mut hist = [0u32; 3];
+        let mut digest = 0u64;
+        for seed in 0..1000u64 {
+            let mut rng = seeded(seed);
+            let out = roll_enchant(&mut rng, recipe, table, None, e);
+            hist[out.len() - 1] += 1;
+            let next: u64 = rng.random();
+            digest ^= next.rotate_left((seed % 64) as u32);
+            for p in &out {
+                digest ^= p.id.as_u128() as u64;
+                digest = digest.rotate_left(7);
+            }
+        }
+        assert_eq!(hist, [612, 232, 156]);
+        assert_eq!(digest, 15790792842087231457);
+    }
+
+    #[test]
+    fn enchant_roll_log_line_names_the_roll() {
+        let e = deploy_enchanting();
+        let character = Uuid::from_u128(0xC0FFEE);
+        let rolled = roll_enchant(
+            &mut seeded(1),
+            &e.recipes[&uuid(MAGICKA_DAMAGE_T10)],
+            e.table_for(&uuid(MADNESS_BATTLEAXE)),
+            None,
+            e,
+        );
+        let line = enchant_roll_log_line(
+            character,
+            uuid(MADNESS_BATTLEAXE),
+            uuid(MAGICKA_DAMAGE_T10),
+            None,
+            &rolled,
+            e,
+        )
+        .expect("an APK recipe is rolled by roll_enchant");
+        let table = e.templates[&uuid(MADNESS_BATTLEAXE)];
+        let t = &e.secondary_tables[table];
+        assert_eq!(
+            line,
+            format!(
+                "enchant rolled: character=00000000-0000-0000-0000-000000c0ffee \
+                 template={MADNESS_BATTLEAXE} recipe={MAGICKA_DAMAGE_T10} table={table} \
+                 item_type={} weapon_type={} slot={} \
+                 primary=5a145cf8-3a20-4b8a-bf6d-8ee1607d3417 tier=10 arcane_tier=none \
+                 count=2 secondaries=[8f372d6d-2620-42ab-809b-edb4d5d1e528,\
+                 a869f868-c23f-45bb-9159-d62b42236a4a]",
+                t.item_type.unwrap(),
+                t.weapon_type.unwrap(),
+                t.equipment_slot.unwrap(),
+            )
+        );
+    }
+
+    #[test]
+    fn enchant_roll_log_line_handles_arcane_no_secondaries_and_no_table() {
+        let e = deploy_enchanting();
+        let recipe = &e.recipes[&uuid(MAGICKA_DAMAGE_T10)];
+        let primary = ItemSingleProperty {
+            id: recipe.property,
+            tier: recipe.tier,
+        };
+        // Arcane tier is printed; no secondaries is an empty list.
+        let line = enchant_roll_log_line(
+            Uuid::nil(),
+            uuid(MADNESS_BATTLEAXE),
+            uuid(MAGICKA_DAMAGE_T10),
+            Some(2),
+            std::slice::from_ref(&primary),
+            e,
+        )
+        .unwrap();
+        assert!(
+            line.contains(" arcane_tier=2 count=0 secondaries=[]"),
+            "{line}"
+        );
+        // A template with no table: every table field is `none`.
+        let line = enchant_roll_log_line(
+            Uuid::nil(),
+            Uuid::from_u128(0xABCD),
+            uuid(MAGICKA_DAMAGE_T10),
+            None,
+            std::slice::from_ref(&primary),
+            e,
+        )
+        .unwrap();
+        assert!(
+            line.contains(" table=none item_type=none weapon_type=none slot=none "),
+            "{line}"
+        );
+        // Not an APK recipe: the result came from a captured outcome, not a roll.
+        assert_eq!(
+            enchant_roll_log_line(
+                Uuid::nil(),
+                uuid(MADNESS_BATTLEAXE),
+                ANY_RECIPE,
+                None,
+                &[primary],
+                e,
+            ),
+            None
+        );
     }
 
     #[test]
