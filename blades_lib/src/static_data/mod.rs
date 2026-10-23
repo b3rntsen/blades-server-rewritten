@@ -262,6 +262,15 @@ pub struct RecipeInput {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SecondaryEnchantTable {
+    /// `_itemType`, `_weaponType`, `_equipmentSlot` — which items the table serves.
+    /// Read only to label logged rolls (tracker #415); the template -> table mapping
+    /// is precomputed in [`EnchantingData::templates`].
+    #[serde(default)]
+    pub item_type: Option<i64>,
+    #[serde(default)]
+    pub weapon_type: Option<i64>,
+    #[serde(default)]
+    pub equipment_slot: Option<i64>,
     /// P(0), P(1), P(2) secondary properties for a non-arcane item.
     #[serde(default)]
     pub count_odds: Vec<f64>,

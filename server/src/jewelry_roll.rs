@@ -186,6 +186,7 @@ mod tests {
                     weight: 1.0,
                 })
                 .collect(),
+            ..Default::default()
         };
         let mut rng = seeded(&[b"x"], 2);
         let out = roll_enchanting_exact(&mut rng, Some(&table), 3, 6);
