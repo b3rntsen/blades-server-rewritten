@@ -798,15 +798,12 @@ pub fn on_c2s_input(
     // Track whether the guard button is HELD before the lock gates below drop the
     // frame (report #357). A guard pressed while staggered is still held when the
     // stagger ends, and the client will not press it again; `reconcile_stagger`
-    // raises it then, as retail does. A block-zone release lets it go, and an attack
-    // press supersedes it, exactly as a live attack press cancels a raised guard.
+    // raises it then, as retail does. ANY release lets it go — including a block
+    // release the client labels outside the block zone (the #113 misread), which
+    // would otherwise leave the flag set with no 8 s leak cap behind it — and an
+    // attack press supersedes it, exactly as a live attack press cancels a guard.
     if let Some(act) = parse_input_activate(user_data) {
-        let f = &mut combat.fighters[sender];
-        if act.block_zone == Some(true) {
-            f.guard_held = act.held;
-        } else if act.held {
-            f.guard_held = false;
-        }
+        combat.fighters[sender].guard_held = act.held && act.block_zone == Some(true);
     }
     // A PARALYZED sender can't act — its inputs are locked for the paralyse duration
     // (`ActorParalyzedState`, §5.4). Handshake/block frames were already handled above;
@@ -11634,6 +11631,37 @@ mod phase4_tests {
         let _ = on_tick(&mut combat, ends, false);
         assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
         assert!(combat.fighters[0].block_phase(ends).is_none());
+    }
+
+    /// Review finding on #357: a block release the client labels OUTSIDE the block
+    /// zone (the #113 misread) must still let go of the held guard. Otherwise a stun
+    /// landing much later — after the 8 s leak guard dropped the server guard — would
+    /// raise a guard the player is not holding.
+    #[test]
+    fn report_357_a_misread_block_release_still_lets_go_of_the_guard() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, false), now + Duration::from_millis(300));
+        assert!(!combat.fighters[0].guard_held);
+
+        let stun = now + Duration::from_secs(30);
+        assert!(combat.fighters[0].apply_stagger_for(stun, 1.2));
+        let ends = stun + Duration::from_millis(1_250);
+        let _ = on_tick(&mut combat, ends, false);
+        assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert!(combat.fighters[0].block_phase(ends).is_none());
+    }
+
+    /// A held guard does not survive into the next round.
+    #[test]
+    fn report_357_the_round_reset_clears_the_held_guard() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        assert!(combat.fighters[0].guard_held, "precondition");
+        combat.reset_fighters_for_next_round(now + Duration::from_secs(1));
+        assert!(!combat.fighters[0].guard_held);
     }
 
     /// End to end, the reporter's case: the opponent's swing that arrives after the
