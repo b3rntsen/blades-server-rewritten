@@ -176,16 +176,7 @@ fn ability_cooldown(ability_uuid: &str, rank: u8) -> Duration {
 /// block window since the on/off flag isn't byte-pinned from a two-sided capture.
 const BLOCK_WINDOW: Duration = Duration::from_secs(2);
 
-/// Safety cap on a guard held with no matching release — a LEAK GUARD, not a game rule.
-///
-/// Retail has **no** auto-expiry: a block ends when the player lets go, or when an
-/// attack press cancels it. Measured from `propId8` of the closing state change over
-/// 539 decoded blocks, the durations are a continuous distribution with no cliff —
-/// median 0.750 s, p90 1.800 s, p99 2.717 s, max **4.767 s**, and 42 of 539 ran past
-/// two seconds. The old two-second `BLOCK_WINDOW` would have silently truncated ~8 % of
-/// real guards, so it is not used as the block's lifetime any more. This cap exists
-/// only so a dropped release packet cannot leave a fighter guarding forever.
-const BLOCK_LEAK_GUARD: Duration = Duration::from_secs(8);
+use super::state::BLOCK_LEAK_GUARD;
 
 /// True iff `user_data` is a `PlayerCombatInputActivate` (op46) frame.
 /// These have carrier `0x2e` (46) — NOT the generic `0x36` UserMessage carrier.
@@ -804,6 +795,16 @@ pub fn on_c2s_input(
         debug!("combat: slot {sender} input ignored — target slot {target_slot} already dead");
         return Vec::new();
     }
+    // Track whether the guard button is HELD before the lock gates below drop the
+    // frame (report #357). A guard pressed while staggered is still held when the
+    // stagger ends, and the client will not press it again; `reconcile_stagger`
+    // raises it then, as retail does. ANY release lets it go — including a block
+    // release the client labels outside the block zone (the #113 misread), which
+    // would otherwise leave the flag set with no 8 s leak cap behind it — and an
+    // attack press supersedes it, exactly as a live attack press cancels a guard.
+    if let Some(act) = parse_input_activate(user_data) {
+        combat.fighters[sender].guard_held = act.held && act.block_zone == Some(true);
+    }
     // A PARALYZED sender can't act — its inputs are locked for the paralyse duration
     // (`ActorParalyzedState`, §5.4). Handshake/block frames were already handled above;
     // this drops only the combat swing/ability of a paralysed attacker.
@@ -910,21 +911,8 @@ pub fn on_c2s_input(
             let f = &mut combat.fighters[sender];
             f.pending_manual_attack = None;
             if act.held {
-                // Guard UP. `set_actor_state` queues the transition; the drain turns it
-                // into the gmid 41 that raises the shield on BOTH screens.
-                //
-                // A guard is also an exit from the prior swing's Recovery. Drop that
-                // swing's scheduled FollowThrough/Recovery/Idle beats now; otherwise a
-                // stale Idle can overwrite `Blocking` on the next tick while the
-                // client is still holding the shield.
-                f.clear_scheduled_states();
-                f.set_actor_state(ActorStateType::Blocking, now);
-                f.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
-                f.blocking_until = Some(now + BLOCK_LEAK_GUARD);
-                f.block_raised_at = Some(now);
-                // Raising a guard ends the combo chain: Recovery -> Blocking is one of
-                // the exits `PlayerRecoveryState$$OnExit@0x1d75714` resets on (02 R5).
-                f.reset_combo();
+                // Guard UP (see `Fighter::raise_guard`).
+                f.raise_guard(now);
                 debug!("combat: slot {sender} op46 blockZone DOWN — guard UP");
             } else {
                 // Guard DOWN on release. Retail ends a block with a gmid 39 carrying
@@ -11526,6 +11514,181 @@ mod phase4_tests {
             combat.draw_tiebreak_winner((500, 500)),
             0,
             "fully tied → slot 0"
+        );
+    }
+
+    // ---- Report #357: a guard held through a stagger goes up when it ends ------
+    //
+    // "My opponents (at least the AI opponents) swing through a high block after I'm
+    // coming out of a stun." In the reporter's match (dcd93872, 2026-10-24) his swing
+    // was blocked high at 15:28:55.34 and stunned him for 2.00 s; he raised his guard
+    // while still stunned and held it, and the AI's swing at 15:28:58.14 — 0.8 s after
+    // the stun had ended — resolved against `target_state=Idle`, unblocked, for 438.
+    //
+    // The stagger gate in `on_c2s_input` drops EVERY input from a staggered fighter,
+    // the guard press included, and the client does not re-send a press it is still
+    // holding. So the server never learned the guard was up.
+    //
+    // Retail honours the held press. Across prod captures 486/503/506/615/616, 17
+    // own-avatar staggers had a block-zone press land inside the stagger and still
+    // held at its end; in all 14 whose next own state was Idle, the server sent
+    // 39 Idle and then 41 Blocking at the stagger's end with NO fresh c2s press in
+    // between (the other 3 ended in a death/round-end pose or a new stagger).
+
+    fn gmid41_count(out: &[(usize, Vec<u8>)]) -> usize {
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(41))
+            .count()
+    }
+
+    #[test]
+    fn report_357_a_guard_held_through_a_stagger_goes_up_when_it_ends() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
+        let _ = drain_state_changes(&mut combat, now);
+
+        // Guard pressed late in the stun, and held.
+        let press = now + Duration::from_millis(1_500);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), press);
+        assert_eq!(
+            combat.fighters[0].actor_state(),
+            ActorStateType::Staggered,
+            "a guard press cannot cut a stagger short"
+        );
+        assert!(combat.fighters[0].block_phase(press).is_none());
+
+        // The stagger runs out on the tick, with no further input from the client.
+        let ends = now + Duration::from_millis(2_050);
+        // The tick drains this slot's state itself, ahead of the op51 Staggered
+        // remove (retail: state frame before status frame), so collect both.
+        let mut out = on_tick(&mut combat, ends, false);
+        out.extend(drain_state_changes(&mut combat, ends));
+        assert_eq!(
+            combat.fighters[0].actor_state(),
+            ActorStateType::Blocking,
+            "the held guard must go up the moment the stagger ends"
+        );
+        assert!(combat.fighters[0].block_phase(ends).is_some());
+
+        // Retail's order: 39 Idle (the stagger ends), then 41 (the guard goes up).
+        assert_eq!(generic_state_count(&out, ActorStateType::Idle), 2, "Idle to both viewers");
+        assert_eq!(gmid41_count(&out), 2, "41 to both viewers");
+        let first_idle = out
+            .iter()
+            .position(|(_, f)| messages::user_message_gmid(f) == Some(39))
+            .unwrap();
+        let first_41 = out
+            .iter()
+            .position(|(_, f)| messages::user_message_gmid(f) == Some(41))
+            .unwrap();
+        assert!(first_idle < first_41, "Idle before Blocking, as retail sends it");
+    }
+
+    /// The control: a guard pressed AND released inside the stagger is not up
+    /// afterwards. Without it, a fix that raised a guard after every stagger would pass.
+    #[test]
+    fn report_357_a_guard_released_during_the_stagger_stays_down() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now + Duration::from_millis(1_000));
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, true), now + Duration::from_millis(1_500));
+        let _ = drain_state_changes(&mut combat, now + Duration::from_millis(1_500));
+
+        let ends = now + Duration::from_millis(2_050);
+        let mut out = on_tick(&mut combat, ends, false);
+        out.extend(drain_state_changes(&mut combat, ends));
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Idle);
+        assert!(combat.fighters[0].block_phase(ends).is_none());
+        assert_eq!(gmid41_count(&out), 0);
+        assert_eq!(generic_state_count(&out, ActorStateType::Idle), 2, "control: the drain path is live");
+    }
+
+    /// A stagger with no guard input at all ends in plain Idle (no phantom guard).
+    #[test]
+    fn report_357_a_stagger_without_a_guard_press_ends_idle() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
+        let ends = now + Duration::from_millis(2_050);
+        let _ = on_tick(&mut combat, ends, false);
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Idle);
+        assert!(combat.fighters[0].block_phase(ends).is_none());
+    }
+
+    /// An attack press during the stagger supersedes a guard held before it: the
+    /// player let the guard go to swing, exactly as a live attack press cancels a
+    /// guard outside a stagger.
+    #[test]
+    fn report_357_an_attack_press_during_the_stagger_drops_the_held_guard() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now + Duration::from_millis(500));
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now + Duration::from_millis(1_000));
+        let ends = now + Duration::from_millis(2_050);
+        let _ = on_tick(&mut combat, ends, false);
+        assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert!(combat.fighters[0].block_phase(ends).is_none());
+    }
+
+    /// Review finding on #357: a block release the client labels OUTSIDE the block
+    /// zone (the #113 misread) must still let go of the held guard. Otherwise a stun
+    /// landing much later — after the 8 s leak guard dropped the server guard — would
+    /// raise a guard the player is not holding.
+    #[test]
+    fn report_357_a_misread_block_release_still_lets_go_of_the_guard() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, false), now + Duration::from_millis(300));
+        assert!(!combat.fighters[0].guard_held);
+
+        let stun = now + Duration::from_secs(30);
+        assert!(combat.fighters[0].apply_stagger_for(stun, 1.2));
+        let ends = stun + Duration::from_millis(1_250);
+        let _ = on_tick(&mut combat, ends, false);
+        assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert!(combat.fighters[0].block_phase(ends).is_none());
+    }
+
+    /// A held guard does not survive into the next round.
+    #[test]
+    fn report_357_the_round_reset_clears_the_held_guard() {
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        assert!(combat.fighters[0].guard_held, "precondition");
+        combat.reset_fighters_for_next_round(now + Duration::from_secs(1));
+        assert!(!combat.fighters[0].guard_held);
+    }
+
+    /// End to end, the reporter's case: the opponent's swing that arrives after the
+    /// stun has ended lands on the held guard, so it does less damage than the same
+    /// swing on a fighter who never raised one.
+    #[test]
+    fn report_357_a_hit_after_the_stagger_lands_on_the_held_guard() {
+        fn damage_taken(hold_guard: bool) -> u32 {
+            let now = Instant::now();
+            let mut combat = live_combat(now);
+            assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
+            if hold_guard {
+                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now + Duration::from_millis(1_500));
+            }
+            let ends = now + Duration::from_millis(2_050);
+            let _ = on_tick(&mut combat, ends, false);
+            let before = combat.fighters[0].health;
+            let hit_at = now + Duration::from_millis(2_800);
+            let _ = swing_and_land(&mut combat, 1, 0, 1.0, hit_at);
+            before - combat.fighters[0].health
+        }
+        let unguarded = damage_taken(false);
+        let guarded = damage_taken(true);
+        assert!(unguarded > 0, "control: the swing lands");
+        assert!(
+            guarded < unguarded,
+            "the held guard must block the swing: guarded {guarded} vs unguarded {unguarded}"
         );
     }
 }
