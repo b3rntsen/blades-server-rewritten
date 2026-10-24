@@ -300,7 +300,42 @@ pub fn process_interrupts(combat: &mut MatchCombat, now: Instant) -> Vec<(usize,
         };
         out.extend(end_executions(combat, slot, &hit, at, false));
     }
+    for slot in 0..combat.fighters.len() {
+        let Some(at) = combat.fighters[slot].self_interrupt_pending.take() else {
+            continue;
+        };
+        out.extend(self_interrupt_spells(combat, slot, at));
+    }
     out
+}
+
+/// The caster left a spell's wind-up or channel for Charging, Blocking or a maneuver:
+/// `ChannelingState$$EndChanneling@0x1a52578` → `RequestInterruptAbility(spell,
+/// selfInterrupt: true)` (06 §1.8). The spell's pending impact or channel is dropped,
+/// its cooldown runs from `at` and its cost stays spent (`AbilityExecutor$$Interrupt
+/// @0x1e9b94c` → `EndExecution`, 07 §5.5), and op59 goes to both viewers.
+///
+/// Retail, s503/615/616 (deduplicated): 14 spell wind-ups (Ice Spike, Lightning Bolt,
+/// Resist Elements, Poison Cloud) and 28 Frostbite channels were left for a 41, 45 or
+/// 58, each with op59 `selfInterrupt=true` for the spell within 4 ms (39 of 42 in the
+/// same millisecond). No
+/// spell op50 followed, and the caster's magicka went on regenerating from its
+/// post-cast value (s503 f3509774: 694 before, 260 at the cast, 288 at the 45 448 ms
+/// later — no refund).
+///
+/// Only spells are touched: a maneuver is not a channel (a bash's own guard, raised at
+/// its cast, is skipped for that reason). The bound is strict, so a spell accepted at
+/// the very instant of the transition has not been left and keeps running.
+pub fn self_interrupt_spells(combat: &mut MatchCombat, slot: usize, at: Instant) -> Vec<(usize, Vec<u8>)> {
+    let hit: Vec<Execution> = {
+        let f = &mut combat.fighters[slot];
+        let (hit, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut f.executions)
+            .into_iter()
+            .partition(|e| !e.is_maneuver && e.started_at < at && at < e.until);
+        f.executions = keep;
+        hit
+    };
+    end_executions(combat, slot, &hit, at, true)
 }
 
 /// A maneuver cast while another runs replaces it: `ChangeManeuverInProgress@0x1d55a54`
@@ -390,7 +425,7 @@ fn end_executions(
             "combat: slot {slot} {} INTERRUPTED {:.2}s in ({}, {dropped_impacts} impact(s) dropped{})",
             e.ability_uuid,
             at.saturating_duration_since(e.started_at).as_secs_f32(),
-            if self_interrupt { "replaced" } else { "stagger/paralysis" },
+            if self_interrupt { "self-interrupt" } else { "stagger/paralysis" },
             if stopped_channel { ", channel stopped" } else { "" },
         );
         let frame = messages_state::interrupt_ability(f.net_object_id, &e.ability_uuid, self_interrupt);
@@ -724,6 +759,164 @@ mod tests {
         }
         assert!(op59s(&out).is_empty());
         assert_eq!(hits_on(&c, &out, 1), 3, "all three bolts still fall");
+    }
+
+    // --- 06-D1: the caster leaves its own wind-up (selfInterrupt) ------------
+    //
+    // `ChannelingState$$EndChanneling@0x1a52578` sends `selfInterrupt: true` when the
+    // caster leaves `Channeling` for anything but Idle, Staggered or Paralyzed (06
+    // §1.8). Retail, s503/615/616: a charge (45), a guard (41) or a maneuver (58) out
+    // of a spell's wind-up or channel came with op59 `selfInterrupt=true` for that
+    // spell within 4 ms, and no spell op50 followed. Ice Spike's four:
+    // s503 f3509774 (45, 448 ms in), f3514588 (41, 985 ms), f3504270 (58, 1001 ms),
+    // s615 f4409775 (41, 549 ms).
+
+    /// A human `PlayerCombatInputActivate` (gmid 46): `{4: held · 5: charge ·
+    /// 6: blockZone}`, as the client sends it.
+    fn activate(held: bool, block_zone: bool) -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, 565)
+            .byte(1, 56)
+            .byte(2, 3)
+            .byte(3, 46)
+            .bool(4, held)
+            .float(5, 0.0)
+            .bool(6, block_zone);
+        let mut f = messages::frame_for_test(w.finish());
+        f[0] = 0x84;
+        f
+    }
+
+    /// What the engine sends for one human input: the resolution, then the drain.
+    fn human_input(c: &mut MatchCombat, slot: usize, frame: &[u8], at: Instant) -> Vec<(usize, Vec<u8>)> {
+        let mut out = on_c2s_input(c, slot, frame, at);
+        out.extend(drain_state_changes(c, at));
+        out
+    }
+
+    fn first(out: &[(usize, Vec<u8>)], gmid: u8) -> Option<usize> {
+        out.iter().position(|(_, f)| messages::user_message_gmid(f) == Some(gmid))
+    }
+
+    /// Ice Spike's 1.12 s wind-up (`_channelDuration`, every rank).
+    const ICE_SPIKE_WIND_UP: f32 = 1.12;
+
+    /// s503 f3509774: the caster pressed attack 448 ms into Ice Spike. op59
+    /// (selfInterrupt) for Ice Spike to both viewers; the spike never lands; the cost
+    /// stays spent; the cooldown runs from the press. Retail framed this one 45 → 59 →
+    /// 45; we send 59 → 45, retail's order for a charge out of a channel (s615
+    /// f4407473-74), and the 45 we send is its second, complete one.
+    #[test]
+    fn a_charge_during_the_ice_spike_wind_up_cancels_it() {
+        let t0 = Instant::now();
+        let mut c = combat(t0, 0);
+        let hp = c.fighters[1].health;
+        cast(&mut c, 0, "IceSpike", AbilityTag::Damage, t0);
+        let magicka_after_cast = c.fighters[0].magicka;
+        assert!(magicka_after_cast < 5_000, "non-vacuous: Ice Spike costs magicka");
+
+        let at = t0 + secs(0.448);
+        let out = human_input(&mut c, 0, &activate(true, false), at);
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
+        assert_op59(&out, uuid_of("IceSpike"), true);
+        assert!(first(&out, 59) < first(&out, 45), "op59 goes out before the 45");
+
+        let late = resolve::land_due_impacts(&mut c, t0 + secs(2.0));
+        assert_eq!(hits_on(&c, &late, 1), 0, "a self-interrupted Ice Spike deals no damage");
+        assert_eq!(c.fighters[1].health, hp);
+        assert_eq!(c.fighters[0].magicka, magicka_after_cast, "the cost is not refunded");
+        assert_eq!(
+            c.fighters[0].cooldowns.get(uuid_of("IceSpike")).copied(),
+            Some(at + secs(5.23)),
+            "the full cooldown runs from the interrupt (EndExecution → BeginCooldown)",
+        );
+    }
+
+    /// s503 f3514588 / s615 f4409775: a guard raised in the wind-up. op59 then 41.
+    #[test]
+    fn a_guard_during_the_ice_spike_wind_up_cancels_it() {
+        let t0 = Instant::now();
+        let mut c = combat(t0, 0);
+        cast(&mut c, 0, "IceSpike", AbilityTag::Damage, t0);
+        let at = t0 + secs(0.985);
+        let out = human_input(&mut c, 0, &activate(true, true), at);
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert_op59(&out, uuid_of("IceSpike"), true);
+        assert!(first(&out, 59) < first(&out, 41), "op59 goes out before the 41");
+        let late = resolve::land_due_impacts(&mut c, t0 + secs(2.0));
+        assert_eq!(hits_on(&c, &late, 1), 0, "a self-interrupted Ice Spike deals no damage");
+    }
+
+    /// s503 f3504269-71: a Power Attack cast 1.0 s into Ice Spike. op38 → op59 → the
+    /// maneuver; the spike never lands, the Power Attack's own hit does.
+    #[test]
+    fn a_maneuver_during_the_ice_spike_wind_up_cancels_it() {
+        let t0 = Instant::now();
+        let mut c = combat(t0, 0);
+        cast(&mut c, 0, "IceSpike", AbilityTag::Damage, t0);
+        let at = t0 + secs(1.0);
+        let out = cast(&mut c, 0, "PowerAttack", AbilityTag::Maneuver, at);
+        assert_eq!(count(&out, 38), 2, "non-vacuous: the maneuver is accepted");
+        assert_op59(&out, uuid_of("IceSpike"), true);
+        assert!(first(&out, 38) < first(&out, 59), "retail: op38, then op59");
+        // The spike was due at 1.12 s; the Power Attack lands at 1.0 + 0.779 s.
+        let out = resolve::land_due_impacts(&mut c, t0 + secs(1.5));
+        assert_eq!(hits_on(&c, &out, 1), 0, "no spike");
+        let out = resolve::land_due_impacts(&mut c, at + secs(0.8));
+        assert_eq!(hits_on(&c, &out, 1), 1, "the Power Attack's own hit lands");
+    }
+
+    /// Control: once the wind-up is over the spell has left `Channeling` for Idle, so a
+    /// charge or guard cancels nothing and the spike lands as before.
+    #[test]
+    fn input_after_the_ice_spike_wind_up_leaves_the_spike_alone() {
+        let t0 = Instant::now();
+        for block_zone in [false, true] {
+            let mut c = combat(t0, 0);
+            cast(&mut c, 0, "IceSpike", AbilityTag::Damage, t0);
+            let at = t0 + secs(ICE_SPIKE_WIND_UP + 0.01);
+            let out = human_input(&mut c, 0, &activate(true, block_zone), at);
+            assert!(op59s(&out).is_empty(), "nothing to interrupt after the wind-up");
+            let out = resolve::land_due_impacts(&mut c, at);
+            assert_eq!(hits_on(&c, &out, 1), 1, "the spike lands (blockZone {block_zone})");
+        }
+    }
+
+    /// Frostbite's 3 s channel ends the same way: all 37 of retail's Frostbite op59s
+    /// (s503/615/616) were self-interrupts, 26 of them with a 41 in the same
+    /// millisecond. The ticks stop with it.
+    #[test]
+    fn a_guard_during_a_frostbite_channel_stops_it() {
+        let t0 = Instant::now();
+        let mut c = combat(t0, 0);
+        let mut out = cast(&mut c, 0, "Frostbite", AbilityTag::Damage, t0);
+        let mut op59 = Vec::new();
+        for ms in (10..=3500).step_by(10) {
+            let t = t0 + Duration::from_millis(ms);
+            if ms == 1000 {
+                let o = human_input(&mut c, 0, &activate(true, true), t);
+                op59 = op59s(&o);
+                out.extend(o);
+            }
+            out.extend(on_tick(&mut c, t, false));
+            out.extend(drain_state_changes(&mut c, t));
+        }
+        assert_eq!(op59.len(), 2, "one op59 per viewer");
+        assert!(op59.iter().all(|(_, id, flag)| id == uuid_of("Frostbite") && *flag));
+        let ticks = hits_on(&c, &out, 1);
+        assert!(ticks <= 6, "no tick after the guard ({ticks} hits)");
+    }
+
+    /// A bash raises its own guard at the cast. That guard leaves no spell wind-up and
+    /// must not cancel the bash itself.
+    #[test]
+    fn a_bash_guard_does_not_self_interrupt_the_bash() {
+        let t0 = Instant::now();
+        let mut c = combat(t0, 0);
+        let out = cast(&mut c, 0, "HarryingBash", AbilityTag::Maneuver, t0);
+        assert_eq!(count(&out, 38), 2, "non-vacuous: the bash is accepted");
+        assert!(op59s(&out).is_empty());
+        assert!(op59s(&drain_state_changes(&mut c, t0)).is_empty());
     }
 
     // --- 05-D5: maneuvers ----------------------------------------------------
