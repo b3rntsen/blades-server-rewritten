@@ -3429,20 +3429,71 @@ mod tests {
     }
 
     /// #312: one kill per request, all the way up — the ladder has ten rungs and the
-    /// handler pays every one of them; nothing stops after the fifth.
+    /// handler pays every one of them; nothing stops after the fifth. #424: nor after
+    /// the tenth — past 650 the ladder steps on, and every response still advertises
+    /// the next rung, which the client's reward handler requires.
     #[test]
-    fn a_run_climbs_all_ten_rungs() {
-        let (mut run, mut player) = gauge_fixture();
-        let mut paid = Vec::new();
-        for _ in 0..80 {
-            let mut tracker = InventoryChangeTracker::default();
-            let showing = advertised(&run, 40).map(|(rung, _)| rung);
-            if update(&mut run, &mut player, &kills(1), &mut tracker).is_some() {
-                paid.push(showing.expect("a paid rung was advertised first"));
+    fn a_run_climbs_all_ten_rungs_and_on_past_650() {
+        for level in [9u64, 40, 77, 100] {
+            let (mut run, mut player) = gauge_fixture();
+            player.character.level = level as u16;
+            let mut paid = Vec::new();
+            while run.score < 1_300.0 {
+                let mut tracker = InventoryChangeTracker::default();
+                let showing = advertised(&run, level).map(|(rung, _)| rung);
+                if update(&mut run, &mut player, &kills(1), &mut tracker).is_some() {
+                    paid.push(showing.expect("a paid rung was advertised first"));
+                }
+                assert!(
+                    !build_future_rewards(run.score, level, run.seed).is_empty(),
+                    "level {level}: score {} advertises no next rung",
+                    run.score
+                );
             }
+            let mut expected = abyss_rewards::ABYSS_LADDER.to_vec();
+            expected.extend([810, 970, 1130, 1290]);
+            assert_eq!(paid, expected, "level {level}");
         }
-        assert_eq!(paid, abyss_rewards::ABYSS_LADDER.to_vec());
-        assert!(advertised(&run, 40).is_none(), "nothing left to advertise past 650");
+    }
+
+    /// #424 (Dwalin, level 77): a level-100 character run from floor 149 — 30 a kill on
+    /// the flat deep-floor tail — crosses 650 around kill 22 and keeps being paid on
+    /// the kill it reaches each later rung, as the client's own gauge does.
+    #[test]
+    fn a_level_100_run_from_floor_149_keeps_paying_past_650() {
+        let ipl = initial_player_level(&real_job_pools(), 100);
+        let floors = served_run(ipl, 149, 12, DEEP_FLOOR_KILLS);
+        assert_eq!(floors[0].0, 149);
+        let server = replay(ipl, &floors);
+        let rungs: Vec<u32> = server.iter().flat_map(|(_, r)| r.iter().copied()).collect();
+        let mut expected = abyss_rewards::ABYSS_LADDER.to_vec();
+        expected.extend([810, 970]);
+        assert_eq!(rungs, expected, "{server:?}");
+        assert_eq!(client_gauge(84, &floors), server, "paid on the client's own kill");
+    }
+
+    /// The wire shape the client needs on the response that pays 650: `reward` AND a
+    /// one-entry `abyssFutureRewards` naming 810. An empty list there is what threw.
+    #[test]
+    fn the_response_that_pays_650_advertises_810() {
+        let (mut run, mut player) = gauge_fixture();
+        run.granted_future_rewards = abyss_rewards::ABYSS_LADDER
+            .iter()
+            .copied()
+            .filter(|r| *r < 650)
+            .collect();
+        run.score = 640.0;
+        let mut tracker = InventoryChangeTracker::default();
+        let mut paid = None;
+        while paid.is_none() {
+            paid = update(&mut run, &mut player, &kills(1), &mut tracker);
+        }
+        assert!(run.granted_future_rewards.contains(&650));
+        let wire = serde_json::to_value(build_future_rewards(run.score, 40, run.seed)).unwrap();
+        let list = wire.as_array().expect("abyssFutureRewards is a list");
+        assert_eq!(list.len(), 1, "{wire}");
+        assert_eq!(list[0]["score"], serde_json::json!(810));
+        assert!(list[0]["reward"].as_object().is_some_and(|r| !r.is_empty()), "{wire}");
     }
 
     /// A captured retail run (`initialPlayerLevel` 10, from floor 1): each floor's
@@ -3809,10 +3860,11 @@ mod tests {
                 .unwrap_or(FALLBACK_KILL_SCORE_MULTIPLIER);
                 let before = score;
                 score += multiplier * sd.kill_score(*level as i32 - epl as i32) as f64;
-                let rungs: Vec<u32> = abyss_rewards::ABYSS_LADDER
-                    .iter()
-                    .copied()
-                    .filter(|rung| before < f64::from(*rung) && score >= f64::from(*rung))
+                // The client knows only the rung it was advertised, so its gauge
+                // crosses whatever the ladder holds — past 650 too (#424).
+                let rungs: Vec<u32> = abyss_rewards::ladder()
+                    .take_while(|rung| score >= f64::from(*rung))
+                    .filter(|rung| before < f64::from(*rung))
                     .collect();
                 if !rungs.is_empty() {
                     reached.push((kill_no, rungs));
@@ -4538,6 +4590,15 @@ mod tests {
             .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
     }
 
+    /// The runs with every rung past 650 taken out — what a run paid before #424
+    /// continued the ladder, so a digest pinned before it still holds.
+    fn without_rungs_past_650(runs: &[Payout]) -> Vec<Payout> {
+        let last = *abyss_rewards::ABYSS_LADDER.last().unwrap();
+        runs.iter()
+            .map(|(rungs, end)| (rungs.iter().filter(|(r, _)| *r <= last).cloned().collect(), end.clone()))
+            .collect()
+    }
+
     fn rung_draw(run: &Payout, rung: u32) -> Option<&RewardGrant> {
         run.0.iter().find(|(r, _)| *r == rung).map(|(_, g)| g)
     }
@@ -4572,8 +4633,17 @@ mod tests {
     fn a_level_7_run_from_floor_1_is_unchanged_by_383() {
         let runs = payouts(7, 1, 30, MIXED_KILLS);
         assert!(runs.iter().all(|r| rung_draw(r, 70).is_some()), "every run reaches rung 70");
-        assert_eq!(payout_digest(&runs), LEVEL_7_FROM_1_DIGEST);
+        // #424: these 30-floor runs pass 650, and now keep being paid past it...
+        for (rungs, _) in &runs {
+            let past: Vec<u32> = rungs.iter().map(|(r, _)| *r).filter(|r| *r > 650).collect();
+            assert_eq!(past, vec![810, 970, 1130, 1290]);
+        }
+        // ...while everything up to 650 and `/end` pay exactly what they did before.
+        assert_eq!(payout_digest(&without_rungs_past_650(&runs)), LEVEL_7_FROM_1_DIGEST);
+        assert_eq!(payout_digest(&runs), LEVEL_7_FROM_1_DIGEST_WITH_424);
     }
+    /// [`LEVEL_7_FROM_1_DIGEST`] with #424's rungs past 650 in it.
+    const LEVEL_7_FROM_1_DIGEST_WITH_424: u64 = 0x2cd9_4254_0bc5_7483;
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// `/end` materials are 20; everything else is pinned unchanged by
     /// [`abyss_runs_move_only_what_388_moves`].
@@ -4631,7 +4701,7 @@ mod tests {
             (45, 149, 4, DEEP_FLOOR_KILLS, 0xd5bd_df6a_7c49_1cb9),
             (100, 149, 4, DEEP_FLOOR_KILLS, 0xb599_e98b_9612_3a1a),
         ] {
-            let runs = payouts(level, start, count, kills);
+            let runs = without_rungs_past_650(&payouts(level, start, count, kills));
             assert_eq!(payout_digest_388_blind(&runs), blind, "level {level} from floor {start}");
             let mut end_materials = 0;
             for (_, end) in &runs {
@@ -4684,7 +4754,7 @@ mod tests {
             (45, 149, 4, DEEP_FLOOR_KILLS, 0x74c9_d235_fd2a_9a71),
             (100, 149, 4, DEEP_FLOOR_KILLS, 0xbf70_0091_a7e2_266a),
         ] {
-            let runs = payouts(level, start, count, kills);
+            let runs = without_rungs_past_650(&payouts(level, start, count, kills));
             assert_eq!(payout_digest_407_blind(&runs), blind, "level {level} from floor {start}");
             for (_, end) in &runs {
                 for (id, q) in &end.stackable_items {
