@@ -42,6 +42,10 @@
 //! RETAIL END SCREENS (reports #371, #383). Rewards seen on screenshots of the
 //! original game, not in a capture, are added beside the corpus by the slot they
 //! were paid in: a rung ([`screenshot_results`]) or `/end` ([`screenshot_end_packages`]).
+//!
+//! PAST 650 THE LADDER GOES ON (report #424). A run that passed 650 used to be
+//! advertised an empty `abyssFutureRewards`, and the client cannot take one — see
+//! [`END_REWARDS_SCORE_DELTA`].
 
 use std::collections::HashMap;
 
@@ -58,6 +62,63 @@ static ABYSS_FUTURE_REWARDS_RAW: &str = include_str!("../abyss_future_rewards.js
 /// The ten score rungs, in order. Public so the wire layer and the tests share
 /// one definition instead of two that can drift.
 pub const ABYSS_LADDER: [u32; 10] = [35, 50, 70, 95, 135, 190, 260, 360, 490, 650];
+
+/// The score between rungs above the last measured one (report #424): 810, 970,
+/// 1130 and so on, each paying a draw from the last rung's pool.
+///
+/// WHY THERE ARE RUNGS AT ALL. The client cannot be told "nothing left": a `/update`
+/// that pays a rung goes `KillPveAction.OnEnemyKilledUpdateComplete` (RVA 0x1C90A50)
+/// → `AbyssController.OnNewRewardInformationRecieved` (RVA 0x1C81908), which reads
+/// `abyssFutureRewards[0]` unconditionally: an empty list throws
+/// `ArgumentOutOfRangeException` (0x1C81990 → 0x261CE5C) and an absent one a null
+/// reference (→ 0x1C81F48), before the paid reward is shown or the next rung set.
+/// The gauge then sits full at 650 for the rest of the run — the report's "the
+/// second reward after the first golden chest is stuck" (360 is the golden chest;
+/// 490 and 650 follow). The same retail client never failed there, so retail's
+/// server always had a next rung to send.
+///
+/// WHAT RETAIL DID. The captures cannot say: 707 of 707 retail responses advertised
+/// exactly one rung, every one of them 35-650, and the one retail run advertised 650
+/// ended before reaching it. Retail's server-only `AbyssScaling_Backend` (absent
+/// from the APK; its getters have no caller in the client) keeps its gauge rewards
+/// in an `AbyssRewardsContainer { _rewards, _endRewardsScoreDelta }` — a finite list
+/// plus ONE score step for after its end. That is the shape implemented here: past
+/// 650, one rung every `END_REWARDS_SCORE_DELTA`, paying from the last rung's pool.
+///
+/// THE VALUE IS NOT MEASURED. 160 is the last measured gap (490 → 650); the ladder's
+/// gaps grow 15, 20, 25, 40, 55, 70, 100, 130, 160, so retail's step was at least
+/// of this order. Changing it re-numbers only the rungs above 650.
+pub const END_REWARDS_SCORE_DELTA: u32 = 160;
+
+/// How many rungs past the last measured one are ever considered — a bound on the
+/// ladder's iteration for a non-finite or absurd score, not a game rule. 1000 rungs
+/// is a score of 160,650, which no run reaches.
+const MAX_END_RUNGS: u32 = 1_000;
+
+/// Every rung score in order: the measured ladder, then one every
+/// [`END_REWARDS_SCORE_DELTA`] past its end.
+pub fn ladder() -> impl Iterator<Item = u32> {
+    let measured = corpus().rungs.iter().map(|r| r.score);
+    let last = corpus().rungs.last().map(|r| r.score);
+    measured.chain(last.into_iter().flat_map(|last| {
+        (1..=MAX_END_RUNGS).map(move |k| last + k * END_REWARDS_SCORE_DELTA)
+    }))
+}
+
+/// The rung definition that pays at `score`: a measured rung, or the last measured
+/// rung for a score past the ladder's end that is one of its steps.
+fn rung_at(score: u32) -> Option<&'static Rung> {
+    let rungs = &corpus().rungs;
+    if let Some(rung) = rungs.iter().find(|r| r.score == score) {
+        return Some(rung);
+    }
+    let last = rungs.last()?;
+    let past = score.checked_sub(last.score)?;
+    (past > 0
+        && past % END_REWARDS_SCORE_DELTA == 0
+        && past / END_REWARDS_SCORE_DELTA <= MAX_END_RUNGS)
+        .then_some(last)
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -529,19 +590,18 @@ pub fn rung_observations(score: u32) -> u64 {
 /// The next rung a run has NOT yet reached, and what it grants.
 ///
 /// Retail sends exactly one entry — the next unreached rung — in 707 of 707
-/// observed responses, so this returns one rung and not the ladder. `None` once
-/// every rung has been passed, which serialises as an empty list, matching a run
-/// that has nothing left to advertise.
+/// observed responses, so this returns one rung and not the ladder. Past 650 the
+/// ladder continues ([`END_REWARDS_SCORE_DELTA`]), so a run always has a next rung:
+/// an empty list hangs the client's gauge (#424). `None` only for a score no ladder
+/// step lies above (non-finite, or past [`MAX_END_RUNGS`]).
 pub fn next_future_reward(
     score: f64,
     character_level: u64,
     run_seed: i64,
 ) -> Option<(u32, RewardGrant)> {
-    let rung = corpus()
-        .rungs
-        .iter()
-        .find(|r| f64::from(r.score) > score)?;
-    Some((rung.score, rung_reward(rung, character_level, run_seed)))
+    let at = ladder().find(|rung| f64::from(*rung) > score)?;
+    let rung = rung_at(at)?;
+    Some((at, rung_reward(rung, at, character_level, run_seed)))
 }
 
 /// Every rung a score has reached (`score >= rung`), lowest first.
@@ -550,11 +610,7 @@ pub fn next_future_reward(
 /// advertised at exactly the score at which it counts as reached, so a rung is
 /// never both advertised and paid, and never neither.
 pub fn reached_rungs(score: f64) -> impl Iterator<Item = u32> {
-    corpus()
-        .rungs
-        .iter()
-        .map(|r| r.score)
-        .filter(move |rung| f64::from(*rung) <= score)
+    ladder().take_while(move |rung| f64::from(*rung) <= score)
 }
 
 /// What one rung grants this run — the very reward [`next_future_reward`]
@@ -565,8 +621,8 @@ pub fn future_reward_for_rung(
     character_level: u64,
     run_seed: i64,
 ) -> Option<RewardGrant> {
-    let rung = corpus().rungs.iter().find(|r| r.score == rung_score)?;
-    Some(rung_reward(rung, character_level, run_seed))
+    let rung = rung_at(rung_score)?;
+    Some(rung_reward(rung, rung_score, character_level, run_seed))
 }
 
 /// Rung results seen on retail screenshots rather than in a capture, by rung.
@@ -690,19 +746,23 @@ fn borrow_from_above<'a>(
 /// purpose: a level 49-59 character still has #371's extra Grand Soul Gem among the
 /// results beside the golden chest, which level 100 does not. Paying exactly level
 /// 100 would take that away, and rewards are never narrowed without HauDrauf.
-fn rung_reward(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant {
-    let mut grant = rung_reward_drawn(rung, real_level, run_seed);
+///
+/// `at` is the score the rung pays at. It is `rung.score` for a measured rung; a rung
+/// past the ladder's end draws from the last rung's pool and seeds with its own
+/// score, so 810 and 970 are separate draws (#424).
+fn rung_reward(rung: &Rung, at: u32, real_level: u64, run_seed: i64) -> RewardGrant {
+    let mut grant = rung_reward_drawn(rung, at, real_level, run_seed);
     // The three best soul gems at 45-48 (owner-approved deviation from retail, #388).
     crate::features::beginner_economy::top_soul_gems(
         &mut grant.stackable_items,
         i64::try_from(real_level).unwrap_or(i64::MAX),
-        mix((run_seed as u64) ^ u64::from(rung.score).rotate_left(17) ^ 0x388_7E40),
+        mix((run_seed as u64) ^ u64::from(at).rotate_left(17) ^ 0x388_7E40),
     );
     grant
 }
 
 /// [`rung_reward`] as drawn, before #388's soul gems.
-fn rung_reward_drawn(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant {
+fn rung_reward_drawn(rung: &Rung, at: u32, real_level: u64, run_seed: i64) -> RewardGrant {
     let character_level = crate::features::loot_level::effective_loot_level_u64(real_level);
     let mut grant = RewardGrant::default();
 
@@ -738,8 +798,8 @@ fn rung_reward_drawn(rung: &Rung, real_level: u64, run_seed: i64) -> RewardGrant
         return grant;
     }
 
-    let seed = mix((run_seed as u64) ^ (u64::from(rung.score)).rotate_left(29));
-    let extra = grand_gem_beside_the_golden_chest(rung.score, real_level);
+    let seed = mix((run_seed as u64) ^ (u64::from(at)).rotate_left(29));
+    let extra = grand_gem_beside_the_golden_chest(at, real_level);
     let mut candidates: Vec<&ObservedReward> = pool.iter().map(|r| &r.reward).collect();
     if let Some(grand) = &extra {
         candidates.push(grand);
@@ -791,16 +851,65 @@ mod tests {
         }
     }
 
-    /// Retail sends the NEXT unreached rung, one entry. A run past every rung
-    /// has nothing left to advertise.
+    /// Retail sends the NEXT unreached rung, one entry — and past 650 there still is
+    /// one (#424): an empty list throws in the client's reward handler.
     #[test]
     fn the_next_unreached_rung_is_selected() {
         assert_eq!(next_future_reward(0.0, 40, 1).unwrap().0, 35);
         assert_eq!(next_future_reward(35.0, 40, 1).unwrap().0, 50);
         assert_eq!(next_future_reward(36.0, 40, 1).unwrap().0, 50);
         assert_eq!(next_future_reward(649.0, 40, 1).unwrap().0, 650);
-        assert!(next_future_reward(650.0, 40, 1).is_none());
-        assert!(next_future_reward(9999.0, 40, 1).is_none());
+        assert_eq!(next_future_reward(650.0, 40, 1).unwrap().0, 810);
+        assert_eq!(next_future_reward(809.9, 40, 1).unwrap().0, 810);
+        assert_eq!(next_future_reward(810.0, 40, 1).unwrap().0, 970);
+        assert_eq!(next_future_reward(9999.0, 40, 1).unwrap().0, 10_090);
+        // A non-finite score ends the search instead of looping.
+        assert!(next_future_reward(f64::INFINITY, 40, 1).is_none());
+        assert!(next_future_reward(f64::NAN, 40, 1).is_none());
+    }
+
+    /// #424, the defect: Dwalin (level 77) passed 650 at ~kill 22 and scored 900-1000.
+    /// From 650 on the server advertised `abyssFutureRewards: []`, which the client's
+    /// `OnNewRewardInformationRecieved` indexes at [0] — so the rung-650 reward never
+    /// showed and the gauge stuck. Every score a run can hold advertises a next rung
+    /// with a reward in it, at every level, and pays exactly what it advertised.
+    #[test]
+    fn every_score_past_650_still_advertises_a_rung_that_pays() {
+        for level in [1u64, 9, 40, 49, 77, 100] {
+            for seed in [1i64, 0x5EED_294, -42] {
+                let mut score = 640.0;
+                while score < 5_000.0 {
+                    let (rung, advertised) = next_future_reward(score, level, seed)
+                        .unwrap_or_else(|| panic!("nothing advertised at {score}, level {level}"));
+                    assert!(f64::from(rung) > score);
+                    assert!(
+                        !advertised.stackable_items.is_empty()
+                            || !advertised.items.is_empty()
+                            || !advertised.chests.is_empty(),
+                        "rung {rung} advertises an empty reward at level {level}"
+                    );
+                    assert_eq!(future_reward_for_rung(rung, level, seed), Some(advertised));
+                    score += 7.5;
+                }
+            }
+        }
+    }
+
+    /// Past 650 a rung lies every [`END_REWARDS_SCORE_DELTA`] and draws from the last
+    /// measured rung's pool. That pool is one retail observation, so today each such
+    /// rung pays what 650 pays the same character.
+    #[test]
+    fn rungs_past_650_step_by_the_end_delta_from_the_last_rungs_pool() {
+        let past: Vec<u32> = ladder().skip(ABYSS_LADDER.len()).take(3).collect();
+        assert_eq!(past, vec![810, 970, 1130]);
+        assert!(future_reward_for_rung(811, 40, 1).is_none(), "811 is not a rung");
+        assert!(future_reward_for_rung(650 + 160 * (MAX_END_RUNGS + 1), 40, 1).is_none());
+        for level in [7u64, 77, 100] {
+            let last = future_reward_for_rung(650, level, 3).unwrap();
+            for rung in [810, 970, 1130] {
+                assert_eq!(future_reward_for_rung(rung, level, 3).unwrap(), last, "rung {rung}, level {level}");
+            }
+        }
     }
 
     /// The chest rungs are the deterministic ones: fixed tier, and the chest is
@@ -927,10 +1036,14 @@ mod tests {
         assert_eq!(reached_rungs(35.0).collect::<Vec<_>>(), vec![35]);
         assert_eq!(reached_rungs(69.0).collect::<Vec<_>>(), vec![35, 50]);
         assert_eq!(
-            reached_rungs(10_000.0).collect::<Vec<_>>(),
+            reached_rungs(650.0).collect::<Vec<_>>(),
             ABYSS_LADDER.to_vec()
         );
-        for score in [0.0, 34.0, 35.0, 49.9, 50.0, 300.0, 650.0] {
+        let mut past_the_end = ABYSS_LADDER.to_vec();
+        past_the_end.extend([810, 970]);
+        assert_eq!(reached_rungs(1_129.0).collect::<Vec<_>>(), past_the_end);
+        assert_eq!(reached_rungs(f64::INFINITY).count(), ABYSS_LADDER.len() + MAX_END_RUNGS as usize);
+        for score in [0.0, 34.0, 35.0, 49.9, 50.0, 300.0, 650.0, 809.0, 810.0, 2_000.0] {
             let next = next_future_reward(score, 1, 1).map(|(s, _)| s);
             let last_reached = reached_rungs(score).last();
             if let Some(next) = next {
