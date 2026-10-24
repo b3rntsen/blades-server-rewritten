@@ -115,14 +115,53 @@ pub struct ChallengeTemplate {
     pub target_enemy_group: Option<Uuid>,
 }
 
+/// The challenges the APK marks `BaseChallengeData._oneTimeOnly` — all fifteen
+/// `Challenge_TUTORIAL_*`, and nothing else (every `Challenge_*` asset in
+/// `reference/apk/blades.apk` read, 2026-10-24).
+///
+/// The client hides the Cancel button for these (`QuestChallengeEntry.Refresh`
+/// sets it from `!ChallengeData._oneTimeOnly`), so one handed out that never
+/// progresses holds a slot for good. Retail handed a character each of them
+/// once, as part of the tutorial; this server has no tutorial (FTUE is patched
+/// out) and used to rotate `Challenge_TUTORIAL_CraftDecoration` in at every
+/// level, again and again (tracker #426). They are never offered
+/// ([`ChallengeTemplate::offered_at`]).
+pub const ONE_TIME_ONLY_TEMPLATES: [Uuid; 15] = [
+    Uuid::from_u128(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf), // CraftDecoration
+    Uuid::from_u128(0x1eb73b9f_b8c2_4359_8734_8acaf2a781b8), // CastFireball
+    Uuid::from_u128(0xa0f7207a_a530_4413_aae3_ddd2f80bae90), // BrewHealthPotion
+    Uuid::from_u128(0x2d782025_9287_412e_9865_8f992dd7260c), // PerformCriticalHit
+    Uuid::from_u128(0x42b56ab2_a172_4096_9876_f18abc8338a0), // TryTheAbyss
+    Uuid::from_u128(0x4b2b8652_0274_48b5_a578_b00d8421361a), // RestoreMagicka
+    Uuid::from_u128(0x26c45c2f_b632_48f8_ab88_ade13c052c14), // Repair
+    Uuid::from_u128(0x16d0a4b3_8a35_443a_94ef_3732e08eee69), // StunEnemy
+    Uuid::from_u128(0x06c8d0d6_2d33_4899_8064_c112249e9b45), // BuildHouse
+    Uuid::from_u128(0x7f4ebb4a_c244_4933_856e_f85c92fbea3a), // Smith
+    Uuid::from_u128(0x59f38e6b_39df_410d_9756_6ef87a1d95c3), // Salvage
+    Uuid::from_u128(0x5960c6e0_9638_4983_a5f2_43230e93cd45), // DealSlashingDamage
+    Uuid::from_u128(0xd690be0e_0efe_4e0c_a194_33a1a9161864), // Dodge
+    Uuid::from_u128(0xb91563d0_87fb_49a9_8e48_6ee40aa146de), // DefeatEnemiesInJobs
+    Uuid::from_u128(0x93a363f5_5eea_44b5_8d92_2f321658b3b8), // RestoreStamina
+];
+
 impl ChallengeTemplate {
+    /// Whether the APK marks this a one-time (tutorial) challenge
+    /// ([`ONE_TIME_ONLY_TEMPLATES`]).
+    pub fn one_time_only(&self) -> bool {
+        ONE_TIME_ONLY_TEMPLATES.contains(&self.template_id)
+    }
+
     /// Whether retail offered this challenge to a character of `level`: its
     /// selector's player-level band, `[required, lockedAt)` with 0 meaning no
     /// bound (report #406). `Challenge_DefeatSkeever_4` is
     /// `ChallengeSelector_PlayerLevel_15-19`, so a level-65 character is never
     /// sent hunting Skeevers, which only spawn in low-level content.
+    ///
+    /// A one-time tutorial challenge is offered at no level (#426), so
+    /// [`retire_out_of_band`] also retires one already held at zero progress.
     pub fn offered_at(&self, level: u16) -> bool {
-        level >= self.required_player_level
+        !self.one_time_only()
+            && level >= self.required_player_level
             && (self.locked_at_player_level == 0 || level < self.locked_at_player_level)
     }
 }
@@ -451,6 +490,66 @@ mod tests {
         let mut unknown = skeever.clone();
         unknown.template_id = Uuid::from_u128(0xdead);
         assert!(!retire_out_of_band(&unknown, &pool, LLOYD_LEVEL), "no template, no judgement");
+    }
+
+    const TUTORIAL_CRAFT_DECORATION: Uuid = Uuid::from_u128(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf);
+
+    /// #426: every template the shipped pool names `Challenge_TUTORIAL_*` is in
+    /// [`ONE_TIME_ONLY_TEMPLATES`] — the APK sets `_oneTimeOnly` on exactly those 15.
+    #[test]
+    fn report_426_every_tutorial_template_in_the_pool_is_one_time_only() {
+        let raw: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/challenges.json")).unwrap(),
+        )
+        .unwrap();
+        let tutorials: Vec<Uuid> = raw
+            .iter()
+            .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("Challenge_TUTORIAL_")))
+            .map(|t| t["templateId"].as_str().unwrap().parse().unwrap())
+            .collect();
+        assert_eq!(tutorials, vec![TUTORIAL_CRAFT_DECORATION], "the pool's one tutorial challenge");
+        assert_eq!(ONE_TIME_ONLY_TEMPLATES.len(), 15);
+        for id in &tutorials {
+            assert!(ONE_TIME_ONLY_TEMPLATES.contains(id), "{id}");
+        }
+        let pool = shipped_pool();
+        let one_time = pool.iter().filter(|t| t.one_time_only()).count();
+        assert_eq!(one_time, 1, "CONTROL: nothing else in the pool is one-time");
+    }
+
+    /// #426: `Challenge_TUTORIAL_CraftDecoration` (required/locked level 0/0) was
+    /// offered at every level, every rotation, so a level-77 character could be
+    /// handed it again and again. It is a one-time tutorial challenge the client
+    /// cannot cancel; it is never offered.
+    #[test]
+    fn report_426_the_tutorial_decoration_challenge_is_never_offered() {
+        let pool = shipped_pool();
+        let tutorial = pool.iter().find(|t| t.template_id == TUTORIAL_CRAFT_DECORATION).expect("in the pool");
+        assert_eq!((tutorial.required_player_level, tutorial.locked_at_player_level), (0, 0));
+        for level in 0..=100u16 {
+            assert!(!tutorial.offered_at(level), "offered at {level}");
+            for cursor in 0..pool.len() {
+                let (picked, _) = pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+                assert!(
+                    picked.iter().all(|&i| pool[i].template_id != TUTORIAL_CRAFT_DECORATION),
+                    "picked at level {level} cursor {cursor}"
+                );
+            }
+        }
+    }
+
+    /// #426: a held tutorial challenge the player has made no progress on is
+    /// retired on the next list call (the client cannot cancel it); one with
+    /// progress is kept, so nothing earned is taken away.
+    #[test]
+    fn report_426_a_held_tutorial_challenge_is_retired_unless_it_has_progress() {
+        let pool = shipped_pool();
+        let t = pool.iter().find(|t| t.template_id == TUTORIAL_CRAFT_DECORATION).unwrap();
+        let mut held = ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
+        assert!(retire_out_of_band(&held, &pool, 77), "Dwalin, level 77");
+        assert!(retire_out_of_band(&held, &pool, 1), "and at level 1");
+        held.progress = 1.0;
+        assert!(!retire_out_of_band(&held, &pool, 77), "progress is kept");
     }
 
     #[test]

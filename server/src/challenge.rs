@@ -425,6 +425,39 @@ mod tests {
     /// #406: LLoyd's stored set (prod, 2026-10-17) on the next list call. The
     /// four are all untouched and none is offered at 65 (the Skeever hunt is
     /// 15-19, the rest 1-15), so all four are replaced with ones that are.
+    /// #426: Dwalin's stored set (prod, 2026-10-24, level 77). The tutorial
+    /// "Craft a Decoration" (zero progress, uncancellable in the client) is
+    /// retired and replaced on the next list call; the other three are offered at
+    /// 77 and kept as they are.
+    #[test]
+    fn report_426_dwalins_tutorial_challenge_is_replaced_on_the_next_list() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pool = crate::static_loader::load(&dir).challenge_templates;
+        let stored = |tid: u128, id: u128| {
+            let t = pool.iter().find(|t| t.template_id == Uuid::from_u128(tid)).unwrap();
+            ChallengeInstance::from_template(t, Uuid::from_u128(id), Uuid::new_v4(), 0, 0)
+        };
+        let mut state = ChallengeState {
+            active: vec![
+                stored(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf, 0xc95a9d24_4028_4549_bfb5_54a465f76eec), // TUTORIAL_CraftDecoration
+                stored(0x78826178_9291_4255_a204_6ac312affda5, 0xd45e5b08_c16c_4f02_b17e_aa9bda1da692), // Salvage_Legendary
+                stored(0xcb497c2f_9354_4545_a3d1_bfdab358579f, 0xef4301fd_7215_4579_ace4_021181b9b994), // Perform3HitCombos_15
+                stored(0xba98f140_5dbb_4b58_b7f2_66c080651d8d, 0x606553ba_9aa0_4da6_b298_1e94daf0041f), // CollectChests_15
+            ],
+            cursor: 11,
+            points: 36,
+        };
+        retire_out_of_band(&mut state, &pool, 77);
+        refill(&mut state, &pool, 77);
+        assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
+        let ids: Vec<Uuid> = state.active.iter().map(|c| c.id).collect();
+        assert!(!ids.contains(&Uuid::from_u128(0xc95a9d24_4028_4549_bfb5_54a465f76eec)), "tutorial retired");
+        for kept in [0xd45e5b08_c16c_4f02_b17e_aa9bda1da692u128, 0xef4301fd_7215_4579_ace4_021181b9b994, 0x606553ba_9aa0_4da6_b298_1e94daf0041f] {
+            assert!(ids.contains(&Uuid::from_u128(kept)), "{kept:x} kept");
+        }
+        assert!(state.active.iter().all(|c| c.template_id != Uuid::from_u128(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf)));
+    }
+
     #[test]
     fn report_406_lloyds_stored_set_is_rederived_on_the_next_list() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
