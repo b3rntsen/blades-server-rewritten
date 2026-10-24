@@ -1980,6 +1980,12 @@ pub struct Fighter {
     /// interrupted. Set at the single state seam ([`Self::force_actor_state`]) and by
     /// a re-stagger, so no stagger or paralysis path can forget it.
     pub interrupt_pending: Option<Instant>,
+    /// When this fighter last entered `Charging` or `Blocking`, until
+    /// [`super::interrupts::process_interrupts`] has self-interrupted the spell
+    /// wind-up or channel it left. `ChannelingState$$EndChanneling@0x1a52578` sends
+    /// `selfInterrupt: true` for any next state other than Idle, Staggered or Paralyzed
+    /// (combat-spec 06 §1.8). Set at the single state seam ([`Self::force_actor_state`]).
+    pub self_interrupt_pending: Option<Instant>,
     /// Casts whose interruptible phase is still running: a spell's `AbilityChannel`
     /// wind-up, a channelled spell, or a weapon maneuver up to `OnManeuverEnded`.
     /// See [`Execution`].
@@ -1989,7 +1995,8 @@ pub struct Fighter {
 /// One cast in its interruptible phase.
 ///
 /// The client ends a spell's channel or wind-up, and a maneuver, when the actor leaves
-/// `Channeling` / `Maneuver` for `Staggered` or `Paralyzed`
+/// `Channeling` / `Maneuver` for `Staggered` or `Paralyzed`, and a spell's when the
+/// caster leaves `Channeling` for Charging, Blocking or a maneuver (a self-interrupt)
 /// (`ChannelingState$$EndChanneling@0x1a52578`, `ActorManeuverState$$OnExit@0x1d556b0`):
 /// `RequestInterruptAbility` → `AbilityExecutor$$ForceStop@0x1e9ba28` runs every step's
 /// cleanup and drops the rest, so no damage step runs and the cooldown starts at the
@@ -2302,6 +2309,7 @@ impl Fighter {
             active_poison: None,
             paralyze_secs: paralyze_duration_secs(1),
             interrupt_pending: None,
+            self_interrupt_pending: None,
             executions: Vec::new(),
         }
     }
@@ -2355,6 +2363,12 @@ impl Fighter {
         // maneuver (see [`Execution`]). Keep the earliest unprocessed instant.
         if matches!(next, ActorStateType::Staggered | ActorStateType::Paralyzed) {
             self.interrupt_pending.get_or_insert(now);
+        }
+        // Charging or Blocking out of a spell's wind-up or channel cancels the spell
+        // (`selfInterrupt: true`): retail sent op59 in the same millisecond as the
+        // 45/41 and the spell never landed (06 §1.8; s503/615/616).
+        if matches!(next, ActorStateType::Charging | ActorStateType::Blocking) {
+            self.self_interrupt_pending.get_or_insert(now);
         }
         self.actor_state = next;
         self.state_entered = now;
@@ -4223,6 +4237,7 @@ impl MatchCombat {
             f.maneuver_state_until = None;
             f.staggered_until = None;
             f.interrupt_pending = None;
+            f.self_interrupt_pending = None;
             f.executions.clear();
             // A new round starts with nothing announced: the client resets its own
             // effect layer, so replaying removes for last round's statuses would be
