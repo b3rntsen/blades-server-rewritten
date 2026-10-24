@@ -6741,16 +6741,16 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         // (`ChannelingState$$EndChanneling@0x1a52578`, combat-spec 06 §1.8) — retail
         // sent op59 and no spike landed. The bot instead swung 0.25 s into a 1.12 s
         // Ice Spike and the spike still hit, so the cast had no animation. Decide again
-        // one reaction time after the cast ends, as a player would.
-        let spell_until = combat.fighters[bot]
+        // one reaction time after the cast ends, as a player would. A stagger removes
+        // the execution (`process_interrupts`), which ends the hold with it.
+        let reaction = bot_reaction_time(&mut combat.fighters[bot], &game_session_id, bot);
+        let hold_until = combat.fighters[bot]
             .executions
             .iter()
-            .filter(|e| !e.is_maneuver && now < e.until)
-            .map(|e| e.until)
+            .filter(|e| !e.is_maneuver)
+            .map(|e| e.until + reaction)
             .max();
-        if let Some(until) = spell_until {
-            let reaction = bot_reaction_time(&mut combat.fighters[bot], &game_session_id, bot);
-            combat.fighters[bot].bot_ai.next_decision_at = Some(until + reaction);
+        if hold_until.is_some_and(|t| now < t) {
             continue;
         }
 
@@ -15753,31 +15753,29 @@ mod report_31_high_block_stun {
     ///
     /// So the bot holds its cast: no charge, swing or guard until the wind-up ends,
     /// then the spike lands, then it fights on.
-    #[test]
-    fn a_bot_does_not_swing_through_its_own_ice_spike_wind_up() {
-        const ICE_SPIKE: &str = "cfee0b02-6d91-4d34-869c-a7e54329060d";
-        let now = Instant::now();
+    const ICE_SPIKE_427: &str = "cfee0b02-6d91-4d34-869c-a7e54329060d";
+
+    /// What a 4 s bot fight with an Ice-Spike-only bot put on viewer 0's wire:
+    /// `(cast, spike, bot actions as (gmid, at))`. `hook` runs before every 5 ms tick,
+    /// with the cast instant once the op38 has been seen.
+    fn ice_spike_bot_fight(
+        now: Instant,
+        mut hook: impl FnMut(&mut MatchCombat, Instant, Option<Instant>),
+    ) -> (Option<Instant>, Option<Instant>, Vec<(i64, Instant)>) {
         let mut c = combat(now, 1);
         c.fighters[1].loadout.abilities = vec![EquippedAbility {
-            instance_uuid: ICE_SPIKE.into(),
+            instance_uuid: ICE_SPIKE_427.into(),
             level: 4,
             tag: AbilityTag::Damage,
         }];
         c.fighters[0].max_health = 1_000_000;
         c.fighters[0].health = 1_000_000;
         let bot_obj = c.fighters[1].net_object_id as i64;
-        let wind_up = super::ability_impact_delay(ICE_SPIKE, 4);
-        assert!(
-            wind_up >= Duration::from_secs(1),
-            "Ice Spike ships a ~1.1 s wind-up"
-        );
-
-        let mut cast_at = None;
-        let mut spike_at = None;
-        let mut bot_actions = Vec::new();
+        let (mut cast_at, mut spike_at, mut actions) = (None, None, Vec::new());
         let mut t = now;
         while t < now + Duration::from_secs(4) {
             t += Duration::from_millis(5);
+            hook(&mut c, t, cast_at);
             for (viewer, bytes) in super::on_tick(&mut c, t, false) {
                 if viewer != 0 || bytes.len() < 3 || bytes[1] != 0x36 {
                     continue;
@@ -15787,12 +15785,38 @@ mod report_31_high_block_stun {
                     Some(38) if cast_at.is_none() => cast_at = Some(t),
                     Some(50) if p.int(6) == Some(2) && spike_at.is_none() => spike_at = Some(t),
                     Some(g @ (40 | 41 | 45 | 52 | 58)) if p.int(0) == Some(bot_obj) => {
-                        bot_actions.push((g, t))
+                        actions.push((g, t))
                     }
                     _ => {}
                 }
             }
         }
+        (cast_at, spike_at, actions)
+    }
+
+    /// Tracker #427 (Huge Goober): "the opponent casts ice spike with no animation or
+    /// casting time and is immediately swinging". Prod match 8ea7e68b: the bot cast
+    /// Ice Spike at 15:50:04.596, released a swing at 05.222 (626 ms into the 1.12 s
+    /// wind-up) and the spike landed at 05.717 — cast and swing both happened.
+    ///
+    /// Retail never does both. Over 106 decoded Ice Spike op53 casts (s503/615/616)
+    /// the caster's next state is op39 Idle at a median 1116 ms and its first charge a
+    /// median 1782 ms; in the four casts where the caster did leave the wind-up early
+    /// (Charging, Blocking or a maneuver), retail sent op59 InterruptAbility
+    /// (selfInterrupt) at that same millisecond and no spike landed
+    /// (`ChannelingState$$EndChanneling@0x1a52578`, combat-spec 06 §1.8).
+    ///
+    /// So the bot holds its cast: no charge, swing or guard until the wind-up ends,
+    /// then the spike lands, then it fights on.
+    #[test]
+    fn a_bot_does_not_swing_through_its_own_ice_spike_wind_up() {
+        let now = Instant::now();
+        let wind_up = super::ability_impact_delay(ICE_SPIKE_427, 4);
+        assert!(
+            wind_up >= Duration::from_secs(1),
+            "Ice Spike ships a ~1.1 s wind-up"
+        );
+        let (cast_at, spike_at, actions) = ice_spike_bot_fight(now, |_, _, _| {});
 
         let cast_at = cast_at.expect("non-vacuous: the bot must cast its Ice Spike");
         let spike_at = spike_at.expect("non-vacuous: the spike must land");
@@ -15800,7 +15824,7 @@ mod report_31_high_block_stun {
             spike_at >= cast_at + wind_up,
             "the spike lands after the wind-up, not before"
         );
-        let during: Vec<_> = bot_actions
+        let during: Vec<_> = actions
             .iter()
             .filter(|(_, at)| *at > cast_at && *at < cast_at + wind_up)
             .map(|(g, at)| (*g, at.saturating_duration_since(cast_at).as_millis()))
@@ -15811,8 +15835,73 @@ mod report_31_high_block_stun {
              (gmid, ms after the cast): {during:?}",
         );
         assert!(
-            bot_actions.iter().any(|(g, at)| *g == 45 && *at > spike_at),
-            "control: the bot must still swing once the cast is over, got {bot_actions:?}",
+            actions.iter().any(|(g, at)| *g == 45 && *at > spike_at),
+            "control: the bot must still swing once the cast is over, got {actions:?}",
+        );
+    }
+
+    /// The hold covers the guard too: a human who charges into the bot's wind-up does
+    /// not get a bot guard until the cast is over (raising it would self-interrupt the
+    /// spell in retail). Once the cast ends, the same charge does raise it.
+    #[test]
+    fn a_bot_holds_its_guard_until_its_ice_spike_wind_up_ends() {
+        let now = Instant::now();
+        let wind_up = super::ability_impact_delay(ICE_SPIKE_427, 4);
+        let (cast_at, spike_at, actions) = ice_spike_bot_fight(now, |c, t, cast| {
+            if cast.is_some_and(|at| t >= at + Duration::from_millis(100)) {
+                c.fighters[0].set_actor_state(ActorStateType::Charging, t);
+            }
+        });
+        let cast_at = cast_at.expect("non-vacuous: the bot must cast");
+        assert!(spike_at.is_some(), "the uninterrupted spike lands");
+        let guards: Vec<_> = actions
+            .iter()
+            .filter(|(g, _)| *g == 41)
+            .map(|(_, at)| *at)
+            .collect();
+        assert!(
+            guards.iter().all(|at| *at >= cast_at + wind_up),
+            "guard raised inside the wind-up at {:?} ms",
+            guards
+                .iter()
+                .map(|at| at.saturating_duration_since(cast_at).as_millis())
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            !guards.is_empty(),
+            "control: the bot must guard against the charge once its cast is over",
+        );
+    }
+
+    /// A stagger that cancels the cast ends the hold with it: the bot fights on when
+    /// the stagger ends, not when the cancelled cast would have. (Review finding on
+    /// the first version of this gate, which left a stale decision time behind.)
+    #[test]
+    fn a_stagger_that_cancels_the_bots_ice_spike_ends_its_hold() {
+        let now = Instant::now();
+        let wind_up = super::ability_impact_delay(ICE_SPIKE_427, 4);
+        let mut stagger_end = None;
+        let (cast_at, spike_at, actions) = ice_spike_bot_fight(now, |c, t, cast| {
+            if stagger_end.is_none() && cast.is_some_and(|at| t >= at + Duration::from_millis(200))
+            {
+                assert!(c.fighters[1].apply_stagger_for(t, 0.3));
+                stagger_end = Some(t + Duration::from_millis(300));
+            }
+        });
+        let cast_at = cast_at.expect("non-vacuous: the bot must cast");
+        let stagger_end = stagger_end.expect("non-vacuous: the bot was staggered");
+        assert!(spike_at.is_none(), "the stagger interrupts the spike");
+        let first_charge = actions
+            .iter()
+            .find(|(g, at)| *g == 45 && *at >= stagger_end)
+            .map(|(_, at)| *at)
+            .expect("the bot must fight on after the stagger");
+        assert!(
+            first_charge < cast_at + wind_up,
+            "the bot waited out a cancelled cast: first charge {} ms after the cast, \
+             stagger ended at {} ms",
+            first_charge.saturating_duration_since(cast_at).as_millis(),
+            stagger_end.saturating_duration_since(cast_at).as_millis(),
         );
     }
 
