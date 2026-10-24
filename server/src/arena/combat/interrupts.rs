@@ -317,13 +317,15 @@ pub fn process_interrupts(combat: &mut MatchCombat, now: Instant) -> Vec<(usize,
 ///
 /// Retail, s503/615/616 (deduplicated): 14 spell wind-ups (Ice Spike, Lightning Bolt,
 /// Resist Elements, Poison Cloud) and 28 Frostbite channels were left for a 41, 45 or
-/// 58, each with op59 `selfInterrupt=true` for the spell in the same millisecond. No
+/// 58, each with op59 `selfInterrupt=true` for the spell within 4 ms (39 of 42 in the
+/// same millisecond). No
 /// spell op50 followed, and the caster's magicka went on regenerating from its
 /// post-cast value (s503 f3509774: 694 before, 260 at the cast, 288 at the 45 448 ms
 /// later — no refund).
 ///
-/// A cast made at `at` itself is not left by this transition (a bash raises its own
-/// guard at the cast), and a maneuver is not a channel: neither is touched.
+/// Only spells are touched: a maneuver is not a channel (a bash's own guard, raised at
+/// its cast, is skipped for that reason). The bound is strict, so a spell accepted at
+/// the very instant of the transition has not been left and keeps running.
 pub fn self_interrupt_spells(combat: &mut MatchCombat, slot: usize, at: Instant) -> Vec<(usize, Vec<u8>)> {
     let hit: Vec<Execution> = {
         let f = &mut combat.fighters[slot];
@@ -765,7 +767,7 @@ mod tests {
     // caster leaves `Channeling` for anything but Idle, Staggered or Paralyzed (06
     // §1.8). Retail, s503/615/616: a charge (45), a guard (41) or a maneuver (58) out
     // of a spell's wind-up or channel came with op59 `selfInterrupt=true` for that
-    // spell in the same millisecond, and no spell op50 followed. Ice Spike's four:
+    // spell within 4 ms, and no spell op50 followed. Ice Spike's four:
     // s503 f3509774 (45, 448 ms in), f3514588 (41, 985 ms), f3504270 (58, 1001 ms),
     // s615 f4409775 (41, 549 ms).
 
@@ -800,8 +802,10 @@ mod tests {
     const ICE_SPIKE_WIND_UP: f32 = 1.12;
 
     /// s503 f3509774: the caster pressed attack 448 ms into Ice Spike. op59
-    /// (selfInterrupt) for Ice Spike to both viewers, then the 45; the spike never
-    /// lands; the cost stays spent; the cooldown runs from the press.
+    /// (selfInterrupt) for Ice Spike to both viewers; the spike never lands; the cost
+    /// stays spent; the cooldown runs from the press. Retail framed this one 45 → 59 →
+    /// 45; we send 59 → 45, retail's order for a charge out of a channel (s615
+    /// f4407473-74), and the 45 we send is its second, complete one.
     #[test]
     fn a_charge_during_the_ice_spike_wind_up_cancels_it() {
         let t0 = Instant::now();
