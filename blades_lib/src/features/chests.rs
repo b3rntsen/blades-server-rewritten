@@ -428,6 +428,7 @@ pub fn roll_loot(
             generate_treasury_gear(&mut grant, nonce);
             if tier == 3 {
                 add_gold_chest_artifact(&mut grant, level, nonce, owned);
+                pay_top_band_gold_soul_gems(pool, &mut grant, level, nonce);
             }
             fill_jewelry_grading(&mut grant, nonce);
             Some(grant)
@@ -459,6 +460,49 @@ fn pay_chest_gems(grant: &mut RewardGrant, tier: u64, nonce: u64) {
             grant.currencies.insert(crate::economy::GEMS, gems);
         }
         None => add_gem_bonus(grant),
+    }
+}
+
+/// The first chest level of retail's top Gold-chest band: every retail Gold
+/// opening at this level or above is one observation of what a top-level Gold
+/// chest's soul gems were.
+pub const TOP_BAND_GOLD_CHEST_LEVEL: u64 = 61;
+
+/// A Gold chest's soul gems from level 49 (report #421).
+///
+/// THE BUG. [`compose_loot`] keeps the soul gems of one retail opening among the
+/// [`MIN_NEIGHBOURS`] nearest the chest's level. From 49 every chest is minted at
+/// level 100 (#398), and the Gold openings nearest 100 (87-100) are twelve, of
+/// which three paid soul gems, all Grand x3. So a level 49-100 Gold chest paid a
+/// Grand x3 one time in four and never anything else: never Glorious, never
+/// Transcendent, never one, two or four gems.
+///
+/// RETAIL. The 95 Gold openings at chest level 61-100 (`chest_loots.json`): 33
+/// held soul gems (35%), one kind each: Grand 23 (x1-x4), Glorious 5 (x2-x3),
+/// Transcendent 5 (x1-x2) — about 70 / 15 / 15. No level inside 61-100 stands
+/// apart (90-100 holds seven openings), and HauDrauf's rule from #398 is that from
+/// 49 there is no difference to level 100.
+///
+/// THE ROLL. A Gold chest of level 49 or above takes its soul gems, kind and
+/// count together, from one of those 95 openings drawn evenly (an opening without
+/// soul gems pays none). Everything else in the chest is left as composed. Silver
+/// is not touched: its 13 openings nearest 100 already show the band's kinds
+/// (Elevated, Grand, Glorious), one gem a chest.
+fn pay_top_band_gold_soul_gems(pool: &[ChestLootSample], grant: &mut RewardGrant, level: u64, nonce: u64) {
+    use crate::features::store_bundles::{mix, SOUL_GEMS};
+    if level < crate::features::loot_level::TOP_LOOT_FROM_LEVEL as u64 {
+        return;
+    }
+    let band: Vec<&ChestLootSample> = pool.iter().filter(|s| s.chest_level >= TOP_BAND_GOLD_CHEST_LEVEL).collect();
+    if band.is_empty() {
+        return;
+    }
+    let source = draw(&band, mix(nonce ^ 0x0421_5011_6E35_0421));
+    grant.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+    for (id, q) in &source.reward.stackable_items {
+        if SOUL_GEMS.contains(id) {
+            grant.stackable_items.insert(*id, *q);
+        }
     }
 }
 
@@ -855,6 +899,53 @@ mod tests {
         assert_eq!(old.len(), 1, "control: the nearest-level pick is a one-reward trap at 80");
     }
 
+    /// Report #421. From level 49 a Gold chest pays the soul gems of retail's
+    /// 61-100 Gold openings: soul gems in about 35% of chests, Grand about 70%,
+    /// Glorious and Transcendent about 15% each, one kind a chest. Before, the
+    /// level-100 neighbourhood paid Grand x3 one time in four and nothing else.
+    #[test]
+    fn a_gold_chest_from_49_pays_retails_top_band_soul_gems() {
+        use crate::features::store_bundles::SOUL_GEMS;
+        let t = committed();
+        const ROLLS: usize = 4000;
+        for level in [49u64, 60, 75, 100] {
+            let mut with_gems = 0usize;
+            let mut kinds = [0usize; 10];
+            let mut counts: HashMap<usize, HashSet<u64>> = HashMap::new();
+            for i in 0..ROLLS {
+                let key = format!("421:{i}:3:{level}:{}", i * 7);
+                let r = roll_loot(&t, 3, level, &key, &HashSet::new()).unwrap();
+                let gems: Vec<(usize, u64)> = SOUL_GEMS
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, id)| r.stackable_items.get(id).map(|n| (k, *n)))
+                    .collect();
+                assert!(gems.len() <= 1, "level {level}: two kinds of soul gem in one Gold chest: {gems:?}");
+                for (k, n) in gems {
+                    with_gems += 1;
+                    kinds[k] += 1;
+                    counts.entry(k).or_default().insert(n);
+                }
+            }
+            let share = with_gems as f64 / ROLLS as f64;
+            assert!((0.30..=0.40).contains(&share), "level {level}: {share:.3} of Gold chests paid soul gems");
+            let of = |k: usize| kinds[k] as f64 / with_gems as f64;
+            assert_eq!(kinds[..7].iter().sum::<usize>(), 0, "level {level}: below Grand: {kinds:?}");
+            assert!((0.62..=0.78).contains(&of(7)), "level {level}: Grand {:.3}", of(7));
+            assert!((0.10..=0.21).contains(&of(8)), "level {level}: Glorious {:.3}", of(8));
+            assert!((0.10..=0.21).contains(&of(9)), "level {level}: Transcendent {:.3}", of(9));
+            assert_eq!(counts[&7], HashSet::from([1, 2, 3, 4]), "level {level}: Grand counts");
+            assert_eq!(counts[&8], HashSet::from([2, 3]), "level {level}: Glorious counts");
+            assert_eq!(counts[&9], HashSet::from([1, 2]), "level {level}: Transcendent counts");
+        }
+        // Below 49 the chest keeps its own neighbourhood's soul gems: never
+        // Glorious or Transcendent at 45 (retail paid Exceptional/Greater there).
+        for i in 0..ROLLS {
+            let r = roll_loot(&t, 3, 45, &format!("421:{i}:3:45"), &HashSet::new()).unwrap();
+            assert!(!r.stackable_items.contains_key(&SOUL_GEMS[8]) && !r.stackable_items.contains_key(&SOUL_GEMS[9]));
+        }
+    }
+
     /// Report #335, "gold chests only contain low-level content". A level-100
     /// Gold chest must pay what retail paid for Gold chests near level 100 — the
     /// wider pool must not drag it down to mid-level openings. Every item is of a
@@ -1228,14 +1319,19 @@ mod tests {
                 assert_eq!(kinds_of(&roll(level, i)), kinds_of(&before(level, i)), "L{level} chest {i} moved");
             }
         }
-        // Retail's richer tiers are untouched at every level.
+        // Retail's richer tiers are untouched at every level. (A Gold chest's
+        // soul gems from 49 come from retail's 61-100 band, #421, and are
+        // checked in `a_gold_chest_from_49_pays_retails_top_band_soul_gems`.)
+        let without_soul_gems = |r: &RewardGrant| -> Vec<Uuid> {
+            kinds_of(r).into_iter().filter(|id| !crate::features::store_bundles::SOUL_GEMS.contains(id)).collect()
+        };
         for tier in [2i64, 3] {
             for level in [46u64, 100] {
                 for i in 0..200 {
                     let key = format!("381-metal:{i}:{level}");
                     let now = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
                     let was = compose_loot(&t.tiers[&(tier as u64)], level, stable_nonce(&key)).unwrap();
-                    assert_eq!(kinds_of(&now), kinds_of(&was), "tier {tier} L{level} chest {i} moved");
+                    assert_eq!(without_soul_gems(&now), without_soul_gems(&was), "tier {tier} L{level} chest {i} moved");
                 }
             }
         }
