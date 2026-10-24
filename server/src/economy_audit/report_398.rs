@@ -215,14 +215,14 @@ fn levels_below_49_are_unchanged() {
     }
     got.push(("jobs", h));
 
-    let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
+    let treasury = Some(&ctx.sd.chest_loots);
     let mut h = FNV0;
     for l in levels.clone() {
         for (p, _) in super::STORE_CHESTS {
             for n in 0..20u64 {
                 digest_of(
                     &mut h,
-                    &store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), elder),
+                    &store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), treasury),
                 );
             }
         }
@@ -647,12 +647,12 @@ fn story_dungeon_chests_are_minted_at_the_dungeons_enemy_level() {
 #[test]
 fn store_and_gift_chests_from_49_are_level_100s() {
     let ctx = Ctx::load();
-    let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
+    let treasury = Some(&ctx.sd.chest_loots);
     for (p, _) in super::STORE_CHESTS {
         for n in 0..40u64 {
-            let at_100 = store_bundles::roll_bundle_with(&Uuid::from_u128(p), 100, n, &HashSet::new(), elder);
+            let at_100 = store_bundles::roll_bundle_with(&Uuid::from_u128(p), 100, n, &HashSet::new(), treasury);
             for l in PAID_AS_100 {
-                let at = store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), elder);
+                let at = store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), treasury);
                 assert_eq!(serde_json::to_value(&at).unwrap(), serde_json::to_value(&at_100).unwrap());
             }
         }

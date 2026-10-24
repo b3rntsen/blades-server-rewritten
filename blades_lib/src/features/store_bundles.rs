@@ -898,19 +898,50 @@ pub fn roll_bundle_for(
 /// chest's (#368): from 45, where Dragon unlocks and its population changes.
 pub const ELDER_HIGH_LEVEL: u64 = 45;
 
-/// [`roll_bundle_for`], with retail's tier-4 treasury openings for an Elder chest
-/// at [`ELDER_HIGH_LEVEL`] and above (`None` keeps the band).
+/// [`roll_bundle_for`], with retail's treasury chest openings (`chest_loots.json`):
+/// tier 4 for an Elder chest at [`ELDER_HIGH_LEVEL`] and above, and the Gold chest
+/// table for a Golden chest from [`TOP_LOOT_FROM_LEVEL`] (`None` keeps the band).
+///
+/// [`TOP_LOOT_FROM_LEVEL`]: crate::features::loot_level::TOP_LOOT_FROM_LEVEL
 pub fn roll_bundle_with(
     product_id: &Uuid,
     buyer_level: u64,
     nonce: u64,
     owned: &HashSet<Uuid>,
-    elder_treasury: Option<&[crate::features::chests::ChestLootSample]>,
+    treasury: Option<&crate::features::chests::ChestLootTables>,
 ) -> Option<RewardGrant> {
     let product = corpus_product(product_id)?;
     let is_legendary = product.product_id == LEGENDARY_CHEST_CORPUS_ID;
     let is_elder = product.product_id == ELDER_CHEST_CORPUS_ID;
     let is_golden = product.product_id == GOLDEN_CHEST_CORPUS_ID;
+    let elder_treasury = treasury.and_then(|t| t.provisional_tiers.get(&4)).map(Vec::as_slice);
+
+    // THE GOLDEN CHEST FROM 49 (#421). The store's Golden Chest is the APK's
+    // `_rarity: 3`: a Gold chest, sold. From 49 it is bought for a level-100
+    // buyer (#398), but its corpus's top band is 24-89, a mid-level population,
+    // so a level-100 Golden chest paid what a level-30 one did: Middling and
+    // Common soul gems, Iron to Elven gear, Ebony in 2% of slots, a median 6,700
+    // gold. Retail's own Gold chests at 61-100 paid Grand, Glorious and
+    // Transcendent soul gems, Ebony in two slots of three and about 8,800 gold,
+    // and a treasury Gold chest here already pays them (#335, #421). So from 49
+    // the Golden chest is that Gold chest, with fresh item ids per purchase and
+    // the one jewellery rule (#393).
+    if is_golden && buyer_level >= crate::features::loot_level::TOP_LOOT_FROM_LEVEL as u64 {
+        if let Some(tables) = treasury.filter(|t| t.has_own_pool(3)) {
+            let seed = mix(product_id.as_u128() as u64 ^ mix(nonce) ^ buyer_level.rotate_left(13));
+            let key = format!("store-golden:{seed:016x}");
+            let level = crate::features::loot_level::effective_loot_level_u64(buyer_level);
+            let mut grant = crate::features::chests::roll_loot(tables, 3, level, &key, owned)?;
+            for (ordinal, reward) in grant.items.iter_mut().enumerate() {
+                reward.id = instance_uuid(seed, ordinal);
+                super::legendary_gear::regrade_jewelry(
+                    &mut reward.item,
+                    mix(seed ^ 0x9E6C_63D0_676A_9A99 ^ ordinal as u64),
+                );
+            }
+            return Some(grant);
+        }
+    }
 
     // The band containing the buyer's level, else the nearest one — a level above
     // or below everything retail was observed at clamps rather than falling back
@@ -1215,21 +1246,21 @@ fn apply_soul_gem_ladder(
 /// shape; tier 4 (Elder) has eleven opens, at levels 54-94 only, against 405 Epic
 /// Chest purchases — the product the APK catalogue sells as `_rarity: 4`.
 ///
-/// `elder_treasury` is retail's own tier-4 treasury openings (54-94), which pay
+/// `treasury` holds retail's own tier-4 treasury openings (54-94), which pay
 /// a high-level Elder chest's gold and stackables ([`ELDER_HIGH_LEVEL`], #378).
 pub fn roll_treasury_chest(
     tier: u64,
     chest_level: u64,
     nonce: u64,
     owned: &HashSet<Uuid>,
-    elder_treasury: Option<&[crate::features::chests::ChestLootSample]>,
+    treasury: Option<&crate::features::chests::ChestLootTables>,
 ) -> Option<RewardGrant> {
     let product = match tier {
         5 => LEGENDARY_CHEST_PRODUCT_ID,
         4 => EPIC_CHEST_PRODUCT_ID,
         _ => return None,
     };
-    roll_bundle_with(&product, chest_level, nonce, owned, elder_treasury)
+    roll_bundle_with(&product, chest_level, nonce, owned, treasury)
 }
 
 #[cfg(test)]
@@ -2683,6 +2714,65 @@ mod tests {
 
     fn committed_chest_tables() -> crate::features::chests::ChestLootTables {
         serde_json::from_str(include_str!("../../../deploy/static/chest_loots.json")).unwrap()
+    }
+
+    /// The store's Golden Chest (Rare, 250 gems) as `purchase_global_shop` rolls
+    /// it, with the shipped chest tables.
+    fn store_golden(t: &crate::features::chests::ChestLootTables, level: u64, n: u64) -> RewardGrant {
+        let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
+        roll_bundle_with(&golden, level, n, &HashSet::new(), Some(t))
+            .expect("the Golden chest rolls")
+    }
+
+    /// Report #421 (HauDrauf, 2026-10-24): "Goldtruhen auf Stufe 100 aus dem
+    /// Shop geöffnet, nur die kleinsten Seelensteine, Waffen und Tränke".
+    ///
+    /// THE BUG. The store's Golden Chest is the APK's `_rarity: 3`, the Gold
+    /// chest. From 49 the store rolls it for a level-100 buyer (#398), but its
+    /// corpus's top band is 24-89, a mid-level population, so a level-100 Golden
+    /// chest paid exactly what a level-30 one did: Middling and Common soul gems
+    /// (the #388 three-best rule only covered 45-48, and 49+ was assumed to be
+    /// level-100 loot already), Iron to Elven gear, Ebony in 2% of slots.
+    /// Retail's own Gold chests at 61-100 paid Grand, Glorious and Transcendent
+    /// and Ebony in two slots of three; a treasury Gold chest here already does.
+    #[test]
+    fn a_store_golden_chest_from_49_pays_a_level_100_gold_chest() {
+        use super::super::legendary_gear::required_level;
+        let t = committed_chest_tables();
+        const ROLLS: u64 = 2000;
+        for level in [49u64, 60, 100] {
+            let (mut with_gems, mut kinds, mut ebony, mut items) = (0u64, [0u64; 10], 0u64, 0u64);
+            for n in 0..ROLLS {
+                let r = store_golden(&t, level, n);
+                let mut any = false;
+                for (k, id) in SOUL_GEMS.iter().enumerate() {
+                    if r.stackable_items.contains_key(id) {
+                        kinds[k] += 1;
+                        any = true;
+                    }
+                }
+                with_gems += u64::from(any);
+                for i in &r.items {
+                    items += 1;
+                    let tier = required_level(&i.item.item_template_id);
+                    // Retail's Gold chests near 100 never paid below Dwarven.
+                    if let Some(tier) = tier.filter(|&t| t > 1) {
+                        assert!(tier >= 18, "L{level} chest {n}: a tier-{tier} piece");
+                    }
+                    ebony += u64::from(tier == Some(33));
+                }
+            }
+            assert_eq!(kinds[..7].iter().sum::<u64>(), 0, "L{level}: soul gems below Grand: {kinds:?}");
+            let share = with_gems as f64 / ROLLS as f64;
+            assert!((0.30..=0.40).contains(&share), "L{level}: {share:.3} of chests paid soul gems");
+            assert!(kinds[7] > kinds[8] && kinds[8] > 0 && kinds[9] > 0, "L{level}: {kinds:?}");
+            assert!(ebony * 2 > items, "L{level}: Ebony in {ebony} of {items} slots");
+        }
+        // 45-48 keep the #388 rule: the three best, Glorious the likeliest.
+        for n in 0..ROLLS {
+            let r = store_golden(&t, 46, n);
+            assert!(SOUL_GEMS[..7].iter().all(|id| !r.stackable_items.contains_key(id)), "L46 chest {n}");
+        }
     }
 
     /// THE REPORT (#378): "the contents of Gold and Elder chests are set too low".
