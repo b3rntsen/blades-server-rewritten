@@ -684,7 +684,8 @@ async fn start_craft(
         }
     };
 
-    let completed_at_ms = now_ms() + duration_ms;
+    let completed_at_ms =
+        now_ms() + craft_duration_ms(recipe_id, tempering_level, batch_size, duration_ms);
     let job = CraftJob {
         id: job_id,
         recipe_id,
@@ -1579,6 +1580,24 @@ fn grade_bare_jewelry_results<R: Rng + ?Sized>(
         }
     }
     results
+}
+
+/// How long a started job runs: retail's own number for this recipe when the APK ships
+/// one (`recipe_durations.json` — the same field the client's recipe screen shows),
+/// else `fallback_ms`, the branch's captured / authored / zero duration.
+///
+/// The APK wins over everything local because everything local is worse: the
+/// `smith_craftables.json` durations are authored (132 of 134 items carry 17,999,872 ms,
+/// so a 10-minute forge craft ran 5 hours — report #423), captured recipes ignore the
+/// batch size and captured tempers ignore the target level.
+fn craft_duration_ms(
+    recipe_id: Uuid,
+    tempering_level: u64,
+    batch_size: u32,
+    fallback_ms: i64,
+) -> i64 {
+    blades_lib::features::recipe_durations::duration_ms(&recipe_id, tempering_level, batch_size)
+        .unwrap_or(fallback_ms)
 }
 
 fn recipe_output_duration_ms(
@@ -2929,6 +2948,20 @@ mod tests {
             0,
             "negative control: do not invent durations absent from local data"
         );
+    }
+
+    /// #423: the job's duration is the APK recipe's, over any local fallback — the
+    /// authored 5 hours (Steel Gauntlets) and the instant 0 (Dragonscale Armor, which
+    /// has no craftable entry) alike; a recipe the APK does not ship keeps the fallback.
+    #[test]
+    fn craft_duration_prefers_the_apk_recipe_and_keeps_the_fallback_otherwise() {
+        let steel_gauntlets = uuid("f069258d-b765-4c68-9218-0522f131e69f");
+        assert_eq!(craft_duration_ms(steel_gauntlets, 0, 1, 17_999_872), 600_000);
+        assert_eq!(
+            craft_duration_ms(uuid(DRAGONSCALE_ARMOR_RECIPE), 0, 1, 0),
+            27_000_000
+        );
+        assert_eq!(craft_duration_ms(Uuid::new_v4(), 0, 1, 12_345), 12_345);
     }
 
     /// An unknown plain-craft recipe (e.g. an un-captured alchemy brew) must NOT get
@@ -5856,6 +5889,90 @@ mod tests {
                 }
             }
             write_back(conn, row).await.unwrap();
+        }
+
+        /// Seconds from now until the started job completes, from the wire `completedAt`.
+        fn seconds_left(craft_wire: &Value) -> i64 {
+            (craft_wire["completedAt"].as_i64().expect("completedAt") - now_ms()) / 1000
+        }
+
+        /// Tracker report #423. Gamermaus404 forged Steel Gauntlets (recipe f069258d):
+        /// the client's recipe screen shows the APK's `Recipe._duration` (600 s), and the
+        /// job the server started was 5 hours — the authored `smith_craftables.json`
+        /// approximation (17,999,872 ms) that 132 of its 134 items carry. Prod row:
+        /// character 13dca5e5, started 09:28:20, completedAt 14:28:20 UTC.
+        #[tokio::test]
+        async fn a_forge_craft_takes_the_apk_recipe_duration_not_the_authored_five_hours() {
+            const STEEL_GAUNTLETS_RECIPE: &str = "f069258d-b765-4c68-9218-0522f131e69f";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 0).await;
+            stock_inputs(&mut conn, &s, &[STEEL_GAUNTLETS_RECIPE]).await;
+            // Precondition: this recipe takes the authored-craftable path.
+            let template =
+                blades_lib::features::recipe_outputs::output_for(&uuid(STEEL_GAUNTLETS_RECIPE))
+                    .unwrap()
+                    .output_item_template_id;
+            assert_eq!(
+                sd.smith_craftables
+                    .resolve(&template)
+                    .map(|c| c.duration_ms),
+                Some(17_999_872)
+            );
+
+            let started = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                plain_request(STEEL_GAUNTLETS_RECIPE),
+            )
+            .await
+            .expect("forge craft starts");
+            let left = seconds_left(&started.craft);
+            assert!((595..=600).contains(&left), "600 s, got {left} s");
+            let row = stored(&mut conn, &s).await;
+            assert_eq!(
+                row.server_state.0.craft_jobs[0].completed_at_ms,
+                started.craft["completedAt"].as_i64().unwrap(),
+                "the stored job and the wire agree"
+            );
+        }
+
+        /// The other half of the same table: a temper's duration is the APK's
+        /// `TemperingRecipe._levels[temperingLevel - 1]` (retail captures 227610: tL 1 →
+        /// 901 s; 84722: tL 10 → 17,400 s on this ladder). It used to be 0 — instant —
+        /// for every temper recipe outside the 23 captured ones.
+        #[tokio::test]
+        async fn a_temper_takes_the_apk_level_duration() {
+            const TEMPER_RECIPE: &str = "b6e4dfaf-0d5b-470b-a26b-dd423222f435";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            for (level, want) in [(1u64, 900i64), (10, 17_400)] {
+                let s = seed(&mut conn, 0).await;
+                let mut req = request(s.item_id, level);
+                req.recipe_id = uuid(TEMPER_RECIPE);
+                let started = start_craft(
+                    &mut conn,
+                    &sd,
+                    rd,
+                    deploy_items(),
+                    s.user_id,
+                    s.character_id,
+                    req,
+                )
+                .await
+                .expect("temper starts");
+                let left = seconds_left(&started.craft);
+                assert!(
+                    (want - 5..=want).contains(&left),
+                    "tL {level}: {want} s, got {left} s"
+                );
+            }
         }
 
         /// Tracker report #366. Stalhrim Boots (tier 8, the armour the client offers a
