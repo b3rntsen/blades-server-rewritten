@@ -450,7 +450,7 @@ pub struct MatchInstance {
     /// waiting to be adopted at the next between-rounds beat (report #232). See
     /// [`Self::stage_between_rounds_loadout`].
     staged_loadouts: Vec<Option<Loadout>>,
-    /// [`crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD`], held per match so
+    /// [`crate::arena::arena_fight_gift::weapon_on_result_card`], held per match so
     /// tests can exercise both delivery paths.
     weapon_on_result_card: bool,
     /// The slot that ended the match by conceding — the exit button or an ENet
@@ -520,7 +520,7 @@ impl MatchInstance {
             interround_profile_round: None,
             interround_profiles_sent: vec![false; capacity],
             staged_loadouts: vec![None; capacity],
-            weapon_on_result_card: crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD,
+            weapon_on_result_card: crate::arena::arena_fight_gift::weapon_on_result_card(),
             conceded_slot: None,
         }
     }
@@ -1995,7 +1995,7 @@ impl MatchInstance {
 
             // The every-25th-fight weapon (owner-approved #390/#391), shown on THIS
             // card and granted straight into the backpack (#401) rather than as a
-            // claimable gift — only while `WEAPON_ON_RESULT_CARD` is on. Only for a
+            // claimable gift — only while `ARENA_WEAPON_ON_RESULT_CARD` is on. Only for a
             // finished fight by a real player whose account count is known; the
             // writer re-checks the count and grants exactly this instance. With no
             // card weapon the writer mints the claimable gift (#539).
@@ -2104,6 +2104,17 @@ impl MatchInstance {
                     )
                 },
             );
+            if !reward.inventory_items.is_empty() {
+                info!(
+                    "combat: op49 slot {slot} card promotion item(s) in inventory.backpack.items {:?} \
+                     (ARENA_PROMOTION_ITEMS_ON_CARD)",
+                    reward
+                        .inventory_items
+                        .iter()
+                        .map(|i| (i.id, i.item.item_template_id))
+                        .collect::<Vec<_>>()
+                );
+            }
             if !reward.reward_chests.is_empty() || card_weapon.is_some() {
                 info!(
                     "combat: op49 slot {slot} card rewards — meter chest(s) {:?}{}",
@@ -4872,7 +4883,7 @@ pub(in crate::arena::combat) mod tests {
         let cards = two_nil_cards(
             [6, 6],
             [None, None],
-            crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD,
+            crate::arena::arena_fight_gift::weapon_on_result_card(),
         );
         let win = &cards[&0];
         assert_eq!(win["character"]["pvpChestMeter"], 0, "6 + 2 rounds wraps at 8");
@@ -4900,7 +4911,7 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(lose["inventory"]["treasuryVersion"], 24_500);
     }
 
-    /// Report #401 (1), with `WEAPON_ON_RESULT_CARD` ON: the every-25th-fight weapon
+    /// Report #401 (1), with `ARENA_WEAPON_ON_RESULT_CARD` ON: the every-25th-fight weapon
     /// is shown on the 25th fight's own card — `reward.items` plus the same instance
     /// in `inventory.backpack.items`, with `backpackVersion` +1 — won or lost.
     /// Fights 24 and 26 carry nothing, and an unknown count never promises a weapon.
@@ -4952,13 +4963,13 @@ pub(in crate::arena::combat) mod tests {
         assert!(weapon_of(&cards[&0]).is_none() && weapon_of(&cards[&1]).is_none());
     }
 
-    /// `WEAPON_ON_RESULT_CARD` OFF (the shipped default until a client check, #401):
+    /// `ARENA_WEAPON_ON_RESULT_CARD` OFF (the shipped default until a client check, #401):
     /// the 25th fight's card is exactly #539's — no `reward.items`, no backpack diff,
     /// no backpack bump — so the economy writer mints the claimable gift instead.
     #[test]
     fn with_the_flag_off_the_twenty_fifth_fight_card_carries_no_weapon() {
         assert!(
-            !crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD,
+            !crate::arena::arena_fight_gift::weapon_on_result_card(),
             "ships OFF until the client has been checked"
         );
         let cards = two_nil_cards([0, 0], [Some(24), Some(24)], false);

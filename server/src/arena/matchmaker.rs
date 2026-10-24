@@ -492,7 +492,7 @@ async fn record_match_resolved(
 /// `tokio::time::timeout` per player: awaiting it unbounded once hung all
 /// matchmaking (see `resolve`).
 ///
-/// With `arena_fight_gift::WEAPON_ON_RESULT_CARD` on, also reads the account's
+/// With `arena_fight_gift::weapon_on_result_card()` on, also reads the account's
 /// finished-fight count, so the match-end card can show the every-25th-fight
 /// weapon. A failed read leaves it unknown and the milestone falls back to a
 /// claimable gift.
@@ -504,7 +504,7 @@ async fn load_loadout(
     let mut lo = load_character_loadout(db, user_id, character_id).await;
     // Only the result-card delivery needs the count (#401); while it is off the
     // milestone is decided by the writer alone, as in #539.
-    if lo.character_uuid.is_empty() || !crate::arena::arena_fight_gift::WEAPON_ON_RESULT_CARD {
+    if lo.character_uuid.is_empty() || !crate::arena::arena_fight_gift::weapon_on_result_card() {
         return lo;
     }
     if let Some(db) = db
