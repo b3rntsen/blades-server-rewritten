@@ -1522,7 +1522,9 @@ pub async fn purchase_global_shop(
             // sequence of chests. The held templates are what keep an artifact the
             // buyer already owns from being handed out again (#310). The Epic
             // Chest is a tier-4 (Elder) chest, so from level 45 it pays retail's
-            // high-level Elder gold and stackables like a treasury one (#378).
+            // high-level Elder gold and stackables like a treasury one (#378), and
+            // the Golden Chest is a Gold chest, so from 49 it is a level-100
+            // treasury Gold chest (#421).
             let reward = {
                 blades_lib::features::store_bundles::roll_bundle_with(
                     &product_id,
@@ -1532,12 +1534,7 @@ pub async fn purchase_global_shop(
                     )),
                     roll_nonce,
                     &entry.inventory.0.item_templates(),
-                    globals
-                        .static_data
-                        .chest_loots
-                        .provisional_tiers
-                        .get(&4)
-                        .map(Vec::as_slice),
+                    Some(&globals.static_data.chest_loots),
                 )
                 .unwrap_or(reward)
             };
@@ -4652,6 +4649,9 @@ mod report_387_legendary_chest_sequence {
         assert!(read.contains(".global_shop_purchases"), "lifetime count: {read}");
         assert!(!read.contains("window"), "a window count restarts with every offer: {read}");
         assert!(body.contains("purchase_roll_nonce(bought_before, character_id, roll_alt)"));
+        // #421: the store chests roll with the shipped treasury tables, so a
+        // Golden chest from 49 is a level-100 Gold chest.
+        assert!(body.contains("Some(&globals.static_data.chest_loots)"), "the chest tables reach the roll");
         let nonces: HashSet<u64> = (0..10_000).map(|n| purchase_roll_nonce(n, SEPHORIS, None)).collect();
         assert_eq!(nonces.len(), 10_000);
     }

@@ -953,12 +953,12 @@ fn sample_treasury(ctx: &Ctx, tier: i64, level: u64, daily: bool) -> Sample {
 }
 
 fn sample_store_chest(ctx: &Ctx, product: Uuid, level: u64) -> Sample {
-    let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
+    let treasury = Some(&ctx.sd.chest_loots);
     let mut out = Sample::default();
     for i in 0..ctx.rolls {
         let nonce = crate::global_shop::purchase_roll_nonce(i, buyer(i), None);
         if let Some(r) =
-            store_bundles::roll_bundle_with(&product, level, nonce, &HashSet::new(), elder)
+            store_bundles::roll_bundle_with(&product, level, nonce, &HashSet::new(), treasury)
         {
             out.rewards.push(r);
         }

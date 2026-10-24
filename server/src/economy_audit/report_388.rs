@@ -159,7 +159,7 @@ fn soul_gems_at_45_to_48_are_the_three_best_in_every_source() {
     let pools = super::read::<serde_json::Value>("deploy/static/job_pools.json");
     let top: HashSet<Uuid> = SOUL_GEMS[7..].iter().copied().collect();
     let grand: HashSet<Uuid> = HashSet::from([GRAND_SOUL_GEM]);
-    let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
+    let treasury = Some(&ctx.sd.chest_loots);
     let mut quests: Vec<&Uuid> = gd.quests.keys().collect();
     quests.sort();
     let mut events: Vec<&Uuid> = ctx.sd.event_quests.templates.keys().collect();
@@ -214,7 +214,7 @@ fn soul_gems_at_45_to_48_are_the_three_best_in_every_source() {
         let mut v = Vec::new();
         for (p, _) in super::STORE_CHESTS {
             for n in 0..60u64 {
-                let r = blades_lib::features::store_bundles::roll_bundle_with(&Uuid::from_u128(p), level as u64, n, &HashSet::new(), elder);
+                let r = blades_lib::features::store_bundles::roll_bundle_with(&Uuid::from_u128(p), level as u64, n, &HashSet::new(), treasury);
                 v.extend(r.iter().flat_map(|r| gems_of(&r.stackable_items)));
             }
         }
@@ -295,7 +295,7 @@ fn material_stacks_are_5_10_or_20_in_chests_corpses_and_containers() {
     let ctx = Ctx::load();
     let gd = gd();
     let scaling = crate::quest::shipped_scaling();
-    let elder = ctx.sd.chest_loots.provisional_tiers.get(&4).map(Vec::as_slice);
+    let treasury = Some(&ctx.sd.chest_loots);
 
     let mut chest_sizes = Sizes::default();
     for tier in [-1i64, 1, 2, 3, 4, 5] {
@@ -309,7 +309,7 @@ fn material_stacks_are_5_10_or_20_in_chests_corpses_and_containers() {
     for (p, _) in super::STORE_CHESTS {
         for level in SAMPLE_LEVELS {
             for n in 0..20u64 {
-                let r = blades_lib::features::store_bundles::roll_bundle_with(&Uuid::from_u128(p), level, n, &HashSet::new(), elder);
+                let r = blades_lib::features::store_bundles::roll_bundle_with(&Uuid::from_u128(p), level, n, &HashSet::new(), treasury);
                 r.iter().for_each(|r| chest_sizes.add(&r.stackable_items));
             }
         }

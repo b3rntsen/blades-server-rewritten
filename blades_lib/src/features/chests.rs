@@ -417,8 +417,7 @@ pub fn roll_loot(
     // No other tier below 1 exists in the APK enum; treat one as tier 1.
     let tier = tier.max(1) as u64;
     let nonce = stable_nonce(chest_key);
-    let elder_treasury = tables.provisional_tiers.get(&4).map(Vec::as_slice);
-    let mut grant = crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned, elder_treasury)
+    let mut grant = crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned, Some(tables))
         .or_else(|| {
             let (pool, _) = tables.pool_for(tier)?;
             let mut grant = compose_loot(pool, level, nonce)?;
