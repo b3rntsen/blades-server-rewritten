@@ -45,7 +45,8 @@
 //!
 //! PAST 650 THE LADDER GOES ON (report #424). A run that passed 650 used to be
 //! advertised an empty `abyssFutureRewards`, and the client cannot take one — see
-//! [`END_REWARDS_SCORE_DELTA`].
+//! [`END_REWARDS_SCORE_DELTA`]. It goes on as retail's did: a golden chest, then two
+//! materials, over and over — see [`END_CYCLE`].
 
 use std::collections::HashMap;
 
@@ -64,7 +65,7 @@ static ABYSS_FUTURE_REWARDS_RAW: &str = include_str!("../abyss_future_rewards.js
 pub const ABYSS_LADDER: [u32; 10] = [35, 50, 70, 95, 135, 190, 260, 360, 490, 650];
 
 /// The score between rungs above the last measured one (report #424): 810, 970,
-/// 1130 and so on, each paying a draw from the last rung's pool.
+/// 1130 and so on, each paying what [`END_CYCLE`] says.
 ///
 /// WHY THERE ARE RUNGS AT ALL. The client cannot be told "nothing left": a `/update`
 /// that pays a rung goes `KillPveAction.OnEnemyKilledUpdateComplete` (RVA 0x1C90A50)
@@ -83,12 +84,35 @@ pub const ABYSS_LADDER: [u32; 10] = [35, 50, 70, 95, 135, 190, 260, 360, 490, 65
 /// from the APK; its getters have no caller in the client) keeps its gauge rewards
 /// in an `AbyssRewardsContainer { _rewards, _endRewardsScoreDelta }` — a finite list
 /// plus ONE score step for after its end. That is the shape implemented here: past
-/// 650, one rung every `END_REWARDS_SCORE_DELTA`, paying from the last rung's pool.
+/// 650, one rung every `END_REWARDS_SCORE_DELTA`.
 ///
-/// THE VALUE IS NOT MEASURED. 160 is the last measured gap (490 → 650); the ladder's
-/// gaps grow 15, 20, 25, 40, 55, 70, 100, 130, 160, so retail's step was at least
-/// of this order. Changing it re-numbers only the rungs above 650.
+/// THE VALUE IS NOT CAPTURED; 160 is the last measured gap (490 → 650), and the one
+/// a retail player's account bounds (Durin, #424, message 2927): "completing the
+/// Abyss from levels 140 to 149 used to earn two golden chests". Floors 140-149 are
+/// ten floors of three kills at the flat deep-floor 30 a kill. His own run from floor
+/// 140, on video (recording 379), scored exactly that: 570 on reaching floor 146, 660
+/// on 147, 750 on 148 — about 930 once 149 is cleared. The second golden chest sits
+/// at 650 + step and the third at 650 + 4 × step ([`END_CYCLE`]), so "exactly two"
+/// needs 650 + step <= ~930 < 650 + 4 × step: a step of about 70 to 280. 160 lies
+/// inside it with room either side (810 reached on floor 148, 1290 four floors past
+/// 149). His "the bar filled more slowly after the first golden chest" is the
+/// measured ladder's own gaps, 100 before the chest and 130 then 160 after it.
+/// Changing the value re-numbers only the rungs above 650.
 pub const END_REWARDS_SCORE_DELTA: u32 = 160;
+
+/// What the rungs past 650 pay, in turn: the golden chest (rung 360's chest — tier 3,
+/// at the character's level), then a draw from rung 490's pool, then one from rung
+/// 650's, and again — 810 is a golden chest, 970 and 1130 materials, 1290 a golden
+/// chest, and so on.
+///
+/// Durin (#424, message 2927), who played retail's Abyss: "the first golden chest
+/// rewarded two materials, then a second golden chest, then two materials, then a
+/// third golden chest". In the measured ladder the two after the first golden chest
+/// (360) are 490 and 650, so the cycle repeats exactly that triple. No capture
+/// reached past 650; where data is missing a detailed player account is trusted.
+/// Before this, every rung past 650 paid 650's pool — two Copper Ingots, the one
+/// retail observation at 650 — and a run never saw a second golden chest.
+pub const END_CYCLE: [u32; 3] = [360, 490, 650];
 
 /// How many rungs past the last measured one are ever considered — a bound on the
 /// ladder's iteration for a non-finite or absurd score, not a game rule. 1000 rungs
@@ -105,8 +129,9 @@ pub fn ladder() -> impl Iterator<Item = u32> {
     }))
 }
 
-/// The rung definition that pays at `score`: a measured rung, or the last measured
-/// rung for a score past the ladder's end that is one of its steps.
+/// The rung definition that pays at `score`: a measured rung, or — for a score past
+/// the ladder's end that is one of its steps — the measured rung [`END_CYCLE`] repeats
+/// there.
 fn rung_at(score: u32) -> Option<&'static Rung> {
     let rungs = &corpus().rungs;
     if let Some(rung) = rungs.iter().find(|r| r.score == score) {
@@ -114,10 +139,15 @@ fn rung_at(score: u32) -> Option<&'static Rung> {
     }
     let last = rungs.last()?;
     let past = score.checked_sub(last.score)?;
-    (past > 0
-        && past % END_REWARDS_SCORE_DELTA == 0
-        && past / END_REWARDS_SCORE_DELTA <= MAX_END_RUNGS)
-        .then_some(last)
+    if past == 0 || past % END_REWARDS_SCORE_DELTA != 0 {
+        return None;
+    }
+    let step = past / END_REWARDS_SCORE_DELTA;
+    if step > MAX_END_RUNGS {
+        return None;
+    }
+    let repeats = END_CYCLE[((step - 1) % END_CYCLE.len() as u32) as usize];
+    rungs.iter().find(|r| r.score == repeats)
 }
 
 #[derive(Deserialize)]
@@ -748,8 +778,8 @@ fn borrow_from_above<'a>(
 /// 100 would take that away, and rewards are never narrowed without HauDrauf.
 ///
 /// `at` is the score the rung pays at. It is `rung.score` for a measured rung; a rung
-/// past the ladder's end draws from the last rung's pool and seeds with its own
-/// score, so 810 and 970 are separate draws (#424).
+/// past the ladder's end draws from the pool of the rung it repeats ([`END_CYCLE`])
+/// and seeds with its own score, so 970 and 1450 are separate draws (#424).
 fn rung_reward(rung: &Rung, at: u32, real_level: u64, run_seed: i64) -> RewardGrant {
     let mut grant = rung_reward_drawn(rung, at, real_level, run_seed);
     // The three best soul gems at 45-48 (owner-approved deviation from retail, #388).
@@ -799,7 +829,9 @@ fn rung_reward_drawn(rung: &Rung, at: u32, real_level: u64, run_seed: i64) -> Re
     }
 
     let seed = mix((run_seed as u64) ^ (u64::from(at)).rotate_left(29));
-    let extra = grand_gem_beside_the_golden_chest(at, real_level);
+    // By the rung it repeats, so a 490 past the ladder's end ([`END_CYCLE`]) keeps
+    // 490's extra result; for a measured rung `rung.score` is `at`.
+    let extra = grand_gem_beside_the_golden_chest(rung.score, real_level);
     let mut candidates: Vec<&ObservedReward> = pool.iter().map(|r| &r.reward).collect();
     if let Some(grand) = &extra {
         candidates.push(grand);
@@ -895,20 +927,78 @@ mod tests {
         }
     }
 
-    /// Past 650 a rung lies every [`END_REWARDS_SCORE_DELTA`] and draws from the last
-    /// measured rung's pool. That pool is one retail observation, so today each such
-    /// rung pays what 650 pays the same character.
+    /// Past 650 a rung lies every [`END_REWARDS_SCORE_DELTA`], and they pay in turn a
+    /// golden chest, a draw from 490's pool and one from 650's (#424, [`END_CYCLE`]).
     #[test]
-    fn rungs_past_650_step_by_the_end_delta_from_the_last_rungs_pool() {
+    fn rungs_past_650_step_by_the_end_delta() {
         let past: Vec<u32> = ladder().skip(ABYSS_LADDER.len()).take(3).collect();
         assert_eq!(past, vec![810, 970, 1130]);
         assert!(future_reward_for_rung(811, 40, 1).is_none(), "811 is not a rung");
+        assert!(future_reward_for_rung(650 + 160 * MAX_END_RUNGS, 40, 1).is_some());
         assert!(future_reward_for_rung(650 + 160 * (MAX_END_RUNGS + 1), 40, 1).is_none());
-        for level in [7u64, 77, 100] {
-            let last = future_reward_for_rung(650, level, 3).unwrap();
-            for rung in [810, 970, 1130] {
-                assert_eq!(future_reward_for_rung(rung, level, 3).unwrap(), last, "rung {rung}, level {level}");
+    }
+
+    /// Every result a measured rung can pay a character of `level`, over many runs.
+    fn pool_of(rung: u32, level: u64) -> Vec<RewardGrant> {
+        let mut seen: Vec<RewardGrant> = Vec::new();
+        for seed in -200i64..200 {
+            let mut grant = future_reward_for_rung(rung, level, seed).unwrap();
+            for item in &mut grant.items {
+                item.id = Uuid::nil();
             }
+            if !seen.contains(&grant) {
+                seen.push(grant);
+            }
+        }
+        seen
+    }
+
+    /// #424, Durin: "the first golden chest rewarded two materials, then a second
+    /// golden chest, then two materials, then a third golden chest". Past 650 the
+    /// rungs cycle golden chest → 490's pool → 650's pool, from 810 on, at every level.
+    #[test]
+    fn past_650_a_golden_chest_comes_every_third_rung() {
+        for level in [1u64, 9, 40, 49, 77, 100] {
+            let pools = END_CYCLE.map(|rung| pool_of(rung, level));
+            for seed in [1i64, 3, 0x5EED_294, -42] {
+                let golden = future_reward_for_rung(360, level, seed).unwrap();
+                let past: Vec<u32> = ladder().skip(ABYSS_LADDER.len()).take(12).collect();
+                for (k, rung) in past.iter().enumerate() {
+                    let mut paid = future_reward_for_rung(*rung, level, seed).unwrap();
+                    if k % 3 == 0 {
+                        assert_eq!(paid, golden, "rung {rung}, level {level}: the golden chest");
+                        continue;
+                    }
+                    assert!(paid.chests.is_empty(), "rung {rung}, level {level}: a material, not a chest");
+                    for item in &mut paid.items {
+                        item.id = Uuid::nil();
+                    }
+                    assert!(
+                        pools[k % 3].contains(&paid),
+                        "rung {rung}, level {level}: not from {}'s pool",
+                        END_CYCLE[k % 3]
+                    );
+                }
+                let golden_rungs: Vec<u32> = past
+                    .iter()
+                    .copied()
+                    .filter(|r| !future_reward_for_rung(*r, level, seed).unwrap().chests.is_empty())
+                    .collect();
+                assert_eq!(golden_rungs, vec![810, 1290, 1770, 2250], "level {level}");
+            }
+        }
+    }
+
+    /// The golden chest past 650 is rung 360's: tier 3, at the character's level —
+    /// level 100's from 49 on (#398), as at 360.
+    #[test]
+    fn the_golden_chest_past_650_is_rung_360s() {
+        for (level, chest_level) in [(9u64, 9u64), (40, 40), (48, 48), (49, 100), (77, 100), (100, 100)] {
+            let chest = future_reward_for_rung(810, level, 7).unwrap();
+            assert_eq!(chest.chests.len(), 1);
+            assert_eq!(chest.chests[0].tier, 3, "level {level}");
+            assert_eq!(chest.chests[0].level, chest_level, "level {level}");
+            assert!(chest.stackable_items.is_empty() && chest.items.is_empty());
         }
     }
 

@@ -3494,6 +3494,141 @@ mod tests {
         assert_eq!(list.len(), 1, "{wire}");
         assert_eq!(list[0]["score"], serde_json::json!(810));
         assert!(list[0]["reward"].as_object().is_some_and(|r| !r.is_empty()), "{wire}");
+        // #424, Durin: after the first golden chest's two materials comes the second.
+        assert_eq!(
+            list[0]["reward"],
+            serde_json::json!({"chests": [{"level": 40, "tier": 3}]}),
+            "810 is the second golden chest: {wire}"
+        );
+    }
+
+    /// One kill per `/update`, through the handler's own scoring and paying, recording
+    /// for every paying update the rung the client was advertised before it and the
+    /// grant the update actually paid.
+    fn paid_with_adverts(
+        level: u32,
+        ipl: u32,
+        seed: i64,
+        floors: &[(u32, &str, u32, &[&str])],
+    ) -> Vec<((u32, RewardGrant), Vec<u32>, RewardGrant)> {
+        let mut run = run_from(&floors.iter().map(|f| (f.0, f.2)).collect::<Vec<_>>(), ipl);
+        run.current_floor_index = 0;
+        run.seed = seed;
+        for (slice, floor) in run.slices.iter_mut().zip(floors) {
+            slice.dungeon_settings_id = Uuid::parse_str(floor.1).unwrap();
+            slice.completed = false;
+            slice.enemy_killed = false;
+        }
+        let (_, mut player) = gauge_fixture();
+        player.character.level = level as u16;
+        let mut tracker = InventoryChangeTracker::default();
+        let mut out = Vec::new();
+        let mut time = 0;
+        for (_, _, _, groups) in floors {
+            for group in *groups {
+                time += 1;
+                let showing = advertised(&run, u64::from(level)).expect("a next rung is always advertised");
+                let before = run.granted_future_rewards.clone();
+                let action = parse_actions(serde_json::json!([{
+                    "type": "enemy_killed", "spawnGroupId": group, "spawnerIndex": 0,
+                    "enemyIndex": 0, "xpReward": 0.0, "time": time
+                }]));
+                if let Some(grant) = update(&mut run, &mut player, &action, &mut tracker) {
+                    let mut rungs: Vec<u32> =
+                        run.granted_future_rewards.difference(&before).copied().collect();
+                    rungs.sort();
+                    out.push((showing, rungs, grant));
+                }
+            }
+            let completed =
+                parse_actions(serde_json::json!([{"type": "abyss_slice_completed", "time": 0}]));
+            update(&mut run, &mut player, &completed, &mut tracker);
+        }
+        out
+    }
+
+    fn is_golden_chest(grant: &RewardGrant) -> bool {
+        grant.chests.iter().any(|c| c.tier == 3)
+    }
+
+    /// A grant with the ids the grant path mints (item instance ids, treasury chest
+    /// ids) blanked, so an advertisement and a payment compare on what they give.
+    fn without_minted_ids(grant: &RewardGrant) -> RewardGrant {
+        let mut grant = grant.clone();
+        grant.items.iter_mut().for_each(|item| item.id = Uuid::nil());
+        grant.chests.iter_mut().for_each(|chest| chest.id = None);
+        grant
+    }
+
+    /// Checks [`paid_with_adverts`]' updates: the first rung each one paid is the rung
+    /// advertised before it, and a one-rung update paid exactly the advertised reward.
+    /// Returns, rung by rung from the golden chest (360) on, `G` for a golden chest and
+    /// `m` for anything else.
+    fn check_paid_as_advertised(
+        level: u32,
+        seed: i64,
+        paid: &[((u32, RewardGrant), Vec<u32>, RewardGrant)],
+    ) -> String {
+        let mut kinds = String::new();
+        for ((rung, shown), paid_rungs, grant) in paid {
+            assert_eq!(paid_rungs[0], *rung, "level {level}: the first rung paid is the advertised one");
+            if paid_rungs.len() == 1 {
+                assert_eq!(without_minted_ids(grant), without_minted_ids(shown), "level {level}: rung {rung}");
+            }
+            for r in paid_rungs.iter().filter(|r| **r >= 360) {
+                let one = abyss_rewards::future_reward_for_rung(*r, u64::from(level), seed).unwrap();
+                kinds.push(if is_golden_chest(&one) { 'G' } else { 'm' });
+            }
+        }
+        kinds
+    }
+
+    /// #424, Durin (message 2927): "Completing the Abyss from levels 140 to 149 used to
+    /// earn two golden chests" — and the build he tested paid one. Ten floors from 140
+    /// at retail's deep-floor kills reach the second golden chest (810) and not the
+    /// third (1290), at his level and at 100, on the kill the client's gauge gets there,
+    /// and each paid rung is exactly the one advertised before it.
+    #[test]
+    fn a_run_from_floor_140_to_149_earns_two_golden_chests() {
+        for level in [77u32, 100] {
+            let ipl = initial_player_level(&real_job_pools(), level);
+            let floors = served_run(ipl, 140, 10, DEEP_FLOOR_KILLS);
+            assert_eq!((floors[0].0, floors[9].0), (140, 149));
+            let server = replay(ipl, &floors);
+            assert_eq!(client_gauge(ipl, &floors), server, "level {level}: paid on the client's kill");
+            for nonce in 0..16u64 {
+                let seed = generate_run_seed(Uuid::from_u128(0x424), nonce);
+                let paid = paid_with_adverts(level, ipl, seed, &floors);
+                let golden = paid.iter().filter(|(_, _, grant)| is_golden_chest(grant)).count();
+                assert_eq!(golden, 2, "level {level} nonce {nonce}: {paid:?}");
+                let rungs: Vec<u32> = paid.iter().flat_map(|(_, r, _)| r.iter().copied()).collect();
+                assert!(rungs.contains(&810) && !rungs.contains(&1290), "level {level}: {rungs:?}");
+                assert_eq!(check_paid_as_advertised(level, seed, &paid), "GmmG", "level {level}: {rungs:?}");
+            }
+        }
+    }
+
+    /// The cycle on a long run, low level and deep: a level-9 character from floor 1 and
+    /// a level-100 one from floor 149 (memory: Abyss changes need both). Past the first
+    /// golden chest every third rung is a golden chest, the two between are materials,
+    /// every response advertises one next rung, and each paid reward is the one shown.
+    #[test]
+    fn long_runs_cycle_golden_chest_then_two_materials_at_level_9_and_100() {
+        for (level, start, count, kills) in
+            [(9u32, 1u32, 60usize, MIXED_KILLS), (100, 149, 30, DEEP_FLOOR_KILLS)]
+        {
+            let ipl = initial_player_level(&real_job_pools(), level);
+            let floors = served_run(ipl, start, count, kills);
+            assert_eq!(floors.len(), count, "level {level}: {count} floors served");
+            let paid = paid_with_adverts(level, ipl, 0x5EED_424, &floors);
+            let rungs: Vec<u32> = paid.iter().flat_map(|(_, r, _)| r.iter().copied()).collect();
+            assert!(rungs.iter().any(|r| *r >= 1_770), "level {level}: the run reaches a third cycle: {rungs:?}");
+            let kinds = check_paid_as_advertised(level, 0x5EED_424, &paid);
+            let expected: String = "Gmm".repeat(kinds.len().div_ceil(3)).chars().take(kinds.len()).collect();
+            assert_eq!(kinds, expected, "level {level}: {rungs:?}");
+            let golden = paid.iter().filter(|(_, _, grant)| is_golden_chest(grant)).count();
+            assert_eq!(golden, kinds.matches('G').count(), "level {level}: golden chests actually paid");
+        }
     }
 
     /// A captured retail run (`initialPlayerLevel` 10, from floor 1): each floor's
@@ -4642,8 +4777,10 @@ mod tests {
         assert_eq!(payout_digest(&without_rungs_past_650(&runs)), LEVEL_7_FROM_1_DIGEST);
         assert_eq!(payout_digest(&runs), LEVEL_7_FROM_1_DIGEST_WITH_424);
     }
-    /// [`LEVEL_7_FROM_1_DIGEST`] with #424's rungs past 650 in it.
-    const LEVEL_7_FROM_1_DIGEST_WITH_424: u64 = 0x2cd9_4254_0bc5_7483;
+    /// [`LEVEL_7_FROM_1_DIGEST`] with #424's rungs past 650 in it — re-pinned when they
+    /// became golden chest, 490's pool, 650's pool in turn (it was 0x2cd9_4254_0bc5_7483
+    /// while every one paid 650's pool).
+    const LEVEL_7_FROM_1_DIGEST_WITH_424: u64 = 0x41ba_801d_3f2e_46bf;
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// `/end` materials are 20; everything else is pinned unchanged by
     /// [`abyss_runs_move_only_what_388_moves`].
