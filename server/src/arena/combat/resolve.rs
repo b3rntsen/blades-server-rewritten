@@ -1715,6 +1715,13 @@ pub(super) fn resolve_ability_cast(
     out.push((sender, perform.clone()));
     out.push((target_slot, perform));
 
+    // A maneuver cast out of the caster's own spell wind-up or channel cancels the
+    // spell (`selfInterrupt: true`, 06 §1.8). Retail's order is op38 → op59 → op58
+    // (s503 f3504269-71, s615 f4398740-42).
+    if tag == AbilityTag::Maneuver {
+        out.extend(super::interrupts::self_interrupt_spells(combat, sender, now));
+    }
+
     // Emit the stat update (after the cast echo so the client sees the visual before
     // the bar drop — matches retail ordering).
     out.extend(stat_frames);
@@ -5459,6 +5466,7 @@ fn on_round_ended(
         // Nothing is left to interrupt, and a maneuver lock must not outlive it.
         fighter.executions.clear();
         fighter.interrupt_pending = None;
+        fighter.self_interrupt_pending = None;
         // Status lifetimes are round-scoped. Once the result burst moves the Match
         // object to PostRound, no Burning/Frozen/Poisoned tick may survive to bill a
         // fighter during the round-end walk or the final match-end sequence.
