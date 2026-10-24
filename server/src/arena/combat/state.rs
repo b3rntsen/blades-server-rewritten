@@ -1781,6 +1781,14 @@ pub struct Fighter {
     /// (gmid 46 propId 6). Recorded for telemetry; it does **not** gate swings — see
     /// the note in `resolve::on_c2s_input`.
     pub last_input_block_zone: Option<bool>,
+    /// The player is HOLDING the guard button: the last block-zone `gmid 46` was a
+    /// press, and neither a block-zone release nor an attack press has come since.
+    ///
+    /// Tracked separately from `Blocking` because a press can arrive while the
+    /// fighter cannot block — staggered — and the client does not re-send a press it
+    /// is still holding. Retail raises such a guard the moment the stagger ends
+    /// (report #357; see [`Self::reconcile_stagger`]).
+    pub guard_held: bool,
 
     // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
     /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
@@ -2095,6 +2103,17 @@ pub const HEALTH_PERCENT_TO_CAUSE_STATUS: f32 =
 /// [Phase 3.13]
 pub const BASE_STAGGER_DURATION_SECS: f32 = PVP_BASE_STAGGER_DURATION;
 
+/// Safety cap on a guard held with no matching release — a LEAK GUARD, not a game rule.
+///
+/// Retail has **no** auto-expiry: a block ends when the player lets go, or when an
+/// attack press cancels it. Measured from `propId8` of the closing state change over
+/// 539 decoded blocks, the durations are a continuous distribution with no cliff —
+/// median 0.750 s, p90 1.800 s, p99 2.717 s, max **4.767 s**, and 42 of 539 ran past
+/// two seconds. The old two-second `BLOCK_WINDOW` would have silently truncated ~8 % of
+/// real guards, so it is not used as the block's lifetime any more. This cap exists
+/// only so a dropped release packet cannot leave a fighter guarding forever.
+pub const BLOCK_LEAK_GUARD: Duration = Duration::from_secs(8);
+
 /// `CombatParameters.criticalHealthThreshold` — health **percentage** (0..100) below
 /// which a fighter is "critical" (drives the potion prompt + `Fortify Health
 /// Regeneration At Critical Health`). [Phase 3.13]
@@ -2264,6 +2283,7 @@ impl Fighter {
             active_manual_attack: None,
             last_client_charge: None,
             last_input_block_zone: None,
+            guard_held: false,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
@@ -2600,6 +2620,24 @@ impl Fighter {
         true
     }
 
+    /// Put this fighter's guard UP for a held block press. `set_actor_state` queues
+    /// the transition and the drain turns it into the gmid 41 that raises the shield
+    /// on both screens.
+    ///
+    /// A guard is also an exit from the prior swing's Recovery, so that swing's
+    /// scheduled FollowThrough/Recovery/Idle beats are dropped — otherwise a stale
+    /// Idle could overwrite `Blocking` on the next tick while the client still holds
+    /// the shield. Raising a guard ends the combo chain: Recovery -> Blocking is one
+    /// of the exits `PlayerRecoveryState$$OnExit@0x1d75714` resets on (02 R5).
+    pub fn raise_guard(&mut self, now: Instant) {
+        self.clear_scheduled_states();
+        self.set_actor_state(ActorStateType::Blocking, now);
+        self.blocking_side = ActiveSide::Middle; // retail: propId 9 == 1 in 578/578
+        self.blocking_until = Some(now + BLOCK_LEAK_GUARD);
+        self.block_raised_at = Some(now);
+        self.reset_combo();
+    }
+
     /// Clear an expired stagger, returning true when the fighter just recovered.
     pub fn reconcile_stagger(&mut self, now: Instant) -> bool {
         if let Some(t) = self.staggered_until {
@@ -2609,6 +2647,16 @@ impl Fighter {
                 self.weakness_rating = 0.0;
                 if self.actor_state == ActorStateType::Staggered {
                     self.set_actor_state(ActorStateType::Idle, now);
+                    // Report #357: a guard pressed during the stagger and still held
+                    // goes up now. The stagger gate dropped the press, and the client
+                    // will not send it again while the button stays down, so without
+                    // this the server fought on with the guard down while the player's
+                    // screen showed it up — every hit "went through the block".
+                    // Retail sends exactly this pair at the stagger's end, 39 Idle then
+                    // 41, with no fresh press (14 of 14 captured cases).
+                    if self.guard_held && !self.has_reckless_fury(now) && !self.is_dead() {
+                        self.raise_guard(now);
+                    }
                 }
                 return true;
             }
@@ -4167,6 +4215,7 @@ impl MatchCombat {
             f.active_manual_attack = None;
             f.last_client_charge = None;
             f.last_input_block_zone = None;
+            f.guard_held = false;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();
