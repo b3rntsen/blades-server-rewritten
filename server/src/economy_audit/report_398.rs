@@ -256,8 +256,10 @@ fn levels_below_49_are_unchanged() {
         ("daily", 0x8d8e_2e5c_0659_5552),
         // #407 (HauDrauf, 2026-10-17) re-pins abyss_rewards: `/end` soul gems are 3 to 7.
         // #424 re-pins it: score 700 is advertised rung 810 where it had none (with
-        // that one advert masked the digest is #407's 0x1bd6_397f_a2cf_4dae).
-        ("abyss_rewards", 0x9aec_63b7_d1bf_01c4),
+        // that one advert masked the digest is #407's 0x1bd6_397f_a2cf_4dae) — and
+        // again when 810 became the second golden chest (it was 0x9aec_63b7_d1bf_01c4
+        // while 810 paid 650's pool).
+        ("abyss_rewards", 0x01bd_21b9_1821_72ee),
         ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),
         ("quests", 0x3f01_52cb_5eef_d622),
         ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
