@@ -515,15 +515,35 @@ async fn start_craft(
         if tempering_level > 0 {
             restore_tempered_condition(&mut mutated, repair_data);
         } else {
-            // Read off the item the roll produced; the RNG is not touched again.
-            enchant_roll_log = enchant_roll_log_line(
+            // The double-Ravage pity timer (tracker #415, owner decision d17) runs on
+            // the roll's result; the counter persists with the job in `write_back`.
+            let pity = crate::enchant_pity::apply(
+                &static_data.enchanting,
+                &existing,
+                recipe_id,
+                &mut mutated,
+                &mut entry.server_state.0.enchant_pity_misses,
+            );
+            // A forced pair gets its own line and NOT an `enchant rolled:` one: the
+            // odds tally reads those, and a forced pair is not a draw from the tables.
+            // Otherwise read off the item the roll produced; the RNG is not touched again.
+            enchant_roll_log = crate::enchant_pity::forced_log_line(
                 character_id,
                 existing.item_template_id,
                 recipe_id,
-                existing.arcane_tier,
+                &pity,
                 &mutated.properties.enchanting,
-                &static_data.enchanting,
-            );
+            )
+            .or_else(|| {
+                enchant_roll_log_line(
+                    character_id,
+                    existing.item_template_id,
+                    recipe_id,
+                    existing.arcane_tier,
+                    &mutated.properties.enchanting,
+                    &static_data.enchanting,
+                )
+            });
         }
         entry.inventory.0.backpack_version += 1;
         let reward_item = RewardItem {
@@ -1713,7 +1733,8 @@ fn apply_item_mod<R: Rng + ?Sized>(
 /// 2. a secondary COUNT drawn from the item's `ArcaneTier` odds when it has one
 ///    (tier 1 → exactly 1, tier 2 → exactly 2; 34/34 captured arcane-2 enchants had 2,
 ///    which the non-arcane odds would produce with probability 0.15^34), else from the
-///    item type's `SecondaryEnchantmentEffectData` odds (weapons: 0.60 / 0.25 / 0.15);
+///    item type's `SecondaryEnchantmentEffectData` odds (weapons: 0.60 / 0.25 / 0.15),
+///    unless `enchant_tuning.json`'s `secondaryCountOdds` overrides that type;
 /// 3. that many secondaries, each a weighted draw WITHOUT replacement from the table's
 ///    pool (no captured item ever repeats one: 0 of 34, where drawing with replacement
 ///    repeats one about 15% of the time), each at the primary's tier (every captured
@@ -1732,10 +1753,7 @@ fn roll_enchant<R: Rng + ?Sized>(
         tier: recipe.tier,
     }];
     let Some(table) = table else { return out };
-    let count_odds = arcane_tier
-        .and_then(|t| enchanting.arcane_tier_count_odds.get(&t))
-        .unwrap_or(&table.count_odds);
-    let count = weighted_index(rng, count_odds).unwrap_or(0);
+    let count = weighted_index(rng, enchanting.roll_count_odds(table, arcane_tier)).unwrap_or(0);
     let mut pool: Vec<(Uuid, f64)> = table
         .properties
         .iter()
@@ -1796,6 +1814,17 @@ fn enchant_roll_log_line(
         secondaries.len(),
         secondaries.join(","),
     ))
+}
+
+/// One enchant roll as `POST /crafts` rolls it, for the pity timer's tests.
+#[cfg(test)]
+pub(crate) fn roll_item_for_test<R: Rng + ?Sized>(
+    item: &Item,
+    recipe_id: Uuid,
+    enchanting: &EnchantingData,
+    rng: &mut R,
+) -> Item {
+    apply_item_mod(item, 0, recipe_id, None, enchanting, &HashMap::new(), rng)
 }
 
 /// Index drawn in proportion to `weights` (non-positive weights never win); `None` when
@@ -2567,6 +2596,80 @@ mod tests {
                 "{id}: in {got:.3} of 2-draws, want {want}"
             );
         }
+    }
+
+    /// Owner decision d22 (tracker #415): the secondary-count odds are one config
+    /// value, and its default is retail. Both defaults: no file (the code's own) and
+    /// the shipped `enchant_tuning.json`, whose explicit numbers must equal the APK's.
+    #[test]
+    fn count_odds_config_defaults_to_retail() {
+        let code_default = deploy_enchanting();
+        assert_eq!(code_default.tuning, Default::default());
+        let shipped = static_data_from_deploy().enchanting;
+        assert!(
+            !shipped.tuning.secondary_count_odds.is_empty(),
+            "the shipped file spells the odds out"
+        );
+        assert_eq!(
+            shipped.tuning.double_ravage_pity,
+            Default::default(),
+            "shipped pity settings = code defaults"
+        );
+        for e in [code_default, &shipped] {
+            for (i, t) in e.secondary_tables.iter().enumerate() {
+                assert_eq!(e.count_odds_for(t), t.count_odds.as_slice(), "table {i}");
+            }
+            let odds = |template: &str| e.count_odds_for(e.table_for(&uuid(template)).unwrap());
+            assert_eq!(odds(MADNESS_BATTLEAXE), [0.6, 0.25, 0.15], "weapons");
+            assert_eq!(odds(GOLD_EMERALD_RING), [0.3, 0.6, 0.1], "rings");
+        }
+        // Every table is covered by a rule, so editing the file reaches every type.
+        for (i, t) in shipped.secondary_tables.iter().enumerate() {
+            assert!(
+                shipped.tuning.secondary_count_odds.iter().any(|r| r.matches(t)),
+                "table {i} ({:?}/{:?}/{:?}) has no rule",
+                t.item_type,
+                t.weapon_type,
+                t.equipment_slot
+            );
+        }
+    }
+
+    /// The config is what the roll reads: weapons set to "always two" roll two, and
+    /// arcane tiers keep their fixed counts.
+    #[test]
+    fn count_odds_config_drives_the_roll() {
+        let mut e = deploy_enchanting().clone();
+        e.tuning.secondary_count_odds = vec![blades_lib::static_data::CountOddsRule {
+            label: "weapons".into(),
+            item_type: 2,
+            weapon_type: None,
+            equipment_slot: None,
+            odds: vec![0.0, 0.0, 1.0],
+        }];
+        let mut rng = seeded(22);
+        for arcane in [None, Some(1)] {
+            let item = madness_battleaxe(arcane);
+            for _ in 0..500 {
+                let rolled = roll_item_for_test(&item, uuid(MAGICKA_DAMAGE_T10), &e, &mut rng);
+                let want = if arcane.is_some() { 1 } else { 2 };
+                assert_eq!(rolled.properties.enchanting.len() - 1, want, "{arcane:?}");
+            }
+        }
+        // A ring is not a weapon: its retail odds still give it 0, 1 and 2.
+        let ring = Item {
+            item_template_id: uuid(GOLD_EMERALD_RING),
+            ..madness_battleaxe(None)
+        };
+        let lens: std::collections::HashSet<usize> = (0..500)
+            .map(|_| {
+                roll_item_for_test(&ring, uuid(MAGICKA_DAMAGE_T10), &e, &mut rng)
+                    .properties
+                    .enchanting
+                    .len()
+            })
+            .collect();
+        assert_eq!(lens.len(), 3, "ring counts untouched: {lens:?}");
     }
 
     #[test]
@@ -5328,6 +5431,55 @@ mod tests {
 
         fn gold_of(e: &CharacterDbEntryEconomy) -> u64 {
             e.wallet.0.balance(GOLD)
+        }
+
+        /// Tracker #415 (d17) end to end: the pity counter is read from and written
+        /// to the character's stored `server_state`, so it survives a restart. An
+        /// arcane-2 battleaxe with 95 misses on record gets both Ravages on its next
+        /// enchant and the stored counter clears; the other class is untouched.
+        #[tokio::test]
+        async fn the_pity_counter_lives_in_server_state_and_forces_the_pair() {
+            use crate::enchant_pity::{RAVAGE_MAGICKA, RAVAGE_STAMINA, has_double_ravage};
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 1_000_000).await;
+            diesel::sql_query(
+                "UPDATE characters SET server_state = \
+                 '{\"enchantPityMisses\": {\"arcane2\": 95, \"normal\": 7}}'::jsonb WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(s.character_id)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+            start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                request(s.item_id, 0),
+            )
+            .await
+            .expect("enchant starts");
+            let row = stored(&mut conn, &s).await;
+            let job = &row.server_state.0.craft_jobs[0];
+            let item = serde_json::from_value::<RewardItem>(job.results["items"][0].clone())
+                .unwrap()
+                .item;
+            let ids: Vec<Uuid> = item.properties.enchanting.iter().map(|p| p.id).collect();
+            assert!(
+                has_double_ravage(&item.properties.enchanting),
+                "95 misses on record: the pair is due ({ids:?})"
+            );
+            assert!(ids.contains(&RAVAGE_MAGICKA) && ids.contains(&RAVAGE_STAMINA));
+            assert_eq!(
+                row.server_state.0.enchant_pity_misses,
+                [("normal".to_string(), 7)].into(),
+                "arcane2 cleared, the other class untouched"
+            );
         }
 
         #[tokio::test]

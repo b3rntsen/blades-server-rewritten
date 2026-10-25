@@ -1,0 +1,19 @@
+{
+  "_doc": "Newblades enchant tuning (tracker #415). NOT retail data: enchanting.json holds the APK's tables, this file overrides them. Every key defaults to today's behaviour when absent, and a missing or invalid file is the default. Read at startup: edit, then `deploy/arena.sh static` (restarts the arena).",
+  "_secondaryCountOdds": "Owner decision d22. P(0), P(1), P(2) secondary enchantments for a NON-arcane item, per item type; first matching rule wins, and a table no rule matches keeps its retail odds. itemType: 2 weapon, 3 armor, 9 shield, 10 ring, 11 necklace. equipmentSlot (armor): 1 head, 3 body, 4 hands, 7 feet. weaponType: absent = every weapon. The values below ARE retail (SecondaryEnchantmentEffectData in the APK); arcane tiers 1 and 2 keep their fixed one / two regardless.",
+  "secondaryCountOdds": [
+    { "label": "weapons", "itemType": 2, "odds": [0.6, 0.25, 0.15] },
+    { "label": "armor: head", "itemType": 3, "equipmentSlot": 1, "odds": [0.3, 0.4, 0.3] },
+    { "label": "armor: body", "itemType": 3, "equipmentSlot": 3, "odds": [0.6, 0.25, 0.15] },
+    { "label": "armor: hands", "itemType": 3, "equipmentSlot": 4, "odds": [0.5, 0.3, 0.2] },
+    { "label": "armor: feet", "itemType": 3, "equipmentSlot": 7, "odds": [0.4, 0.4, 0.2] },
+    { "label": "shields", "itemType": 9, "odds": [0.5, 0.3, 0.2] },
+    { "label": "rings", "itemType": 10, "odds": [0.3, 0.6, 0.1] },
+    { "label": "necklaces", "itemType": 11, "odds": [0.5, 0.3, 0.2] }
+  ],
+  "_doubleRavagePity": "Owner decision d17, not retail. After `tries[class]` weapon enchants in a row without both Ravage Magicka and Ravage Stamina, the next one in that class gets both. class: normal = no arcane tier, arcane2 = arcane tier 2 (arcane 1 rolls one secondary, so it has no timer). Thresholds = expected tries 1 / (P(two secondaries) x 2 x 0.07 x 0.07 / 0.93): 632.7 normal, 94.9 arcane2. A class absent or set to 0 is never forced. enabled: false turns the timer off.",
+  "doubleRavagePity": {
+    "enabled": true,
+    "tries": { "normal": 630, "arcane2": 95 }
+  }
+}
