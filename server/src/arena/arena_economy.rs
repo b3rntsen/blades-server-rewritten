@@ -1230,7 +1230,7 @@ mod tests {
             backpack_version: 7,
             treasury_version: 3,
         };
-        let weapon = crate::arena::arena_fight_gift::weapon_instance(Uuid::from_u128(25));
+        let weapon = crate::arena::arena_fight_gift::weapon_instance(Uuid::from_u128(25), 0);
         let mut tracker = InventoryChangeTracker::default();
         deliver_card_weapon(&mut inv, &weapon, &mut tracker);
 
