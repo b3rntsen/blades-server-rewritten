@@ -73,12 +73,24 @@ fn check_token(app: &ServerGlobal, req: &HttpRequest) -> Result<(), BladeApiErro
         .or(app.arena_import_token.as_deref())
         .filter(|t| !t.is_empty());
     let Some(expected) = expected else {
-        return Err(BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, DEBUG_SERVICE_ID, 1));
+        return Err(BladeApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            DEBUG_SERVICE_ID,
+            1,
+        ));
     };
     match extract_token(req) {
         Some(provided) if provided == expected => Ok(()),
-        Some(_) => Err(BladeApiError::new(StatusCode::FORBIDDEN, DEBUG_SERVICE_ID, 2)),
-        None => Err(BladeApiError::new(StatusCode::UNAUTHORIZED, DEBUG_SERVICE_ID, 3)),
+        Some(_) => Err(BladeApiError::new(
+            StatusCode::FORBIDDEN,
+            DEBUG_SERVICE_ID,
+            2,
+        )),
+        None => Err(BladeApiError::new(
+            StatusCode::UNAUTHORIZED,
+            DEBUG_SERVICE_ID,
+            3,
+        )),
     }
 }
 
@@ -240,12 +252,20 @@ pub async fn debug_inject(
         let bytes = decode_hex(hex)
             .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, DEBUG_SERVICE_ID, 11))?;
         if bytes.is_empty() {
-            return Err(BladeApiError::new(StatusCode::BAD_REQUEST, DEBUG_SERVICE_ID, 12));
+            return Err(BladeApiError::new(
+                StatusCode::BAD_REQUEST,
+                DEBUG_SERVICE_ID,
+                12,
+            ));
         }
         (bytes, "payloadHex".to_string())
     } else {
         // Neither provided.
-        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, DEBUG_SERVICE_ID, 13));
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            DEBUG_SERVICE_ID,
+            13,
+        ));
     };
 
     let plaintext_hex = hex_lower(&plaintext);
@@ -260,11 +280,19 @@ pub async fn debug_inject(
         .debug_enqueue(body.match_id, target, plaintext.clone());
     let Some(n) = resolved else {
         // No such live match.
-        return Err(BladeApiError::new(StatusCode::NOT_FOUND, DEBUG_SERVICE_ID, 14));
+        return Err(BladeApiError::new(
+            StatusCode::NOT_FOUND,
+            DEBUG_SERVICE_ID,
+            14,
+        ));
     };
     if n == 0 {
         // Match exists but the target slot has no connected peer.
-        return Err(BladeApiError::new(StatusCode::NOT_FOUND, DEBUG_SERVICE_ID, 15));
+        return Err(BladeApiError::new(
+            StatusCode::NOT_FOUND,
+            DEBUG_SERVICE_ID,
+            15,
+        ));
     }
 
     // Report what WILL be sent (ciphertext len == plaintext len; XOR preserves it).
@@ -294,7 +322,11 @@ pub async fn debug_inject(
 
     log::info!(
         "arena DEBUG inject queued: match {} target {:?} ({} B, {}) → {} peer(s)",
-        body.match_id, target, plaintext_len, source, n
+        body.match_id,
+        target,
+        plaintext_len,
+        source,
+        n
     );
 
     Ok(HttpResponse::Ok().json(InjectResponse {
@@ -321,16 +353,21 @@ fn build_from_builder(
 ) -> Result<(Vec<u8>, String), BladeApiError> {
     match builder.trim().to_ascii_lowercase().as_str() {
         "matchstatechange" | "op79" | "matchstatechangerequest" => {
-            let trigger = body.trigger.as_deref().ok_or_else(|| {
-                BladeApiError::new(StatusCode::BAD_REQUEST, DEBUG_SERVICE_ID, 20)
-            })?;
+            let trigger = body
+                .trigger
+                .as_deref()
+                .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, DEBUG_SERVICE_ID, 20))?;
             let controller = body.controller_id.unwrap_or(560);
             Ok((
                 messages::match_state_change_request(controller, trigger),
                 format!("builder:matchstatechange(controller={controller},trigger={trigger:?})"),
             ))
         }
-        _ => Err(BladeApiError::new(StatusCode::BAD_REQUEST, DEBUG_SERVICE_ID, 21)),
+        _ => Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            DEBUG_SERVICE_ID,
+            21,
+        )),
     }
 }
 
@@ -341,7 +378,10 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
         .chars()
         .filter(|c| !c.is_whitespace() && *c != ':' && *c != ',')
         .collect();
-    let cleaned = cleaned.strip_prefix("0x").or_else(|| cleaned.strip_prefix("0X")).unwrap_or(&cleaned);
+    let cleaned = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+        .unwrap_or(&cleaned);
     if cleaned.len() % 2 != 0 {
         return None;
     }
@@ -393,7 +433,10 @@ mod tests {
     #[test]
     fn hex_roundtrips_lowercase() {
         assert_eq!(hex_lower(&[0xBE, 0x36, 0x0a]), "be360a");
-        assert_eq!(decode_hex(&hex_lower(&[0x01, 0xFF, 0x80])), Some(vec![0x01, 0xFF, 0x80]));
+        assert_eq!(
+            decode_hex(&hex_lower(&[0x01, 0xFF, 0x80])),
+            Some(vec![0x01, 0xFF, 0x80])
+        );
     }
 
     /// The `matchstatechange` builder must produce a byte-exact op79 frame —
@@ -410,8 +453,15 @@ mod tests {
             controller_id: Some(560),
         };
         let (frame, source) = build_from_builder("matchstatechange", &body).unwrap();
-        assert_eq!(frame, messages::match_state_change_request(560, "OpponentShowcase"));
-        assert_eq!(&frame[0..2], &[0xBE, 0x36], "op79 rides marker 0xBE + carrier 0x36");
+        assert_eq!(
+            frame,
+            messages::match_state_change_request(560, "OpponentShowcase")
+        );
+        assert_eq!(
+            &frame[0..2],
+            &[0xBE, 0x36],
+            "op79 rides marker 0xBE + carrier 0x36"
+        );
         assert!(frame.ends_with(b"OpponentShowcase"));
         assert!(source.contains("OpponentShowcase"));
 

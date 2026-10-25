@@ -158,7 +158,9 @@ pub fn now_unix() -> i64 {
 /// Returns `None` before the first season opens, so the arena runs unseasoned
 /// rather than silently back-dating players into a season that has not started.
 pub fn season_at(now: i64) -> Option<&'static SeasonConfig> {
-    SEASONS.iter().find(|s| now >= s.start_unix && now < s.end_unix)
+    SEASONS
+        .iter()
+        .find(|s| now >= s.start_unix && now < s.end_unix)
 }
 
 /// The eleven-key PvP counter block, exactly as retail archives it.
@@ -214,7 +216,10 @@ pub struct RolloverOutcome {
 /// scored. Returns what it did.
 pub fn roll_character_into(ch: &mut CompleteCharacter, season: &SeasonConfig) -> RolloverOutcome {
     if ch.pvp_season_id == season.id {
-        return RolloverOutcome { reset: false, archived_under: None };
+        return RolloverOutcome {
+            reset: false,
+            archived_under: None,
+        };
     }
 
     let closing = ch.pvp_season_id;
@@ -235,9 +240,11 @@ pub fn roll_character_into(ch: &mut CompleteCharacter, season: &SeasonConfig) ->
     }
     ch.pvp_season_id = season.id;
 
-    RolloverOutcome { reset: true, archived_under }
+    RolloverOutcome {
+        reset: true,
+        archived_under,
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -267,18 +274,31 @@ mod tests {
         let mut ch = retail_character(closing);
 
         // Precondition: there is something to archive and nowhere it is archived yet.
-        assert_eq!(ch.pvp_trophies, 1215, "fixture must start with real standings");
-        assert!(ch.pvp_season_history.is_null(), "fixture must start with no history");
+        assert_eq!(
+            ch.pvp_trophies, 1215,
+            "fixture must start with real standings"
+        );
+        assert!(
+            ch.pvp_season_history.is_null(),
+            "fixture must start with no history"
+        );
 
         let out = roll_character_into(&mut ch, &SEASON_2026_09);
         assert!(out.reset);
         assert_eq!(out.archived_under, Some(closing));
 
         let hist = ch.pvp_season_history.as_object().expect("history is a map");
-        let blk = hist.get(&closing.to_string()).expect("closing season archived");
+        let blk = hist
+            .get(&closing.to_string())
+            .expect("closing season archived");
 
         // The exact eleven-key retail block, no more and no less.
-        let mut keys: Vec<&str> = blk.as_object().unwrap().keys().map(|s| s.as_str()).collect();
+        let mut keys: Vec<&str> = blk
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|s| s.as_str())
+            .collect();
         keys.sort_unstable();
         assert_eq!(
             keys,
@@ -335,7 +355,10 @@ mod tests {
 
         // …and the rollover is run again by mistake.
         let out = roll_character_into(&mut ch, &SEASON_2026_09);
-        assert!(!out.reset, "a second rollover into the same season must be a no-op");
+        assert!(
+            !out.reset,
+            "a second rollover into the same season must be a no-op"
+        );
         assert_eq!(out.archived_under, None);
         assert_eq!(ch.pvp_trophies, 640, "in-season progress must survive");
         assert_eq!(ch.number_pvp_match_played, 40);
@@ -349,13 +372,22 @@ mod tests {
     #[test]
     fn a_character_that_never_had_a_season_is_stamped_but_not_archived() {
         let mut ch = CompleteCharacter::default();
-        assert!(ch.pvp_season_id.is_nil(), "precondition: fresh char has a nil season");
+        assert!(
+            ch.pvp_season_id.is_nil(),
+            "precondition: fresh char has a nil season"
+        );
 
         let out = roll_character_into(&mut ch, &SEASON_2026_09);
         assert!(out.reset);
-        assert_eq!(out.archived_under, None, "nil season must not become a history key");
+        assert_eq!(
+            out.archived_under, None,
+            "nil season must not become a history key"
+        );
         assert!(
-            ch.pvp_season_history.as_object().map(|m| m.is_empty()).unwrap_or(true),
+            ch.pvp_season_history
+                .as_object()
+                .map(|m| m.is_empty())
+                .unwrap_or(true),
             "no junk key in pvpSeasonHistory"
         );
         assert_eq!(ch.pvp_season_id, SEASON_2026_09.id);
@@ -380,12 +412,26 @@ mod tests {
         // 2026-09-01T00:00:00Z .. 2026-10-01T00:00:00Z, i.e. exactly 30 days.
         assert_eq!(SEASON_2026_09.start_unix, 1_788_220_800);
         assert_eq!(SEASON_2026_09.end_unix, 1_790_812_800);
-        assert_eq!(SEASON_2026_09.end_unix - SEASON_2026_09.start_unix, 30 * 86_400);
+        assert_eq!(
+            SEASON_2026_09.end_unix - SEASON_2026_09.start_unix,
+            30 * 86_400
+        );
 
-        assert!(season_at(SEASON_2026_09.start_unix - 1).is_none(), "not live before it opens");
-        assert_eq!(season_at(SEASON_2026_09.start_unix).map(|s| s.id), Some(SEASON_2026_09.id));
-        assert_eq!(season_at(SEASON_2026_09.end_unix - 1).map(|s| s.id), Some(SEASON_2026_09.id));
-        assert!(season_at(SEASON_2026_09.end_unix).is_none(), "end is exclusive");
+        assert!(
+            season_at(SEASON_2026_09.start_unix - 1).is_none(),
+            "not live before it opens"
+        );
+        assert_eq!(
+            season_at(SEASON_2026_09.start_unix).map(|s| s.id),
+            Some(SEASON_2026_09.id)
+        );
+        assert_eq!(
+            season_at(SEASON_2026_09.end_unix - 1).map(|s| s.id),
+            Some(SEASON_2026_09.id)
+        );
+        assert!(
+            season_at(SEASON_2026_09.end_unix).is_none(),
+            "end is exclusive"
+        );
     }
-
 }

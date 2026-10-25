@@ -23,7 +23,7 @@ use blades_lib::static_data::{
 };
 use log::warn;
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 /// Read a JSON file into a UUID-keyed map, skipping the `_meta` provenance block
@@ -742,10 +742,11 @@ mod tests {
                 );
             }
         }
-        assert!(sd
-            .global_shop_overrides
-            .get("globalShopOverrides")
-            .is_some());
+        assert!(
+            sd.global_shop_overrides
+                .get("globalShopOverrides")
+                .is_some()
+        );
         assert!(
             sd.global_shop_windows["globalShopWindows"]
                 .as_object()

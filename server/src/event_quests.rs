@@ -1,11 +1,11 @@
+use actix_web::http::StatusCode;
+use chrono::NaiveDateTime;
+use diesel::prelude::*;
+use diesel_async::AsyncPgConnection;
+use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use diesel::prelude::*;
-use chrono::NaiveDateTime;
-use diesel_async::AsyncPgConnection;
-use diesel_async::RunQueryDsl;
-use actix_web::http::StatusCode;
 
 use crate::BladeApiError;
 
@@ -57,7 +57,8 @@ impl EventQuestReward {
             *out.currencies.entry(*id).or_insert(0) += *n;
         }
         if other.character_xp.is_some() {
-            out.character_xp = Some(out.character_xp.unwrap_or(0) + other.character_xp.unwrap_or(0));
+            out.character_xp =
+                Some(out.character_xp.unwrap_or(0) + other.character_xp.unwrap_or(0));
         }
         if other.town_xp.is_some() {
             out.town_xp = Some(out.town_xp.unwrap_or(0) + other.town_xp.unwrap_or(0));
@@ -78,7 +79,7 @@ pub struct EventQuestTemplate {
     pub final_reward: Option<EventQuestReward>,
     #[serde(rename = "eventIds")]
     pub event_ids: Vec<Uuid>,
-     #[serde(rename = "payableRewards")]
+    #[serde(rename = "payableRewards")]
     #[serde(default)]
     pub payable_rewards: HashMap<String, EventQuestPayableReward>,
     #[serde(rename = "_meta")]
@@ -222,11 +223,9 @@ impl EventQuestData {
                 templates: HashMap::new(),
             };
         }
-        
+
         match serde_json::from_value::<Self>(value.clone()) {
-            Ok(data) => {
-                data
-            }
+            Ok(data) => data,
             Err(e) => {
                 log::error!("[events] failed to parse event_quests.json: {}", e);
                 Self {
@@ -274,7 +273,11 @@ impl EventCompletion {
                     .await
                     .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))
             }
-            Err(_e) => Err(BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3)),
+            Err(_e) => Err(BladeApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                20001,
+                3,
+            )),
         }
     }
 
@@ -375,10 +378,10 @@ impl EventCompletion {
         conn: &mut AsyncPgConnection,
     ) -> Result<(), BladeApiError> {
         use crate::schema::event_completions::dsl::*;
-        
+
         self.completion_count += 1;
         self.last_completed_at = chrono::Utc::now().naive_utc();
-        
+
         diesel::update(event_completions)
             .filter(id.eq(self.id))
             .set((
@@ -388,7 +391,7 @@ impl EventCompletion {
             .execute(conn)
             .await
             .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
-        
+
         Ok(())
     }
 }
@@ -432,7 +435,11 @@ mod tier_progression {
     fn authored_templates_are_labelled_as_such() {
         let d = data();
         let authored: Vec<_> = d.templates.values().filter(|t| t._meta.authored).collect();
-        assert_eq!(authored.len(), 7, "the seven retired events, and only those");
+        assert_eq!(
+            authored.len(),
+            7,
+            "the seven retired events, and only those"
+        );
 
         for t in &authored {
             assert_eq!(
@@ -440,7 +447,11 @@ mod tier_progression {
                 "{} claims to be authored AND observed",
                 t.gld_quest_id
             );
-            assert!(!t._meta.name.is_empty(), "{}: an authored row needs a name", t.gld_quest_id);
+            assert!(
+                !t._meta.name.is_empty(),
+                "{}: an authored row needs a name",
+                t.gld_quest_id
+            );
             // It must still be playable — authored is not an excuse for a half table.
             assert_eq!(t.rewards.len(), 5, "{}", t.gld_quest_id);
             assert_eq!(t.payable_rewards.len(), 5, "{}", t.gld_quest_id);
@@ -484,7 +495,9 @@ mod tier_progression {
         let mut checked = 0;
 
         for (id, tpl) in &d.templates {
-            let Some(bonus) = tpl.final_reward.as_ref() else { continue };
+            let Some(bonus) = tpl.final_reward.as_ref() else {
+                continue;
+            };
             let last = tpl.rewards.len() - 1;
             let tier = granting_tier(tpl, last);
             let paid = tpl.payout_for_completion(last).expect("last tier must pay");
@@ -508,7 +521,10 @@ mod tier_progression {
             checked += 1;
         }
 
-        assert!(checked > 0, "no template carried a finalReward — the test proved nothing");
+        assert!(
+            checked > 0,
+            "no template carried a finalReward — the test proved nothing"
+        );
     }
 
     /// Every tier before the last pays exactly its own entry, untouched. This is
@@ -558,7 +574,11 @@ mod tier_progression {
                 // the same source the implementation grants from, read raw
                 let raw_tier = {
                     let payable = &raw_tpl["payableRewards"][n.to_string()]["reward"];
-                    if payable.is_object() { payable.clone() } else { raw_tpl["rewards"][n].clone() }
+                    if payable.is_object() {
+                        payable.clone()
+                    } else {
+                        raw_tpl["rewards"][n].clone()
+                    }
                 };
                 let paid = tpl.payout_for_completion(n).expect("tier must pay");
                 let is_last = n + 1 == tpl.rewards.len();
@@ -566,7 +586,8 @@ mod tier_progression {
                 if let Some(xp) = raw_tier["characterXp"].as_u64() {
                     if xp > 0 {
                         assert_eq!(
-                            paid.character_xp.unwrap_or(0), xp,
+                            paid.character_xp.unwrap_or(0),
+                            xp,
                             "template {id} tier {n}: characterXp {xp} was lost in parsing"
                         );
                         checked_xp += 1;
@@ -576,7 +597,9 @@ mod tier_progression {
                 if let Some(items) = raw_tier["stackableItems"].as_object() {
                     for (item, qty) in items {
                         let want = qty.as_u64().unwrap_or(0);
-                        if want == 0 { continue; }
+                        if want == 0 {
+                            continue;
+                        }
                         let key: Uuid = item.parse().expect("item id");
                         let got = paid.stackable_items.get(&key).copied().unwrap_or(0);
                         // the last tier also folds in finalReward, so it may exceed
@@ -594,8 +617,14 @@ mod tier_progression {
 
         // Controls: if the corpus specified none of these, the loop above would
         // assert nothing at all and pass regardless of the code.
-        assert!(checked_xp > 0, "no characterXp in the corpus — the test proved nothing");
-        assert!(checked_items > 0, "no stackableItems in the corpus — the test proved nothing");
+        assert!(
+            checked_xp > 0,
+            "no characterXp in the corpus — the test proved nothing"
+        );
+        assert!(
+            checked_items > 0,
+            "no stackableItems in the corpus — the test proved nothing"
+        );
     }
 
     /// Specifically that the camelCase fields bind at all -- the single mistake
@@ -622,7 +651,10 @@ mod tier_progression {
     fn every_template_has_tiers_to_pay() {
         let d = data();
         for (id, tpl) in &d.templates {
-            assert!(!tpl.rewards.is_empty(), "template {id} ships no reward tiers");
+            assert!(
+                !tpl.rewards.is_empty(),
+                "template {id} ships no reward tiers"
+            );
             assert!(
                 tpl.payout_for_completion(0).is_some(),
                 "template {id} pays nothing on a first completion"
@@ -637,7 +669,11 @@ mod window_reset_tests {
 
     /// The rule `reset_if_before` applies, isolated from the database so it can be
     /// asserted directly.
-    fn should_reset(count: i32, last_completed_at: NaiveDateTime, window_start: NaiveDateTime) -> bool {
+    fn should_reset(
+        count: i32,
+        last_completed_at: NaiveDateTime,
+        window_start: NaiveDateTime,
+    ) -> bool {
         count != 0 && last_completed_at < window_start
     }
 
@@ -684,6 +720,10 @@ mod window_reset_tests {
     #[test]
     fn a_zero_count_is_never_rewritten() {
         let window_start = Utc::now().naive_utc();
-        assert!(!should_reset(0, window_start - Duration::days(9), window_start));
+        assert!(!should_reset(
+            0,
+            window_start - Duration::days(9),
+            window_start
+        ));
     }
 }

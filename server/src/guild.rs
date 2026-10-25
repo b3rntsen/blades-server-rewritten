@@ -1074,7 +1074,11 @@ pub struct GuildBoardEntry {
     pub trophies: i64,
 }
 
-fn guild_board_from(rows: &[GuildRow], members: &HashMap<String, i64>, limit: usize) -> Vec<GuildBoardEntry> {
+fn guild_board_from(
+    rows: &[GuildRow],
+    members: &HashMap<String, i64>,
+    limit: usize,
+) -> Vec<GuildBoardEntry> {
     rows.iter()
         .take(limit)
         .enumerate()
@@ -1979,7 +1983,16 @@ pub async fn leave_guild(
 
     conn.transaction(move |conn| {
         async move {
-            depart_guild(conn, &gid, user_id, character_id, me.stored_user_id, my_rank, ts).await
+            depart_guild(
+                conn,
+                &gid,
+                user_id,
+                character_id,
+                me.stored_user_id,
+                my_rank,
+                ts,
+            )
+            .await
         }
         .scope_boxed()
     })
@@ -2559,12 +2572,19 @@ mod exchange_amount_tests {
 
     #[test]
     fn the_client_table_is_complete_and_self_consistent() {
-        assert_eq!(GUILD_EXCHANGE_DATA.len(), 65, "65 entries in GuildExchangeData");
+        assert_eq!(
+            GUILD_EXCHANGE_DATA.len(),
+            65,
+            "65 entries in GuildExchangeData"
+        );
         for (t, base, mults, pct) in GUILD_EXCHANGE_DATA {
             assert!(Uuid::parse_str(t).is_ok(), "{t} is not a uuid");
             assert!(*base > 0 && *pct > 0 && *pct <= 100, "{t}");
             assert!(mults.iter().all(|m| *m >= 1), "{t}");
-            assert!(mults.windows(2).all(|w| w[0] <= w[1]), "{t} ladder decreases");
+            assert!(
+                mults.windows(2).all(|w| w[0] <= w[1]),
+                "{t} ladder decreases"
+            );
         }
     }
 
@@ -2641,71 +2661,396 @@ mod exchange_amount_tests {
 /// item retail happened not to show us — including soul gems 1–6, which the client
 /// asks for ONE at a time like every other gem (report #325).
 const GUILD_EXCHANGE_DATA: &[(&str, i64, [i64; 10], i64)] = &[
-    ("e7193116-d761-479b-8a20-5633737977f5", 10, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 20), // Lumber
-    ("fd67bbc6-20f4-44a3-9614-28265ebb8c67", 10, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 20), // Limestone
-    ("42d91529-c88b-4c5b-815b-b55508b4e7ef", 6, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 20), // Clay
-    ("55e82826-2d68-469c-8870-753665ca62cd", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // IronBar
-    ("51f7612f-a797-4417-8a92-493b0aae7f45", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // AnimalHide
-    ("b81952e0-c3c8-4a5c-92c0-8215d3eb71af", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // SteelIngot
-    ("9d9732a5-cd1c-4a93-8755-0bf92ee65d64", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // Leather
-    ("b74a5c55-a687-4604-aa59-ba3ddfddcd2a", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // SilverIngot
-    ("b604fd80-25b0-4bfb-8cc3-aad05bef96c0", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // ScribChitin
-    ("74f091b5-fd88-464b-a98a-f60a5e8a0f25", 3, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // OrichalcumIngot
-    ("f11fb90b-b441-4d72-a33f-50d14d3d6778", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DwarvenIngot
-    ("e80bee76-f92c-4005-9eff-20d1e8c64d24", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // QuickSilverIngot
-    ("4312b0ed-e397-4815-9693-a511ecda71de", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // MoonstoneOre
-    ("85ed5500-3581-4699-8095-4b5ff6514355", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // MalachiteIngot
-    ("8ef9f10c-3c46-492c-9a00-29fd1626d85e", 4, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // ChaurusChitin
-    ("75112030-b248-49b0-9c70-0da8dea150d1", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // EbonyIngot
-    ("ba9fe442-2cf8-48a8-9416-6d91c2a00cab", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // StalhrimIngot
-    ("f9181a67-b094-4c37-a145-ced9dfe610d6", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DaedraHeart
-    ("d523932f-8c7f-4192-9112-5dbd60883c2b", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DragonBone
-    ("34ddfe0e-5119-4e52-8eef-a77b6bc810a7", 5, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 20), // DragonScale
-    ("fbf96b07-e9aa-4157-8761-10179fa05138", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Garlic
-    ("f00f350d-97c2-47cd-a554-e1a37c9ff7f2", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Lavender
-    ("0e59a8f9-8a47-48a0-afac-8c3053cc778c", 4, [1, 1, 1, 1, 1, 1, 2, 2, 2, 2], 50), // Histcarp
-    ("200d62f5-7de2-4a6c-979a-43df30d6fd86", 4, [1, 1, 1, 1, 1, 1, 2, 2, 2, 2], 50), // BlueDartwing
-    ("dba6adde-b1f3-4146-8155-91426652495a", 6, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // Ectoplasm
-    ("0de08119-d316-4933-a5d3-8ef702d4efdc", 6, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // MoonSugar
-    ("4d7420db-8042-4946-a43f-e0b3bd9bec81", 8, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // Nightshade
-    ("a4d5e792-5a27-4bb3-851f-e0917c0962db", 8, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // GiantsToe
-    ("fe3567e0-ec8e-4f41-8e77-a56f861ab898", 10, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // DaedrothTooth
-    ("4577fb2b-47f7-4112-b870-1479e2529b06", 10, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 50), // DragonClaw
-    ("f1c5c03c-5297-48fb-a9d2-5f32bffb467c", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // FireSalts
-    ("05b4dd6b-796f-4088-a772-0e33ea3db976", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // FrostSalts
-    ("10c54e43-a2a1-4833-9491-4c19149f43b5", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // VoidSalts
-    ("8b7d0044-3a38-4ee0-af45-d2892b0f508d", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Deathbell
-    ("07f380dd-f123-4ef7-9b12-8b9fdb03c3e1", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // ImpStool
-    ("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // Honeycomb
-    ("9687d83c-aa7b-4cf3-a69f-0bba8204fa61", 2, [1, 1, 2, 2, 3, 3, 4, 4, 5, 5], 50), // GlowDust
-    ("19ce1a65-057f-4f34-a0ed-27de7c085662", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem1
-    ("790a188b-3fa0-4f38-99d9-bc8d3675bc46", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem2
-    ("eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem3
-    ("1ba210b4-8cca-4f2f-b942-8fab80a52fd8", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem4
-    ("3932e499-441e-4c6d-b671-9a03131ebe6f", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem5
-    ("a1d41da0-51e0-4a80-ba9a-b8e9046be27e", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem6
-    ("a3351353-f613-4368-bac7-05783f857b07", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem7
-    ("68d7941e-8c8d-47bf-9f66-becb058f1817", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem8
-    ("bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem9
-    ("d94bab85-53d5-4c9c-a637-acd94fc66c98", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // SoulGem10
-    ("89ece62c-9ff6-470a-a152-d45ef4e0c222", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Pearl
-    ("92b77b2f-bd33-469f-8aad-8a228b9537eb", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Brass
-    ("3ca59113-a093-4cc8-8389-0f578ad94851", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Topaz
-    ("9df9233f-e7b9-47e8-bc75-f37707917759", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Garnet
-    ("3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Amethyst
-    ("cf4b1b42-a736-4aa1-99b8-baca9f9c2276", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 33), // Ruby
-    ("71bb8562-07ad-4f18-855a-96f9156b8e6b", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // GoldIngot
-    ("014606cd-8898-4c1d-8029-63220a179c47", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Sapphire
-    ("4d1231be-d3fa-4282-81b2-0f7bed4aabff", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Emerald
-    ("16e102fb-b1c0-42de-8106-0aa27e77f7f0", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Diamond
-    ("ab97efe1-bae9-4d16-8fd9-e05bad9ecb95", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Atronite
-    ("70f2c013-813e-4f63-8b29-7a54a13b5e58", 1, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1], 100), // Faerite
-    ("38d32048-ce01-4390-a4f0-cdb94ef3ce72", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Bronze
-    ("61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Marble
-    ("574ab81c-1ba1-4127-a4aa-e9cbba5767ad", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Fabric
-    ("b94c2028-dba7-44bd-b6f9-6f85ab0195b6", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Seed
-    ("6bd960ca-9af3-4b33-9ec0-5c06d50ad43e", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Dye
-    ("8ac9076c-cba9-4cf4-a8a5-d2303aab22b0", 1, [1, 1, 1, 1, 2, 2, 2, 3, 3, 3], 33), // Crystal
+    (
+        "e7193116-d761-479b-8a20-5633737977f5",
+        10,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        20,
+    ), // Lumber
+    (
+        "fd67bbc6-20f4-44a3-9614-28265ebb8c67",
+        10,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        20,
+    ), // Limestone
+    (
+        "42d91529-c88b-4c5b-815b-b55508b4e7ef",
+        6,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        20,
+    ), // Clay
+    (
+        "55e82826-2d68-469c-8870-753665ca62cd",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // IronBar
+    (
+        "51f7612f-a797-4417-8a92-493b0aae7f45",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // AnimalHide
+    (
+        "b81952e0-c3c8-4a5c-92c0-8215d3eb71af",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // SteelIngot
+    (
+        "9d9732a5-cd1c-4a93-8755-0bf92ee65d64",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // Leather
+    (
+        "b74a5c55-a687-4604-aa59-ba3ddfddcd2a",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // SilverIngot
+    (
+        "b604fd80-25b0-4bfb-8cc3-aad05bef96c0",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // ScribChitin
+    (
+        "74f091b5-fd88-464b-a98a-f60a5e8a0f25",
+        3,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // OrichalcumIngot
+    (
+        "f11fb90b-b441-4d72-a33f-50d14d3d6778",
+        4,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // DwarvenIngot
+    (
+        "e80bee76-f92c-4005-9eff-20d1e8c64d24",
+        4,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // QuickSilverIngot
+    (
+        "4312b0ed-e397-4815-9693-a511ecda71de",
+        4,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // MoonstoneOre
+    (
+        "85ed5500-3581-4699-8095-4b5ff6514355",
+        4,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // MalachiteIngot
+    (
+        "8ef9f10c-3c46-492c-9a00-29fd1626d85e",
+        4,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // ChaurusChitin
+    (
+        "75112030-b248-49b0-9c70-0da8dea150d1",
+        5,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // EbonyIngot
+    (
+        "ba9fe442-2cf8-48a8-9416-6d91c2a00cab",
+        5,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // StalhrimIngot
+    (
+        "f9181a67-b094-4c37-a145-ced9dfe610d6",
+        5,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // DaedraHeart
+    (
+        "d523932f-8c7f-4192-9112-5dbd60883c2b",
+        5,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // DragonBone
+    (
+        "34ddfe0e-5119-4e52-8eef-a77b6bc810a7",
+        5,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        20,
+    ), // DragonScale
+    (
+        "fbf96b07-e9aa-4157-8761-10179fa05138",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // Garlic
+    (
+        "f00f350d-97c2-47cd-a554-e1a37c9ff7f2",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // Lavender
+    (
+        "0e59a8f9-8a47-48a0-afac-8c3053cc778c",
+        4,
+        [1, 1, 1, 1, 1, 1, 2, 2, 2, 2],
+        50,
+    ), // Histcarp
+    (
+        "200d62f5-7de2-4a6c-979a-43df30d6fd86",
+        4,
+        [1, 1, 1, 1, 1, 1, 2, 2, 2, 2],
+        50,
+    ), // BlueDartwing
+    (
+        "dba6adde-b1f3-4146-8155-91426652495a",
+        6,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        50,
+    ), // Ectoplasm
+    (
+        "0de08119-d316-4933-a5d3-8ef702d4efdc",
+        6,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        50,
+    ), // MoonSugar
+    (
+        "4d7420db-8042-4946-a43f-e0b3bd9bec81",
+        8,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        50,
+    ), // Nightshade
+    (
+        "a4d5e792-5a27-4bb3-851f-e0917c0962db",
+        8,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        50,
+    ), // GiantsToe
+    (
+        "fe3567e0-ec8e-4f41-8e77-a56f861ab898",
+        10,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        50,
+    ), // DaedrothTooth
+    (
+        "4577fb2b-47f7-4112-b870-1479e2529b06",
+        10,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        50,
+    ), // DragonClaw
+    (
+        "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // FireSalts
+    (
+        "05b4dd6b-796f-4088-a772-0e33ea3db976",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // FrostSalts
+    (
+        "10c54e43-a2a1-4833-9491-4c19149f43b5",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // VoidSalts
+    (
+        "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // Deathbell
+    (
+        "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // ImpStool
+    (
+        "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // Honeycomb
+    (
+        "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+        2,
+        [1, 1, 2, 2, 3, 3, 4, 4, 5, 5],
+        50,
+    ), // GlowDust
+    (
+        "19ce1a65-057f-4f34-a0ed-27de7c085662",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem1
+    (
+        "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem2
+    (
+        "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem3
+    (
+        "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem4
+    (
+        "3932e499-441e-4c6d-b671-9a03131ebe6f",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem5
+    (
+        "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem6
+    (
+        "a3351353-f613-4368-bac7-05783f857b07",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem7
+    (
+        "68d7941e-8c8d-47bf-9f66-becb058f1817",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem8
+    (
+        "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem9
+    (
+        "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // SoulGem10
+    (
+        "89ece62c-9ff6-470a-a152-d45ef4e0c222",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Pearl
+    (
+        "92b77b2f-bd33-469f-8aad-8a228b9537eb",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Brass
+    (
+        "3ca59113-a093-4cc8-8389-0f578ad94851",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Topaz
+    (
+        "9df9233f-e7b9-47e8-bc75-f37707917759",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Garnet
+    (
+        "3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Amethyst
+    (
+        "cf4b1b42-a736-4aa1-99b8-baca9f9c2276",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        33,
+    ), // Ruby
+    (
+        "71bb8562-07ad-4f18-855a-96f9156b8e6b",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // GoldIngot
+    (
+        "014606cd-8898-4c1d-8029-63220a179c47",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // Sapphire
+    (
+        "4d1231be-d3fa-4282-81b2-0f7bed4aabff",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // Emerald
+    (
+        "16e102fb-b1c0-42de-8106-0aa27e77f7f0",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // Diamond
+    (
+        "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // Atronite
+    (
+        "70f2c013-813e-4f63-8b29-7a54a13b5e58",
+        1,
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        100,
+    ), // Faerite
+    (
+        "38d32048-ce01-4390-a4f0-cdb94ef3ce72",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Bronze
+    (
+        "61d5e5c7-78b8-4fc3-ba6a-5b7c2a15866d",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Marble
+    (
+        "574ab81c-1ba1-4127-a4aa-e9cbba5767ad",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Fabric
+    (
+        "b94c2028-dba7-44bd-b6f9-6f85ab0195b6",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Seed
+    (
+        "6bd960ca-9af3-4b33-9ec0-5c06d50ad43e",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Dye
+    (
+        "8ac9076c-cba9-4cf4-a8a5-d2303aab22b0",
+        1,
+        [1, 1, 1, 1, 2, 2, 2, 3, 3, 3],
+        33,
+    ), // Crystal
 ];
 
 /// `(requestedAmount, maxDonationAmount)` for an item requested by a character whose
@@ -3733,19 +4078,31 @@ mod website_guild_board {
         let wire: Vec<i64> = rows
             .iter()
             .enumerate()
-            .map(|(i, g)| LeaderboardEntry { rank: i as i64 + 1, guild: GuildWire::from_row(g, 0) }.rank)
+            .map(|(i, g)| {
+                LeaderboardEntry {
+                    rank: i as i64 + 1,
+                    guild: GuildWire::from_row(g, 0),
+                }
+                .rank
+            })
             .collect();
         assert_eq!(board.iter().map(|e| e.rank).collect::<Vec<_>>(), wire);
-        assert_eq!(board[0], GuildBoardEntry {
-            rank: 1,
-            guild_id: "b".into(),
-            name: "Guild b".into(),
-            tag_id: "1".into(),
-            badge_icon_index: 3,
-            member_count: 12,
-            trophies: 900,
-        });
-        assert_eq!(board[1].member_count, 0, "a guild missing from the count has 0 members");
+        assert_eq!(
+            board[0],
+            GuildBoardEntry {
+                rank: 1,
+                guild_id: "b".into(),
+                name: "Guild b".into(),
+                tag_id: "1".into(),
+                badge_icon_index: 3,
+                member_count: 12,
+                trophies: 900,
+            }
+        );
+        assert_eq!(
+            board[1].member_count, 0,
+            "a guild missing from the count has 0 members"
+        );
         assert_eq!(guild_board_from(&rows, &members, 2).len(), 2);
     }
 }
@@ -3783,7 +4140,11 @@ mod rejoin_after_leaving {
         lines
             .map(|l| {
                 let f: Vec<&str> = l.split(',').collect();
-                (f[svc].parse().unwrap(), f[http].parse().unwrap(), f[code].parse().unwrap())
+                (
+                    f[svc].parse().unwrap(),
+                    f[http].parse().unwrap(),
+                    f[code].parse().unwrap(),
+                )
             })
             .collect()
     }
@@ -3791,8 +4152,14 @@ mod rejoin_after_leaving {
     #[test]
     fn the_committed_table_is_the_clients_guild_service() {
         let rows = client_rows();
-        assert!(rows.len() > 90, "precondition: the GUILD rows are all there");
-        assert!(rows.iter().all(|(svc, _, _)| *svc == RETAIL_GUILD_SERVICE_ID));
+        assert!(
+            rows.len() > 90,
+            "precondition: the GUILD rows are all there"
+        );
+        assert!(
+            rows.iter()
+                .all(|(svc, _, _)| *svc == RETAIL_GUILD_SERVICE_ID)
+        );
     }
 
     /// The reported failure, generalised: every join/apply refusal must be a
@@ -3820,7 +4187,10 @@ mod rejoin_after_leaving {
         assert_eq!(join_refusal_wire(JoinRefusal::GuildIsInvalid).1, 9);
         assert_eq!(join_refusal_wire(JoinRefusal::BelowMinimumLevel).1, 1000);
         assert_eq!(join_refusal_wire(JoinRefusal::GuildIsAtMaxMembers).1, 1001);
-        assert_eq!(join_refusal_wire(JoinRefusal::GuildIsAtMaxApplications).1, 1002);
+        assert_eq!(
+            join_refusal_wire(JoinRefusal::GuildIsAtMaxApplications).1,
+            1002
+        );
     }
 
     async fn fixture() -> Option<AsyncPgConnection> {
@@ -3878,7 +4248,9 @@ mod rejoin_after_leaving {
     }
 
     /// What `join_guild` would decide for USER right now, against an OPEN guild.
-    async fn rejoin(conn: &mut AsyncPgConnection) -> (Option<Removal>, Result<JoinAdmission, JoinRefusal>) {
+    async fn rejoin(
+        conn: &mut AsyncPgConnection,
+    ) -> (Option<Removal>, Result<JoinAdmission, JoinRefusal>) {
         let removal = find_removal(conn, GUILD, USER).await.unwrap();
         let verdict = evaluate_join(JoinContext {
             guild_type: Some(GuildType::Open),
@@ -3901,9 +4273,17 @@ mod rejoin_after_leaving {
         seat(&mut conn, GM_USER, GM_CHAR, GuildRank::Grandmaster).await;
         seat(&mut conn, USER, CHAR, GuildRank::Member).await;
 
-        depart_guild(&mut conn, GUILD, USER, CHAR, USER, GuildRank::Member, now_secs())
-            .await
-            .unwrap();
+        depart_guild(
+            &mut conn,
+            GUILD,
+            USER,
+            CHAR,
+            USER,
+            GuildRank::Member,
+            now_secs(),
+        )
+        .await
+        .unwrap();
 
         let (removal, verdict) = rejoin(&mut conn).await;
         assert_eq!(removal, None, "a voluntary leave must not arm the cooldown");

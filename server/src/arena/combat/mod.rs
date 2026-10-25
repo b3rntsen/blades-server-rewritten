@@ -43,23 +43,23 @@
 // consume them (Phase B/C).
 #![allow(dead_code)]
 
-pub mod trace;
 pub mod ability_tags;
 pub mod artifact_properties;
+pub mod block_temper;
+pub mod cast_refusal_log;
 pub mod damage;
 pub mod engine;
 pub mod gamedata;
-pub mod block_temper;
-pub mod cast_refusal_log;
 pub mod input;
 pub mod interrupts;
 pub mod loadout;
 pub mod messages;
-pub mod perks;
 pub mod messages_state;
+pub mod perks;
 pub mod resolve;
 pub mod state;
 pub mod tables;
+pub mod trace;
 
 // Offline reproduction-differential test against retail capture s506 (round-start).
 // Test-only: no production code, just drives the engine over s506's timing and
@@ -160,7 +160,7 @@ fn debug_hold_window_at(
 
 #[cfg(test)]
 mod debug_hold_tests {
-    use super::{debug_hold_window_at, DEBUG_HOLD_MAX_WINDOW};
+    use super::{DEBUG_HOLD_MAX_WINDOW, debug_hold_window_at};
 
     #[test]
     fn stale_boolean_alone_cannot_freeze_a_restarted_server() {
@@ -185,7 +185,14 @@ mod debug_hold_tests {
 
     #[test]
     fn false_values_ignore_even_a_valid_deadline() {
-        for value in [None, Some(""), Some("0"), Some("false"), Some("NO"), Some("off")] {
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("false"),
+            Some("NO"),
+            Some("off"),
+        ] {
             assert_eq!(debug_hold_window_at(value, Some("1100"), 1_000), None);
         }
     }

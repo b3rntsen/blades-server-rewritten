@@ -132,7 +132,10 @@ pub struct ArenaConfig {
 impl ArenaConfig {
     pub fn from_env() -> Self {
         fn parse<T: std::str::FromStr>(key: &str, default: T) -> T {
-            env::var(key).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+            env::var(key)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default)
         }
         ArenaConfig {
             advertise_host: env::var("ARENA_ADVERTISE_HOST")

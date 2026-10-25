@@ -15,7 +15,7 @@
 use std::fmt;
 use std::time::Instant;
 
-use log::{debug, info, log_enabled, Level};
+use log::{Level, debug, info, log_enabled};
 
 use super::interrupts::{self, CastRefusal};
 use super::state::{AbilityTag, ActorStateType, FlowState, MatchCombat};
@@ -546,9 +546,10 @@ mod tests {
         let out = cast(&mut c);
         assert_eq!(take_logged().len(), 1);
         assert!(!out.is_empty());
-        assert!(out
-            .iter()
-            .all(|(_, f)| messages::user_message_gmid(f) == Some(65)));
+        assert!(
+            out.iter()
+                .all(|(_, f)| messages::user_message_gmid(f) == Some(65))
+        );
         assert_eq!(c.fighters[0].magicka, need - 1, "a refusal costs nothing");
 
         // Control: the passing state casts.
@@ -561,9 +562,10 @@ mod tests {
             vec![],
             "a successful cast reports no refusal"
         );
-        assert!(out
-            .iter()
-            .any(|(_, f)| messages::user_message_gmid(f) != Some(65)));
+        assert!(
+            out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) != Some(65))
+        );
         assert!(c.fighters[0].magicka < 100_000, "the cast was paid for");
     }
 

@@ -83,7 +83,10 @@ mod tests {
         for (id, want_name) in [
             ("9f089463-ccc5-4a9e-88c9-9e2f380ff829", "Steel Longsword"),
             ("83e71505-e6ef-467e-97f6-77853a7d5c07", "Warrior's Fire"),
-            ("668a077b-2a2e-477b-894d-cb0878fa7dd3", "Dragonbone Longsword"),
+            (
+                "668a077b-2a2e-477b-894d-cb0878fa7dd3",
+                "Dragonbone Longsword",
+            ),
         ] {
             let id: Uuid = id.parse().unwrap();
             let got = output_for(&id).unwrap_or_else(|| panic!("{want_name} does not resolve"));
@@ -106,7 +109,10 @@ mod tests {
                 offenders.push(*rid);
             }
         }
-        assert!(offenders.is_empty(), "recipes mapping to their own id: {offenders:?}");
+        assert!(
+            offenders.is_empty(),
+            "recipes mapping to their own id: {offenders:?}"
+        );
     }
 
     /// Only the crafting types that PRODUCE an item are here. Repair, temper,
@@ -116,13 +122,18 @@ mod tests {
     fn only_producing_crafting_types_are_present() {
         let mut kinds = std::collections::BTreeMap::new();
         for out in corpus().recipes.values() {
-            *kinds.entry(out.crafting_type.clone().unwrap_or_default()).or_insert(0) += 1;
+            *kinds
+                .entry(out.crafting_type.clone().unwrap_or_default())
+                .or_insert(0) += 1;
         }
         assert_eq!(kinds.get("Smithing"), Some(&617));
         assert_eq!(kinds.get("DecorationCrafting"), Some(&141));
         assert_eq!(kinds.get("Alchemy"), Some(&140));
         for banned in ["Repairing", "Tempering", "Salvaging", "Enchanting"] {
-            assert!(kinds.get(banned).is_none(), "{banned} must not declare an output here");
+            assert!(
+                kinds.get(banned).is_none(),
+                "{banned} must not declare an output here"
+            );
         }
     }
 }

@@ -1,4 +1,12 @@
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use crate::{
+    BladeApiError, ServerGlobal,
+    event_quests::{EventCompletion, EventQuestData},
+    json_db::JsonDbWrapper,
+    models::{QuestDbEntry, QuestDbEntryDungeonStateAndInitialState},
+    quest::jobs_gen,
+    session::SessionLookedUpMaybe,
+    util::check_permission_for_character_and_get_it,
+};
 use actix_web::{
     get,
     http::StatusCode,
@@ -7,31 +15,27 @@ use actix_web::{
 };
 use blades_lib::game_data::GameData;
 use blades_lib::static_data::QuestLevelScaling;
-use blades_lib::util::dungeon::run_loot_seed;
 use blades_lib::user_data::{
     B64EncodedData, CompleteCharacterWithIdWithoutData, DungeonGeneratedData,
     DungeonGeneratedDataWithId, DungeonState, DungeonStatus, ObjectiveStatus, Quest, QuestStatus,
     QuestWithId,
 };
+use blades_lib::util::dungeon::run_loot_seed;
 use diesel;
 use diesel::{
+    BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper, associations::HasTable,
     prelude::*,
-    associations::HasTable,
-    BoolExpressionMethods, ExpressionMethods, QueryDsl, SelectableHelper,
 };
-use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt, AsyncPgConnection};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use crate::{
-    event_quests::{EventCompletion, EventQuestData},
-    BladeApiError, ServerGlobal,
-    json_db::JsonDbWrapper,
-    models::{QuestDbEntry, QuestDbEntryDungeonStateAndInitialState},
-    quest::jobs_gen,
-    session::SessionLookedUpMaybe,
-    util::check_permission_for_character_and_get_it,
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
 };
 use rand;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+use uuid::Uuid;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,8 +89,12 @@ pub async fn get_dungeons(
     let character_id_normal = path.into_inner();
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let _ = check_permission_for_character_and_get_it(&mut *conn, &session.session, character_id_normal)
-        .await?;
+    let _ = check_permission_for_character_and_get_it(
+        &mut *conn,
+        &session.session,
+        character_id_normal,
+    )
+    .await?;
 
     // Get quest dungeons
     let ongoing_quest_query = {
@@ -132,7 +140,8 @@ pub async fn get_dungeons(
 
     // Convert event dungeons to the same response format
     for entry in event_dungeons_query {
-        if let (Some(state_value), Some(initial_value)) = (entry.dungeon_state, entry.initial_state) {
+        if let (Some(state_value), Some(initial_value)) = (entry.dungeon_state, entry.initial_state)
+        {
             let state: DungeonState = serde_json::from_value(state_value)
                 .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
             let initial: B64EncodedData = serde_json::from_value(initial_value)
@@ -289,10 +298,10 @@ pub async fn exit_quest_dungeon(
 
     // Extract gldQuestId from the quest's info field
     let gld_quest_id: Uuid = row_info.0["gldQuestId"]
-    .as_str()
-    .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?
-    .parse()
-    .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
+        .as_str()
+        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?
+        .parse()
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2))?;
 
     // Now check if this is an event quest by looking up the template
     let is_event = app_state.event_quests.templates.contains_key(&gld_quest_id);
@@ -673,7 +682,10 @@ pub(crate) fn generated_enemy_level(generated: &DungeonGeneratedData) -> Option<
 /// Report #398: `-1` became level 1, so every story dungeon reported itself as a
 /// level-1 dungeon and every chest found in one was minted as a level-1 chest. Retail
 /// sent the real level (a level-40 dungeon in the captures).
-pub(crate) fn quest_dungeon_level(difficulty_level: i64, generated: Option<&DungeonGeneratedData>) -> u64 {
+pub(crate) fn quest_dungeon_level(
+    difficulty_level: i64,
+    generated: Option<&DungeonGeneratedData>,
+) -> u64 {
     if difficulty_level >= 1 {
         return difficulty_level as u64;
     }
@@ -692,7 +704,10 @@ pub(crate) async fn character_level(
         .first(conn)
         .await
         .optional()?;
-    Ok(character.and_then(|c| c.0["level"].as_i64()).unwrap_or(1).max(1))
+    Ok(character
+        .and_then(|c| c.0["level"].as_i64())
+        .unwrap_or(1)
+        .max(1))
 }
 
 /// Put an event instance back to how its next run starts.
@@ -895,7 +910,7 @@ pub async fn enter_quest_dungeon(
     app_state: web::Data<Arc<ServerGlobal>>,
 ) -> Result<Json<EnterDungeonResponse>, BladeApiError> {
     let session_lookup = session.get_session_or_error()?;
-    let validated_session = &session_lookup.session; 
+    let validated_session = &session_lookup.session;
     let body = body.0;
     let (character_id_normal, quest_id) = path.into_inner();
     let globals = app_state.get_ref().clone();
@@ -1013,7 +1028,6 @@ pub async fn enter_quest_dungeon(
             };
 
             if let Some(dungeon_instance) = fresh_instance {
-
                 // `level` is the dungeon's own power and `seed` its generation
                 // seed. Both were the constants `1` and `54321` — so every dungeon
                 // any player has ever entered on the ordinary quest path reported
@@ -1106,9 +1120,18 @@ mod event_dungeon_shadowing_guard {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        for col in ["character_id", "event_id", "dungeon_id", "user_id", "quest_id"] {
+        for col in [
+            "character_id",
+            "event_id",
+            "dungeon_id",
+            "user_id",
+            "quest_id",
+        ] {
             let needle = format!("{col}.eq({col})");
-            assert!(!code.contains(&needle), "self-comparing filter `{needle}` matches every row");
+            assert!(
+                !code.contains(&needle),
+                "self-comparing filter `{needle}` matches every row"
+            );
         }
     }
 }
@@ -1172,8 +1195,11 @@ mod dungeon_settings_resolution {
             end_secs: 1_793_404_800,   // 2026-10-31 00:00 UTC
             quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
         };
-        let openings: Vec<(i64, Uuid, bool)> =
-            theme.plan(&sd.game_events).expect("plans").openings().collect();
+        let openings: Vec<(i64, Uuid, bool)> = theme
+            .plan(&sd.game_events)
+            .expect("plans")
+            .openings()
+            .collect();
         sd.game_event_theme = Some(theme);
 
         let undying = HALLOWEEN_THEME_QUESTS[2];
@@ -1182,7 +1208,11 @@ mod dungeon_settings_resolution {
             .filter(|(_, q, _)| *q == undying)
             .map(|(s, _, _)| *s)
             .collect();
-        assert!(runs.len() >= 2, "Wrath of the Undying opens {} time(s)", runs.len());
+        assert!(
+            runs.len() >= 2,
+            "Wrath of the Undying opens {} time(s)",
+            runs.len()
+        );
         let second = runs[1];
         let at = |t: i64| chrono::DateTime::from_timestamp(t, 0).unwrap().naive_utc();
 
@@ -1196,7 +1226,10 @@ mod dungeon_settings_resolution {
             game_event_theme: None,
             ..sd.clone()
         };
-        assert_ne!(event_window_start_at(&plain, undying, second + 3_600), Some(at(second)));
+        assert_ne!(
+            event_window_start_at(&plain, undying, second + 3_600),
+            Some(at(second))
+        );
     }
 
     // ---------------------------------------------------------------- the defect
@@ -1248,11 +1281,10 @@ mod dungeon_settings_resolution {
     fn event_quest_generated_data_uses_its_referenced_dungeon() {
         let gd = game_data();
         let quest_id = Uuid::parse_str("e8f3614c-8672-4f77-9dad-4b400676f4b6").unwrap();
-        let expected_dungeon =
-            Uuid::parse_str("924f1147-fd7f-4736-9e2d-f33fa942dbdd").unwrap();
+        let expected_dungeon = Uuid::parse_str("924f1147-fd7f-4736-9e2d-f33fa942dbdd").unwrap();
         let (dungeon_id, generated) =
             event_dungeon_data(&gd, quest_id, 40, &crate::quest::shipped_scaling(), 0)
-            .expect("the EQ15 event quest must generate a real dungeon payload");
+                .expect("the EQ15 event quest must generate a real dungeon payload");
 
         assert_eq!(dungeon_id, expected_dungeon);
         for id in [
@@ -1286,31 +1318,38 @@ mod dungeon_settings_resolution {
         for quest_id in sd.event_quests.templates.keys() {
             let (dungeon_id, generated) =
                 event_dungeon_data(&gd, *quest_id, 40, &sd.quests_daily.level_scaling, 0)
-                .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
-            assert!(gd.dungeons.contains_key(&dungeon_id), "resolved dungeon exists");
-            let stages: Vec<_> =
-                blades_lib::util::quest::event_dungeon_stage_ids(&gd, &dungeon_id)
-                    .unwrap()
-                    .into_iter()
-                    .map(|id| &gd.dungeons[&id].spawn_info)
-                    .collect();
+                    .unwrap_or_else(|e| panic!("event quest {quest_id} cannot generate: {e}"));
+            assert!(
+                gd.dungeons.contains_key(&dungeon_id),
+                "resolved dungeon exists"
+            );
+            let stages: Vec<_> = blades_lib::util::quest::event_dungeon_stage_ids(&gd, &dungeon_id)
+                .unwrap()
+                .into_iter()
+                .map(|id| &gd.dungeons[&id].spawn_info)
+                .collect();
 
-            let expected_enemies: HashSet<_> =
-                stages.iter().flat_map(|s| s.enemy_spawn_groups.keys()).copied().collect();
+            let expected_enemies: HashSet<_> = stages
+                .iter()
+                .flat_map(|s| s.enemy_spawn_groups.keys())
+                .copied()
+                .collect();
             let actual_enemies: HashSet<_> =
                 generated.enemy_generated_data.keys().copied().collect();
             assert_eq!(actual_enemies, expected_enemies, "event quest {quest_id}");
 
-            let expected_chests: HashSet<_> =
-                stages.iter().flat_map(|s| s.chest.keys()).copied().collect();
+            let expected_chests: HashSet<_> = stages
+                .iter()
+                .flat_map(|s| s.chest.keys())
+                .copied()
+                .collect();
             let actual_chests: HashSet<_> =
                 generated.chest_generated_data.keys().copied().collect();
             assert_eq!(actual_chests, expected_chests, "event quest {quest_id}");
 
             let expected_items: HashSet<_> =
                 stages.iter().flat_map(|s| s.item.keys()).copied().collect();
-            let actual_items: HashSet<_> =
-                generated.item_generated_data.keys().copied().collect();
+            let actual_items: HashSet<_> = generated.item_generated_data.keys().copied().collect();
             assert_eq!(actual_items, expected_items, "event quest {quest_id}");
         }
     }
@@ -1319,7 +1358,11 @@ mod dungeon_settings_resolution {
 
     /// Every enemy in `data`, flattened.
     fn enemies(data: &DungeonGeneratedData) -> Vec<&blades_lib::user_data::DungeonEnemyResult> {
-        data.enemy_generated_data.values().flatten().flatten().collect()
+        data.enemy_generated_data
+            .values()
+            .flatten()
+            .flatten()
+            .collect()
     }
 
     /// Every event enemy stands where retail stood it: `level` plus its group's
@@ -1348,15 +1391,27 @@ mod dungeon_settings_resolution {
     fn a_level_55_event_row_and_attempt_agree_and_pay_grand_soul_gems() {
         let (sd, gd) = (static_data(), game_data());
         let scaling = &sd.quests_daily.level_scaling;
-        let above_grand = blades_lib::features::loot_level::SOUL_GEMS_ABOVE_GRAND.map(|g| g.to_string());
+        let above_grand =
+            blades_lib::features::loot_level::SOUL_GEMS_ABOVE_GRAND.map(|g| g.to_string());
         let (mut rows, mut grand) = (0, 0);
         // A year of weekly calendars, to reach events that pay soul gems.
         for week in 0..52i64 {
-            for m in &crate::quest::event_quests::mint(&sd, &gd, CHAR, 55, NOW + week * 7 * 86_400) {
-                let shown = m.dungeon.as_ref().expect("an event row carries dungeon data");
-                let (_, attempt) =
-                    event_dungeon_data_for_run(&gd, m.quest.gld_quest_id, m.quest.difficulty_level, scaling, m.quest_id, 0, 55)
-                        .expect("generates");
+            for m in &crate::quest::event_quests::mint(&sd, &gd, CHAR, 55, NOW + week * 7 * 86_400)
+            {
+                let shown = m
+                    .dungeon
+                    .as_ref()
+                    .expect("an event row carries dungeon data");
+                let (_, attempt) = event_dungeon_data_for_run(
+                    &gd,
+                    m.quest.gld_quest_id,
+                    m.quest.difficulty_level,
+                    scaling,
+                    m.quest_id,
+                    0,
+                    55,
+                )
+                .expect("generates");
                 assert_eq!(
                     serde_json::to_value(&attempt).unwrap(),
                     serde_json::to_value(shown).unwrap(),
@@ -1366,14 +1421,21 @@ mod dungeon_settings_resolution {
                 // The row's milestones and final reward too, as `/quests` serves them.
                 let json = serde_json::to_string(&(&attempt, &m.quest)).unwrap();
                 for gem in &above_grand {
-                    assert!(!json.contains(gem.as_str()), "event {}: {gem} at level 55", m.quest.gld_quest_id);
+                    assert!(
+                        !json.contains(gem.as_str()),
+                        "event {}: {gem} at level 55",
+                        m.quest.gld_quest_id
+                    );
                 }
                 grand += json.matches("68d7941e-8c8d-47bf-9f66-becb058f1817").count();
                 rows += 1;
             }
         }
         assert!(rows > 0, "the committed calendar opens events");
-        assert!(grand > 0, "no event paid a Grand soul gem in {rows} rows, so this proves nothing");
+        assert!(
+            grand > 0,
+            "no event paid a Grand soul gem in {rows} rows, so this proves nothing"
+        );
     }
 
     /// An event attempt is the dungeon the client was SHOWN.
@@ -1391,10 +1453,16 @@ mod dungeon_settings_resolution {
         let (sd, gd) = (static_data(), game_data());
         let scaling = &sd.quests_daily.level_scaling;
         let minted = crate::quest::event_quests::mint(&sd, &gd, CHAR, 89, NOW);
-        assert!(!minted.is_empty(), "the committed calendar opens events at NOW");
+        assert!(
+            !minted.is_empty(),
+            "the committed calendar opens events at NOW"
+        );
 
         for m in &minted {
-            let shown = m.dungeon.as_ref().expect("an event row carries dungeon data");
+            let shown = m
+                .dungeon
+                .as_ref()
+                .expect("an event row carries dungeon data");
             let level = m.quest.difficulty_level;
             // The precondition that makes this discriminate: at level 1 the old
             // code and the new would agree on the level.
@@ -1402,7 +1470,11 @@ mod dungeon_settings_resolution {
             assert!(level > 1, "a level-89 row must not be level 1");
 
             let row_info = serde_json::to_value(&m.quest).unwrap();
-            assert_eq!(quest_row_difficulty(&row_info), level, "read off the stored row");
+            assert_eq!(
+                quest_row_difficulty(&row_info),
+                level,
+                "read off the stored row"
+            );
 
             let (_, attempt) = event_dungeon_data_for_run(
                 &gd,
@@ -1463,7 +1535,8 @@ mod dungeon_settings_resolution {
 
         let (_, tier_one) =
             event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0, 0).unwrap();
-        let (_, retry) = event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0, 0).unwrap();
+        let (_, retry) =
+            event_dungeon_data_for_run(&gd, wrath, level, scaling, instance, 0, 0).unwrap();
         assert_eq!(
             serde_json::to_value(&tier_one).unwrap(),
             serde_json::to_value(&retry).unwrap(),
@@ -1505,21 +1578,31 @@ mod dungeon_settings_resolution {
             })
             .collect();
         candidates.sort();
-        assert!(!candidates.is_empty(), "the corpus ships single-stage story quests with dungeons");
+        assert!(
+            !candidates.is_empty(),
+            "the corpus ships single-stage story quests with dungeons"
+        );
         let (template_id, dungeon) = candidates[0];
 
         let (row, data) =
             blades_lib::util::quest::generate_quest_data(&gd, template_id, 89, scaling).unwrap();
         let data = data.expect("a dungeon quest carries generated data");
         assert_eq!(row.difficulty_level, 73);
-        assert!(enemies(&data).iter().all(|e| e.enemy_level == 73 && e.given_xp == 258));
+        assert!(
+            enemies(&data)
+                .iter()
+                .all(|e| e.enemy_level == 73 && e.given_xp == 258)
+        );
 
         // Its loot is the level-100 character's (#398); the enemies stay at 73.
         let same = blades_lib::util::dungeon::generate_for_dungeon_with_loot_shift(
             &gd,
             &dungeon,
             None,
-            blades_lib::util::dungeon::EnemyLevels::Flat { level: 73, given_xp: scaling.given_xp(73) },
+            blades_lib::util::dungeon::EnemyLevels::Flat {
+                level: 73,
+                given_xp: scaling.given_xp(73),
+            },
             blades_lib::features::loot_level::dungeon_loot_shift(scaling, 89, 73),
         )
         .unwrap();
@@ -1578,7 +1661,11 @@ mod dungeon_settings_resolution {
                     );
                 }
             }
-            assert_eq!(enemies(&attempt).len(), enemy_count, "event {event}: retail's count");
+            assert_eq!(
+                enemies(&attempt).len(),
+                enemy_count,
+                "event {event}: retail's count"
+            );
             let chests: usize = attempt.chest_generated_data.values().map(Vec::len).sum();
             assert_eq!(chests, chest_count, "event {event}: retail's chests");
             assert_event_levels(&attempt, 16, scaling);
@@ -1586,7 +1673,11 @@ mod dungeon_settings_resolution {
             // The plain (unseeded) path the update handler heals empty rows with
             // covers the same stages.
             let (_, plain) = event_dungeon_data(&gd, uuid(event), 16, scaling, 0).unwrap();
-            assert_eq!(enemies(&plain).len(), enemy_count, "event {event}: unseeded path");
+            assert_eq!(
+                enemies(&plain).len(),
+                enemy_count,
+                "event {event}: unseeded path"
+            );
         }
     }
 
@@ -1602,8 +1693,15 @@ mod dungeon_settings_resolution {
             .find(|m| m.quest.gld_quest_id == uuid(EQ24))
             .expect("the committed calendar opens EQ24 on 2026-10-03");
         let shown = row.dungeon.as_ref().unwrap();
-        for group in gd.dungeons[&uuid(EQ24_B)].spawn_info.enemy_spawn_groups.keys() {
-            assert!(shown.enemy_generated_data.contains_key(group), "stage _B group {group}");
+        for group in gd.dungeons[&uuid(EQ24_B)]
+            .spawn_info
+            .enemy_spawn_groups
+            .keys()
+        {
+            assert!(
+                shown.enemy_generated_data.contains_key(group),
+                "stage _B group {group}"
+            );
         }
         assert_eq!(enemies(shown).len(), 20);
 
@@ -1650,9 +1748,18 @@ mod dungeon_settings_resolution {
         let b = &gd.dungeons[&uuid(EQ23_B)].spawn_info;
         let keys = |d: &DungeonGeneratedData| {
             (
-                d.enemy_generated_data.keys().copied().collect::<HashSet<_>>(),
-                d.chest_generated_data.keys().copied().collect::<HashSet<_>>(),
-                d.item_generated_data.keys().copied().collect::<HashSet<_>>(),
+                d.enemy_generated_data
+                    .keys()
+                    .copied()
+                    .collect::<HashSet<_>>(),
+                d.chest_generated_data
+                    .keys()
+                    .copied()
+                    .collect::<HashSet<_>>(),
+                d.item_generated_data
+                    .keys()
+                    .copied()
+                    .collect::<HashSet<_>>(),
             )
         };
         let retail = (
@@ -1679,10 +1786,16 @@ mod dungeon_settings_resolution {
         .unwrap();
         let (_, plain) = event_dungeon_data(&gd, uuid(EQ23), 2, scaling, 0).unwrap();
 
-        for (path, data) in
-            [("mint", row.dungeon.as_ref().unwrap()), ("attempt", &attempt), ("heal", &plain)]
-        {
-            assert_eq!(keys(data), retail, "{path}: EQ23 must be `_A`, exactly as retail");
+        for (path, data) in [
+            ("mint", row.dungeon.as_ref().unwrap()),
+            ("attempt", &attempt),
+            ("heal", &plain),
+        ] {
+            assert_eq!(
+                keys(data),
+                retail,
+                "{path}: EQ23 must be `_A`, exactly as retail"
+            );
             for group in b.enemy_spawn_groups.keys() {
                 assert!(
                     !data.enemy_generated_data.contains_key(group),
@@ -1714,7 +1827,9 @@ mod dungeon_settings_resolution {
         for (event, stages) in [(EQ24, 2), (EQ22, 3)] {
             let d = resolve_dungeon_settings_id(&gd, uuid(event), None).unwrap();
             assert_eq!(
-                blades_lib::util::quest::event_dungeon_stage_ids(&gd, &d).unwrap().len(),
+                blades_lib::util::quest::event_dungeon_stage_ids(&gd, &d)
+                    .unwrap()
+                    .len(),
                 stages,
                 "event {event}"
             );
@@ -1858,8 +1973,9 @@ mod dungeon_settings_resolution {
             "difficultyLevel": 20,
             "objectiveStatuses": {},
         });
-        let generated = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0)
-            .expect("the reference dungeon is in the corpus");
+        let generated =
+            jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0)
+                .expect("the reference dungeon is in the corpus");
 
         let settings_id = resolve_dungeon_settings_id(
             &gd,
@@ -1919,18 +2035,16 @@ async fn handle_event_dungeon_entry(
     now: i64,
 ) -> Result<Json<EnterDungeonResponse>, BladeApiError> {
     // Get the event quest template
-    let event_template = event_quests.templates.get(&quest_id)
-        .ok_or_else(|| {
-            log::error!("[event_dungeon] Quest {} not found in templates", quest_id);
-            BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)
-        })?;
+    let event_template = event_quests.templates.get(&quest_id).ok_or_else(|| {
+        log::error!("[event_dungeon] Quest {} not found in templates", quest_id);
+        BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)
+    })?;
 
     // Get the actual event ID from the template's eventIds array
-    let actual_event_id = *event_template.event_ids.get(0)
-        .ok_or_else(|| {
-            log::error!("[event_dungeon] No eventIds found for quest {}", quest_id);
-            BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)
-        })?;
+    let actual_event_id = *event_template.event_ids.get(0).ok_or_else(|| {
+        log::error!("[event_dungeon] No eventIds found for quest {}", quest_id);
+        BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)
+    })?;
 
     // The event quest template points to the dungeon the client loads. The quest UUID
     // itself is only the key used by the quest and event-dungeon endpoints.
@@ -1939,7 +2053,11 @@ async fn handle_event_dungeon_entry(
     // shown, not at a flat level 1 (see `event_dungeon_data`).
     let max_entries = 1;
 
-    log::info!("[event_dungeon] Processing event quest {} with event_id {}", quest_id, actual_event_id);
+    log::info!(
+        "[event_dungeon] Processing event quest {} with event_id {}",
+        quest_id,
+        actual_event_id
+    );
 
     // The completion record, with any count left over from a PREVIOUS window of this
     // event already dropped. Without that the counter is a lifetime total against
@@ -2327,7 +2445,10 @@ mod dungeon_status_is_derived {
     #[test]
     fn no_dungeon_status_carries_a_literal_seed_or_level() {
         let mut files = Vec::new();
-        rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        rs_files(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
 
         // The one place a literal is honest: `dungeon_update` answers an update
         // that arrives after the event dungeon's state was already cleared. There
@@ -2411,9 +2532,9 @@ mod exit_request_parsing {
 mod event_run_lifecycle_db {
     use super::*;
     use actix_web::ResponseError;
-    use blades_lib::util::dungeon::generate_for_dungeon;
     use blades_lib::static_data::StaticData;
     use blades_lib::user_data::{Backpack, CompleteInventory, CompleteWallet, Loadout, Treasury};
+    use blades_lib::util::dungeon::generate_for_dungeon;
     use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
     use serde_json::{Value, json};
     use std::sync::OnceLock;
@@ -2758,23 +2879,39 @@ mod event_run_lifecycle_db {
     async fn the_attempt_is_stored_at_the_rows_level() {
         let mut conn = db!();
         let p = seed(&mut conn).await;
-        let level = quest_info(&mut conn, &p).await["difficultyLevel"].as_u64().unwrap();
-        assert!(level > 1, "a level-40 row is not level 1 — otherwise this proves nothing");
+        let level = quest_info(&mut conn, &p).await["difficultyLevel"]
+            .as_u64()
+            .unwrap();
+        assert!(
+            level > 1,
+            "a level-40 row is not level 1 — otherwise this proves nothing"
+        );
 
         let stored_sql = "SELECT generated_data AS v FROM event_dungeons \
                           WHERE character_id = $1 AND dungeon_id = $2";
         let row_sql = "SELECT generated_data AS v FROM quests WHERE id = $1 AND character_id = $2";
 
-        let status = enter(&mut conn, &p, Some("INSTANCE")).await.expect("enters");
+        let status = enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("enters");
         assert_eq!(status.level, level, "the dungeon reports the row's level");
-        let stored = json_of(&mut conn, stored_sql, p.character, p.template).await.unwrap();
-        let shown = json_of(&mut conn, row_sql, p.instance, p.character).await.unwrap();
-        assert_eq!(stored, shown, "the attempt is the dungeon the client was shown");
+        let stored = json_of(&mut conn, stored_sql, p.character, p.template)
+            .await
+            .unwrap();
+        let shown = json_of(&mut conn, row_sql, p.instance, p.character)
+            .await
+            .unwrap();
+        assert_eq!(
+            stored, shown,
+            "the attempt is the dungeon the client was shown"
+        );
 
         // A resume keeps it there.
         let status = enter(&mut conn, &p, None).await.expect("resumes");
         assert_eq!(status.level, level);
-        let stored = json_of(&mut conn, stored_sql, p.character, p.template).await.unwrap();
+        let stored = json_of(&mut conn, stored_sql, p.character, p.template)
+            .await
+            .unwrap();
         assert_eq!(stored, shown);
     }
 
@@ -2784,8 +2921,12 @@ mod event_run_lifecycle_db {
     async fn a_resume_heals_an_attempt_stored_at_level_1() {
         let mut conn = db!();
         let p = seed(&mut conn).await;
-        let level = quest_info(&mut conn, &p).await["difficultyLevel"].as_u64().unwrap();
-        enter(&mut conn, &p, Some("INSTANCE")).await.expect("enters");
+        let level = quest_info(&mut conn, &p).await["difficultyLevel"]
+            .as_u64()
+            .unwrap();
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("enters");
 
         // Put the row back the way the old entry left it.
         let dungeon = resolve_dungeon_settings_id(&world().gd, p.template, None).unwrap();
@@ -3087,21 +3228,35 @@ mod event_run_lifecycle_db {
         .execute(&mut conn)
         .await
         .unwrap();
-        let town_xp = |v: Option<Value>| v.expect("a town")["levelInfo"]["experiencePoints"].clone();
+        let town_xp =
+            |v: Option<Value>| v.expect("a town")["levelInfo"]["experiencePoints"].clone();
 
-        enter(&mut conn, &p, Some("INSTANCE")).await.expect("tier 0");
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("tier 0");
         let first = complete(&mut conn, &p).await;
         assert_eq!(first["reward"]["townXp"], json!(40));
         assert_eq!(first["town"]["levelInfo"]["experiencePoints"], json!(565));
         let sql = "SELECT town AS v FROM characters WHERE id = $1 AND $2 = $2";
-        assert_eq!(town_xp(json_of(&mut conn, sql, p.character, p.character).await), json!(565));
+        assert_eq!(
+            town_xp(json_of(&mut conn, sql, p.character, p.character).await),
+            json!(565)
+        );
         exit(&mut conn, &p, false).await;
 
-        enter(&mut conn, &p, Some("INSTANCE")).await.expect("tier 1");
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("tier 1");
         let second = complete(&mut conn, &p).await;
-        assert!(second["reward"].get("townXp").is_none(), "tier 1 carries no townXp");
+        assert!(
+            second["reward"].get("townXp").is_none(),
+            "tier 1 carries no townXp"
+        );
         assert!(second.get("town").is_none(), "no town without townXp");
-        assert_eq!(town_xp(json_of(&mut conn, sql, p.character, p.character).await), json!(565));
+        assert_eq!(
+            town_xp(json_of(&mut conn, sql, p.character, p.character).await),
+            json!(565)
+        );
     }
 
     /// The old exit never reset an instance, so rows are sitting on production with
@@ -3313,7 +3468,13 @@ mod event_run_lifecycle_db {
     }
 
     fn tiers_of(p: &Player) -> usize {
-        world().sd.event_quests.templates.get(&p.template).unwrap().milestone_count()
+        world()
+            .sd
+            .event_quests
+            .templates
+            .get(&p.template)
+            .unwrap()
+            .milestone_count()
     }
 
     /// One full run: enter, complete, walk out.
@@ -3354,10 +3515,18 @@ mod event_run_lifecycle_db {
         }
         assert_eq!(completions(&mut conn, &p).await as usize, tiers);
         let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
-        assert_eq!(refused.status_code().as_u16(), 403, "A has finished the event");
+        assert_eq!(
+            refused.status_code().as_u16(),
+            403,
+            "A has finished the event"
+        );
 
         switch_to(&mut conn, &p, ALT_B).await;
-        assert_eq!(completions(&mut conn, &p).await, 0, "B arrives with a fresh event");
+        assert_eq!(
+            completions(&mut conn, &p).await,
+            0,
+            "B arrives with a fresh event"
+        );
         let first = run_once(&mut conn, &p, "alt B run 0").await;
         let want = crate::quest::event_milestone_reward(
             &world().sd,
@@ -3366,16 +3535,32 @@ mod event_run_lifecycle_db {
             0,
         )
         .unwrap();
-        assert_eq!(first["reward"], serde_json::to_value(&want).unwrap(), "B is paid tier 1");
+        assert_eq!(
+            first["reward"],
+            serde_json::to_value(&want).unwrap(),
+            "B is paid tier 1"
+        );
         assert_eq!(completions(&mut conn, &p).await, 1);
 
         switch_to(&mut conn, &p, ALT_A).await;
-        assert_eq!(completions(&mut conn, &p).await as usize, tiers, "A is still finished");
+        assert_eq!(
+            completions(&mut conn, &p).await as usize,
+            tiers,
+            "A is still finished"
+        );
         let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
-        assert_eq!(refused.status_code().as_u16(), 403, "and still cannot replay it");
+        assert_eq!(
+            refused.status_code().as_u16(),
+            403,
+            "and still cannot replay it"
+        );
 
         switch_to(&mut conn, &p, ALT_B).await;
-        assert_eq!(completions(&mut conn, &p).await, 1, "B's own tier came back with B");
+        assert_eq!(
+            completions(&mut conn, &p).await,
+            1,
+            "B's own tier came back with B"
+        );
         run_once(&mut conn, &p, "alt B run 1").await;
         assert_eq!(completions(&mut conn, &p).await, 2);
     }
@@ -3390,26 +3575,53 @@ mod event_run_lifecycle_db {
         let mut conn = db!();
         let p = two_alts(&mut conn, json!({"parkedQuests": []})).await;
         run_once(&mut conn, &p, "alt A run 0").await;
-        enter(&mut conn, &p, Some("INSTANCE")).await.expect("A's second run");
-        diesel::sql_query("UPDATE event_dungeons SET generated_data = 'null'::jsonb WHERE character_id = $1")
-            .bind::<diesel::sql_types::Uuid, _>(p.character)
-            .execute(&mut conn)
+        enter(&mut conn, &p, Some("INSTANCE"))
             .await
-            .unwrap();
+            .expect("A's second run");
+        diesel::sql_query(
+            "UPDATE event_dungeons SET generated_data = 'null'::jsonb WHERE character_id = $1",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
         let a_attempt = attempt(&mut conn, &p).await.expect("A mid-run");
 
         switch_to(&mut conn, &p, ALT_B).await;
         let c = p.character;
-        assert_eq!(count(&mut conn, "SELECT count(*) AS n FROM event_completions WHERE character_id = $1", c).await, 0);
-        assert_eq!(count(&mut conn, "SELECT count(*) AS n FROM event_dungeons WHERE character_id = $1", c).await, 0);
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT count(*) AS n FROM event_completions WHERE character_id = $1",
+                c
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(
+                &mut conn,
+                "SELECT count(*) AS n FROM event_dungeons WHERE character_id = $1",
+                c
+            )
+            .await,
+            0
+        );
         assert!(
-            live_server_state(&mut conn, c).await.get("parkedEventCompletions").is_none(),
+            live_server_state(&mut conn, c)
+                .await
+                .get("parkedEventCompletions")
+                .is_none(),
             "the parking keys never reach the live row"
         );
 
         switch_to(&mut conn, &p, ALT_A).await;
         assert_eq!(completions(&mut conn, &p).await, 1, "A's counter came back");
-        assert_eq!(attempt(&mut conn, &p).await, Some(a_attempt), "A's attempt came back");
+        assert_eq!(
+            attempt(&mut conn, &p).await,
+            Some(a_attempt),
+            "A's attempt came back"
+        );
         assert_eq!(
             json_of(
                 &mut conn,
@@ -3421,13 +3633,23 @@ mod event_run_lifecycle_db {
             Some(Value::Null),
             "JSON null stays JSON null"
         );
-        assert!(live_server_state(&mut conn, c).await.get("parkedEventDungeons").is_none());
+        assert!(
+            live_server_state(&mut conn, c)
+                .await
+                .get("parkedEventDungeons")
+                .is_none()
+        );
     }
 
     async fn live_server_state(conn: &mut AsyncPgConnection, c: Uuid) -> Value {
-        json_of(conn, "SELECT server_state AS v FROM characters WHERE id = $1 AND id = $2", c, c)
-            .await
-            .unwrap()
+        json_of(
+            conn,
+            "SELECT server_state AS v FROM characters WHERE id = $1 AND id = $2",
+            c,
+            c,
+        )
+        .await
+        .unwrap()
     }
 
     /// The state production is in today (#334): the counter on the live row says
@@ -3457,7 +3679,10 @@ mod event_run_lifecycle_db {
             "the run pays its first tier"
         );
         assert_eq!(completions(&mut conn, &p).await, 1);
-        assert_eq!(done["character"]["completedQuests"][p.instance.to_string()], json!(1));
+        assert_eq!(
+            done["character"]["completedQuests"][p.instance.to_string()],
+            json!(1)
+        );
     }
 
     /// Missing event state: a resume (no `dungeonInstance`) with no attempt row at
@@ -3467,7 +3692,9 @@ mod event_run_lifecycle_db {
     async fn missing_or_unreadable_event_state_starts_a_fresh_run() {
         let mut conn = db!();
         let p = seed(&mut conn).await;
-        let fresh = enter(&mut conn, &p, None).await.expect("a resume with nothing stored");
+        let fresh = enter(&mut conn, &p, None)
+            .await
+            .expect("a resume with nothing stored");
         assert_eq!(fresh.revive_count, 0);
         assert!(attempt(&mut conn, &p).await.is_some(), "a live attempt now");
 
@@ -3478,14 +3705,19 @@ mod event_run_lifecycle_db {
         .execute(&mut conn)
         .await
         .unwrap();
-        let again = enter(&mut conn, &p, Some("INSTANCE")).await.expect("an unreadable attempt");
+        let again = enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("an unreadable attempt");
         assert_eq!(again.revive_count, 0);
         assert!(
-            attempt(&mut conn, &p).await.unwrap().get("dungeonStatus").is_some(),
+            attempt(&mut conn, &p)
+                .await
+                .unwrap()
+                .get("dungeonStatus")
+                .is_some(),
             "replaced by a readable one"
         );
     }
-
 
     /// Restoring a kept version brings its event rows back too, and the state it
     /// replaces keeps its own (the same rule as its quest rows).
@@ -3511,10 +3743,11 @@ mod event_run_lifecycle_db {
         .await
         .unwrap()
         .id;
-        crate::admin::apply_restore(&mut conn, a_version).await.expect("restore");
+        crate::admin::apply_restore(&mut conn, a_version)
+            .await
+            .expect("restore");
         assert_eq!(completions(&mut conn, &p).await, 1, "A's counter is back");
     }
-
 
     /// The other direction: an alt that arrived without its event rows (a version
     /// kept before they were parked) but whose own record says every tier of this
@@ -3535,8 +3768,11 @@ mod event_run_lifecycle_db {
         .await
         .unwrap();
         let refused = enter(&mut conn, &p, Some("INSTANCE")).await.unwrap_err();
-        assert_eq!(refused.status_code().as_u16(), 403, "finished, as the game shows it");
+        assert_eq!(
+            refused.status_code().as_u16(),
+            403,
+            "finished, as the game shows it"
+        );
         assert_eq!(completions(&mut conn, &p).await as usize, tiers);
     }
-
 }

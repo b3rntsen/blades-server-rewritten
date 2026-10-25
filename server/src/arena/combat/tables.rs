@@ -67,7 +67,6 @@ impl Weight {
             Weight::Heavy => (1.987, 1.186),
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +82,8 @@ impl Weight {
 /// gate is 0.2333 + 0.1 = 0.3333 s. Every one of the 370 templates carries both
 /// values, so the model must not collapse them again.
 pub fn swing_interval(attack_delay: f32, recovery_to_combo_time: f32) -> std::time::Duration {
-    let secs = (attack_delay + recovery_to_combo_time).max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY);
+    let secs =
+        (attack_delay + recovery_to_combo_time).max(combat_params::GLOBAL_MINIMUM_ATTACK_DELAY);
     std::time::Duration::from_secs_f32(secs)
 }
 
@@ -128,8 +128,7 @@ pub fn fallback_swing_interval(weight: Weight) -> std::time::Duration {
 /// asset). A character's `Item.tempering_level` is the orthogonal axis and the
 /// shipped `WeaponTemplateList` has no per-temper table, so the bonus still comes
 /// from UESP. [Class 2: real mechanism, UESP magnitudes]
-pub const QUALITY_BONUS: [f32; 11] =
-    [0.0, 1.5, 4.5, 9.0, 15.0, 22.5, 30.0, 37.5, 45.0, 60.0, 75.0];
+pub const QUALITY_BONUS: [f32; 11] = [0.0, 1.5, 4.5, 9.0, 15.0, 22.5, 30.0, 37.5, 45.0, 60.0, 75.0];
 
 /// The damage a `tempering_level` adds to a weapon of this `weight`:
 /// `QUALITY_BONUS[level] × weight.damage_factor()`. Levels past the table clamp.
@@ -294,8 +293,7 @@ pub fn apply_resistance_and_weakness(
     let weakness = weakness_rating.max(0.0);
     let net = resistance - weakness;
     if net > 0.0 {
-        let reduced = incoming
-            - net * combat_params::REDUCTION_PER_RESISTANCE_RATING * eff;
+        let reduced = incoming - net * combat_params::REDUCTION_PER_RESISTANCE_RATING * eff;
         let floored = reduced.max(incoming * (1.0 - combat_params::MAXIMUM_RESISTANCE_REDUCTION));
         if piercing_floor > 0.0 {
             floored.max(incoming.min(piercing_floor))
@@ -416,7 +414,7 @@ pub fn ability_damage(ability_uuid: &str, rank: u8) -> Option<f32> {
 /// weapon does not resolve to a real `gamedata::WEAPONS` template (bots, the
 /// starter loadout, characters imported without inventory).
 pub mod fallback {
-    use super::{Weight, QUALITY_BONUS};
+    use super::{QUALITY_BONUS, Weight};
 
     /// Heavy (1.0×) base damage for a smithy level (1 = Iron … 10 = Dragonbone):
     /// `15 × (smithy_level + 1)`. Cross-validated against the shipped assets:
@@ -447,8 +445,8 @@ pub mod fallback {
 
     /// Level-appropriate weapon base damage for a weight class.
     pub fn weapon_base_for_level(level: u16, weight: Weight) -> f32 {
-        let heavy =
-            heavy_base(smithy_level_for_char_level(level)) + QUALITY_BONUS[quality_tier_for_level(level)];
+        let heavy = heavy_base(smithy_level_for_char_level(level))
+            + QUALITY_BONUS[quality_tier_for_level(level)];
         heavy * weight.damage_factor()
     }
 }
@@ -486,7 +484,10 @@ mod tests {
         // Ward R1 magicka 205.
         assert_eq!(ability_cost(gamedata::ids::WARD, 1), (0, 205));
         // Thunderstorm's REAL uuid resolves (the old table's did not).
-        assert_ne!(ability_cost("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1), (0, 0));
+        assert_ne!(
+            ability_cost("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1),
+            (0, 0)
+        );
         // Unknown uuid → no cost.
         assert_eq!(ability_cost("unknown-uuid", 1), (0, 0));
         // Cooldowns are per-ability, from the asset.
@@ -502,7 +503,10 @@ mod tests {
         // Combo input unlocks before neutral: 0.233333 + 0.10 = 0.333333 s.
         assert!((got.as_secs_f32() - 0.333333).abs() < 1e-4, "got {got:?}");
         let neutral = neutral_interval_for_weapon(dagger);
-        assert!((neutral.as_secs_f32() - 0.633333).abs() < 1e-4, "got {neutral:?}");
+        assert!(
+            (neutral.as_secs_f32() - 0.633333).abs() < 1e-4,
+            "got {neutral:?}"
+        );
         // The global floor is respected for a pathologically fast template.
         assert_eq!(
             swing_interval(0.0, 0.0),
@@ -577,12 +581,19 @@ mod tests {
     fn enchant_damage_follows_the_shipped_curve() {
         const POISON: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
         let t10 = enchant_damage(POISON, 10).expect("poison tier 10");
-        assert!((t10 - 137.32).abs() < 0.5, "s506 poison base {t10} != 137.32");
+        assert!(
+            (t10 - 137.32).abs() < 0.5,
+            "s506 poison base {t10} != 137.32"
+        );
         // The curve is convex: tier 2 is ~1/10 of tier 10, not 1/5 as a linear
         // `13.73 × tier` model would say.
         let t2 = enchant_damage(POISON, 2).expect("poison tier 2");
         assert!((t2 - 736.0 * ENCHANT_DAMAGE_PER_VALUE).abs() < 1e-3);
-        assert!(t2 < t10 / 5.0, "convex curve: t2 {t2} << t10/5 {}", t10 / 5.0);
+        assert!(
+            t2 < t10 / 5.0,
+            "convex curve: t2 {t2} << t10/5 {}",
+            t10 / 5.0
+        );
         // Odd tiers do not exist for this family.
         assert_eq!(enchant_damage(POISON, 3), None);
     }
@@ -600,25 +611,46 @@ mod tests {
             (gamedata::WeaponClass::Heavy, Weight::Heavy),
         ] {
             let key = |w: &gamedata::WeaponStats| {
-                [w.attack_delay, w.backswing_time, w.max_damage_time, w.max_damage_factor,
-                 w.combo_damage_factor, w.recovery_time]
-                    .map(|v| (v * 1000.0).round() as i64)
+                [
+                    w.attack_delay,
+                    w.backswing_time,
+                    w.max_damage_time,
+                    w.max_damage_factor,
+                    w.combo_damage_factor,
+                    w.recovery_time,
+                ]
+                .map(|v| (v * 1000.0).round() as i64)
             };
             let mut counts: std::collections::HashMap<[i64; 6], usize> = Default::default();
             for w in gamedata::WEAPONS.iter().filter(|w| w.weapon_class == class) {
                 *counts.entry(key(w)).or_default() += 1;
             }
             let (modal, n) = counts.iter().max_by_key(|(_, n)| **n).unwrap();
-            assert!(*n >= 100, "{weight:?}: the standard template covers most of the class");
+            assert!(
+                *n >= 100,
+                "{weight:?}: the standard template covers most of the class"
+            );
             let lo = Loadout {
-                weapon: WeaponProfile { weight: Some(weight), ..Default::default() },
+                weapon: WeaponProfile {
+                    weight: Some(weight),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let cp = lo.charge_params();
-            let got = [cp.attack_delay, cp.backswing_time, cp.max_damage_time,
-                       cp.max_damage_factor, cp.combo_damage_factor, cp.recovery_time]
-                .map(|v| (v * 1000.0).round() as i64);
-            assert_eq!(&got, modal, "{weight:?} fallback must equal the shipped standard");
+            let got = [
+                cp.attack_delay,
+                cp.backswing_time,
+                cp.max_damage_time,
+                cp.max_damage_factor,
+                cp.combo_damage_factor,
+                cp.recovery_time,
+            ]
+            .map(|v| (v * 1000.0).round() as i64);
+            assert_eq!(
+                &got, modal,
+                "{weight:?} fallback must equal the shipped standard"
+            );
         }
     }
 
@@ -668,9 +700,15 @@ mod weakness_tests {
         assert!((weak - 120.0).abs() < 1e-3, "100 + (50 - 30)");
 
         let pierced = apply_resistance_and_weakness(60.0, 160.0, 0.0, 1.0, 40.0);
-        assert!((pierced - 40.0).abs() < 1e-3, "piercing floor keeps min(pre, pierce)");
+        assert!(
+            (pierced - 40.0).abs() < 1e-3,
+            "piercing floor keeps min(pre, pierce)"
+        );
 
         let control = apply_resistance_and_weakness(100.0, 30.0, 0.0, 1.0, 0.0);
-        assert!((control - 70.0).abs() < 1e-3, "plain resistance still subtracts flat");
+        assert!(
+            (control - 70.0).abs() < 1e-3,
+            "plain resistance still subtracts flat"
+        );
     }
 }

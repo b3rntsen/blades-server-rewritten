@@ -8,26 +8,28 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use blades_lib::economy::{RewardGrant, RewardItem};
-use blades_lib::user_data::{
-    B64EncodedData, CompleteCharacterWithIdWithoutData, CompleteInventoryUpdate, DungeonStatus,
-    EnemyIndex, EnemyStatus, InventoryChangeTracker, CompleteInventory, CompleteWallet, DungeonGeneratedData,
-    DungeonState, LootTableResult,
-};
 use blades_lib::economy::apply_reward;
+use blades_lib::economy::{RewardGrant, RewardItem};
 use blades_lib::features::{chests, revive};
-use diesel;
-use diesel::{
-     prelude::*,
-    ExpressionMethods, QueryDsl, SelectableHelper,
+use blades_lib::user_data::{
+    B64EncodedData, CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
+    CompleteWallet, DungeonGeneratedData, DungeonState, DungeonStatus, EnemyIndex, EnemyStatus,
+    InventoryChangeTracker, LootTableResult,
 };
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel;
+use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, prelude::*};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::{BladeApiError, ServerGlobal, session::{Session, SessionLookedUpMaybe}};
+use crate::{
+    BladeApiError, ServerGlobal,
+    session::{Session, SessionLookedUpMaybe},
+};
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -170,9 +172,8 @@ fn item_loot_grant(
 /// all (no client sends one, but the field is optional) takes everything left,
 /// as before.
 fn take_named_corpse_loot(stored: &mut LootTableResult, named: &RewardGrant) -> RewardGrant {
-    let names_nothing = named.currencies.is_empty()
-        && named.stackable_items.is_empty()
-        && named.items.is_empty();
+    let names_nothing =
+        named.currencies.is_empty() && named.stackable_items.is_empty() && named.items.is_empty();
     if names_nothing {
         let all = std::mem::take(stored);
         return RewardGrant {
@@ -417,7 +418,8 @@ pub async fn dungeon_update(
             crate::dungeon::quest_row_difficulty(&row_info.as_ref().unwrap().0),
             body.0,
             validated_session,
-        ).await;
+        )
+        .await;
     }
 
     handle_quest_dungeon_update(
@@ -427,7 +429,8 @@ pub async fn dungeon_update(
         quest_id,
         body.0,
         validated_session,
-    ).await
+    )
+    .await
 }
 
 /// Add the data for the stage the client is actually walking.
@@ -498,180 +501,190 @@ async fn handle_quest_dungeon_update(
     session: &Session,
 ) -> Result<Json<DungeonUpdateResponse>, BladeApiError> {
     conn.transaction(|mut conn| {
-        async move {
-            let (quest_data, mut character_data) = {
-                use crate::schema::characters;
-                use crate::schema::quests;
+        {
+            async move {
+                let (quest_data, mut character_data) = {
+                    use crate::schema::characters;
+                    use crate::schema::quests;
 
-                quests::table
-                    .filter(quests::id.eq(quest_id))
-                    .filter(characters::id.eq(character_id))
-                    .inner_join(characters::table)
-                    .filter(characters::user_id.eq(session.user_id))
-                    .select((
-                        QuestDbEntryDungeonStateAndGeneratedData::as_select(),
-                        CharacterDbEntryCharacterWalletInventory::as_select(),
-                    ))
-                    .for_no_key_update()
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
-            };
-            let mut generated_data = quest_data.generated_data.0.ok_or_else(|| {
-                log::warn!(
-                    "dungeon_update: 400 -- quest {quest_id} for character {character_id} \
-                     has no generated_data"
-                );
-                BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
-            })?;
-
-            // THE CLIENT IS IN A DIFFERENT VERSION OF THIS DUNGEON THAN WE GENERATED.
-            //
-            // Retail builds several variants of a dungeon (`..._A`, `_B`, `_C`); 23
-            // families in parsed.json have them, a quest names only the `_A`, and in
-            // all 23 the variants share NOT ONE enemy spawn group. When the client
-            // walks `_B` every kill it reports names a spawner we have no data for,
-            // so it was logged "stale" and thrown away — no XP, no loot, for that
-            // whole stage (#174).
-            //
-            // Because the variants share no groups, the spawner the client reports
-            // identifies its variant unambiguously. So rather than discard the
-            // player's progress, generate the data for the variant they are actually
-            // in and carry on. The regenerated data is persisted below with the rest
-            // of the row, so the rest of the run agrees too.
-            //
-            // Only fires when the group is unknown AND resolves to exactly one
-            // dungeon; an ambiguous or unowned group is still discarded, because
-            // guessing there would invent a dungeon the player is not in.
-            if let Some(repaired) =
-                repair_variant_mismatch(&app_state.game_data, &generated_data, &body.actions, &|level| {
-                    blades_lib::features::loot_level::dungeon_loot_shift(
-                        &app_state.static_data.quests_daily.level_scaling,
-                        i64::from(character_data.character.0.level),
-                        level,
-                    )
-                })
-            {
-                log::info!(
-                    "dungeon_update: character {character_id} is in a different dungeon \
-                     variant than we generated; regenerated from the spawner it reported (#174)"
-                );
-                generated_data = repaired;
-                // The three best soul gems at 45-48 (owner-approved deviation, #388).
-                blades_lib::features::beginner_economy::top_dungeon_soul_gems(
-                    &mut generated_data,
-                    i64::from(character_data.character.0.level),
-                    false,
-                );
-            }
-            let mut dungeon_state = quest_data
-                .dungeon_state
-                .ok_or_else(|| {
+                    quests::table
+                        .filter(quests::id.eq(quest_id))
+                        .filter(characters::id.eq(character_id))
+                        .inner_join(characters::table)
+                        .filter(characters::user_id.eq(session.user_id))
+                        .select((
+                            QuestDbEntryDungeonStateAndGeneratedData::as_select(),
+                            CharacterDbEntryCharacterWalletInventory::as_select(),
+                        ))
+                        .for_no_key_update()
+                        .load(&mut conn)
+                        .await?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+                };
+                let mut generated_data = quest_data.generated_data.0.ok_or_else(|| {
                     log::warn!(
                         "dungeon_update: 400 -- quest {quest_id} for character {character_id} \
-                         has no dungeon_state (not entered, or already exited)"
+                     has no generated_data"
                     );
                     BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
-                })?
-                .0;
+                })?;
 
-            let mut inventory_modification_tracker = InventoryChangeTracker::default();
-
-            dungeon_state.dungeon_status.current_state = body.current_state.clone();
-
-            let mut wallet = std::mem::take(&mut character_data.wallet.0);
-
-            // From level 49 a chest is minted at the level a level-100 character's
-            // would be (#398): a job's at the level-100 board's difficulty, any
-            // other dungeon's at the level-100 enemy level.
-            let character_level = character_data.character.0.level;
-            let is_job = if body
-                .actions
-                .iter()
-                .any(|a| matches!(a, DungeonUpdateAction::ChestCollected(_)))
-            {
-                use crate::schema::quests;
-                let info: Option<JsonDbWrapper<blades_lib::user_data::Quest>> = quests::table
-                    .filter(quests::id.eq(quest_id))
-                    .filter(quests::character_id.eq(character_id))
-                    .select(quests::info)
-                    .first(&mut conn)
-                    .await
-                    .optional()?;
-                info.is_some_and(|i| crate::quest::jobs_gen::is_job_row(&i.0))
-            } else {
-                false
-            };
-            let chest_loot_level = |level: u64| {
-                paid_chest_level(
-                    &app_state.static_data.quests_daily.level_scaling,
-                    &app_state.job_pools,
-                    character_level,
-                    is_job,
-                    level,
-                )
-            };
-
-            let result = {
-                let currency_moved = process_dungeon_actions(
-                    &body.actions,
+                // THE CLIENT IS IN A DIFFERENT VERSION OF THIS DUNGEON THAN WE GENERATED.
+                //
+                // Retail builds several variants of a dungeon (`..._A`, `_B`, `_C`); 23
+                // families in parsed.json have them, a quest names only the `_A`, and in
+                // all 23 the variants share NOT ONE enemy spawn group. When the client
+                // walks `_B` every kill it reports names a spawner we have no data for,
+                // so it was logged "stale" and thrown away — no XP, no loot, for that
+                // whole stage (#174).
+                //
+                // Because the variants share no groups, the spawner the client reports
+                // identifies its variant unambiguously. So rather than discard the
+                // player's progress, generate the data for the variant they are actually
+                // in and carry on. The regenerated data is persisted below with the rest
+                // of the row, so the rest of the run agrees too.
+                //
+                // Only fires when the group is unknown AND resolves to exactly one
+                // dungeon; an ambiguous or unowned group is still discarded, because
+                // guessing there would invent a dungeon the player is not in.
+                if let Some(repaired) = repair_variant_mismatch(
+                    &app_state.game_data,
                     &generated_data,
-                    &mut dungeon_state,
-                    &mut character_data,
-                    &mut wallet,
-                    &mut inventory_modification_tracker,
-                    &chest_loot_level,
-                );
-
-                character_data.wallet.0 = wallet;
-
-                DungeonUpdateResponse {
-                    dungeon_status: dungeon_state.dungeon_status.clone(),
-                    character: CompleteCharacterWithIdWithoutData {
-                        id: character_id,
-                        character: character_data.character.0.clone(),
+                    &body.actions,
+                    &|level| {
+                        blades_lib::features::loot_level::dungeon_loot_shift(
+                            &app_state.static_data.quests_daily.level_scaling,
+                            i64::from(character_data.character.0.level),
+                            level,
+                        )
                     },
-                    inventory: character_data.inventory.0.generate_client_update(&inventory_modification_tracker),
-                    wallet: currency_moved.then(|| character_data.wallet.0.clone()),
+                ) {
+                    log::info!(
+                        "dungeon_update: character {character_id} is in a different dungeon \
+                     variant than we generated; regenerated from the spawner it reported (#174)"
+                    );
+                    generated_data = repaired;
+                    // The three best soul gems at 45-48 (owner-approved deviation, #388).
+                    blades_lib::features::beginner_economy::top_dungeon_soul_gems(
+                        &mut generated_data,
+                        i64::from(character_data.character.0.level),
+                        false,
+                    );
                 }
-            };
+                let mut dungeon_state = quest_data
+                    .dungeon_state
+                    .ok_or_else(|| {
+                        log::warn!(
+                            "dungeon_update: 400 -- quest {quest_id} for character {character_id} \
+                         has no dungeon_state (not entered, or already exited)"
+                        );
+                        BladeApiError::new(StatusCode::BAD_REQUEST, 20001, 2)
+                    })?
+                    .0;
 
-            let quest_data_rebuilt = QuestDbEntryDungeonStateAndGeneratedData {
-                id: quest_id,
-                dungeon_state: Some(JsonDbWrapper(dungeon_state)),
-                generated_data: JsonDbWrapper(Some(generated_data)),
-            };
+                let mut inventory_modification_tracker = InventoryChangeTracker::default();
 
-            {
-                use crate::schema::quests;
-                diesel::update(quests::table)
-                    // BOTH halves of the primary key. `quests.id` alone is NOT unique:
-                    // an ordinary story quest is stored under the template id, so every
-                    // character on that quest has a row with the same `id`, and an
-                    // update filtered on `id` writes one player's dungeon state into
-                    // all of them. The SELECT above is already scoped to this
-                    // character; the write has to be too.
-                    .filter(quests::id.eq(quest_id))
-                    .filter(quests::character_id.eq(character_id))
-                    .set(quest_data_rebuilt)
-                    .execute(&mut conn)
-                    .await?;
+                dungeon_state.dungeon_status.current_state = body.current_state.clone();
+
+                let mut wallet = std::mem::take(&mut character_data.wallet.0);
+
+                // From level 49 a chest is minted at the level a level-100 character's
+                // would be (#398): a job's at the level-100 board's difficulty, any
+                // other dungeon's at the level-100 enemy level.
+                let character_level = character_data.character.0.level;
+                let is_job = if body
+                    .actions
+                    .iter()
+                    .any(|a| matches!(a, DungeonUpdateAction::ChestCollected(_)))
+                {
+                    use crate::schema::quests;
+                    let info: Option<JsonDbWrapper<blades_lib::user_data::Quest>> = quests::table
+                        .filter(quests::id.eq(quest_id))
+                        .filter(quests::character_id.eq(character_id))
+                        .select(quests::info)
+                        .first(&mut conn)
+                        .await
+                        .optional()?;
+                    info.is_some_and(|i| crate::quest::jobs_gen::is_job_row(&i.0))
+                } else {
+                    false
+                };
+                let chest_loot_level = |level: u64| {
+                    paid_chest_level(
+                        &app_state.static_data.quests_daily.level_scaling,
+                        &app_state.job_pools,
+                        character_level,
+                        is_job,
+                        level,
+                    )
+                };
+
+                let result = {
+                    let currency_moved = process_dungeon_actions(
+                        &body.actions,
+                        &generated_data,
+                        &mut dungeon_state,
+                        &mut character_data,
+                        &mut wallet,
+                        &mut inventory_modification_tracker,
+                        &chest_loot_level,
+                    );
+
+                    character_data.wallet.0 = wallet;
+
+                    DungeonUpdateResponse {
+                        dungeon_status: dungeon_state.dungeon_status.clone(),
+                        character: CompleteCharacterWithIdWithoutData {
+                            id: character_id,
+                            character: character_data.character.0.clone(),
+                        },
+                        inventory: character_data
+                            .inventory
+                            .0
+                            .generate_client_update(&inventory_modification_tracker),
+                        wallet: currency_moved.then(|| character_data.wallet.0.clone()),
+                    }
+                };
+
+                let quest_data_rebuilt = QuestDbEntryDungeonStateAndGeneratedData {
+                    id: quest_id,
+                    dungeon_state: Some(JsonDbWrapper(dungeon_state)),
+                    generated_data: JsonDbWrapper(Some(generated_data)),
+                };
+
+                {
+                    use crate::schema::quests;
+                    diesel::update(quests::table)
+                        // BOTH halves of the primary key. `quests.id` alone is NOT unique:
+                        // an ordinary story quest is stored under the template id, so every
+                        // character on that quest has a row with the same `id`, and an
+                        // update filtered on `id` writes one player's dungeon state into
+                        // all of them. The SELECT above is already scoped to this
+                        // character; the write has to be too.
+                        .filter(quests::id.eq(quest_id))
+                        .filter(quests::character_id.eq(character_id))
+                        .set(quest_data_rebuilt)
+                        .execute(&mut conn)
+                        .await?;
+                }
+
+                {
+                    use crate::schema::characters;
+                    diesel::update(characters::table)
+                        .filter(characters::id.eq(character_data.id))
+                        .set(character_data)
+                        .execute(&mut conn)
+                        .await?;
+                }
+
+                Ok::<_, BladeApiError>(Json(result))
             }
-
-            {
-                use crate::schema::characters;
-                diesel::update(characters::table)
-                    .filter(characters::id.eq(character_data.id))
-                    .set(character_data)
-                    .execute(&mut conn)
-                    .await?;
-            }
-
-            Ok::<_, BladeApiError>(Json(result))
         }
-    }.scope_boxed()).await
+        .scope_boxed()
+    })
+    .await
 }
 
 async fn handle_event_dungeon_update(
@@ -964,11 +977,16 @@ fn charge_stackable(
 /// whatever the character's level. A Gold chest at level 1 pays about 3,000 gold
 /// and Iron and Steel gear, against about 8,200 gold and Glass, Dwarven and Ebony
 /// gear at 45-48 -- "the Gold chests only had low-value items".
-pub(crate) fn dungeon_chest_level(dungeon_level: u64, generated_data: &DungeonGeneratedData) -> u64 {
+pub(crate) fn dungeon_chest_level(
+    dungeon_level: u64,
+    generated_data: &DungeonGeneratedData,
+) -> u64 {
     if dungeon_level > 1 {
         return dungeon_level;
     }
-    crate::dungeon::generated_enemy_level(generated_data).unwrap_or(dungeon_level).max(1)
+    crate::dungeon::generated_enemy_level(generated_data)
+        .unwrap_or(dungeon_level)
+        .max(1)
 }
 
 /// The level a chest found in a dungeon of `level` is minted at for a character of
@@ -1032,7 +1050,7 @@ fn process_dungeon_actions(
                     enemy_killed.spawner_index,
                     enemy_killed.enemy_index,
                 );
-                
+
                 let Some(enemy_generated_data) = generated_data.get_enemy(&enemy_index) else {
                     log::warn!(
                         "dungeon_update: enemy {:?} not in generated data (stale) — skipping",
@@ -1040,7 +1058,7 @@ fn process_dungeon_actions(
                     );
                     continue;
                 };
-                
+
                 if let Some(current_enemy_data) = dungeon_state
                     .dungeon_status
                     .enemy_status
@@ -1075,7 +1093,10 @@ fn process_dungeon_actions(
                     enemy_loot.enemy_index,
                 );
 
-                let Some(status) = dungeon_state.dungeon_status.enemy_status.get_mut(&enemy_index)
+                let Some(status) = dungeon_state
+                    .dungeon_status
+                    .enemy_status
+                    .get_mut(&enemy_index)
                 else {
                     // Looting a corpse we have no record of killing credits nothing --
                     // that is the whole point of not trusting the body.
@@ -1273,7 +1294,11 @@ fn process_dungeon_actions(
     // reaches the database and the client never learns it owns one -- then hangs
     // when it opens the chest it believes it just picked up (#104). Exactly the
     // failure #142 fixed for the backpack.
-    if !inventory_modification_tracker.modified_treasury.added.is_empty() {
+    if !inventory_modification_tracker
+        .modified_treasury
+        .added
+        .is_empty()
+    {
         character_data.inventory.0.treasury_version += 1;
     }
 
@@ -1391,8 +1416,14 @@ mod tests {
         let req: DungeonUpdateRequest =
             serde_json::from_str(raw).expect("mixed dungeon-update batch must deserialize");
         assert_eq!(req.actions.len(), 3);
-        assert!(matches!(req.actions[0], DungeonUpdateAction::EnemyKilled(_)));
-        assert!(matches!(req.actions[1], DungeonUpdateAction::CombatCompleted(_)));
+        assert!(matches!(
+            req.actions[0],
+            DungeonUpdateAction::EnemyKilled(_)
+        ));
+        assert!(matches!(
+            req.actions[1],
+            DungeonUpdateAction::CombatCompleted(_)
+        ));
         // Unknown action type tolerated (not a 400).
         assert!(matches!(req.actions[2], DungeonUpdateAction::Unknown));
     }
@@ -1649,7 +1680,11 @@ mod tests {
         );
         // Corpse gold is credited from stored state in the handler, not from this
         // payload, so it must NOT appear here.
-        assert_eq!(wallet.balance(gold), 0, "the request's corpse loot must be ignored");
+        assert_eq!(
+            wallet.balance(gold),
+            0,
+            "the request's corpse loot must be ignored"
+        );
         assert!(
             tracker.modified_backpack.stackable_items.contains(&lumber),
             "the pickup must be reported to the client, or the bag looks unchanged"
@@ -1689,16 +1724,21 @@ mod tests {
 
         // today's reality: nothing generated -> the request is honoured
         let got = pick(LootTableResult::default(), req.clone());
-        assert_eq!(got.currencies.get(&gold), Some(&4),
-                   "an empty stored table must not silently pay nothing");
+        assert_eq!(
+            got.currencies.get(&gold),
+            Some(&4),
+            "an empty stored table must not silently pay nothing"
+        );
 
         // once we DO generate loot, the request stops mattering
         let mut stored = LootTableResult::default();
         stored.stackable_items.insert(lumber, 7);
         let got = pick(stored, req.clone());
         assert_eq!(got.stackable_items.get(&lumber), Some(&7));
-        assert!(got.currencies.is_empty(),
-                "stored loot must win outright, not merge with the request");
+        assert!(
+            got.currencies.is_empty(),
+            "stored loot must win outright, not merge with the request"
+        );
     }
 
     /// Crediting the loot is not enough — the client applies a backpack diff only when
@@ -1757,8 +1797,7 @@ mod tests {
     fn a_gear_pickup_off_the_floor_reaches_the_backpack() {
         use blades_lib::economy::{RewardItem, apply_reward};
         use blades_lib::user_data::{
-            Backpack, CompleteCharacter, CompleteInventory, CompleteWallet, Item, Loadout,
-            Treasury,
+            Backpack, CompleteCharacter, CompleteInventory, CompleteWallet, Item, Loadout, Treasury,
         };
 
         let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
@@ -1796,7 +1835,13 @@ mod tests {
         };
         let mut character = CompleteCharacter::default();
         let mut tracker = InventoryChangeTracker::default();
-        apply_reward(&loot, &mut wallet, &mut inventory, &mut character, &mut tracker);
+        apply_reward(
+            &loot,
+            &mut wallet,
+            &mut inventory,
+            &mut character,
+            &mut tracker,
+        );
 
         // The defect: this is the assertion that failed before.
         assert!(
@@ -1838,8 +1883,15 @@ mod tests {
         let branch = &src[start..end];
 
         // Controls: the slice really is the branch, not an empty or runaway cut.
-        assert!(branch.contains("apply_reward"), "slice missed the branch body");
-        assert!(branch.len() < 4000, "slice ran past the branch: {} bytes", branch.len());
+        assert!(
+            branch.contains("apply_reward"),
+            "slice missed the branch body"
+        );
+        assert!(
+            branch.len() < 4000,
+            "slice ran past the branch: {} bytes",
+            branch.len()
+        );
 
         assert!(
             !branch.contains("reward.stackable_items.insert")
@@ -1909,7 +1961,10 @@ mod tests {
         );
         // control: the rest of the response is still there, so the assertion above
         // is about the wallet key and not about an empty object.
-        assert!(quiet.get("dungeonStatus").is_some(), "the response must still be a response");
+        assert!(
+            quiet.get("dungeonStatus").is_some(),
+            "the response must still be a response"
+        );
 
         let paid = render(Some(CompleteWallet::default()));
         assert!(
@@ -1968,7 +2023,10 @@ mod tests {
         let mut requests = Vec::new();
         for step in sequence {
             let capture = step["captureId"].as_u64().unwrap();
-            assert_eq!(step["retailStatus"], 200, "retail accepted capture {capture}");
+            assert_eq!(
+                step["retailStatus"], 200,
+                "retail accepted capture {capture}"
+            );
             let req: DungeonUpdateRequest = serde_json::from_value(step["body"].clone())
                 .unwrap_or_else(|e| {
                     panic!("retail capture {capture} (200 on retail) is rejected here: {e}")
@@ -2017,14 +2075,29 @@ mod tests {
         let mut chests_after = Vec::new();
         for (capture, req) in &requests {
             let mut tracker = InventoryChangeTracker::default();
-            process_dungeon_actions(&req.actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker, &|l| l);
+            process_dungeon_actions(
+                &req.actions,
+                &generated,
+                &mut state,
+                &mut character,
+                &mut wallet,
+                &mut tracker,
+                &|l| l,
+            );
             chests_after.push((*capture, character.inventory.0.treasury.chests().len()));
         }
 
         // Retail's treasury after these six: one chest from 4807, a second from 4816.
         assert_eq!(
             chests_after,
-            vec![(4804, 0), (4805, 0), (4807, 1), (4811, 1), (4813, 1), (4816, 2)],
+            vec![
+                (4804, 0),
+                (4805, 0),
+                (4807, 1),
+                (4811, 1),
+                (4813, 1),
+                (4816, 2)
+            ],
             "each chest opened in the tutorial must reach the treasury exactly once"
         );
         assert!(
@@ -2229,7 +2302,10 @@ mod tests {
         }
 
         assert_eq!(counts, vec![467, 465, 461]);
-        assert_eq!(revive_count, 3, "reviveCount must move; retail's responses do");
+        assert_eq!(
+            revive_count, 3,
+            "reviveCount must move; retail's responses do"
+        );
     }
 
     /// Both types used to deserialize into `Unknown` and be logged away. Retail's client
@@ -2284,7 +2360,10 @@ mod variant_repair_coverage_tests {
         let repairs = production.matches("match repair_variant_mismatch(").count()
             + production.matches("repair_variant_mismatch(&").count();
 
-        assert!(runs >= 2, "expected the quest and event paths, found {runs}");
+        assert!(
+            runs >= 2,
+            "expected the quest and event paths, found {runs}"
+        );
         assert_eq!(
             repairs, runs,
             "{runs} path(s) run dungeon actions but only {repairs} attempt the variant repair; \
@@ -2373,7 +2452,15 @@ mod event_kill_rewards_tests {
         let xp_before = character.character.0.experience;
         let mut wallet = CompleteWallet::default();
         let mut tracker = InventoryChangeTracker::default();
-        process_dungeon_actions(&req.actions, generated, &mut state, &mut character, &mut wallet, &mut tracker, &|l| l);
+        process_dungeon_actions(
+            &req.actions,
+            generated,
+            &mut state,
+            &mut character,
+            &mut wallet,
+            &mut tracker,
+            &|l| l,
+        );
         let gold = wallet.0.get(&GOLD).map_or(0, |w| w.balance);
         (character.character.0.experience - xp_before, gold)
     }
@@ -2388,7 +2475,10 @@ mod event_kill_rewards_tests {
         let scaling = &sd.quests_daily.level_scaling;
         let now = 1_777_852_800; // inside the committed calendar
         let minted = crate::quest::event_quests::mint(&sd, &gd, CHAR, 89, now);
-        assert!(!minted.is_empty(), "the committed calendar opens events at `now`");
+        assert!(
+            !minted.is_empty(),
+            "the committed calendar opens events at `now`"
+        );
 
         for row in &minted {
             let template = row.quest.gld_quest_id;
@@ -2405,16 +2495,29 @@ mod event_kill_rewards_tests {
                 89,
             )
             .unwrap();
-            let enemies = attempt.enemy_generated_data.values().flatten().flatten().count() as u64;
+            let enemies = attempt
+                .enemy_generated_data
+                .values()
+                .flatten()
+                .flatten()
+                .count() as u64;
             assert!(enemies > 0, "event {template} has enemies to kill");
 
             let (xp, gold) = clear_the_dungeon(&attempt);
             // 258 XP a kill at level 73, more for an enemy its group stands above
             // the row (#365) -- exactly what the attempt says each is worth.
-            let shown: u64 =
-                attempt.enemy_generated_data.values().flatten().flatten().map(|e| e.given_xp).sum();
+            let shown: u64 = attempt
+                .enemy_generated_data
+                .values()
+                .flatten()
+                .flatten()
+                .map(|e| e.given_xp)
+                .sum();
             assert_eq!(xp, shown, "event {template}: each kill pays its enemy's XP");
-            assert!(xp >= enemies * 258, "event {template}: at least 258 XP a kill");
+            assert!(
+                xp >= enemies * 258,
+                "event {template}: at least 258 XP a kill"
+            );
             assert_eq!(
                 (xp, gold),
                 clear_the_dungeon(row.dungeon.as_ref().unwrap()),
@@ -2540,7 +2643,12 @@ mod report323_stage_repair_tests {
         let b = Uuid::parse_str(EQ24_B).unwrap();
         let first_stage_only =
             blades_lib::util::dungeon::generate_for_dungeon_with_seed(&gd, &a, 99, 18, 63).unwrap();
-        let b_group = *gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys().next().unwrap();
+        let b_group = *gd.dungeons[&b]
+            .spawn_info
+            .enemy_spawn_groups
+            .keys()
+            .next()
+            .unwrap();
 
         let repaired = repair_variant_mismatch(&gd, &first_stage_only, &kill_in(b_group), &|_| 0)
             .expect("a kill in stage _B is repaired");
@@ -2560,15 +2668,28 @@ mod report323_stage_repair_tests {
             );
         }
         for group in gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys() {
-            assert!(repaired.enemy_generated_data.contains_key(group), "stage _B group {group}");
+            assert!(
+                repaired.enemy_generated_data.contains_key(group),
+                "stage _B group {group}"
+            );
         }
         for chest in gd.dungeons[&b].spawn_info.chest.keys() {
-            assert!(repaired.chest_generated_data.contains_key(chest), "stage _B chest {chest}");
+            assert!(
+                repaired.chest_generated_data.contains_key(chest),
+                "stage _B chest {chest}"
+            );
         }
-        let enemies: Vec<_> = repaired.enemy_generated_data.values().flatten().flatten().collect();
+        let enemies: Vec<_> = repaired
+            .enemy_generated_data
+            .values()
+            .flatten()
+            .flatten()
+            .collect();
         assert_eq!(enemies.len(), 20);
         assert!(
-            enemies.iter().all(|e| e.enemy_level == 18 && e.given_xp == 63),
+            enemies
+                .iter()
+                .all(|e| e.enemy_level == 18 && e.given_xp == 63),
             "the repair keeps the run's difficulty"
         );
 
@@ -2655,12 +2776,28 @@ mod report328_corpse_loot_tests {
         let mut run = |actions: Vec<DungeonUpdateAction>| {
             let mut tracker = InventoryChangeTracker::default();
             let moved = process_dungeon_actions(
-                &actions, &generated, &mut state, &mut character, &mut wallet, &mut tracker, &|l| l,
+                &actions,
+                &generated,
+                &mut state,
+                &mut character,
+                &mut wallet,
+                &mut tracker,
+                &|l| l,
             );
-            let mut reported: Vec<Uuid> =
-                tracker.modified_backpack.stackable_items.into_iter().collect();
+            let mut reported: Vec<Uuid> = tracker
+                .modified_backpack
+                .stackable_items
+                .into_iter()
+                .collect();
             reported.sort();
-            let left = state.dungeon_status.enemy_status.values().next().unwrap().loot.clone();
+            let left = state
+                .dungeon_status
+                .enemy_status
+                .values()
+                .next()
+                .unwrap()
+                .loot
+                .clone();
             (reported, moved, left)
         };
 
@@ -2669,11 +2806,24 @@ mod report328_corpse_loot_tests {
             "enemyIndex": 0, "xpReward": 10.0, "time": 1
         })));
 
-        let (reported, moved, left) = run(loot(serde_json::json!({"stackableItems": {LEATHER: 2}})));
-        assert_eq!(reported, vec![uuid(LEATHER)], "only the stack picked up is reported");
+        let (reported, moved, left) =
+            run(loot(serde_json::json!({"stackableItems": {LEATHER: 2}})));
+        assert_eq!(
+            reported,
+            vec![uuid(LEATHER)],
+            "only the stack picked up is reported"
+        );
         assert!(!moved, "no gold was picked up yet");
-        assert_eq!(left.stackable_items.get(&uuid(IRON)), Some(&5), "iron stays on the corpse");
-        assert_eq!(left.currencies.get(&uuid(GOLD)), Some(&304), "gold stays on the corpse");
+        assert_eq!(
+            left.stackable_items.get(&uuid(IRON)),
+            Some(&5),
+            "iron stays on the corpse"
+        );
+        assert_eq!(
+            left.currencies.get(&uuid(GOLD)),
+            Some(&304),
+            "gold stays on the corpse"
+        );
 
         let (reported, moved, left) = run(loot(serde_json::json!({"currencies": {GOLD: 304}})));
         assert!(reported.is_empty() && moved);
@@ -2682,14 +2832,21 @@ mod report328_corpse_loot_tests {
         // The client names the entry; the stored amount is what is paid.
         let (reported, _, left) = run(loot(serde_json::json!({"stackableItems": {IRON: 999}})));
         assert_eq!(reported, vec![uuid(IRON)]);
-        assert!(left.is_empty(), "the corpse is empty once every entry is taken");
+        assert!(
+            left.is_empty(),
+            "the corpse is empty once every entry is taken"
+        );
 
         // A replay of a taken entry pays nothing and reports nothing.
         let (reported, moved, _) = run(loot(serde_json::json!({"stackableItems": {IRON: 5}})));
         assert!(reported.is_empty() && !moved);
 
         let backpack = &character.inventory.0.backpack.stackable_items;
-        assert_eq!(backpack.count(uuid(IRON)), 5, "each entry is paid exactly once");
+        assert_eq!(
+            backpack.count(uuid(IRON)),
+            5,
+            "each entry is paid exactly once"
+        );
         assert_eq!(backpack.count(uuid(LEATHER)), 2);
         assert_eq!(wallet.balance(uuid(GOLD)), 304);
     }

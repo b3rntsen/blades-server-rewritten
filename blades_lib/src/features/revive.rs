@@ -24,8 +24,7 @@ use uuid::Uuid;
 
 /// `05a7d501-f096-41e9-8443-fd6a090d8425` — "Scroll of Revival"
 /// (`Items.Name.ReviveScroll`), the only tender in every `_reviveItemCostList`.
-pub const REVIVE_SCROLL_TEMPLATE: Uuid =
-    Uuid::from_u128(0x05a7_d501_f096_41e9_8443_fd6a_090d_8425);
+pub const REVIVE_SCROLL_TEMPLATE: Uuid = Uuid::from_u128(0x05a7_d501_f096_41e9_8443_fd6a_090d_8425);
 
 /// Scrolls charged for the 1st, 2nd, … revive of a run, from
 /// `MiscGameplayConstants._consecutiveRevive`.

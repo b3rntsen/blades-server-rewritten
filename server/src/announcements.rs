@@ -207,7 +207,11 @@ fn authored_gift_announcement(
     gift: &crate::free_for_all::GiftOverrideRow,
     now: i64,
 ) -> Announcement {
-    let start = if gift.start_time > 0 { gift.start_time } else { now };
+    let start = if gift.start_time > 0 {
+        gift.start_time
+    } else {
+        now
+    };
     let ttl = if gift.end_time > 0 {
         gift.end_time
     } else {
@@ -335,7 +339,11 @@ mod tests {
         };
         let a = arena_weapon_gift_announcement(&gift, 2_000);
         assert_eq!(a.id, id.to_string());
-        assert!(a.asset_url.ends_with(&format!("/gift/{id}")), "{}", a.asset_url);
+        assert!(
+            a.asset_url.ends_with(&format!("/gift/{id}")),
+            "{}",
+            a.asset_url
+        );
         assert!(a.start_time <= 2_000 && a.ttl > 2_000, "live now");
         assert_eq!(
             reachable_asset_url(&a.asset_url, DEFAULT_ASSET_ORIGIN),
@@ -354,7 +362,6 @@ mod tests {
         assert!(!gift.asset_url.contains("/free-for-all/"));
         assert!(!gift.asset_url.contains("/arena-season/"));
     }
-
 
     fn a_run(opens_at: i64, closes_at: i64) -> crate::free_for_all::FreeForAllRun {
         crate::free_for_all::FreeForAllRun {
@@ -485,7 +492,10 @@ mod asset_host_tests {
     /// — check the new entries carry a host a client can resolve.
     #[test]
     fn the_whole_shipped_feed_becomes_reachable() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/announcements.json");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/announcements.json"
+        );
         let raw = std::fs::read_to_string(path).expect("read announcements.json");
         let feed: Vec<Announcement> = serde_json::from_str(&raw).expect("parse announcements");
         assert_eq!(feed.len(), 156, "the shipped retail feed");
@@ -502,7 +512,10 @@ mod asset_host_tests {
                 rewritten += 1;
             }
         }
-        assert_eq!(rewritten, 156, "every shipped url was minted on the dead host");
+        assert_eq!(
+            rewritten, 156,
+            "every shipped url was minted on the dead host"
+        );
     }
 
     /// The default must be the host that actually answers, because an operator
@@ -510,7 +523,10 @@ mod asset_host_tests {
     /// name that does not resolve.
     #[test]
     fn the_default_origin_is_the_edge_that_serves_these() {
-        assert_eq!(DEFAULT_ASSET_ORIGIN, "https://announcements-feed.nb.dethele.com");
+        assert_eq!(
+            DEFAULT_ASSET_ORIGIN,
+            "https://announcements-feed.nb.dethele.com"
+        );
         assert_ne!(DEFAULT_ASSET_ORIGIN, RETAIL_ASSET_ORIGIN);
     }
 }

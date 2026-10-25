@@ -209,10 +209,7 @@ impl RepairData {
 
 /// Every repairable item the character owns, equipped or in the backpack, as
 /// `(item id, is_equipped)`. This is what a faithful "Repair all" covers.
-pub fn repairable_items(
-    data: &RepairData,
-    inventory: &CompleteInventory,
-) -> Vec<(Uuid, bool)> {
+pub fn repairable_items(data: &RepairData, inventory: &CompleteInventory) -> Vec<(Uuid, bool)> {
     let mut out: Vec<(Uuid, bool)> = Vec::new();
     for equipped in inventory.loadout.equipped_items.0.values() {
         if data.needs_repair(&equipped.item) {
@@ -349,9 +346,7 @@ pub fn apply_repairs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::user_data::{
-        Backpack, ItemPropertiesAll, Loadout, SingleEquippedItem, Treasury,
-    };
+    use crate::user_data::{Backpack, ItemPropertiesAll, Loadout, SingleEquippedItem, Treasury};
     use serde_json::json;
 
     /// A template with a full 11-level ladder plus a repair price.
@@ -402,10 +397,10 @@ mod tests {
     }
 
     fn equip(inv: &mut CompleteInventory, id: Uuid, slot: Uuid, it: Item) {
-        inv.loadout.equipped_items.0.insert(
-            slot,
-            SingleEquippedItem { id, slot, item: it },
-        );
+        inv.loadout
+            .equipped_items
+            .0
+            .insert(slot, SingleEquippedItem { id, slot, item: it });
     }
 
     fn wallet(gold: u64) -> CompleteWallet {
@@ -417,7 +412,11 @@ mod tests {
     #[test]
     fn meta_key_does_not_break_the_table() {
         let d = data();
-        assert_eq!(d.template_count(), 1, "_meta must not become a template row");
+        assert_eq!(
+            d.template_count(),
+            1,
+            "_meta must not become a template row"
+        );
         assert_eq!(d.cost_template_count(), 1);
     }
 
@@ -481,7 +480,12 @@ mod tests {
         let e3 = Uuid::from_u128(0xa3);
         equip(&mut inv, e1, Uuid::from_u128(0xf1), item(TPL, 0, 10.0));
         equip(&mut inv, e2, Uuid::from_u128(0xf2), item(TPL, 10, 100.0));
-        equip(&mut inv, e3, Uuid::from_u128(0xf3), item(TPL_UNKNOWN, 3, 5.0));
+        equip(
+            &mut inv,
+            e3,
+            Uuid::from_u128(0xf3),
+            item(TPL_UNKNOWN, 3, 5.0),
+        );
         let b1 = Uuid::from_u128(0xb1);
         let b2 = Uuid::from_u128(0xb2);
         let b3 = Uuid::from_u128(0xb3);
@@ -491,7 +495,10 @@ mod tests {
 
         // First visit: there is a bill, and it covers every worn item.
         let before = repair_all_cost(&d, &inv);
-        assert!(before > 0, "a worn loadout must quote a nonzero repair bill");
+        assert!(
+            before > 0,
+            "a worn loadout must quote a nonzero repair bill"
+        );
         let to_repair: Vec<Uuid> = repairable_items(&d, &inv)
             .into_iter()
             .map(|(id, _)| id)
@@ -504,7 +511,10 @@ mod tests {
 
         let mut tracker = InventoryChangeTracker::default();
         let outcome = apply_repairs(&d, &to_repair, &mut inv, &mut w, &mut tracker);
-        assert!(outcome.unaffordable.is_empty(), "rich character pays for all");
+        assert!(
+            outcome.unaffordable.is_empty(),
+            "rich character pays for all"
+        );
         assert!(outcome.unknown.is_empty());
         assert_eq!(outcome.repaired.len(), 5);
         assert_eq!(outcome.gold_spent, before);
@@ -531,11 +541,24 @@ mod tests {
         }
         for (id, it) in inv.backpack.items.0.iter() {
             let max = d.max_durability_or_default(it).unwrap();
-            assert_eq!(it.durability, max, "backpack item {id} not at max condition");
+            assert_eq!(
+                it.durability, max,
+                "backpack item {id} not at max condition"
+            );
         }
         // Temper-specific maxima, not one global number.
-        assert_eq!(inv.loadout.equipped_items.0[&Uuid::from_u128(0xf1)].item.durability, 325.0);
-        assert_eq!(inv.loadout.equipped_items.0[&Uuid::from_u128(0xf2)].item.durability, 675.0);
+        assert_eq!(
+            inv.loadout.equipped_items.0[&Uuid::from_u128(0xf1)]
+                .item
+                .durability,
+            325.0
+        );
+        assert_eq!(
+            inv.loadout.equipped_items.0[&Uuid::from_u128(0xf2)]
+                .item
+                .durability,
+            675.0
+        );
         assert_eq!(inv.backpack.items.0[&b1].durability, 484.375);
     }
 
@@ -548,13 +571,21 @@ mod tests {
         assert!(d.is_empty(), "empty tables — the worst case");
         let mut inv = inventory();
         let mut w = wallet(1_000);
-        equip(&mut inv, Uuid::from_u128(0xa1), Uuid::from_u128(0xf1), item(TPL, 3, 7.0));
+        equip(
+            &mut inv,
+            Uuid::from_u128(0xa1),
+            Uuid::from_u128(0xf1),
+            item(TPL, 3, 7.0),
+        );
         inv.backpack
             .items
             .0
             .insert(Uuid::from_u128(0xb1), item(TPL_UNKNOWN, 9, 2.0));
 
-        let ids: Vec<Uuid> = repairable_items(&d, &inv).into_iter().map(|(i, _)| i).collect();
+        let ids: Vec<Uuid> = repairable_items(&d, &inv)
+            .into_iter()
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(ids.len(), 2);
         let mut tracker = InventoryChangeTracker::default();
         apply_repairs(&d, &ids, &mut inv, &mut w, &mut tracker);
@@ -665,7 +696,10 @@ mod tests {
         // silent-skip defect comes back for that item.
         for (tpl, levels) in d.max_durability.iter() {
             for (lvl, v) in levels.iter().enumerate() {
-                assert!(*v > 0.0, "template {tpl} temper {lvl} has no max durability");
+                assert!(
+                    *v > 0.0,
+                    "template {tpl} temper {lvl} has no max durability"
+                );
             }
         }
 
@@ -678,7 +712,9 @@ mod tests {
             "the retail-observed temper-10 675 durability ceiling is present"
         );
         assert!(
-            d.max_durability.values().all(|l| l.iter().all(|v| *v <= 675.0)),
+            d.max_durability
+                .values()
+                .all(|l| l.iter().all(|v| *v <= 675.0)),
             "no template exceeds the retail-observed 675 durability ceiling"
         );
     }

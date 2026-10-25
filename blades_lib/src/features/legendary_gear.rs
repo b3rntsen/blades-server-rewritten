@@ -228,7 +228,10 @@ pub(crate) fn generate_at(shell: &Item, required_level: u64, seed: u64) -> Optio
         grade: shell.grade,
         tempering_level: shell.tempering_level,
         durability,
-        properties: ItemPropertiesAll { enchanting, grading },
+        properties: ItemPropertiesAll {
+            enchanting,
+            grading,
+        },
         arcane_tier: shell.arcane_tier,
     })
 }
@@ -254,7 +257,10 @@ fn roll_grading(
         .map(|(k, p)| {
             let j = k + pick(seed ^ (k as u64 + 1).rotate_left(37), ids.len() - k);
             ids.swap(k, j);
-            ItemSingleProperty { id: ids[k], tier: p.tier }
+            ItemSingleProperty {
+                id: ids[k],
+                tier: p.tier,
+            }
         })
         .collect()
 }
@@ -276,7 +282,10 @@ pub(crate) fn regrade_jewelry(item: &mut Item, seed: u64) -> bool {
     let tiers: Vec<ItemSingleProperty> =
         super::jewelry_grades::tiers_from_seed(seed ^ 0x7C15_9E37_79B9_4A7F)
             .iter()
-            .map(|&tier| ItemSingleProperty { id: Uuid::nil(), tier })
+            .map(|&tier| ItemSingleProperty {
+                id: Uuid::nil(),
+                tier,
+            })
             .collect();
     let grading = roll_grading(&t.category, &tiers, seed);
     if grading.iter().any(|p| p.id.is_nil()) {
@@ -432,7 +441,11 @@ pub(crate) fn kind_of(template: &Uuid) -> Option<&'static str> {
 /// The (required level, APK material tier) group a template belongs to.
 #[cfg(test)]
 pub(crate) fn tier_group_of(template: &Uuid) -> Option<(u64, u64)> {
-    pool().table.templates.get(template).map(|t| (t.required_level, t.tier))
+    pool()
+        .table
+        .templates
+        .get(template)
+        .map(|t| (t.required_level, t.tier))
 }
 
 /// Pool templates at an unlock level (21 per tier; 42 at level 1, Iron and Steel).
@@ -464,7 +477,11 @@ mod tests {
         );
         assert_eq!(t.secondary_tables.len(), 16);
         assert_eq!(t.grading_tables["ring"].len(), 34, "RingGradePropertyList");
-        assert_eq!(t.grading_tables["necklace"].len(), 15, "NecklaceGradePropertyList");
+        assert_eq!(
+            t.grading_tables["necklace"].len(),
+            15,
+            "NecklaceGradePropertyList"
+        );
         assert_eq!(
             t.category_weights.values().sum::<u64>(),
             2065,

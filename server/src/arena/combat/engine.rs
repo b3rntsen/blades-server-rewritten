@@ -114,11 +114,19 @@ const MATCH_STATE_BACKEND_TIMEOUT: f32 = 10.0;
 /// The holds below are rounded from the s506 deltas (6:+0s, 7:+2s, 11:+3s, 12:+12s,
 /// 13:+5s); the timeouts are the exact captured propId6 values.
 const MATCH_STATE_ROUND0_PROGRESSION: &[(MatchState, Duration, f32)] = &[
-    (MatchState::OpponentFoundFeedback, Duration::from_secs(0), 1.5),
+    (
+        MatchState::OpponentFoundFeedback,
+        Duration::from_secs(0),
+        1.5,
+    ),
     (MatchState::PreMatch, Duration::from_secs(2), 3.0),
     (MatchState::OpponentShowcase, Duration::from_secs(3), 12.0),
     (MatchState::PreRound, Duration::from_secs(12), 4.0),
-    (MatchState::InRound, Duration::from_secs(5), ROUND_TIMEOUT_WIRE),
+    (
+        MatchState::InRound,
+        Duration::from_secs(5),
+        ROUND_TIMEOUT_WIRE,
+    ),
 ];
 
 /// The retail post-match `MatchState` walk AFTER a round-ending death — the path the
@@ -157,7 +165,11 @@ const MATCH_STATE_MATCHEND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     // 17 → 15 gap is ~1 s (observed +1 s and +0 s in s615's two matches).
     (MatchState::Victory, Duration::from_secs(1), 5.0),
     (MatchState::PostMatch, Duration::from_secs(6), 5.0),
-    (MatchState::DisconnectingPlayersAfterMatch, Duration::from_secs(5), 0.0),
+    (
+        MatchState::DisconnectingPlayersAfterMatch,
+        Duration::from_secs(5),
+        0.0,
+    ),
 ];
 
 /// The op49/op48 result_code (s506 = 3; near-constant, ≈ maxRounds/result enum).
@@ -192,7 +204,10 @@ pub(super) fn pvp_trophies(combat: &MatchCombat) -> (i64, i64) {
         combat
             .fighters
             .get(slot)
-            .map(|f| PrePvpState::from_profile(&f.loadout.profile_character_json, f.loadout.level).trophies)
+            .map(|f| {
+                PrePvpState::from_profile(&f.loadout.profile_character_json, f.loadout.level)
+                    .trophies
+            })
             .unwrap_or(0)
     };
     (trophy(0), trophy(1))
@@ -202,7 +217,8 @@ impl PrePvpState {
     /// Parse the PvP block out of a character profile blob. An empty/unparseable
     /// blob (bot, starter loadout) yields all-zero, which the reward path handles.
     fn from_profile(character_json: &str, fallback_level: u16) -> Self {
-        let v: serde_json::Value = serde_json::from_str(character_json).unwrap_or(serde_json::Value::Null);
+        let v: serde_json::Value =
+            serde_json::from_str(character_json).unwrap_or(serde_json::Value::Null);
         let i = |k: &str| v.get(k).and_then(|x| x.as_i64()).unwrap_or(0);
         PrePvpState {
             trophies: i("pvpTrophies"),
@@ -235,7 +251,9 @@ impl PrePvpState {
 fn elo_opponent_trophies(own: &PrePvpState, opponent: Option<(&PrePvpState, bool)>) -> i64 {
     match opponent {
         None => own.trophies,
-        Some((opp, true)) => crate::arena::arena_ladder::bot_opponent_trophies(own.trophies, opp.matchmaking),
+        Some((opp, true)) => {
+            crate::arena::arena_ladder::bot_opponent_trophies(own.trophies, opp.matchmaking)
+        }
         Some((opp, false)) => opp.trophies,
     }
 }
@@ -257,11 +275,13 @@ fn promotion_reward_json(
     if !promo.stackable_items.is_empty() {
         value.insert(
             "stackableItems".into(),
-            serde_json::json!(promo
-                .stackable_items
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeMap<_, _>>()),
+            serde_json::json!(
+                promo
+                    .stackable_items
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            ),
         );
     }
     // The rung's fixed currencies (e.g. 50 / 100 Gems for a new arena). They were
@@ -270,11 +290,13 @@ fn promotion_reward_json(
     if !promo.currencies.is_empty() {
         value.insert(
             "currencies".into(),
-            serde_json::json!(promo
-                .currencies
-                .iter()
-                .copied()
-                .collect::<std::collections::BTreeMap<_, _>>()),
+            serde_json::json!(
+                promo
+                    .currencies
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            ),
         );
     }
     value.insert("characterXp".into(), serde_json::json!(0));
@@ -347,11 +369,23 @@ fn promotion_reward_json(
 /// `combat.round`.
 const MATCH_STATE_INTERROUND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     (MatchState::ChooseLoadout, Duration::from_secs(3), 20.0),
-    (MatchState::AwaitingClientBackendSynchronization, Duration::from_secs(20), 10.0),
-    (MatchState::SynchronizingLoadout, Duration::from_secs(1), 15.0),
+    (
+        MatchState::AwaitingClientBackendSynchronization,
+        Duration::from_secs(20),
+        10.0,
+    ),
+    (
+        MatchState::SynchronizingLoadout,
+        Duration::from_secs(1),
+        15.0,
+    ),
     (MatchState::OpponentShowcase, Duration::from_secs(3), 5.0),
     (MatchState::PreRound, Duration::from_secs(5), 4.0),
-    (MatchState::InRound, Duration::from_secs(4), ROUND_TIMEOUT_WIRE),
+    (
+        MatchState::InRound,
+        Duration::from_secs(4),
+        ROUND_TIMEOUT_WIRE,
+    ),
 ];
 
 /// Whether a finished match's cups and W/L must be thrown away.
@@ -466,7 +500,12 @@ impl MatchInstance {
     /// `expected_peers` is how many real ENet peers must connect before the round
     /// starts (== capacity for PvP; 1 for a solo-vs-bot match, whose 2nd fighter is
     /// a server-driven bot with no peer).
-    pub fn new(capacity: usize, expected_peers: usize, loadouts: Vec<Loadout>, now: Instant) -> Self {
+    pub fn new(
+        capacity: usize,
+        expected_peers: usize,
+        loadouts: Vec<Loadout>,
+        now: Instant,
+    ) -> Self {
         Self::new_with_ranking_context(
             capacity,
             expected_peers,
@@ -533,7 +572,11 @@ impl MatchInstance {
             .fighters
             .iter()
             .take(self.combat.expected_peers)
-            .position(|f| f.loadout.character_uuid.eq_ignore_ascii_case(character_uuid))
+            .position(|f| {
+                f.loadout
+                    .character_uuid
+                    .eq_ignore_ascii_case(character_uuid)
+            })
     }
 
     /// Hold a loadout for the human playing `character_uuid` (report #232).
@@ -587,7 +630,12 @@ impl MatchInstance {
                     .join(", "),
             );
             self.prepare_interround_profile_relay();
-            if self.interround_profiles_sent.get(slot).copied().unwrap_or(false) {
+            if self
+                .interround_profiles_sent
+                .get(slot)
+                .copied()
+                .unwrap_or(false)
+            {
                 self.broadcast_profile_of(out, slot);
             }
         }
@@ -639,7 +687,8 @@ impl MatchInstance {
             self.combat.round,
             &self.combat.game_session_id,
         )];
-        if let Some(flow) = messages::flow_state(self.combat.flow_controller_id, self.combat.phase) {
+        if let Some(flow) = messages::flow_state(self.combat.flow_controller_id, self.combat.phase)
+        {
             out.push(flow);
         }
         out
@@ -711,7 +760,12 @@ impl MatchInstance {
     /// viewers. Draining at this ONE seam — rather than at each of the dozen sites that
     /// change an actor state — is what makes it impossible to add a state change that
     /// silently fails to animate. [`resolve::drain_state_changes`]
-    pub fn on_c2s(&mut self, sender: usize, user_data: &[u8], now: Instant) -> Vec<(usize, Vec<u8>)> {
+    pub fn on_c2s(
+        &mut self,
+        sender: usize,
+        user_data: &[u8],
+        now: Instant,
+    ) -> Vec<(usize, Vec<u8>)> {
         // Both directions at the one seam — see `trace`. Off unless
         // ARENA_TRACE_DIR is set, and it can never fail a match.
         super::trace::record(&self.combat.game_session_id, "c2s", sender, user_data);
@@ -807,7 +861,9 @@ impl MatchInstance {
                     self.mark_interround_profile_sent(sender);
                 }
             }
-            debug!("combat c2s: slot {sender} op61 LoadoutClientBackendSynchronized — handshake, no reply");
+            debug!(
+                "combat c2s: slot {sender} op61 LoadoutClientBackendSynchronized — handshake, no reply"
+            );
             return out;
         }
 
@@ -901,7 +957,9 @@ impl MatchInstance {
                     );
                     out.push((opp, relay));
                 } else {
-                    debug!("combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → echoed to emoter (no opponent — solo/bot)");
+                    debug!(
+                        "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") → echoed to emoter (no opponent — solo/bot)"
+                    );
                 }
             }
             return out;
@@ -925,13 +983,21 @@ impl MatchInstance {
 
         // Everything else (swipe / ability / block / position) → resolution.
         let phase_before = self.combat.phase;
-        out.extend(resolve::on_c2s_input(&mut self.combat, sender, user_data, now));
+        out.extend(resolve::on_c2s_input(
+            &mut self.combat,
+            sender,
+            user_data,
+            now,
+        ));
         // A killing blow flips StateTimeout→RoundEnd (final round → match-end walk) or
         // StateTimeout→NextState (non-final round → between-rounds walk) inside
         // `resolve::on_round_ending_death`. Either way, anchor the new walk's s506 timers
         // to NOW (the death) rather than to whenever StateTimeout was entered.
         if phase_before == FlowState::StateTimeout
-            && matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState)
+            && matches!(
+                self.combat.phase,
+                FlowState::RoundEnd | FlowState::NextState
+            )
         {
             self.combat.phase_entered = now;
         }
@@ -1020,7 +1086,9 @@ impl MatchInstance {
         let mut out = pending_death_burst;
         for slot in 0..self.combat.fighters.len() {
             out.push((slot, result.clone()));
-            if let Some(m) = messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd) {
+            if let Some(m) =
+                messages::flow_state(self.combat.flow_controller_id, FlowState::RoundEnd)
+            {
                 out.push((slot, m));
             }
             out.push((slot, post_round.clone()));
@@ -1179,7 +1247,9 @@ impl MatchInstance {
                     self.broadcast_stat_updates(&mut out);
                 }
                 if elapsed >= SPAWN_HANDSHAKE_HOLD {
-                    info!("combat FSM: Spawning → BackendMatchCreated (round-start handshake settled)");
+                    info!(
+                        "combat FSM: Spawning → BackendMatchCreated (round-start handshake settled)"
+                    );
                     self.combat.phase = FlowState::BackendMatchCreated;
                     self.combat.phase_entered = now;
                     self.last_heartbeat = now;
@@ -1214,7 +1284,9 @@ impl MatchInstance {
                 if let Some(&(state, hold_before, timeout)) =
                     MATCH_STATE_ROUND0_PROGRESSION.get(self.setup_step)
                 {
-                    if self.take_skip_request(now.duration_since(self.combat.phase_entered) >= hold_before) {
+                    if self.take_skip_request(
+                        now.duration_since(self.combat.phase_entered) >= hold_before,
+                    ) {
                         info!(
                             "combat FSM: MatchState → {:?}({}) [round-0 setup step {}/{}]",
                             state,
@@ -1229,7 +1301,9 @@ impl MatchInstance {
                 } else {
                     // The whole progression has been emitted (last state = InRound(13));
                     // the client is now in the combat scene. Enter the live round.
-                    info!("combat FSM: BackendMatchCreated → StateTimeout (InRound reached — round 1 live)");
+                    info!(
+                        "combat FSM: BackendMatchCreated → StateTimeout (InRound reached — round 1 live)"
+                    );
                     // Round 1 is a round start too: charge the first-use delays before
                     // anyone can act, or the opener is ungated exactly as round 2 was.
                     self.combat.charge_initial_cooldowns(now);
@@ -1252,7 +1326,10 @@ impl MatchInstance {
                 // A bot's killing blow on the tick flips StateTimeout→RoundEnd (match-end)
                 // or →NextState (between-rounds); anchor the new walk to NOW (same as the
                 // on_c2s player-kill path).
-                if matches!(self.combat.phase, FlowState::RoundEnd | FlowState::NextState) {
+                if matches!(
+                    self.combat.phase,
+                    FlowState::RoundEnd | FlowState::NextState
+                ) {
                     self.combat.phase_entered = now;
                 }
                 // The 120-second InRound timeout is authoritative. Bots normally
@@ -1279,7 +1356,8 @@ impl MatchInstance {
             // [MATCH_STATE_MATCHEND_PROGRESSION]
             // The post-round walks wait for the death burst's result (PostRound + op48)
             // to be on the wire: a Ready press must not skip ahead of it.
-            FlowState::RoundEnd | FlowState::NextState if self.combat.round_end_pending.is_some() => {}
+            FlowState::RoundEnd | FlowState::NextState
+                if self.combat.round_end_pending.is_some() => {}
             FlowState::RoundEnd => {
                 if let Some(&(state, hold_before, timeout)) =
                     MATCH_STATE_MATCHEND_PROGRESSION.get(self.combat.matchend_step)
@@ -1316,7 +1394,11 @@ impl MatchInstance {
                         // (p50 559) after → BackendMatchEnd(17), n = 94; sent with the
                         // 17 step, the nearest beat this walk has (tracker #305).
                         if matches!(state, MatchState::BackendMatchEnd) {
-                            if let Some(f) = self.combat.winner.and_then(|w| self.combat.fighters.get_mut(w)) {
+                            if let Some(f) = self
+                                .combat
+                                .winner
+                                .and_then(|w| self.combat.fighters.get_mut(w))
+                            {
                                 f.force_actor_state(super::state::ActorStateType::Emote, now);
                             }
                             out.extend(resolve::drain_state_changes(&mut self.combat, now));
@@ -1351,7 +1433,9 @@ impl MatchInstance {
                 } else {
                     // The terminal state (DisconnectingPlayersAfterMatch=19) has been
                     // broadcast; the match is over.
-                    info!("combat FSM: RoundEnd → Finished (post-match walk complete; client returns to lobby)");
+                    info!(
+                        "combat FSM: RoundEnd → Finished (post-match walk complete; client returns to lobby)"
+                    );
                     self.combat.phase = FlowState::Finished;
                 }
             }
@@ -1366,7 +1450,9 @@ impl MatchInstance {
                 if let Some(&(state, hold_before, timeout)) =
                     MATCH_STATE_INTERROUND_PROGRESSION.get(self.combat.interround_step)
                 {
-                    if self.take_skip_request(now.duration_since(self.combat.phase_entered) >= hold_before) {
+                    if self.take_skip_request(
+                        now.duration_since(self.combat.phase_entered) >= hold_before,
+                    ) {
                         // Bump the round when the LIVE round actually starts — i.e. at
                         // InRound(13), the LAST between-rounds step — not at the first.
                         //
@@ -1640,7 +1726,12 @@ impl MatchInstance {
                 ),
             ));
 
-            for opponent in self.combat.fighters.iter().filter(|actor| actor.slot != viewer) {
+            for opponent in self
+                .combat
+                .fighters
+                .iter()
+                .filter(|actor| actor.slot != viewer)
+            {
                 if !opponent.loadout.profile_character_json.is_empty() {
                     out.push((
                         viewer,
@@ -1669,7 +1760,12 @@ impl MatchInstance {
     /// `Match.OnObjectPropertiesChanged` applies it and fires `OnMatchStateChanged`,
     /// binding the local/opponent `PvpPlayer` during `WaitingForPlayers`(3) /
     /// `InitialPlayerSetup`(4). Also records the state on `MatchCombat`. [s506 obj 123]
-    fn broadcast_match_state(&mut self, out: &mut Vec<(usize, Vec<u8>)>, state: MatchState, timeout_secs: f32) {
+    fn broadcast_match_state(
+        &mut self,
+        out: &mut Vec<(usize, Vec<u8>)>,
+        state: MatchState,
+        timeout_secs: f32,
+    ) {
         self.combat.match_state = state;
         self.combat.match_state_timeout_secs = timeout_secs;
         for viewer in 0..self.combat.fighters.len() {
@@ -1735,10 +1831,15 @@ impl MatchInstance {
             })
             .collect();
         let is_bot_slot: Vec<bool> = (0..n)
-            .map(|slot| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[slot].loadout))
+            .map(|slot| {
+                crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[slot].loadout)
+            })
             .collect();
-        let h2h_match =
-            ranking::is_h2h_match(n, self.combat.expected_peers(), is_bot_slot.iter().any(|x| *x));
+        let h2h_match = ranking::is_h2h_match(
+            n,
+            self.combat.expected_peers(),
+            is_bot_slot.iter().any(|x| *x),
+        );
 
         // What each slot's trophy swing is priced against. Computed once so the card
         // preview below and the persisted payout in the main loop cannot disagree.
@@ -1778,7 +1879,11 @@ impl MatchInstance {
                 let rounds_lost = opponent
                     .and_then(|o| self.combat.rounds_won.get(o).copied())
                     .unwrap_or(0);
-                let outcome = MatchOutcome { rounds_won, rounds_lost, win: is_winner };
+                let outcome = MatchOutcome {
+                    rounds_won,
+                    rounds_lost,
+                    win: is_winner,
+                };
                 let trophy_delta = ranking::trophy_delta(
                     &self.ranking.config,
                     ranking::TrophyDeltaInput {
@@ -1809,9 +1914,17 @@ impl MatchInstance {
             let rounds_lost = opponent
                 .and_then(|o| self.combat.rounds_won.get(o).copied())
                 .unwrap_or(0);
-            let outcome = MatchOutcome { rounds_won, rounds_lost, win: is_winner };
+            let outcome = MatchOutcome {
+                rounds_won,
+                rounds_lost,
+                win: is_winner,
+            };
 
-            let level = if p.level > 0 { p.level } else { f.loadout.level };
+            let level = if p.level > 0 {
+                p.level
+            } else {
+                f.loadout.level
+            };
             // The arena the match is fought in — the third input to the shipped
             // reward tables. Read off the PRE-match trophy high-water mark, which
             // is what the ladder promotes on, so a promotion earned by this very
@@ -1835,7 +1948,11 @@ impl MatchInstance {
             let post_high_water = p.high_water.max(post_trophies);
             let (post_meter, filled) = arena_ladder::advance_chest_meter(p.chest_meter, rounds_won);
             let post_streak = if is_winner {
-                if p.winning_streak > 0 { p.winning_streak + 1 } else { 1 }
+                if p.winning_streak > 0 {
+                    p.winning_streak + 1
+                } else {
+                    1
+                }
             } else if p.winning_streak < 0 {
                 p.winning_streak - 1
             } else {
@@ -2123,7 +2240,11 @@ impl MatchInstance {
             if !reward.reward_chests.is_empty() || card_weapon.is_some() {
                 info!(
                     "combat: op49 slot {slot} card rewards — meter chest(s) {:?}{}",
-                    reward.reward_chests.iter().map(|c| (&c.id, c.tier)).collect::<Vec<_>>(),
+                    reward
+                        .reward_chests
+                        .iter()
+                        .map(|c| (&c.id, c.tier))
+                        .collect::<Vec<_>>(),
                     card_weapon
                         .as_ref()
                         .map(|w| format!(
@@ -2446,7 +2567,10 @@ pub(in crate::arena::combat) mod tests {
         let mut m = super::MatchInstance::new(2, 2, vec![], now);
         m.skip_state_requested.insert(0);
         m.skip_state_requested.insert(1);
-        assert!(m.take_skip_request(false), "both ready — this state advances");
+        assert!(
+            m.take_skip_request(false),
+            "both ready — this state advances"
+        );
         assert!(
             !m.take_skip_request(false),
             "the latch is consumed; the NEXT state waits for fresh presses"
@@ -2521,14 +2645,17 @@ pub(in crate::arena::combat) mod tests {
         // Mid-stagger: nothing removed yet.
         let mid = collect_op51(m.on_tick(2, t0 + Duration::from_millis(400)));
         assert!(
-            !mid.iter().any(|(apply, eff)| !*apply && *eff == StatusEffectType::Staggered as u8),
+            !mid.iter()
+                .any(|(apply, eff)| !*apply && *eff == StatusEffectType::Staggered as u8),
             "no remove while the stagger is still running",
         );
 
         // Past the duration: the remove goes out.
         let after = collect_op51(m.on_tick(2, t0 + Duration::from_millis(1200)));
         assert!(
-            after.iter().any(|(apply, eff)| !*apply && *eff == StatusEffectType::Staggered as u8),
+            after
+                .iter()
+                .any(|(apply, eff)| !*apply && *eff == StatusEffectType::Staggered as u8),
             "a lapsed stagger must emit op51 Staggered with apply=false; saw {after:?}",
         );
     }
@@ -2538,7 +2665,9 @@ pub(in crate::arena::combat) mod tests {
         let mut v = Vec::new();
         for (_viewer, frame) in out {
             // marker 0xBE, carrier, then NetData
-            let Some(i) = frame.iter().position(|b| *b == 0xBE) else { continue };
+            let Some(i) = frame.iter().position(|b| *b == 0xBE) else {
+                continue;
+            };
             if i + 2 >= frame.len() {
                 continue;
             }
@@ -2556,8 +2685,8 @@ pub(in crate::arena::combat) mod tests {
         }
         v
     }
-    use super::*;
     use super::super::state::ActorStateType;
+    use super::*;
 
     fn inst(capacity: usize) -> (MatchInstance, Instant) {
         let now = Instant::now();
@@ -2612,9 +2741,10 @@ pub(in crate::arena::combat) mod tests {
         // the damage. Returning only one of them would hide whichever the test is
         // actually about.
         let mut out = m.on_c2s(slot, &[0x84, 0x36], t);
-        out.extend(
-            m.on_tick(2, t + super::super::resolve::FOLLOW_THROUGH_DELAY + Duration::from_millis(1)),
-        );
+        out.extend(m.on_tick(
+            2,
+            t + super::super::resolve::FOLLOW_THROUGH_DELAY + Duration::from_millis(1),
+        ));
         out
     }
 
@@ -2649,7 +2779,9 @@ pub(in crate::arena::combat) mod tests {
         let out = m.on_tick(2, t0);
         assert_eq!(m.phase(), FlowState::Spawning);
         assert_eq!(
-            out.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            out.iter()
+                .filter(|(_, b)| b.ends_with(b"BackendMatchCreated"))
+                .count(),
             0,
             "BackendMatchCreated must NOT ride the spawn burst (retail staggers it)"
         );
@@ -2659,14 +2791,27 @@ pub(in crate::arena::combat) mod tests {
         // The Avatars come LATER (after the Match→InitialPlayerSetup transition, see
         // `match_state_progresses_3_4_5`). So this burst = 2 viewers × (2 Player + 1
         // Match) = 6 op50 (0x32) spawn messages — NO Avatars yet.
-        let spawns = out.iter().filter(|(_, b)| b.len() >= 2 && b[1] == 0x32).count();
-        assert_eq!(spawns, 6, "op50 = Player(both) + Match per viewer; avatars come after state 3→4");
+        let spawns = out
+            .iter()
+            .filter(|(_, b)| b.len() >= 2 && b[1] == 0x32)
+            .count();
+        assert_eq!(
+            spawns, 6,
+            "op50 = Player(both) + Match per viewer; avatars come after state 3→4"
+        );
         // No Avatar (type 56) op50 in the first burst (they ride the 3→4 tick).
         let avatars = out
             .iter()
-            .filter(|(_, b)| b.len() >= 3 && b[1] == 0x32 && arena_proto::parse_netdata(&b[2..]).int(1) == Some(56))
+            .filter(|(_, b)| {
+                b.len() >= 3
+                    && b[1] == 0x32
+                    && arena_proto::parse_netdata(&b[2..]).int(1) == Some(56)
+            })
             .count();
-        assert_eq!(avatars, 0, "Avatars are NOT in the WaitingForPlayers spawn burst");
+        assert_eq!(
+            avatars, 0,
+            "Avatars are NOT in the WaitingForPlayers spawn burst"
+        );
         // The Match spawn carries MatchState=WaitingForPlayers(3) — NOT 5 — so the
         // client enters player binding instead of jumping straight to BackendMatchCreation.
         assert_eq!(
@@ -2685,20 +2830,31 @@ pub(in crate::arena::combat) mod tests {
         let (mut m, t0) = inst(2);
         let burst = m.on_tick(2, t0); // → Spawning
         assert_eq!(m.phase(), FlowState::Spawning);
-        assert!(burst.iter().any(|(_, b)| b.len() >= 2 && b[1] == 0x32), "spawns in the first burst");
         assert!(
-            !burst.iter().any(|(_, b)| b.ends_with(b"BackendMatchCreated")),
+            burst.iter().any(|(_, b)| b.len() >= 2 && b[1] == 0x32),
+            "spawns in the first burst"
+        );
+        assert!(
+            !burst
+                .iter()
+                .any(|(_, b)| b.ends_with(b"BackendMatchCreated")),
             "BackendMatchCreated must NOT ride the spawn burst"
         );
         // Held right up to the stagger deadline.
         let held = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD - Duration::from_millis(1));
-        assert!(held.iter().all(|(_, b)| !b.ends_with(b"BackendMatchCreated")));
+        assert!(
+            held.iter()
+                .all(|(_, b)| !b.ends_with(b"BackendMatchCreated"))
+        );
         assert_eq!(m.phase(), FlowState::Spawning);
         // After the hold: BackendMatchCreated to both players.
         let created = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD);
         assert_eq!(m.phase(), FlowState::BackendMatchCreated);
         assert_eq!(
-            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            created
+                .iter()
+                .filter(|(_, b)| b.ends_with(b"BackendMatchCreated"))
+                .count(),
             2,
             "BackendMatchCreated announced ~4s after the spawns, to both players"
         );
@@ -2723,7 +2879,10 @@ pub(in crate::arena::combat) mod tests {
             .iter()
             .filter(|(_, b)| b.len() >= 2 && b[1] == 0x35)
             .count();
-        assert_eq!(setup_updates, 2, "InitialPlayerSetup(4) → op55 update to both viewers");
+        assert_eq!(
+            setup_updates, 2,
+            "InitialPlayerSetup(4) → op55 update to both viewers"
+        );
         // After the stagger hold → BackendMatchCreation(5), again an op55 update.
         let created = m.on_tick(2, t0 + SPAWN_HANDSHAKE_HOLD);
         assert_eq!(m.match_state_for_test(), MatchState::BackendMatchCreation);
@@ -2733,7 +2892,10 @@ pub(in crate::arena::combat) mod tests {
         );
         // …and the op79 stateName "BackendMatchCreated" rides the SAME tick (flow controller).
         assert_eq!(
-            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            created
+                .iter()
+                .filter(|(_, b)| b.ends_with(b"BackendMatchCreated"))
+                .count(),
             2,
         );
     }
@@ -2760,11 +2922,22 @@ pub(in crate::arena::combat) mod tests {
         // distinct from op54-small stat word (p3=65) and flow states (p3=0x4F).
         let profiles: Vec<&(usize, Vec<u8>)> = out
             .iter()
-            .filter(|(_, b)| b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35))
+            .filter(|(_, b)| {
+                b.len() > 2
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
+            })
             .collect();
-        assert_eq!(profiles.len(), 2, "exactly one op54 profile per viewer (opponent-only, not self)");
+        assert_eq!(
+            profiles.len(),
+            2,
+            "exactly one op54 profile per viewer (opponent-only, not self)"
+        );
         // viewer 0 must receive slot 1's (Bob's) profile object id, NOT its own (slot 0).
-        let p0 = profiles.iter().find(|(v, _)| *v == 0).expect("viewer 0 profile");
+        let p0 = profiles
+            .iter()
+            .find(|(v, _)| *v == 0)
+            .expect("viewer 0 profile");
         assert_eq!(
             arena_proto::parse_netdata(&p0.1[2..]).int(0),
             Some(m.combat.fighters[1].player_net_object_id as i64),
@@ -2861,7 +3034,10 @@ pub(in crate::arena::combat) mod tests {
         let setup = m.on_tick(2, now + MATCH_SETUP_STAGGER);
 
         // Baseline: nobody has toggled, so Alice sees Bob WITH a helmet.
-        let base = setup.iter().find(|(v, b)| *v == 0 && is_profile(b)).expect("viewer 0 profile");
+        let base = setup
+            .iter()
+            .find(|(v, b)| *v == 0 && is_profile(b))
+            .expect("viewer 0 profile");
         assert_eq!(
             arena_proto::parse_netdata(&base.1[2..]).int(6),
             Some(0),
@@ -2876,16 +3052,26 @@ pub(in crate::arena::combat) mod tests {
         );
         let out = m.on_c2s(1, &op61, now + MATCH_SETUP_STAGGER);
 
-        let relayed: Vec<&(usize, Vec<u8>)> =
-            out.iter().filter(|(v, b)| *v == 0 && is_profile(b)).collect();
-        assert_eq!(relayed.len(), 1, "Bob's toggle re-broadcasts his profile to Alice");
+        let relayed: Vec<&(usize, Vec<u8>)> = out
+            .iter()
+            .filter(|(v, b)| *v == 0 && is_profile(b))
+            .collect();
+        assert_eq!(
+            relayed.len(),
+            1,
+            "Bob's toggle re-broadcasts his profile to Alice"
+        );
         let nd = arena_proto::parse_netdata(&relayed[0].1[2..]);
         assert_eq!(
             nd.int(0),
             Some(m.combat.fighters[1].player_net_object_id as i64),
             "the re-broadcast profile describes BOB"
         );
-        assert_eq!(nd.int(6), Some(1), "p6 HideHelmet=true reaches Alice's client");
+        assert_eq!(
+            nd.int(6),
+            Some(1),
+            "p6 HideHelmet=true reaches Alice's client"
+        );
         assert!(
             !out.iter().any(|(v, b)| *v == 1 && is_profile(b)),
             "never echo a client its own profile"
@@ -2952,7 +3138,10 @@ pub(in crate::arena::combat) mod tests {
         // It is addressed to the lone human viewer (slot 0) and carries the OPPONENT's
         // (slot 1) player object id — never the viewer's own object.
         let (viewer, body) = profiles[0];
-        assert_eq!(*viewer, 0, "the profile is delivered to the human viewer (slot 0)");
+        assert_eq!(
+            *viewer, 0,
+            "the profile is delivered to the human viewer (slot 0)"
+        );
         assert_eq!(
             arena_proto::parse_netdata(&body[2..]).int(0),
             Some(fixed.combat.fighters[1].player_net_object_id as i64),
@@ -2994,10 +3183,14 @@ pub(in crate::arena::combat) mod tests {
         m.on_tick(1, t + Duration::from_millis(400));
         m.on_tick(
             1,
-            t + Duration::from_millis(400) + super::super::resolve::FOLLOW_THROUGH_DELAY
+            t + Duration::from_millis(400)
+                + super::super::resolve::FOLLOW_THROUGH_DELAY
                 + Duration::from_millis(1),
         );
-        assert!(m.fighter_health(0) < before, "bot should damage the player on tick");
+        assert!(
+            m.fighter_health(0) < before,
+            "bot should damage the player on tick"
+        );
     }
 
     /// THE point of tracker #21: a guard raised AFTER the attacker committed, but
@@ -3041,10 +3234,16 @@ pub(in crate::arena::combat) mod tests {
         m.on_c2s(1, &block, t0 + Duration::from_millis(20));
 
         // Let the hit land.
-        m.on_tick(2, t0 + super::super::resolve::FOLLOW_THROUGH_DELAY + Duration::from_millis(1));
+        m.on_tick(
+            2,
+            t0 + super::super::resolve::FOLLOW_THROUGH_DELAY + Duration::from_millis(1),
+        );
         let guarded_dealt = full - m.fighter_health(1);
 
-        assert!(guarded_dealt > 0, "an optimal block still lets the halved elemental through");
+        assert!(
+            guarded_dealt > 0,
+            "an optimal block still lets the halved elemental through"
+        );
         assert!(
             guarded_dealt < open_dealt / 2,
             "the late-but-in-time guard must have blocked: took {guarded_dealt} vs {open_dealt} unguarded"
@@ -3062,7 +3261,11 @@ pub(in crate::arena::combat) mod tests {
         for i in 0..=((SPAWN_HANDSHAKE_HOLD + Duration::from_secs(6)).as_millis() / 100) as u32 {
             mid.on_tick(2, t0 + step * i);
         }
-        assert_eq!(mid.phase(), FlowState::BackendMatchCreated, "still walking MatchState, not live yet");
+        assert_eq!(
+            mid.phase(),
+            FlowState::BackendMatchCreated,
+            "still walking MatchState, not live yet"
+        );
 
         // (b) The full drive reaches the live round (StateTimeout), round 1, and emits
         // a StateTimeout heartbeat once live.
@@ -3079,7 +3282,12 @@ pub(in crate::arena::combat) mod tests {
         // After the cadence elapses (measured from when it actually went live): a
         // StateTimeout heartbeat to both players.
         let out = m.on_tick(2, live + HEARTBEAT);
-        assert_eq!(out.iter().filter(|(_, b)| b.ends_with(b"StateTimeout")).count(), 2);
+        assert_eq!(
+            out.iter()
+                .filter(|(_, b)| b.ends_with(b"StateTimeout"))
+                .count(),
+            2
+        );
     }
 
     /// Capture-proven (s506): the round-start op58 clock-sync is a CLIENT-INITIATED
@@ -3095,7 +3303,11 @@ pub(in crate::arena::combat) mod tests {
         let now = Instant::now();
         let mut m = MatchInstance::new(2, 2, vec![], now);
         m.on_tick(2, now); // Connecting → Spawning (round-start burst)
-        assert_eq!(m.phase(), FlowState::Spawning, "test drives to the round-start phase");
+        assert_eq!(
+            m.phase(),
+            FlowState::Spawning,
+            "test drives to the round-start phase"
+        );
 
         // Build the client's c2s op58: two Longs [clock0=0 @propId0, token @propId1].
         // `messages::clock` writes exactly that NetData; patch the marker to the c2s
@@ -3107,7 +3319,11 @@ pub(in crate::arena::combat) mod tests {
         let out = m.on_c2s(0, &c2s, now);
 
         // Exactly one reply, to the SENDER (slot 0), carrier op58.
-        assert_eq!(out.len(), 1, "op58 clock-sync replies to the sender ONLY (not a broadcast)");
+        assert_eq!(
+            out.len(),
+            1,
+            "op58 clock-sync replies to the sender ONLY (not a broadcast)"
+        );
         let (target, reply) = &out[0];
         assert_eq!(*target, 0, "reply goes back to the sender");
         assert_eq!(reply[0], messages::MARKER_S2C, "s2c marker 0xBE");
@@ -3123,13 +3339,20 @@ pub(in crate::arena::combat) mod tests {
         );
         match nd.props.get(&0) {
             Some(&arena_proto::NetDataValue::Long(ticks)) => {
-                assert!(ticks > 621_355_968_000_000_000, "propId 0 is a real .NET-ticks server clock");
+                assert!(
+                    ticks > 621_355_968_000_000_000,
+                    "propId 0 is a real .NET-ticks server clock"
+                );
             }
             other => panic!("propId 0 must be a Long server clock, got {other:?}"),
         }
 
         // Combat resolution did NOT run (no phantom damage from the handshake frame).
-        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "no damage from a clock-sync");
+        assert_eq!(
+            m.fighter_health(1),
+            m.fighter_max_health(1),
+            "no damage from a clock-sync"
+        );
     }
 
     /// A malformed c2s op58 (no parseable token) still gets a reply (token 0) — the
@@ -3169,9 +3392,20 @@ pub(in crate::arena::combat) mod tests {
         op61[0] = 0x84; // c2s marker (byte 0 is not parsed)
 
         let out = m.on_c2s(0, &op61, t0);
-        assert!(out.is_empty(), "op61 produces NO s2c (the server never replies to it)");
-        assert_eq!(m.fighter_health(1), full, "op61 must NOT damage the opponent (it's not a swing)");
-        assert_eq!(m.phase(), FlowState::StateTimeout, "op61 does not change the match phase");
+        assert!(
+            out.is_empty(),
+            "op61 produces NO s2c (the server never replies to it)"
+        );
+        assert_eq!(
+            m.fighter_health(1),
+            full,
+            "op61 must NOT damage the opponent (it's not a swing)"
+        );
+        assert_eq!(
+            m.phase(),
+            FlowState::StateTimeout,
+            "op61 does not change the match phase"
+        );
     }
 
     /// The other carrier-0x36 round-transition handshake frames (op36 PlayerLoadoutReady,
@@ -3184,18 +3418,32 @@ pub(in crate::arena::combat) mod tests {
         // op36 PlayerLoadoutReady (c2s).
         let mut op36 = {
             let mut w = arena_proto::NetDataWriter::new();
-            w.int(0, m.combat.fighters[0].player_net_object_id).byte(1, 55).byte(2, 3).byte(3, 36);
+            w.int(0, m.combat.fighters[0].player_net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 36);
             messages::frame_for_test(w.finish())
         };
         op36[0] = 0x84;
-        assert!(m.on_c2s(0, &op36, t0).is_empty(), "op36 PlayerLoadoutReady → no s2c");
+        assert!(
+            m.on_c2s(0, &op36, t0).is_empty(),
+            "op36 PlayerLoadoutReady → no s2c"
+        );
 
         // op80 MatchStateChangeAck (c2s echo).
-        let mut op80 = messages::match_state_change_ack(m.combat.flow_controller_id, "StateTimeout");
+        let mut op80 =
+            messages::match_state_change_ack(m.combat.flow_controller_id, "StateTimeout");
         op80[0] = 0x84;
-        assert!(m.on_c2s(0, &op80, t0).is_empty(), "op80 MatchStateChangeAck → no s2c");
+        assert!(
+            m.on_c2s(0, &op80, t0).is_empty(),
+            "op80 MatchStateChangeAck → no s2c"
+        );
 
-        assert_eq!(m.fighter_health(1), full, "no handshake frame damages the opponent");
+        assert_eq!(
+            m.fighter_health(1),
+            full,
+            "no handshake frame damages the opponent"
+        );
     }
 
     #[test]
@@ -3210,14 +3458,20 @@ pub(in crate::arena::combat) mod tests {
             .iter()
             .map(|(_, ud)| {
                 assert_eq!(ud[1], 0x36, "carrier 54");
-                arena_proto::parse_netdata(&ud[2..]).int(3).expect("propId 3 GameMessageId")
+                arena_proto::parse_netdata(&ud[2..])
+                    .int(3)
+                    .expect("propId 3 GameMessageId")
             })
             .collect();
         let damage: Vec<&(usize, Vec<u8>)> = out
             .iter()
             .filter(|(_, ud)| arena_proto::parse_netdata(&ud[2..]).int(3) == Some(50))
             .collect();
-        assert_eq!(damage.len(), 2, "ReceiveDamage to both target and attacker: {gmids:?}");
+        assert_eq!(
+            damage.len(),
+            2,
+            "ReceiveDamage to both target and attacker: {gmids:?}"
+        );
         assert_eq!(
             gmids.iter().filter(|g| **g == 52).count(),
             2,
@@ -3240,7 +3494,11 @@ pub(in crate::arena::combat) mod tests {
         // loses floor(total) = 105 and carries the fractional remainder. The equal
         // Magicka drain is excluded. NO 25% clamp anymore (§4.5):
         // the hit is the honest model value. HP is raw (×3 arena pool); wire is a fraction.
-        assert_eq!(m.fighter_max_health(1) - m.fighter_health(1), 105, "B raw HP -105 (combo-0 Light swing, un-clamped)");
+        assert_eq!(
+            m.fighter_max_health(1) - m.fighter_health(1),
+            105,
+            "B raw HP -105 (combo-0 Light swing, un-clamped)"
+        );
         if let Some(arena_proto::NetDataValue::ULong(v)) =
             arena_proto::parse_netdata(&damage[0].1[2..]).props.get(&4)
         {
@@ -3265,7 +3523,11 @@ pub(in crate::arena::combat) mod tests {
     /// Swing `attacker` into its opponent (past the swing cooldown each time, from
     /// `start`) until a death fires. Returns `(death_burst, time_of_death)`. Panics if
     /// no death within 40 swings (the cap is generous: clamped hits kill in ≥4).
-    fn swing_until_death(m: &mut MatchInstance, attacker: usize, start: Instant) -> (Vec<(usize, Vec<u8>)>, Instant) {
+    fn swing_until_death(
+        m: &mut MatchInstance,
+        attacker: usize,
+        start: Instant,
+    ) -> (Vec<(usize, Vec<u8>)>, Instant) {
         let mut t = start;
         for _ in 0..40 {
             t += Duration::from_millis(500);
@@ -3279,7 +3541,9 @@ pub(in crate::arena::combat) mod tests {
                 out.extend(m.on_tick(2, t));
             }
             let is_op29 = |b: &[u8]| {
-                b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
+                b.len() > 3
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(29)
             };
             if out.iter().any(|(_, b)| is_op29(b)) {
                 return (out, t);
@@ -3427,7 +3691,10 @@ pub(in crate::arena::combat) mod tests {
 
         // CONTROL: one frame inside the live round and the result stands.
         m.on_c2s(0, &c2s_handshake(obj, 55), live);
-        assert!(m.saw_in_round_c2s[0], "a live-round frame counts as playing");
+        assert!(
+            m.saw_in_round_c2s[0],
+            "a live-round frame counts as playing"
+        );
         assert!(!void_ai_match_result(m.saw_in_round_c2s[0], true));
     }
 
@@ -3460,7 +3727,11 @@ pub(in crate::arena::combat) mod tests {
             .iter()
             .map(|&(s, h, t)| (s, h.as_secs(), t))
             .collect();
-        assert_eq!(got.as_slice(), want, "s506-decoded between-rounds (state, hold_secs, timeout)");
+        assert_eq!(
+            got.as_slice(),
+            want,
+            "s506-decoded between-rounds (state, hold_secs, timeout)"
+        );
     }
 
     /// **Report #24, part 1 (behaviour) — the loadout window is really 20 s wide, and
@@ -3487,7 +3758,10 @@ pub(in crate::arena::combat) mod tests {
         let (awaiting_at, _) = first_state(&log, MatchState::AwaitingClientBackendSynchronization);
         let dwell = awaiting_at - chose_at;
 
-        assert_eq!(chose_timeout, 20.0, "ChooseLoadout announces retail's 20.0 s timeout (was 30.0)");
+        assert_eq!(
+            chose_timeout, 20.0,
+            "ChooseLoadout announces retail's 20.0 s timeout (was 30.0)"
+        );
         assert!(
             dwell >= Duration::from_millis(19_500),
             "the between-rounds loadout screen must stay up ~20s, not flash past: dwell was {dwell:?}"
@@ -3525,7 +3799,8 @@ pub(in crate::arena::combat) mod tests {
                 .filter(|(v, f, _)| *v == viewer && matches!(f, InterRoundFrame::Flow(_)))
                 .count();
             assert_eq!(
-                op55, MATCH_STATE_INTERROUND_PROGRESSION.len(),
+                op55,
+                MATCH_STATE_INTERROUND_PROGRESSION.len(),
                 "viewer {viewer} gets one op55 per between-rounds state"
             );
             assert_eq!(
@@ -3545,7 +3820,14 @@ pub(in crate::arena::combat) mod tests {
             .collect();
         assert_eq!(
             triggers,
-            vec!["NextState", "NextState", "NextState", "NextState", "NextState", "StateTimeout"],
+            vec![
+                "NextState",
+                "NextState",
+                "NextState",
+                "NextState",
+                "NextState",
+                "StateTimeout"
+            ],
             "five op79 \"NextState\" triggers then the live-round handover"
         );
     }
@@ -3577,7 +3859,11 @@ pub(in crate::arena::combat) mod tests {
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
         let (_d2, t2) = swing_until_death(&mut m, 0, live2);
         assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 took the match");
-        assert_eq!(m.phase(), FlowState::RoundEnd, "the match-end walk is running");
+        assert_eq!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "the match-end walk is running"
+        );
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
 
         // Advance into the walk and stop partway through a dwell.
@@ -3678,9 +3964,15 @@ pub(in crate::arena::combat) mod tests {
         // #24 — is unchanged, and the control below still proves the walk does not
         // advance on its own.
         let op57 = c2s_handshake(m.combat.fighters[0].player_net_object_id, 57);
-        assert!(m.on_c2s(0, &op57, now).is_empty(), "op57 itself emits nothing");
+        assert!(
+            m.on_c2s(0, &op57, now).is_empty(),
+            "op57 itself emits nothing"
+        );
         let op57_b = c2s_handshake(m.combat.fighters[1].player_net_object_id, 57);
-        assert!(m.on_c2s(1, &op57_b, now).is_empty(), "op57 itself emits nothing");
+        assert!(
+            m.on_c2s(1, &op57_b, now).is_empty(),
+            "op57 itself emits nothing"
+        );
         assert_eq!(
             (m.fighter_health(0), m.fighter_health(1)),
             hp_before,
@@ -3758,7 +4050,10 @@ pub(in crate::arena::combat) mod tests {
         // logical actor state. Model that divergence by leaving the logical state Idle.
         m.combat.fighters[caster].set_actor_state(ActorStateType::Idle, t);
         let _ = m.combat.fighters[caster].take_state_changes();
-        assert_eq!(m.combat.fighters[caster].actor_state(), ActorStateType::Idle);
+        assert_eq!(
+            m.combat.fighters[caster].actor_state(),
+            ActorStateType::Idle
+        );
 
         let mut idle_viewers = std::collections::HashSet::new();
         let step = Duration::from_millis(100);
@@ -3825,19 +4120,32 @@ pub(in crate::arena::combat) mod tests {
         );
         let step = Duration::from_millis(50);
         for i in 1..=200u32 {
-            let out: Vec<_> = m.on_tick(2, t + step * i).into_iter().filter(|(v, _)| *v == 0).collect();
-            let choose = out.iter().position(|(_, b)| match_state(b) == Some(MatchState::ChooseLoadout as u8));
+            let out: Vec<_> = m
+                .on_tick(2, t + step * i)
+                .into_iter()
+                .filter(|(v, _)| *v == 0)
+                .collect();
+            let choose = out
+                .iter()
+                .position(|(_, b)| match_state(b) == Some(MatchState::ChooseLoadout as u8));
             let emotes: Vec<i64> = out
                 .iter()
                 .enumerate()
                 .filter(|(_, (_, b))| is_emote(b))
                 .map(|(n, (_, b))| {
-                    assert!(choose.is_some_and(|c| n < c), "Emote outside / after the ChooseLoadout tick");
+                    assert!(
+                        choose.is_some_and(|c| n < c),
+                        "Emote outside / after the ChooseLoadout tick"
+                    );
                     arena_proto::parse_netdata(&b[2..]).int(0).unwrap()
                 })
                 .collect();
             if choose.is_some() {
-                assert_eq!(emotes, objs.to_vec(), "both actors Emote, ahead of → ChooseLoadout(8)");
+                assert_eq!(
+                    emotes,
+                    objs.to_vec(),
+                    "both actors Emote, ahead of → ChooseLoadout(8)"
+                );
                 return;
             }
         }
@@ -3856,7 +4164,11 @@ pub(in crate::arena::combat) mod tests {
     fn a_non_final_round_death_sends_op29_first_and_no_idle_until_the_reset() {
         let (mut m, t0) = live_inst(2);
         let (death, t) = swing_until_death(&mut m, 0, t0);
-        assert_ne!(m.phase(), FlowState::RoundEnd, "fixture: round 1 is not the final round");
+        assert_ne!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "fixture: round 1 is not the final round"
+        );
         let loser_obj = m.combat.fighters[1].net_object_id as i64;
         let winner_obj = m.combat.fighters[0].net_object_id as i64;
         const STATE_FAMILY: [i64; 12] = [29, 39, 40, 41, 42, 43, 44, 45, 52, 53, 58, 73];
@@ -3866,7 +4178,9 @@ pub(in crate::arena::combat) mod tests {
             }
             let nd = arena_proto::parse_netdata(&b[2..]);
             let g = nd.int(3)?;
-            STATE_FAMILY.contains(&g).then(|| (nd.int(0).unwrap_or(-1), g, nd.int(6)))
+            STATE_FAMILY
+                .contains(&g)
+                .then(|| (nd.int(0).unwrap_or(-1), g, nd.int(6)))
         };
 
         for viewer in 0..2 {
@@ -3889,9 +4203,13 @@ pub(in crate::arena::combat) mod tests {
             // Control: the WINNER leaves its killing swing for Idle with the result
             // (retail 212/214; the Emote waits for ChooseLoadout — tracker #305).
             assert!(
-                death.iter().filter(|(v, _)| *v == viewer).filter_map(|(_, b)| state_frame(b)).any(
-                    |(obj, g, s)| obj == winner_obj && g == 39 && s == Some(ActorStateType::Idle as i64)
-                ),
+                death
+                    .iter()
+                    .filter(|(v, _)| *v == viewer)
+                    .filter_map(|(_, b)| state_frame(b))
+                    .any(|(obj, g, s)| obj == winner_obj
+                        && g == 39
+                        && s == Some(ActorStateType::Idle as i64)),
                 "viewer {viewer}: the winner's post-kill 39 Idle must go out"
             );
         }
@@ -3919,8 +4237,14 @@ pub(in crate::arena::combat) mod tests {
             }
         }
         assert_eq!(m.phase(), FlowState::StateTimeout, "round 2 must re-open");
-        assert_eq!(loser_idle_before_reset, 0, "the loser must not be revived during the break");
-        assert_eq!(loser_idle_at_reset, 2, "the round reset revives the loser for both viewers");
+        assert_eq!(
+            loser_idle_before_reset, 0,
+            "the loser must not be revived during the break"
+        );
+        assert_eq!(
+            loser_idle_at_reset, 2,
+            "the round reset revives the loser for both viewers"
+        );
     }
 
     /// **Report #24, cross-PR guard — the inter-round op65 names the opponent's REAL
@@ -3962,7 +4286,10 @@ pub(in crate::arena::combat) mod tests {
             }
         }
         assert_eq!(m.phase(), FlowState::StateTimeout, "round 2 must re-open");
-        assert!(!seen.is_empty(), "the between-rounds walk must emit op65 frames");
+        assert!(
+            !seen.is_empty(),
+            "the between-rounds walk must emit op65 frames"
+        );
 
         for slot in 0..2 {
             let obj = m.combat.fighters[slot].net_object_id as i64;
@@ -4022,8 +4349,7 @@ pub(in crate::arena::combat) mod tests {
             "op36 between rounds → exactly one op54 PROFILE, slot 0's, to slot 1 only"
         );
         assert!(
-            m.on_c2s(0, &op36, t + Duration::from_millis(1))
-                .is_empty(),
+            m.on_c2s(0, &op36, t + Duration::from_millis(1)).is_empty(),
             "a repeated op36 must not rebuild the same opponent actor again"
         );
 
@@ -4097,7 +4423,11 @@ pub(in crate::arena::combat) mod tests {
         assert!(m.stage_between_rounds_loadout(&FLAPPETY.to_uppercase(), next));
         m.on_tick(2, t + Duration::from_millis(1));
         assert!(
-            m.combat.fighters[0].loadout.abilities.iter().all(|a| a.instance_uuid != ICE_SPIKE),
+            m.combat.fighters[0]
+                .loadout
+                .abilities
+                .iter()
+                .all(|a| a.instance_uuid != ICE_SPIKE),
             "a staged loadout must never be adopted during a live round"
         );
 
@@ -4117,13 +4447,28 @@ pub(in crate::arena::combat) mod tests {
                 }
             }
         }
-        assert!(opponent_saw_switched_profile, "op54 relays the switched loadout");
+        assert!(
+            opponent_saw_switched_profile,
+            "op54 relays the switched loadout"
+        );
 
         let f = &m.combat.fighters[0];
         assert_eq!(f.loadout.abilities.len(), 1);
-        assert_eq!((f.loadout.abilities[0].instance_uuid.as_str(), f.loadout.abilities[0].level), (ICE_SPIKE, 4));
-        assert_eq!(f.loadout.current_request_index, 77, "match state is carried over");
-        assert!(f.loadout.hide_helmet, "the in-match hide-helmet toggle is carried over");
+        assert_eq!(
+            (
+                f.loadout.abilities[0].instance_uuid.as_str(),
+                f.loadout.abilities[0].level
+            ),
+            (ICE_SPIKE, 4)
+        );
+        assert_eq!(
+            f.loadout.current_request_index, 77,
+            "match state is carried over"
+        );
+        assert!(
+            f.loadout.hide_helmet,
+            "the in-match hide-helmet toggle is carried over"
+        );
         assert_eq!(f.health, f.max_health, "round 2 opens on full pools");
 
         // Round 2: the same cast now resolves at rank 4 (196.76 vs 108.83 base damage).
@@ -4158,7 +4503,10 @@ pub(in crate::arena::combat) mod tests {
     /// the FSM emitted (op55 propId5) + the instant it went live. Panics if it doesn't
     /// re-enter the round within the expected window.
     fn drive_interround_to_live(m: &mut MatchInstance, t: Instant) -> (Vec<u8>, Instant) {
-        let total: Duration = MATCH_STATE_INTERROUND_PROGRESSION.iter().map(|(_, h, _)| *h).sum::<Duration>()
+        let total: Duration = MATCH_STATE_INTERROUND_PROGRESSION
+            .iter()
+            .map(|(_, h, _)| *h)
+            .sum::<Duration>()
             + Duration::from_secs(2);
         let step = Duration::from_millis(250);
         let n = (total.as_millis() / step.as_millis()) as u32;
@@ -4195,12 +4543,14 @@ pub(in crate::arena::combat) mod tests {
             "op79 RoundEnd flow on the killing blow"
         );
         assert!(
-            death_out.iter().any(|(_, b)| b.len() > 3 && b[1] == 0x36
+            death_out.iter().any(|(_, b)| b.len() > 3
+                && b[1] == 0x36
                 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)),
             "op48 MatchPostRoundInfoMsg (the result) on the killing blow"
         );
         assert!(
-            death_out.iter().any(|(_, b)| b.len() > 2 && b[1] == 0x35
+            death_out.iter().any(|(_, b)| b.len() > 2
+                && b[1] == 0x35
                 && arena_proto::parse_netdata(&b[2..]).int(5) == Some(14)),
             "Match net-object → PostRound(14)"
         );
@@ -4219,12 +4569,27 @@ pub(in crate::arena::combat) mod tests {
 
         let (_death, t) = swing_until_death(&mut m, 0, t0);
         // Slot 0 won round 1; score 1-0; the match is LOOPING (NextState), not ending.
-        assert_eq!(m.combat.rounds_won, [1, 0], "winner (slot 0) has 1 round-win");
-        assert_eq!(m.phase(), FlowState::NextState, "non-final death → between-rounds walk, NOT RoundEnd/Finished");
-        assert_eq!(m.match_state_for_test(), MatchState::PostRound, "PostRound(14) emitted at the death");
+        assert_eq!(
+            m.combat.rounds_won,
+            [1, 0],
+            "winner (slot 0) has 1 round-win"
+        );
+        assert_eq!(
+            m.phase(),
+            FlowState::NextState,
+            "non-final death → between-rounds walk, NOT RoundEnd/Finished"
+        );
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::PostRound,
+            "PostRound(14) emitted at the death"
+        );
         assert!(!m.is_finished(), "the match is NOT finished after round 1");
         // Combat input is ignored during the between-rounds walk (not StateTimeout).
-        assert!(m.on_c2s(0, &[0x84, 0x36], t + Duration::from_millis(1)).is_empty());
+        assert!(
+            m.on_c2s(0, &[0x84, 0x36], t + Duration::from_millis(1))
+                .is_empty()
+        );
 
         // Walk the between-rounds MatchState sequence → re-enter the live round.
         let (states_seen, _live) = drive_interround_to_live(&mut m, t);
@@ -4233,21 +4598,36 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(
             states_seen,
             vec![
-                MatchState::ChooseLoadout as u8,                      // 8
+                MatchState::ChooseLoadout as u8,                        // 8
                 MatchState::AwaitingClientBackendSynchronization as u8, // 9
-                MatchState::SynchronizingLoadout as u8,               // 10
-                MatchState::OpponentShowcase as u8,                   // 11
-                MatchState::PreRound as u8,                           // 12
-                MatchState::InRound as u8,                            // 13
+                MatchState::SynchronizingLoadout as u8,                 // 10
+                MatchState::OpponentShowcase as u8,                     // 11
+                MatchState::PreRound as u8,                             // 12
+                MatchState::InRound as u8,                              // 13
             ],
             "between-rounds MatchState walk must be 8→9→10→11→12→13 (s506 round-0→round-1)"
         );
-        assert_eq!(m.phase(), FlowState::StateTimeout, "re-entered the live round for round 2");
+        assert_eq!(
+            m.phase(),
+            FlowState::StateTimeout,
+            "re-entered the live round for round 2"
+        );
         assert_eq!(m.combat.round, 2, "round bumped to 2");
         // Both fighters reset to FULL HP for the new round.
-        assert_eq!(m.fighter_health(0), m.fighter_max_health(0), "winner reset to full HP");
-        assert_eq!(m.fighter_health(1), m.fighter_max_health(1), "loser reset to full HP");
-        assert!(!m.is_finished(), "peers NOT disconnected — the match continues");
+        assert_eq!(
+            m.fighter_health(0),
+            m.fighter_max_health(0),
+            "winner reset to full HP"
+        );
+        assert_eq!(
+            m.fighter_health(1),
+            m.fighter_max_health(1),
+            "loser reset to full HP"
+        );
+        assert!(
+            !m.is_finished(),
+            "peers NOT disconnected — the match continues"
+        );
     }
 
     /// A paired human-vs-human match must remain interactive after the first round. This
@@ -4281,9 +4661,7 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(m.combat.winner, Some(1));
         assert_eq!(m.phase(), FlowState::RoundEnd);
         assert!(conceded.iter().any(|(_, b)| {
-            b.len() > 2
-                && b[1] == 0x36
-                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
+            b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
         }));
     }
 
@@ -4344,27 +4722,60 @@ pub(in crate::arena::combat) mod tests {
         // Round 1: slot 0 wins → op48 must say RoundNumber=1, IsMatchEnded=false,
         // MatchWinnerPlayerId empty (the match is NOT over — best-of-3, score 1-0).
         let (d1, t1) = swing_until_death(&mut m, 0, t0);
-        let (r1, ended1, mw1, slots1, p11_1) = parse_op48(&d1).expect("op48 emitted on the round-1 death");
-        assert_eq!(r1, 3, "p4 is the CONSTANT 3 retail always sends, not the live round");
+        let (r1, ended1, mw1, slots1, p11_1) =
+            parse_op48(&d1).expect("op48 emitted on the round-1 death");
+        assert_eq!(
+            r1, 3,
+            "p4 is the CONSTANT 3 retail always sends, not the live round"
+        );
         assert!(!ended1, "round 1 is NOT the match end → IsMatchEnded=false");
-        assert_eq!(mw1, "", "no overall MatchWinnerPlayerId on an intermediate round");
-        assert_eq!(slots1[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round-1 winner in slot 1");
-        assert_eq!(slots1[1], "1131a037-716c-49cc-b165-32d8ddc14f49", "round-1 loser in slot 1");
-        assert_eq!(slots1[2], "", "round-2 slot must still be EMPTY after round 1");
-        assert_eq!(slots1[3], "", "round-2 slot must still be EMPTY after round 1");
+        assert_eq!(
+            mw1, "",
+            "no overall MatchWinnerPlayerId on an intermediate round"
+        );
+        assert_eq!(
+            slots1[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "round-1 winner in slot 1"
+        );
+        assert_eq!(
+            slots1[1], "1131a037-716c-49cc-b165-32d8ddc14f49",
+            "round-1 loser in slot 1"
+        );
+        assert_eq!(
+            slots1[2], "",
+            "round-2 slot must still be EMPTY after round 1"
+        );
+        assert_eq!(
+            slots1[3], "",
+            "round-2 slot must still be EMPTY after round 1"
+        );
         assert_eq!(p11_1, 0, "p11 = completedRounds-1 = 0 after round 1");
-        assert_eq!(m.combat.rounds_won, [1, 0], "server score 1-0 after round 1");
+        assert_eq!(
+            m.combat.rounds_won,
+            [1, 0],
+            "server score 1-0 after round 1"
+        );
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
 
         // Round 2: slot 0 wins again → 2-0 → the MATCH ends. op48 RoundNumber=2,
         // IsMatchEnded=true, MatchWinnerPlayerId = the winner.
         let (d2, _t2) = swing_until_death(&mut m, 0, live2);
-        let (r2, ended2, mw2, slots2, p11_2) = parse_op48(&d2).expect("op48 emitted on the round-2 death");
+        let (r2, ended2, mw2, slots2, p11_2) =
+            parse_op48(&d2).expect("op48 emitted on the round-2 death");
         assert_eq!(r2, 3, "p4 still the constant 3");
         assert!(ended2, "2-0 ends the match → IsMatchEnded=true");
-        assert_eq!(slots2[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round 1 is PRESERVED (cumulative)");
-        assert_eq!(slots2[2], "38c987fd-c42b-4ea6-b869-c8d4c03055f9", "round 2 winner fills the second slot");
-        assert_eq!(slots2[3], "1131a037-716c-49cc-b165-32d8ddc14f49", "round 2 loser fills the second slot");
+        assert_eq!(
+            slots2[0], "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "round 1 is PRESERVED (cumulative)"
+        );
+        assert_eq!(
+            slots2[2], "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "round 2 winner fills the second slot"
+        );
+        assert_eq!(
+            slots2[3], "1131a037-716c-49cc-b165-32d8ddc14f49",
+            "round 2 loser fills the second slot"
+        );
         assert_eq!(p11_2, 1, "p11 = 1 after two rounds");
         assert_eq!(
             mw2, "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
@@ -4390,7 +4801,11 @@ pub(in crate::arena::combat) mod tests {
         // Round 2: slot 1 kills slot 0 → 1-1, loops to round 3.
         let (_d2, t2) = swing_until_death(&mut m, 1, live2);
         assert_eq!(m.combat.rounds_won, [1, 1], "score is now 1-1");
-        assert_eq!(m.phase(), FlowState::NextState, "1-1 still loops (no fighter at 2 wins)");
+        assert_eq!(
+            m.phase(),
+            FlowState::NextState,
+            "1-1 still loops (no fighter at 2 wins)"
+        );
         assert!(!m.is_finished());
         let (_s2, live3) = drive_interround_to_live(&mut m, t2);
         assert_eq!(m.combat.round, 3);
@@ -4398,7 +4813,11 @@ pub(in crate::arena::combat) mod tests {
         // Round 3: slot 0 kills slot 1 → 2-1, the match ENDS (terminal walk).
         let (_d3, _t3) = swing_until_death(&mut m, 0, live3);
         assert_eq!(m.combat.rounds_won, [2, 1], "winner reached 2 round-wins");
-        assert_eq!(m.phase(), FlowState::RoundEnd, "2 wins → match-end walk (RoundEnd), NOT another loop");
+        assert_eq!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "2 wins → match-end walk (RoundEnd), NOT another loop"
+        );
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
     }
 
@@ -4412,7 +4831,11 @@ pub(in crate::arena::combat) mod tests {
         m.combat.fighters[1].health = m.combat.fighters[1].max_health / 4;
 
         let before = m.on_tick(2, live + ROUND_TIMEOUT - Duration::from_millis(1));
-        assert_eq!(m.phase(), FlowState::StateTimeout, "the round remains live before 120s");
+        assert_eq!(
+            m.phase(),
+            FlowState::StateTimeout,
+            "the round remains live before 120s"
+        );
         assert_eq!(m.combat.rounds_won, [0, 0]);
         assert!(
             !before.iter().any(|(_, b)| {
@@ -4424,8 +4847,16 @@ pub(in crate::arena::combat) mod tests {
         );
 
         let expired = m.on_tick(2, live + ROUND_TIMEOUT);
-        assert_eq!(m.combat.rounds_won, [1, 0], "higher HP fraction wins the timed round");
-        assert_eq!(m.phase(), FlowState::NextState, "round 1 timeout enters the inter-round walk");
+        assert_eq!(
+            m.combat.rounds_won,
+            [1, 0],
+            "higher HP fraction wins the timed round"
+        );
+        assert_eq!(
+            m.phase(),
+            FlowState::NextState,
+            "round 1 timeout enters the inter-round walk"
+        );
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
         assert!(
             expired.iter().any(|(_, b)| {
@@ -4464,22 +4895,29 @@ pub(in crate::arena::combat) mod tests {
     fn explicit_concede_runs_complete_terminal_walk() {
         let (mut m, _t0, live) = live_inst_at(2);
         let concede_at = live + Duration::from_secs(3);
-        let immediate = m.on_c2s(
-            0,
-            &[0xBE, GameMessageId::ConcedeMatch as u8],
-            concede_at,
-        );
+        let immediate = m.on_c2s(0, &[0xBE, GameMessageId::ConcedeMatch as u8], concede_at);
 
-        assert_eq!(m.combat.winner, Some(1), "the opponent wins a voluntary concede");
+        assert_eq!(
+            m.combat.winner,
+            Some(1),
+            "the opponent wins a voluntary concede"
+        );
         assert_eq!(m.combat.rounds_won, [0, 1]);
-        assert_eq!(m.phase(), FlowState::RoundEnd, "do not disconnect before the terminal walk");
+        assert_eq!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "do not disconnect before the terminal walk"
+        );
         assert!(!m.is_finished());
         let duplicate = m.on_c2s(
             0,
             &[0xBE, GameMessageId::ConcedeMatch as u8],
             concede_at + Duration::from_millis(100),
         );
-        assert!(duplicate.is_empty(), "a repeated exit cannot award the match twice");
+        assert!(
+            duplicate.is_empty(),
+            "a repeated exit cannot award the match twice"
+        );
         assert_eq!(m.combat.rounds_won, [0, 1]);
 
         let op48 = immediate
@@ -4503,7 +4941,10 @@ pub(in crate::arena::combat) mod tests {
                 break;
             }
         }
-        assert!(m.is_finished(), "the full walk eventually returns both clients to the lobby");
+        assert!(
+            m.is_finished(),
+            "the full walk eventually returns both clients to the lobby"
+        );
     }
 
     /// The post-InRound terminal walk (the "error 3" fix): after a round-ending death
@@ -4528,7 +4969,11 @@ pub(in crate::arena::combat) mod tests {
         let (mut m, t0) = live_inst(2);
         let leave = t0 + Duration::from_secs(3);
         m.concede_by_departure(1, leave);
-        assert_eq!(m.phase(), FlowState::RoundEnd, "the terminal walk has begun");
+        assert_eq!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "the terminal walk has begun"
+        );
 
         // Walk the terminal progression, recording for every tick the Match states
         // broadcast in it and whether the op49 card rode along.
@@ -4643,7 +5088,11 @@ pub(in crate::arena::combat) mod tests {
         let immediate = m.concede_by_departure(1, leave);
 
         // Slot 0 wins; the FSM enters the terminal match-end walk.
-        assert_eq!(m.combat.winner, Some(0), "the survivor (slot 0) is the winner");
+        assert_eq!(
+            m.combat.winner,
+            Some(0),
+            "the survivor (slot 0) is the winner"
+        );
         assert_eq!(m.phase(), FlowState::RoundEnd, "→ terminal match-end walk");
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
 
@@ -4655,7 +5104,10 @@ pub(in crate::arena::combat) mod tests {
                 && b[1] == 0x36
                 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(48)
         });
-        assert!(op48_to_survivor, "survivor gets an op48 result card immediately");
+        assert!(
+            op48_to_survivor,
+            "survivor gets an op48 result card immediately"
+        );
 
         // Ticking through the walk reaches the exact retail terminal sequence and
         // Finished — identical to a normal win — so `take_finished_peers` will then
@@ -4689,7 +5141,10 @@ pub(in crate::arena::combat) mod tests {
             ],
             "a conceded match walks the same terminal MatchState sequence as a normal win"
         );
-        assert!(m.is_finished(), "the conceded match finishes → survivor returns to lobby");
+        assert!(
+            m.is_finished(),
+            "the conceded match finishes → survivor returns to lobby"
+        );
     }
 
     /// Owner-approved arena Gems (#390/#391): the player who left abandoned the
@@ -4718,12 +5173,22 @@ pub(in crate::arena::combat) mod tests {
                 break;
             }
         }
-        assert_eq!(cards[&0]["reward"]["currencies"][gems.as_str()], 6, "survivor paid the win");
+        assert_eq!(
+            cards[&0]["reward"]["currencies"][gems.as_str()],
+            6,
+            "survivor paid the win"
+        );
         assert!(
-            cards[&1]["reward"]["currencies"].get(gems.as_str()).is_none(),
+            cards[&1]["reward"]["currencies"]
+                .get(gems.as_str())
+                .is_none(),
             "the leaver abandoned the fight: no Gems"
         );
-        assert_eq!(cards[&1]["wallet"].as_array().unwrap().len(), 1, "leaver's wallet unchanged");
+        assert_eq!(
+            cards[&1]["wallet"].as_array().unwrap().len(),
+            1,
+            "leaver's wallet unchanged"
+        );
     }
 
     /// A concession must NOT fire when the match is already ending — a disconnect there
@@ -4738,12 +5203,16 @@ pub(in crate::arena::combat) mod tests {
         let _ = m.concede_by_departure(1, t0 + Duration::from_secs(1));
         assert_eq!(m.phase(), FlowState::RoundEnd);
         let again = m.concede_by_departure(0, t0 + Duration::from_secs(2));
-        assert!(again.is_empty(), "no second concession once the match is already ending");
+        assert!(
+            again.is_empty(),
+            "no second concession once the match is already ending"
+        );
         assert_eq!(m.combat.winner, Some(0), "the winner is unchanged");
 
         // A solo match (one fighter) has no opponent → nothing to award.
         let now = Instant::now();
-        let mut solo = MatchInstance::new(1, 1, vec![crate::arena::combat::loadout::starter()], now);
+        let mut solo =
+            MatchInstance::new(1, 1, vec![crate::arena::combat::loadout::starter()], now);
         solo.on_tick(1, now);
         let out = solo.concede_by_departure(0, now + Duration::from_secs(1));
         assert!(out.is_empty(), "a solo departure awards nobody");
@@ -4757,11 +5226,19 @@ pub(in crate::arena::combat) mod tests {
         // Best-of-3: slot 0 must win TWO rounds to END the match. Round 1 kill → loops;
         // walk back into round 2; round 2 kill → 2-0 → the MATCH-ending death.
         let (_d1, t1) = swing_until_death(&mut m, 0, t0);
-        assert_eq!(m.phase(), FlowState::NextState, "round-1 death loops, not ends");
+        assert_eq!(
+            m.phase(),
+            FlowState::NextState,
+            "round-1 death loops, not ends"
+        );
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
         let (_d2, t) = swing_until_death(&mut m, 0, live2);
         assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
-        assert_eq!(m.phase(), FlowState::RoundEnd, "the match-ending death → terminal walk");
+        assert_eq!(
+            m.phase(),
+            FlowState::RoundEnd,
+            "the match-ending death → terminal walk"
+        );
         assert_eq!(m.match_state_for_test(), MatchState::PostRound);
 
         // Tick at 250 ms through the whole terminal walk (4 + 6 + 5 s of holds ≈ 15 s).
@@ -4791,21 +5268,31 @@ pub(in crate::arena::combat) mod tests {
                 break;
             }
         }
-        assert!(saw_terminal_heartbeat, "an op79 StateTimeout heartbeat rides the post-match walk (s506)");
+        assert!(
+            saw_terminal_heartbeat,
+            "an op79 StateTimeout heartbeat rides the post-match walk (s506)"
+        );
         // The exact retail terminal sequence (s506 obj 123 final round): 17 → 16 → 19.
         assert_eq!(
             states_seen,
             vec![
-                MatchState::BackendMatchEnd as u8,            // 17
-                MatchState::Victory as u8,                    // 15
-                MatchState::PostMatch as u8,                  // 16
+                MatchState::BackendMatchEnd as u8,                // 17
+                MatchState::Victory as u8,                        // 15
+                MatchState::PostMatch as u8,                      // 16
                 MatchState::DisconnectingPlayersAfterMatch as u8, // 19
             ],
             "post-match MatchState walk must be BackendMatchEnd(17)→Victory(15)→PostMatch(16)→\
              Disconnecting(19) — the order measured in retail s615/s616/s506/s293"
         );
-        assert_eq!(m.phase(), FlowState::Finished, "match Finished after the terminal state");
-        assert_eq!(m.match_state_for_test(), MatchState::DisconnectingPlayersAfterMatch);
+        assert_eq!(
+            m.phase(),
+            FlowState::Finished,
+            "match Finished after the terminal state"
+        );
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::DisconnectingPlayersAfterMatch
+        );
     }
 
     /// Play a full 2-0 match (slot 0 wins both rounds) between two named fighters
@@ -4835,8 +5322,18 @@ pub(in crate::arena::combat) mod tests {
             2,
             2,
             vec![
-                mk("Flappety", "38c987fd-c42b-4ea6-b869-c8d4c03055f9", meter[0], fights[0]),
-                mk("Blank", "1131a037-716c-49cc-b165-32d8ddc14f49", meter[1], fights[1]),
+                mk(
+                    "Flappety",
+                    "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+                    meter[0],
+                    fights[0],
+                ),
+                mk(
+                    "Blank",
+                    "1131a037-716c-49cc-b165-32d8ddc14f49",
+                    meter[1],
+                    fights[1],
+                ),
             ],
             now,
         );
@@ -4882,7 +5379,9 @@ pub(in crate::arena::combat) mod tests {
         for flag in [false, true] {
             let cards = two_nil_cards([6, 6], [Some(24), None], flag);
             let win = &cards[&0];
-            let chests = win["reward"]["chests"].as_array().expect("reward.chests on the card");
+            let chests = win["reward"]["chests"]
+                .as_array()
+                .expect("reward.chests on the card");
             assert_eq!(chests.len(), 1, "one meter chest (weapon flag {flag})");
         }
         let cards = two_nil_cards(
@@ -4891,8 +5390,13 @@ pub(in crate::arena::combat) mod tests {
             crate::arena::arena_fight_gift::weapon_on_result_card(),
         );
         let win = &cards[&0];
-        assert_eq!(win["character"]["pvpChestMeter"], 0, "6 + 2 rounds wraps at 8");
-        let chests = win["reward"]["chests"].as_array().expect("reward.chests on the card");
+        assert_eq!(
+            win["character"]["pvpChestMeter"], 0,
+            "6 + 2 rounds wraps at 8"
+        );
+        let chests = win["reward"]["chests"]
+            .as_array()
+            .expect("reward.chests on the card");
         assert_eq!(chests.len(), 1, "one meter chest");
         assert_eq!(chests[0]["id"], "47", "the next free treasury id");
         assert_eq!(chests[0]["level"], 86, "the character's level");
@@ -4902,16 +5406,30 @@ pub(in crate::arena::combat) mod tests {
             "the same chest, same id, in the treasury change set"
         );
         assert_eq!(win["inventory"]["treasuryVersion"], 24_501);
-        assert_eq!(win["rewardNewLevelArena"], serde_json::json!({}), "not a promotion");
+        assert_eq!(
+            win["rewardNewLevelArena"],
+            serde_json::json!({}),
+            "not a promotion"
+        );
         // Retail's key set for a match reward.
-        let mut keys: Vec<&str> =
-            win["reward"].as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        let mut keys: Vec<&str> = win["reward"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, vec!["characterXp", "chests", "currencies"]);
 
         let lose = &cards[&1];
-        assert_eq!(lose["character"]["pvpChestMeter"], 6, "no round won, no fill");
-        assert!(lose["reward"].get("chests").is_none(), "no meter chest for the loser");
+        assert_eq!(
+            lose["character"]["pvpChestMeter"], 6,
+            "no round won, no fill"
+        );
+        assert!(
+            lose["reward"].get("chests").is_none(),
+            "no meter chest for the loser"
+        );
         assert!(lose["inventory"].get("treasury").is_none());
         assert_eq!(lose["inventory"]["treasuryVersion"], 24_500);
     }
@@ -4938,7 +5456,11 @@ pub(in crate::arena::combat) mod tests {
         );
         assert_eq!(w["arcaneTier"], 2, "Arcane II");
         assert_eq!(w["temperingLevel"], 0);
-        assert!(w["id"].as_str().is_some_and(|id| id.parse::<uuid::Uuid>().is_ok()));
+        assert!(
+            w["id"]
+                .as_str()
+                .is_some_and(|id| id.parse::<uuid::Uuid>().is_ok())
+        );
         assert!(
             w.get("properties")
                 .and_then(|p| p.get("ENCHANTING"))
@@ -4949,7 +5471,10 @@ pub(in crate::arena::combat) mod tests {
             win["inventory"]["backpack"]["items"][0], *w,
             "the same instance in the backpack diff"
         );
-        assert_eq!(win["inventory"]["backpackVersion"], 385_264, "backpack version bumped once");
+        assert_eq!(
+            win["inventory"]["backpackVersion"], 385_264,
+            "backpack version bumped once"
+        );
 
         let lose = &cards[&1];
         assert!(weapon_of(lose).is_none(), "fight 24 carries no weapon");
@@ -4958,8 +5483,14 @@ pub(in crate::arena::combat) mod tests {
 
         // The LOSER on its 25th fight is paid too; the winner's 26th is not.
         let cards = two_nil_cards([0, 0], [Some(25), Some(24)], true);
-        assert!(weapon_of(&cards[&0]).is_none(), "fight 26 carries no weapon");
-        assert!(weapon_of(&cards[&1]).is_some(), "a lost 25th fight still pays");
+        assert!(
+            weapon_of(&cards[&0]).is_none(),
+            "fight 26 carries no weapon"
+        );
+        assert!(
+            weapon_of(&cards[&1]).is_some(),
+            "a lost 25th fight still pays"
+        );
 
         // Unknown count: no promise on the card.
         let cards = two_nil_cards([0, 0], [None, None], true);
@@ -4978,9 +5509,18 @@ pub(in crate::arena::combat) mod tests {
         let cards = two_nil_cards([0, 0], [Some(24), Some(24)], false);
         for slot in [0, 1] {
             let card = &cards[&slot];
-            assert!(card["reward"].get("items").is_none(), "slot {slot}: no weapon on op49");
-            assert!(card["inventory"].get("backpack").is_none(), "slot {slot}: no backpack diff");
-            assert_eq!(card["inventory"]["backpackVersion"], 385_263, "slot {slot}: no bump");
+            assert!(
+                card["reward"].get("items").is_none(),
+                "slot {slot}: no weapon on op49"
+            );
+            assert!(
+                card["inventory"].get("backpack").is_none(),
+                "slot {slot}: no backpack diff"
+            );
+            assert_eq!(
+                card["inventory"]["backpackVersion"], 385_263,
+                "slot {slot}: no bump"
+            );
         }
     }
 
@@ -5007,8 +5547,9 @@ pub(in crate::arena::combat) mod tests {
             let mut l = crate::arena::combat::loadout::starter();
             l.display_name = name.into();
             l.character_uuid = uuid.into();
-            l.profile_character_json =
-                format!(r#"{{"id":"{uuid}","name":"{name}","level":86,"pvpTrophies":{pvp_trophies}}}"#);
+            l.profile_character_json = format!(
+                r#"{{"id":"{uuid}","name":"{name}","level":86,"pvpTrophies":{pvp_trophies}}}"#
+            );
             l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
             l
         };
@@ -5029,7 +5570,10 @@ pub(in crate::arena::combat) mod tests {
 
         // Round 1 death LOOPS (best-of-3) — NO op49 on an intermediate round.
         let (d1, t1) = swing_until_death(&mut m, 0, live);
-        assert!(!d1.iter().any(|(_, b)| is_op49(b)), "no op49 on the looping round-1 death");
+        assert!(
+            !d1.iter().any(|(_, b)| is_op49(b)),
+            "no op49 on the looping round-1 death"
+        );
         assert_eq!(m.phase(), FlowState::NextState);
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
 
@@ -5053,9 +5597,17 @@ pub(in crate::arena::combat) mod tests {
             }
         }
         // Exactly ONE op49 per player (2), one to each slot.
-        assert_eq!(op49s.len(), 2, "one op49 MatchEndMatchMsg per player at match-end");
+        assert_eq!(
+            op49s.len(),
+            2,
+            "one op49 MatchEndMatchMsg per player at match-end"
+        );
         let slots: std::collections::BTreeSet<usize> = op49s.iter().map(|(s, _)| *s).collect();
-        assert_eq!(slots.into_iter().collect::<Vec<_>>(), vec![0, 1], "one op49 to each slot");
+        assert_eq!(
+            slots.into_iter().collect::<Vec<_>>(),
+            vec![0, 1],
+            "one op49 to each slot"
+        );
 
         // Each op49 header has the right winner/loser, and its ResultsJSON parses with
         // the reward fields the card animates.
@@ -5063,19 +5615,40 @@ pub(in crate::arena::combat) mod tests {
         for (slot, b) in &op49s {
             let nd = arena_proto::parse_netdata(&b[2..]);
             assert_eq!(nd.int(3), Some(49), "GMID 49");
-            assert_eq!(nd.string(5), Some("38c987fd-c42b-4ea6-b869-c8d4c03055f9"), "winner = slot 0 (Flappety)");
-            assert_eq!(nd.string(6), Some("1131a037-716c-49cc-b165-32d8ddc14f49"), "loser = slot 1 (Blank)");
+            assert_eq!(
+                nd.string(5),
+                Some("38c987fd-c42b-4ea6-b869-c8d4c03055f9"),
+                "winner = slot 0 (Flappety)"
+            );
+            assert_eq!(
+                nd.string(6),
+                Some("1131a037-716c-49cc-b165-32d8ddc14f49"),
+                "loser = slot 1 (Blank)"
+            );
             let rj = nd.string(13).expect("ResultsJSON at propId 13");
             let v: serde_json::Value = serde_json::from_str(rj).expect("ResultsJSON parses");
-            assert!(v["reward"]["currencies"].is_object(), "ResultsJSON has reward.currencies");
-            assert!(v["reward"]["characterXp"].is_number(), "ResultsJSON has reward.characterXp");
+            assert!(
+                v["reward"]["currencies"].is_object(),
+                "ResultsJSON has reward.currencies"
+            );
+            assert!(
+                v["reward"]["characterXp"].is_number(),
+                "ResultsJSON has reward.characterXp"
+            );
             // Owner-approved arena Gems (#390/#391): the 2-0 winner's card shows 6,
             // the loser's 3, and each wallet carries the credited Gems balance.
             let gems = blades_lib::economy::GEMS.to_string();
             let expected = if *slot == 0 { 6 } else { 3 };
-            assert_eq!(v["reward"]["currencies"][gems.as_str()], expected, "slot {slot} card Gems");
+            assert_eq!(
+                v["reward"]["currencies"][gems.as_str()],
+                expected,
+                "slot {slot} card Gems"
+            );
             assert_eq!(v["wallet"][1]["currencyId"], gems.as_str());
-            assert_eq!(v["wallet"][1]["balance"], expected, "starter wallet held 0 Gems");
+            assert_eq!(
+                v["wallet"][1]["balance"], expected,
+                "starter wallet held 0 Gems"
+            );
             let own_trophies = v["character"]["pvpTrophies"]
                 .as_i64()
                 .expect("ResultsJSON character.pvpTrophies is a number");
@@ -5147,10 +5720,17 @@ pub(in crate::arena::combat) mod tests {
         };
 
         let (d1, t1) = swing_until_death(&mut m, 0, live);
-        assert!(!d1.iter().any(|(_, b)| is_op49(b)), "no op49 on the looping round-1 death");
+        assert!(
+            !d1.iter().any(|(_, b)| is_op49(b)),
+            "no op49 on the looping round-1 death"
+        );
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
         let (_d2, t) = swing_until_death(&mut m, 0, live2);
-        assert_eq!(m.combat.rounds_won, [2, 0], "the human (slot 0) won the match 2-0");
+        assert_eq!(
+            m.combat.rounds_won,
+            [2, 0],
+            "the human (slot 0) won the match 2-0"
+        );
 
         let mut op49s: Vec<(usize, Vec<u8>)> = Vec::new();
         let step = Duration::from_millis(250);
@@ -5168,11 +5748,17 @@ pub(in crate::arena::combat) mod tests {
         // The engine still builds (but the peer-address layer never delivers) an
         // op49 for the bot's own slot internally — that internal message is exactly
         // where its own post-match `pvpTrophies` is read from below.
-        assert_eq!(op49s.len(), 2, "one op49 per fighter slot, including the bot's own");
+        assert_eq!(
+            op49s.len(),
+            2,
+            "one op49 per fighter slot, including the bot's own"
+        );
 
         let bot_msg = &op49s.iter().find(|(s, _)| *s == 1).unwrap().1;
         let bot_nd = arena_proto::parse_netdata(&bot_msg[2..]);
-        let bot_rj = bot_nd.string(13).expect("bot's own ResultsJSON at propId 13");
+        let bot_rj = bot_nd
+            .string(13)
+            .expect("bot's own ResultsJSON at propId 13");
         let bot_v: serde_json::Value = serde_json::from_str(bot_rj).expect("ResultsJSON parses");
         let bot_post_trophies = bot_v["character"]["pvpTrophies"]
             .as_i64()
@@ -5211,24 +5797,33 @@ pub(in crate::arena::combat) mod tests {
         );
         human.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
 
-        let mut m = MatchInstance::new_with_ranking_context(2, peers, vec![human, opponent], now, ranking);
+        let mut m =
+            MatchInstance::new_with_ranking_context(2, peers, vec![human, opponent], now, ranking);
         let live = drive_to_live(&mut m, 2, now);
         let attacker = usize::from(!human_wins);
         let (_d1, t1) = swing_until_death(&mut m, attacker, live);
         let (_s1, live2) = drive_interround_to_live(&mut m, t1);
         let (_d2, t) = swing_until_death(&mut m, attacker, live2);
         let expected_rounds = if human_wins { [2, 0] } else { [0, 2] };
-        assert_eq!(m.combat.rounds_won, expected_rounds, "precondition: drove the requested 2-0 result");
+        assert_eq!(
+            m.combat.rounds_won, expected_rounds,
+            "precondition: drove the requested 2-0 result"
+        );
 
         let step = Duration::from_millis(250);
         for i in 1..=80u32 {
             for (slot, b) in m.on_tick(2, t + step * i) {
-                let is_op49 = b.len() > 3 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49);
+                let is_op49 = b.len() > 3
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49);
                 if is_op49 && slot == 0 {
                     let nd = arena_proto::parse_netdata(&b[2..]);
                     let v: serde_json::Value =
-                        serde_json::from_str(nd.string(13).expect("ResultsJSON")).expect("ResultsJSON parses");
-                    return v["character"]["pvpTrophies"].as_i64().expect("character.pvpTrophies");
+                        serde_json::from_str(nd.string(13).expect("ResultsJSON"))
+                            .expect("ResultsJSON parses");
+                    return v["character"]["pvpTrophies"]
+                        .as_i64()
+                        .expect("character.pvpTrophies");
                 }
             }
         }
@@ -5251,9 +5846,12 @@ pub(in crate::arena::combat) mod tests {
         let mut l = crate::arena::combat::loadout::starter();
         l.display_name = name.into();
         l.character_uuid = "1131a037-716c-49cc-b165-32d8ddc14f49".into();
-        let mm = matchmaking.map(|v| format!(r#","matchmakingPvpTrophies":{v}"#)).unwrap_or_default();
-        l.profile_character_json =
-            format!(r#"{{"id":"1131a037-716c-49cc-b165-32d8ddc14f49","name":"{name}","level":89,"pvpTrophies":0{mm}}}"#);
+        let mm = matchmaking
+            .map(|v| format!(r#","matchmakingPvpTrophies":{v}"#))
+            .unwrap_or_default();
+        l.profile_character_json = format!(
+            r#"{{"id":"1131a037-716c-49cc-b165-32d8ddc14f49","name":"{name}","level":89,"pvpTrophies":0{mm}}}"#
+        );
         l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
         l
     }
@@ -5287,7 +5885,8 @@ pub(in crate::arena::combat) mod tests {
     /// character's old live/matchmaking trophy spread cannot recreate the +1 bug.
     #[test]
     fn bot_default_uses_fixed_ai_award() {
-        let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", Some(455)), 1);
+        let got =
+            human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", Some(455)), 1);
         assert_eq!(got, 588 + 32);
     }
 
@@ -5296,8 +5895,13 @@ pub(in crate::arena::combat) mod tests {
     #[test]
     fn unrated_bot_still_uses_fixed_ai_award() {
         for mm in [None, Some(0)] {
-            let got = human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", mm), 1);
-            assert_eq!(got, 588 + 32, "matchmakingPvpTrophies {mm:?} must not affect fixed mode");
+            let got =
+                human_post_trophies_after_2_0_win(opponent_loadout("Meryl Andra (AI)", mm), 1);
+            assert_eq!(
+                got,
+                588 + 32,
+                "matchmakingPvpTrophies {mm:?} must not affect fixed mode"
+            );
         }
     }
 
@@ -5323,10 +5927,18 @@ pub(in crate::arena::combat) mod tests {
                 weight: Some(Weight::Light),
             };
             l.enchants = vec![(DamageType::Poison, 10)];
-            assert_eq!(l.paralyze_rank, 0, "precondition: no Paralyze spell equipped");
+            assert_eq!(
+                l.paralyze_rank, 0,
+                "precondition: no Paralyze spell equipped"
+            );
             l
         };
-        let mut m = MatchInstance::new(2, 2, vec![poison, crate::arena::combat::loadout::starter()], now);
+        let mut m = MatchInstance::new(
+            2,
+            2,
+            vec![poison, crate::arena::combat::loadout::starter()],
+            now,
+        );
         let live = drive_to_live(&mut m, 2, now);
         let is_op51_paralyze = |b: &[u8]| {
             b.len() > 5
@@ -5355,7 +5967,10 @@ pub(in crate::arena::combat) mod tests {
                 break;
             }
         }
-        assert!(poisoned, "precondition: the Poisoned condition must still land");
+        assert!(
+            poisoned,
+            "precondition: the Poisoned condition must still land"
+        );
         assert_ne!(
             m.combat.fighters[1].actor_state(),
             ActorStateType::Paralyzed,
@@ -5513,7 +6128,9 @@ pub(in crate::arena::combat) mod tests {
         // not expired), but the phase has decayed to Late.
         let later = press + Duration::from_millis(2500);
         assert!(
-            m.combat.fighters[0].blocking_until.is_some_and(|u| later < u),
+            m.combat.fighters[0]
+                .blocking_until
+                .is_some_and(|u| later < u),
             "the guard is still up at +2.5 s"
         );
         assert_eq!(
@@ -5628,7 +6245,12 @@ pub(in crate::arena::combat) mod tests {
         // 3.125 s is a real observed duration (s615 #4394357). Retail scales the
         // shipped 5 s by resistance, so this is deliberately not the flat constant.
         let frozen_until = t + Duration::from_secs_f32(3.125);
-        push_status(&mut m.combat.fighters[1], StatusEffectType::Frozen, t, frozen_until);
+        push_status(
+            &mut m.combat.fighters[1],
+            StatusEffectType::Frozen,
+            t,
+            frozen_until,
+        );
         let stam_at = m.combat.fighters[1].stamina;
         let mag_at = m.combat.fighters[1].magicka;
 
@@ -5688,7 +6310,12 @@ pub(in crate::arena::combat) mod tests {
         );
 
         let until = t + Duration::from_secs_f32(2.515625);
-        push_status(&mut m.combat.fighters[1], StatusEffectType::Enervated, t, until);
+        push_status(
+            &mut m.combat.fighters[1],
+            StatusEffectType::Enervated,
+            t,
+            until,
+        );
         let mag_at = m.combat.fighters[1].magicka;
         let stam_at = m.combat.fighters[1].stamina;
 
@@ -5716,13 +6343,17 @@ pub(in crate::arena::combat) mod tests {
 
         // A casts an ability (op37 RequestExecuteAbility).
         let mut req = vec![
-            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25, 0x24, 0x00,
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, 0x02, 0x00, 0x00, 0x38, 0x03, 0x25,
+            0x24, 0x00,
         ];
         req.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
         let out = m.on_c2s(0, &req, t0);
 
         // PerformExecuteAbility (38) echoed (gmid byte at index 13).
-        assert!(out.iter().any(|(_, b)| b.get(13) == Some(&38)), "PerformExecuteAbility echoed");
+        assert!(
+            out.iter().any(|(_, b)| b.get(13) == Some(&38)),
+            "PerformExecuteAbility echoed"
+        );
 
         // The CAST echoes immediately; the IMPACT does not. Lightning Bolt ships
         // `channelDuration` 0.5 s, so its damage now lands after the wind-up rather
@@ -5731,8 +6362,9 @@ pub(in crate::arena::combat) mod tests {
         // treatment the swing tests got when tracker #21 moved impact to match the
         // animation.
         assert!(
-            !out.iter().any(|(_, b)| b[1] == 0x36
-                && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)),
+            !out.iter().any(
+                |(_, b)| b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)
+            ),
             "a spell with a 0.5 s wind-up must NOT have dealt damage at cast time",
         );
         let landed = m.on_tick(2, t0 + Duration::from_millis(600));
@@ -5742,7 +6374,11 @@ pub(in crate::arena::combat) mod tests {
             .iter()
             .find(|(_, b)| b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50))
             .expect("ReceiveDamage present once the wind-up has elapsed");
-        assert_eq!(arena_proto::parse_netdata(&rd.1[2..]).int(6), Some(2), "Spell damage source");
+        assert_eq!(
+            arena_proto::parse_netdata(&rd.1[2..]).int(6),
+            Some(2),
+            "Spell damage source"
+        );
 
         // The same ability is on cooldown immediately after.
         assert!(m.on_c2s(0, &req, t0).is_empty(), "ability on cooldown");
@@ -5765,7 +6401,10 @@ pub(in crate::arena::combat) mod tests {
         let open_before = m_open.fighter_health(1);
         swing(&mut m_open, 0, t_open);
         let open_dealt = open_before - m_open.fighter_health(1);
-        assert!(open_dealt >= 100, "un-guarded reference hit is the full ~105, got {open_dealt}");
+        assert!(
+            open_dealt >= 100,
+            "un-guarded reference hit is the full ~105, got {open_dealt}"
+        );
 
         // Build B's (slot 1) PlayerBlockingStateChange (41), guarding RIGHT (the side the
         // attacker's first auto-swing uses). NetData {0:player obj · 1:55 · 2:role · 3:41
@@ -5784,7 +6423,10 @@ pub(in crate::arena::combat) mod tests {
         // The block frame itself: no DAMAGE, but it does relay the guard state so the
         // shield actually appears (report #5 — this used to assert no s2c at all).
         let out = m.on_c2s(1, &block, t0);
-        assert!(!out.is_empty(), "a block input must relay the blocking state");
+        assert!(
+            !out.is_empty(),
+            "a block input must relay the blocking state"
+        );
         // …plus the Blocking (1) status op51 retail sends with it.
         let is_blocking_status = |f: &[u8]| {
             let nd = arena_proto::parse_netdata(&f[2..]);
@@ -5799,7 +6441,11 @@ pub(in crate::arena::combat) mod tests {
             out.iter().any(|(_, f)| is_blocking_status(f)),
             "the guard coming up must announce the Blocking status"
         );
-        assert_eq!(m.fighter_health(1), full, "the block itself deals no damage");
+        assert_eq!(
+            m.fighter_health(1),
+            full,
+            "the block itself deals no damage"
+        );
 
         // A (slot 0) swings Right into B's guard → OPTIMAL block. B's blocking item is
         // the starter's Chaurus Shield alone (R0 240, boost 1.0 → R 480): the physical
@@ -5807,20 +6453,34 @@ pub(in crate::arena::combat) mod tests {
         // 39.36. A's starter hit is 81 Slashing + 23.84 Shock (the open ~105), so
         // 81 − 76.8 = 4.2 and the Shock sits at its 5 % floor, 1.19: 5.39 → 5 HP.
         let dmg = swing(&mut m, 0, t0 + Duration::from_millis(600));
-        assert!(!dmg.is_empty(), "the swing still resolves (ReceiveDamage emitted)");
+        assert!(
+            !dmg.is_empty(),
+            "the swing still resolves (ReceiveDamage emitted)"
+        );
         let opt_dealt = full - m.fighter_health(1);
-        assert_eq!(opt_dealt, 4, "flat optimal budgets against the open {open_dealt}");
+        assert_eq!(
+            opt_dealt, 4,
+            "flat optimal budgets against the open {open_dealt}"
+        );
         // The ReceiveDamage carries the WasOptimalBlocking flag (propId 7 bit3).
-        let rd = dmg.iter().find(|(_, b)| b[1] == 0x36
-            && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50)).expect("ReceiveDamage");
+        let rd = dmg
+            .iter()
+            .find(|(_, b)| b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(50))
+            .expect("ReceiveDamage");
         let flags = arena_proto::parse_netdata(&rd.1[2..]).int(7).unwrap_or(0);
-        assert!(flags & 0b1000 != 0, "WasOptimalBlocking flag set on a same-side block");
+        assert!(
+            flags & 0b1000 != 0,
+            "WasOptimalBlocking flag set on a same-side block"
+        );
 
         // Sanity: an UN-guarded target still takes full damage — a fresh match.
         let (mut m2, t2) = live_inst(2);
         let before = m2.fighter_health(1);
         swing(&mut m2, 0, t2);
-        assert!(m2.fighter_health(1) < before, "an un-guarded target takes damage (block didn't break attacks)");
+        assert!(
+            m2.fighter_health(1) < before,
+            "an un-guarded target takes damage (block didn't break attacks)"
+        );
     }
 
     /// A block window auto-expires: after `BLOCK_WINDOW` a stale guard no longer
@@ -5830,7 +6490,11 @@ pub(in crate::arena::combat) mod tests {
         let (mut m, t0) = live_inst(2);
         let mut block = {
             let mut w = arena_proto::NetDataWriter::new();
-            w.int(0, m.combat.fighters[1].player_net_object_id).byte(1, 55).byte(2, 3).byte(3, 41).byte(4, 1);
+            w.int(0, m.combat.fighters[1].player_net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 41)
+                .byte(4, 1);
             messages::frame_for_test(w.finish())
         };
         block[0] = 0x84;
@@ -5839,7 +6503,10 @@ pub(in crate::arena::combat) mod tests {
         // Well past the 2s window → the guard has lapsed; a Middle swing now lands.
         let late = t0 + Duration::from_secs(3);
         swing(&mut m, 0, late);
-        assert!(m.fighter_health(1) < full, "after the block window expires, the hit lands");
+        assert!(
+            m.fighter_health(1) < full,
+            "after the block window expires, the hit lands"
+        );
     }
 
     /// BUG-2 (emotes): a `PlayEmote` (72) is echoed back as `PlayEmote` (72) — retail's own shape
@@ -5866,9 +6533,16 @@ pub(in crate::arena::combat) mod tests {
 
         let out = m.on_c2s(0, &emote, t0);
         // Broadcast to BOTH: the emoter (slot 0, the echo — bug-2 fix) AND the opponent (slot 1).
-        assert_eq!(out.len(), 2, "emote is broadcast to both players (emoter echo + opponent relay)");
+        assert_eq!(
+            out.len(),
+            2,
+            "emote is broadcast to both players (emoter echo + opponent relay)"
+        );
         let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
-        assert!(viewers.contains(&0), "the EMOTER (slot 0) is echoed its own emote — without this the emote does nothing");
+        assert!(
+            viewers.contains(&0),
+            "the EMOTER (slot 0) is echoed its own emote — without this the emote does nothing"
+        );
         assert!(viewers.contains(&1), "the opponent (slot 1) sees the emote");
         // Every relayed frame echoes gmid 72 in retail's shape, carrying the emoter's
         // avatar + id. Retail never sends 73 (0 of 264,302 captured frames); sending it
@@ -5877,12 +6551,24 @@ pub(in crate::arena::combat) mod tests {
             assert_eq!(body[1], 0x36, "carrier 0x36");
             let nd = arena_proto::parse_netdata(&body[2..]);
             assert_eq!(nd.int(3), Some(72), "GMID must be PlayEmote(72), not 73");
-            assert_eq!(nd.int(0), Some(emoter_avatar), "carries the EMOTER's avatar obj");
-            assert_eq!(nd.string(4), Some("emote_wave"), "the emote id is relayed at propId 4");
+            assert_eq!(
+                nd.int(0),
+                Some(emoter_avatar),
+                "carries the EMOTER's avatar obj"
+            );
+            assert_eq!(
+                nd.string(4),
+                Some("emote_wave"),
+                "the emote id is relayed at propId 4"
+            );
         }
         // No damage from an emote.
         assert_eq!(m.fighter_health(1), full, "an emote deals no damage");
-        assert_eq!(m.phase(), FlowState::StateTimeout, "emote doesn't change the match phase");
+        assert_eq!(
+            m.phase(),
+            FlowState::StateTimeout,
+            "emote doesn't change the match phase"
+        );
     }
 
     /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the FULL round-start burst still goes out
@@ -5902,7 +6588,10 @@ pub(in crate::arena::combat) mod tests {
         let created = m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD); // Spawning → BackendMatchCreated
         assert_eq!(m.phase(), FlowState::BackendMatchCreated);
         assert_eq!(
-            created.iter().filter(|(_, b)| b.ends_with(b"BackendMatchCreated")).count(),
+            created
+                .iter()
+                .filter(|(_, b)| b.ends_with(b"BackendMatchCreated"))
+                .count(),
             2,
             "the BackendMatchCreated round-start frame is still emitted under HOLD"
         );
@@ -5913,8 +6602,15 @@ pub(in crate::arena::combat) mod tests {
         // heartbeat, no bot) — the freeze window for hand-injecting s2c frames.
         let later = now + setup_to_live() + Duration::from_secs(60);
         let out = m.on_tick(1, later);
-        assert_eq!(m.phase(), FlowState::BackendMatchCreated, "HOLD never advances to the live round");
-        assert!(out.is_empty(), "no s2c is generated while held at BackendMatchCreated");
+        assert_eq!(
+            m.phase(),
+            FlowState::BackendMatchCreated,
+            "HOLD never advances to the live round"
+        );
+        assert!(
+            out.is_empty(),
+            "no s2c is generated while held at BackendMatchCreated"
+        );
         assert_eq!(m.combat.round, 0, "round never goes live under HOLD");
     }
 
@@ -5932,16 +6628,13 @@ pub(in crate::arena::combat) mod tests {
         m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD);
         assert_eq!(m.phase(), FlowState::BackendMatchCreated);
 
-        let held = m.on_tick(
-            1,
-            now + SPAWN_HANDSHAKE_HOLD + Duration::from_millis(500),
+        let held = m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD + Duration::from_millis(500));
+        assert!(
+            held.is_empty(),
+            "the match remains parked before the deadline"
         );
-        assert!(held.is_empty(), "the match remains parked before the deadline");
 
-        let resumed = m.on_tick(
-            1,
-            now + SPAWN_HANDSHAKE_HOLD + Duration::from_secs(1),
-        );
+        let resumed = m.on_tick(1, now + SPAWN_HANDSHAKE_HOLD + Duration::from_secs(1));
         assert_eq!(m.phase(), FlowState::BackendMatchCreated);
         assert_eq!(m.setup_step, 1, "ordinary round-0 setup resumed at expiry");
         assert!(
@@ -5965,7 +6658,11 @@ pub(in crate::arena::combat) mod tests {
         m.combat.phase_entered = now;
         let full = m.fighter_health(0);
         let out = m.on_tick(1, now + Duration::from_secs(10));
-        assert_eq!(m.fighter_health(0), full, "no bot swing damages the player under HOLD");
+        assert_eq!(
+            m.fighter_health(0),
+            full,
+            "no bot swing damages the player under HOLD"
+        );
         // The only s2c on a held StateTimeout tick is the flow heartbeat (carrier
         // 0x36, propId3 == 0x4F); there must be NO ReceiveDamage (carrier 0x36,
         // propId3 == 50) from a bot swing.
@@ -6144,9 +6841,7 @@ mod void_for_a_player_who_never_arrived {
     #[test]
     fn the_inbound_seam_still_records_that_the_player_spoke() {
         let src = include_str!("engine.rs");
-        let start = src
-            .find("pub fn on_c2s(")
-            .expect("on_c2s still exists");
+        let start = src.find("pub fn on_c2s(").expect("on_c2s still exists");
         let body = &src[start..start + 800];
         assert!(
             body.contains("saw_in_round_c2s") && body.contains("FlowState::StateTimeout"),

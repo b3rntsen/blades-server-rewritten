@@ -64,7 +64,11 @@ pub fn effective_loot_level_u16(level: u16) -> u16 {
 /// level-49 character stands at enemy level 47 and a level-100 one at 78, so its
 /// loot is rolled 31 levels up, at 78 — exactly the level-100 roll, delta for
 /// delta (an event boss at 47 + 6 drops what one at 78 + 6 does).
-pub fn dungeon_loot_shift(scaling: &QuestLevelScaling, character_level: i64, dungeon_level: i64) -> i64 {
+pub fn dungeon_loot_shift(
+    scaling: &QuestLevelScaling,
+    character_level: i64,
+    dungeon_level: i64,
+) -> i64 {
     let paid_as = effective_loot_level(character_level);
     if paid_as == character_level {
         return 0;
@@ -103,7 +107,10 @@ pub fn cap_event_soul_gems(stacks: &mut HashMap<Uuid, u64>, character_level: i64
     if !EVENT_GRAND_SOUL_GEM_LEVELS.contains(&character_level) {
         return;
     }
-    let capped: u64 = SOUL_GEMS_ABOVE_GRAND.iter().filter_map(|gem| stacks.remove(gem)).sum();
+    let capped: u64 = SOUL_GEMS_ABOVE_GRAND
+        .iter()
+        .filter_map(|gem| stacks.remove(gem))
+        .sum();
     if capped > 0 {
         *stacks.entry(GRAND_SOUL_GEM).or_insert(0) += capped;
     }
@@ -116,7 +123,9 @@ pub fn cap_event_dungeon_soul_gems(data: &mut DungeonGeneratedData, character_le
     if !EVENT_GRAND_SOUL_GEM_LEVELS.contains(&character_level) {
         return;
     }
-    let mut cap = |loot: &mut LootTableResult| cap_event_soul_gems(&mut loot.stackable_items, character_level);
+    let mut cap = |loot: &mut LootTableResult| {
+        cap_event_soul_gems(&mut loot.stackable_items, character_level)
+    };
     for enemy in data.enemy_generated_data.values_mut().flatten().flatten() {
         cap(&mut enemy.spawn_group_loot);
         enemy.loot_table_loot.values_mut().for_each(&mut cap);
@@ -148,7 +157,10 @@ mod tests {
     fn no_dungeon_moves_below_49() {
         let scaling = QuestLevelScaling::default();
         for level in 1..49 {
-            assert_eq!(dungeon_loot_shift(&scaling, level, scaling.enemy_level(level)), 0);
+            assert_eq!(
+                dungeon_loot_shift(&scaling, level, scaling.enemy_level(level)),
+                0
+            );
         }
     }
 
@@ -158,19 +170,35 @@ mod tests {
         let [glorious, transcendent] = SOUL_GEMS_ABOVE_GRAND;
         let exceptional: Uuid = "3932e499-441e-4c6d-b671-9a03131ebe6f".parse().unwrap();
         let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
-        let stacks = HashMap::from([(glorious, 5), (transcendent, 2), (GRAND_SOUL_GEM, 1), (exceptional, 3), (lumber, 9)]);
+        let stacks = HashMap::from([
+            (glorious, 5),
+            (transcendent, 2),
+            (GRAND_SOUL_GEM, 1),
+            (exceptional, 3),
+            (lumber, 9),
+        ]);
         for level in [49, 55, 60] {
             let mut s = stacks.clone();
             cap_event_soul_gems(&mut s, level);
-            assert_eq!(s, HashMap::from([(GRAND_SOUL_GEM, 8), (exceptional, 3), (lumber, 9)]), "level {level}");
+            assert_eq!(
+                s,
+                HashMap::from([(GRAND_SOUL_GEM, 8), (exceptional, 3), (lumber, 9)]),
+                "level {level}"
+            );
         }
         for level in [1, 48, 61, 100] {
             let mut s = stacks.clone();
             cap_event_soul_gems(&mut s, level);
             assert_eq!(s, stacks, "level {level}");
         }
-        assert_eq!(GRAND_SOUL_GEM.to_string(), "68d7941e-8c8d-47bf-9f66-becb058f1817");
+        assert_eq!(
+            GRAND_SOUL_GEM.to_string(),
+            "68d7941e-8c8d-47bf-9f66-becb058f1817"
+        );
         assert_eq!(glorious.to_string(), "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb");
-        assert_eq!(transcendent.to_string(), crate::features::abyss_rewards::TRANSCENDENT_SOUL_GEM);
+        assert_eq!(
+            transcendent.to_string(),
+            crate::features::abyss_rewards::TRANSCENDENT_SOUL_GEM
+        );
     }
 }

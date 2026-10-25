@@ -232,7 +232,9 @@ fn assemble_generated_data_list(
     pools_def: &Value,
     level: u16,
 ) -> Vec<DungeonGeneratedDataWithId> {
-    from_rows.extend(jobs_gen::job_generated_data_list(game_data, jobs, scaling, pools_def, level));
+    from_rows.extend(jobs_gen::job_generated_data_list(
+        game_data, jobs, scaling, pools_def, level,
+    ));
     from_rows
 }
 
@@ -463,7 +465,9 @@ fn drop_foreign_event_stages(
         return false;
     };
     let mut changed = false;
-    for foreign in blades_lib::util::quest::event_dungeon_foreign_stage_ids(game_data, &dungeon_uuid) {
+    for foreign in
+        blades_lib::util::quest::event_dungeon_foreign_stage_ids(game_data, &dungeon_uuid)
+    {
         let spawn = &game_data.dungeons[&foreign].spawn_info;
         for group in spawn.enemy_spawn_groups.keys() {
             changed |= stored.enemy_generated_data.remove(group).is_some();
@@ -1179,14 +1183,9 @@ mod report329_foreign_event_stage_tests {
     fn an_eq23_row_given_the_story_stage_loses_it_and_keeps_its_own() {
         let gd = super::report85_job_generated_data_tests::game_data();
         let info = event_row(&gd, EQ23, 2);
-        let a_only = blades_lib::util::dungeon::generate_for_dungeon_with_seed(
-            &gd,
-            &uuid(EQ23_A),
-            7,
-            2,
-            13,
-        )
-        .unwrap();
+        let a_only =
+            blades_lib::util::dungeon::generate_for_dungeon_with_seed(&gd, &uuid(EQ23_A), 7, 2, 13)
+                .unwrap();
         let mut stored = a_only.clone();
         let b = blades_lib::util::dungeon::generate_for_dungeon(&gd, &uuid(EQ23_B), 2, 13).unwrap();
         blades_lib::util::quest::merge_dungeon_generated_data(&mut stored, b);
@@ -1206,7 +1205,10 @@ mod report329_foreign_event_stage_tests {
             serde_json::to_value(&a_only).unwrap(),
             "exactly `_A`, every roll as the player was shown it"
         );
-        assert!(!drop_foreign_event_stages(&gd, &info, &mut stored), "nothing left to drop");
+        assert!(
+            !drop_foreign_event_stages(&gd, &info, &mut stored),
+            "nothing left to drop"
+        );
     }
 
     /// CONTROL: an EQ24 row keeps its `_B` — that one is a stage of the event —
@@ -1215,14 +1217,13 @@ mod report329_foreign_event_stage_tests {
     fn a_real_second_stage_and_a_captured_row_are_left_alone() {
         let gd = super::report85_job_generated_data_tests::game_data();
         let eq24 = event_row(&gd, EQ24, 16);
-        let mut both =
-            blades_lib::util::quest::generate_for_event_dungeon(
-                &gd,
-                &uuid(EQ24_A),
-                16,
-                &blades_lib::static_data::QuestLevelScaling::default(),
-            )
-            .unwrap();
+        let mut both = blades_lib::util::quest::generate_for_event_dungeon(
+            &gd,
+            &uuid(EQ24_A),
+            16,
+            &blades_lib::static_data::QuestLevelScaling::default(),
+        )
+        .unwrap();
         let before = serde_json::to_value(&both).unwrap();
         assert_eq!(both.enemy_generated_data.len(), 20);
         assert!(!drop_foreign_event_stages(&gd, &eq24, &mut both));
@@ -2388,8 +2389,15 @@ fn merge_reward(into: &mut RewardGrant, extra: &RewardGrant) {
 /// a retried completion pays the same).
 pub(crate) fn beginner_economy_completion(reward: &mut RewardGrant, level: i64, quest_id: Uuid) {
     use blades_lib::features::beginner_economy::{size_material_stacks, top_soul_gems};
-    top_soul_gems(&mut reward.stackable_items, level, quest_id.as_u128() as u64);
-    size_material_stacks(&mut reward.stackable_items, quest_id.as_u128() as u64 ^ 0x388);
+    top_soul_gems(
+        &mut reward.stackable_items,
+        level,
+        quest_id.as_u128() as u64,
+    );
+    size_material_stacks(
+        &mut reward.stackable_items,
+        quest_id.as_u128() as u64 ^ 0x388,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3539,49 +3547,246 @@ pub(crate) mod jobs_gen {
     ///   jobs, and the secret boss in 59 of 59.
     pub const JOB_FAMILIES: &[JobFamily] = &[
         // Bear
-        JobFamily { id: "008cf5b0-2590-433b-832e-f2e6f0e0226f", min_level: 4, max_level: 99, leads: true, bosses: &["008cf5b0-2590-433b-832e-f2e6f0e0226f", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        JobFamily {
+            id: "008cf5b0-2590-433b-832e-f2e6f0e0226f",
+            min_level: 4,
+            max_level: 99,
+            leads: true,
+            bosses: &[
+                "008cf5b0-2590-433b-832e-f2e6f0e0226f",
+                "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+            ],
+        },
         // Spriggan
-        JobFamily { id: "06591d48-8c3a-4f81-a2c6-dba2e7163788", min_level: 3, max_level: 99, leads: true, bosses: &["06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        JobFamily {
+            id: "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+            min_level: 3,
+            max_level: 99,
+            leads: true,
+            bosses: &["06591d48-8c3a-4f81-a2c6-dba2e7163788"],
+        },
         // Thalmor Agent
-        JobFamily { id: "1696d9c0-900f-4829-ae3f-f0441d92a37c", min_level: 6, max_level: 101, leads: true, bosses: &["1696d9c0-900f-4829-ae3f-f0441d92a37c"] },
+        JobFamily {
+            id: "1696d9c0-900f-4829-ae3f-f0441d92a37c",
+            min_level: 6,
+            max_level: 101,
+            leads: true,
+            bosses: &["1696d9c0-900f-4829-ae3f-f0441d92a37c"],
+        },
         // Troll
-        JobFamily { id: "1b2a30db-2871-43a2-bca0-eaa4bd804698", min_level: 7, max_level: 99, leads: true, bosses: &["1b2a30db-2871-43a2-bca0-eaa4bd804698", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        JobFamily {
+            id: "1b2a30db-2871-43a2-bca0-eaa4bd804698",
+            min_level: 7,
+            max_level: 99,
+            leads: true,
+            bosses: &[
+                "1b2a30db-2871-43a2-bca0-eaa4bd804698",
+                "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+            ],
+        },
         // Skeever
-        JobFamily { id: "31be99a6-8557-4e9b-81e6-5503f900b7d2", min_level: 2, max_level: 22, leads: false, bosses: &["008cf5b0-2590-433b-832e-f2e6f0e0226f", "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        JobFamily {
+            id: "31be99a6-8557-4e9b-81e6-5503f900b7d2",
+            min_level: 2,
+            max_level: 22,
+            leads: false,
+            bosses: &[
+                "008cf5b0-2590-433b-832e-f2e6f0e0226f",
+                "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228",
+                "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+            ],
+        },
         // Warmaster
-        JobFamily { id: "33de9f64-8eb6-41d2-b62d-8b7fb3632729", min_level: 10, max_level: 101, leads: true, bosses: &["33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        JobFamily {
+            id: "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
+            min_level: 10,
+            max_level: 101,
+            leads: true,
+            bosses: &["33de9f64-8eb6-41d2-b62d-8b7fb3632729"],
+        },
         // Dremora Raider
-        JobFamily { id: "340cd608-31ec-447f-9f72-2162639bff3c", min_level: 8, max_level: 106, leads: true, bosses: &["340cd608-31ec-447f-9f72-2162639bff3c", "ea8096f9-6c1b-4b42-af71-9ceabd7de33d", "50994925-f050-48b2-8cab-259b0f1a3531", "1696d9c0-900f-4829-ae3f-f0441d92a37c", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        JobFamily {
+            id: "340cd608-31ec-447f-9f72-2162639bff3c",
+            min_level: 8,
+            max_level: 106,
+            leads: true,
+            bosses: &[
+                "340cd608-31ec-447f-9f72-2162639bff3c",
+                "ea8096f9-6c1b-4b42-af71-9ceabd7de33d",
+                "50994925-f050-48b2-8cab-259b0f1a3531",
+                "1696d9c0-900f-4829-ae3f-f0441d92a37c",
+                "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+            ],
+        },
         // Spider
-        JobFamily { id: "3d932102-3b5c-42ba-b96a-35405752c5a3", min_level: 9, max_level: 97, leads: false, bosses: &["6ee657a9-5cc3-45b7-ad14-db8828f7ae2c"] },
+        JobFamily {
+            id: "3d932102-3b5c-42ba-b96a-35405752c5a3",
+            min_level: 9,
+            max_level: 97,
+            leads: false,
+            bosses: &["6ee657a9-5cc3-45b7-ad14-db8828f7ae2c"],
+        },
         // Lich
-        JobFamily { id: "3fa0aa97-7a45-4c96-8b62-53e08691f746", min_level: 7, max_level: 100, leads: true, bosses: &["3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        JobFamily {
+            id: "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+            min_level: 7,
+            max_level: 100,
+            leads: true,
+            bosses: &["3fa0aa97-7a45-4c96-8b62-53e08691f746"],
+        },
         // Mercenary
-        JobFamily { id: "4c60bb97-3918-485a-822e-1017d2401dd2", min_level: 5, max_level: 100, leads: true, bosses: &["4c60bb97-3918-485a-822e-1017d2401dd2", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        JobFamily {
+            id: "4c60bb97-3918-485a-822e-1017d2401dd2",
+            min_level: 5,
+            max_level: 100,
+            leads: true,
+            bosses: &[
+                "4c60bb97-3918-485a-822e-1017d2401dd2",
+                "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
+            ],
+        },
         // Necromancer
-        JobFamily { id: "50994925-f050-48b2-8cab-259b0f1a3531", min_level: 5, max_level: 100, leads: true, bosses: &["50994925-f050-48b2-8cab-259b0f1a3531", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        JobFamily {
+            id: "50994925-f050-48b2-8cab-259b0f1a3531",
+            min_level: 5,
+            max_level: 100,
+            leads: true,
+            bosses: &[
+                "50994925-f050-48b2-8cab-259b0f1a3531",
+                "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
+            ],
+        },
         // Wight
-        JobFamily { id: "521bb612-587d-4a90-adee-904a48d89c33", min_level: 5, max_level: 99, leads: true, bosses: &["521bb612-587d-4a90-adee-904a48d89c33", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        JobFamily {
+            id: "521bb612-587d-4a90-adee-904a48d89c33",
+            min_level: 5,
+            max_level: 99,
+            leads: true,
+            bosses: &[
+                "521bb612-587d-4a90-adee-904a48d89c33",
+                "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+            ],
+        },
         // Spider
-        JobFamily { id: "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c", min_level: 9, max_level: 97, leads: true, bosses: &["6ee657a9-5cc3-45b7-ad14-db8828f7ae2c", "06591d48-8c3a-4f81-a2c6-dba2e7163788", "1b2a30db-2871-43a2-bca0-eaa4bd804698"] },
+        JobFamily {
+            id: "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c",
+            min_level: 9,
+            max_level: 97,
+            leads: true,
+            bosses: &[
+                "6ee657a9-5cc3-45b7-ad14-db8828f7ae2c",
+                "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+                "1b2a30db-2871-43a2-bca0-eaa4bd804698",
+            ],
+        },
         // Wolf
-        JobFamily { id: "7f9c2b46-e6b8-4a65-9caa-f2b952623c23", min_level: 4, max_level: 30, leads: false, bosses: &["008cf5b0-2590-433b-832e-f2e6f0e0226f", "06591d48-8c3a-4f81-a2c6-dba2e7163788", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        JobFamily {
+            id: "7f9c2b46-e6b8-4a65-9caa-f2b952623c23",
+            min_level: 4,
+            max_level: 30,
+            leads: false,
+            bosses: &[
+                "008cf5b0-2590-433b-832e-f2e6f0e0226f",
+                "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+                "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
+            ],
+        },
         // Goblin
-        JobFamily { id: "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228", min_level: 1, max_level: 101, leads: true, bosses: &["8c75bd1f-95a3-47d4-a28c-fdb1fc0de228", "9137d218-6f05-4e8f-a5e5-1c63c61c95ca"] },
+        JobFamily {
+            id: "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228",
+            min_level: 1,
+            max_level: 101,
+            leads: true,
+            bosses: &[
+                "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228",
+                "9137d218-6f05-4e8f-a5e5-1c63c61c95ca",
+            ],
+        },
         // Wisp
-        JobFamily { id: "90a62106-6294-4456-8206-cf6817995bf8", min_level: 24, max_level: 99, leads: false, bosses: &["be99402d-c518-4e81-be00-9e2e20e690b0"] },
+        JobFamily {
+            id: "90a62106-6294-4456-8206-cf6817995bf8",
+            min_level: 24,
+            max_level: 99,
+            leads: false,
+            bosses: &["be99402d-c518-4e81-be00-9e2e20e690b0"],
+        },
         // Goblin Wizard
-        JobFamily { id: "9137d218-6f05-4e8f-a5e5-1c63c61c95ca", min_level: 1, max_level: 100, leads: true, bosses: &["9137d218-6f05-4e8f-a5e5-1c63c61c95ca", "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228"] },
+        JobFamily {
+            id: "9137d218-6f05-4e8f-a5e5-1c63c61c95ca",
+            min_level: 1,
+            max_level: 100,
+            leads: true,
+            bosses: &[
+                "9137d218-6f05-4e8f-a5e5-1c63c61c95ca",
+                "8c75bd1f-95a3-47d4-a28c-fdb1fc0de228",
+            ],
+        },
         // Wispmother
-        JobFamily { id: "be99402d-c518-4e81-be00-9e2e20e690b0", min_level: 10, max_level: 99, leads: true, bosses: &["be99402d-c518-4e81-be00-9e2e20e690b0", "06591d48-8c3a-4f81-a2c6-dba2e7163788"] },
+        JobFamily {
+            id: "be99402d-c518-4e81-be00-9e2e20e690b0",
+            min_level: 10,
+            max_level: 99,
+            leads: true,
+            bosses: &[
+                "be99402d-c518-4e81-be00-9e2e20e690b0",
+                "06591d48-8c3a-4f81-a2c6-dba2e7163788",
+            ],
+        },
         // Atronach
-        JobFamily { id: "d14a0ec0-39a5-417f-a21c-8c4840d60a56", min_level: 25, max_level: 100, leads: true, bosses: &["d14a0ec0-39a5-417f-a21c-8c4840d60a56", "340cd608-31ec-447f-9f72-2162639bff3c", "ea8096f9-6c1b-4b42-af71-9ceabd7de33d", "9137d218-6f05-4e8f-a5e5-1c63c61c95ca", "50994925-f050-48b2-8cab-259b0f1a3531", "1696d9c0-900f-4829-ae3f-f0441d92a37c", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        JobFamily {
+            id: "d14a0ec0-39a5-417f-a21c-8c4840d60a56",
+            min_level: 25,
+            max_level: 100,
+            leads: true,
+            bosses: &[
+                "d14a0ec0-39a5-417f-a21c-8c4840d60a56",
+                "340cd608-31ec-447f-9f72-2162639bff3c",
+                "ea8096f9-6c1b-4b42-af71-9ceabd7de33d",
+                "9137d218-6f05-4e8f-a5e5-1c63c61c95ca",
+                "50994925-f050-48b2-8cab-259b0f1a3531",
+                "1696d9c0-900f-4829-ae3f-f0441d92a37c",
+                "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+            ],
+        },
         // Skeleton
-        JobFamily { id: "de4686d9-f748-40f7-a8d3-7baadb46a695", min_level: 1, max_level: 100, leads: true, bosses: &["de4686d9-f748-40f7-a8d3-7baadb46a695", "50994925-f050-48b2-8cab-259b0f1a3531", "3fa0aa97-7a45-4c96-8b62-53e08691f746", "521bb612-587d-4a90-adee-904a48d89c33"] },
+        JobFamily {
+            id: "de4686d9-f748-40f7-a8d3-7baadb46a695",
+            min_level: 1,
+            max_level: 100,
+            leads: true,
+            bosses: &[
+                "de4686d9-f748-40f7-a8d3-7baadb46a695",
+                "50994925-f050-48b2-8cab-259b0f1a3531",
+                "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+                "521bb612-587d-4a90-adee-904a48d89c33",
+            ],
+        },
         // Bandit
-        JobFamily { id: "de8e06be-5403-4fc1-b912-1a5cd9d608a6", min_level: 1, max_level: 98, leads: true, bosses: &["de8e06be-5403-4fc1-b912-1a5cd9d608a6", "4c60bb97-3918-485a-822e-1017d2401dd2", "33de9f64-8eb6-41d2-b62d-8b7fb3632729"] },
+        JobFamily {
+            id: "de8e06be-5403-4fc1-b912-1a5cd9d608a6",
+            min_level: 1,
+            max_level: 98,
+            leads: true,
+            bosses: &[
+                "de8e06be-5403-4fc1-b912-1a5cd9d608a6",
+                "4c60bb97-3918-485a-822e-1017d2401dd2",
+                "33de9f64-8eb6-41d2-b62d-8b7fb3632729",
+            ],
+        },
         // Dremora Warlock
-        JobFamily { id: "ea8096f9-6c1b-4b42-af71-9ceabd7de33d", min_level: 8, max_level: 106, leads: true, bosses: &["ea8096f9-6c1b-4b42-af71-9ceabd7de33d", "340cd608-31ec-447f-9f72-2162639bff3c", "50994925-f050-48b2-8cab-259b0f1a3531", "1696d9c0-900f-4829-ae3f-f0441d92a37c", "3fa0aa97-7a45-4c96-8b62-53e08691f746"] },
+        JobFamily {
+            id: "ea8096f9-6c1b-4b42-af71-9ceabd7de33d",
+            min_level: 8,
+            max_level: 106,
+            leads: true,
+            bosses: &[
+                "ea8096f9-6c1b-4b42-af71-9ceabd7de33d",
+                "340cd608-31ec-447f-9f72-2162639bff3c",
+                "50994925-f050-48b2-8cab-259b0f1a3531",
+                "1696d9c0-900f-4829-ae3f-f0441d92a37c",
+                "3fa0aa97-7a45-4c96-8b62-53e08691f746",
+            ],
+        },
     ];
 
     fn job_family(id: &str) -> Option<&'static JobFamily> {
@@ -3608,7 +3813,11 @@ pub(crate) mod jobs_gen {
     ) -> (&'static str, &'static str, &'static str, &'static str) {
         let mut rng = Rng::new(base_seed ^ FAMILY_SIDE_STREAM);
         let draw = |rng: &mut Rng, ok: &dyn Fn(&JobFamily) -> bool| -> Option<&'static str> {
-            let pool: Vec<&'static str> = JOB_FAMILIES.iter().filter(|f| ok(f)).map(|f| f.id).collect();
+            let pool: Vec<&'static str> = JOB_FAMILIES
+                .iter()
+                .filter(|f| ok(f))
+                .map(|f| f.id)
+                .collect();
             rng.pick(&pool).copied()
         };
         // A level outside every range (none of today's job levels is) keeps the
@@ -3634,7 +3843,9 @@ pub(crate) mod jobs_gen {
             let chosen = if roll < 2 && primary_fits {
                 Some(primary)
             } else if roll < 6 || other.is_empty() {
-                rng.pick(&own).copied().or_else(|| rng.pick(&other).copied())
+                rng.pick(&own)
+                    .copied()
+                    .or_else(|| rng.pick(&other).copied())
             } else {
                 rng.pick(&other).copied()
             };
@@ -4152,7 +4363,10 @@ pub(crate) mod jobs_gen {
             game_data,
             &JOB_SPAWN_GROUPS_REFERENCE,
             Some(run_seed),
-            blades_lib::util::dungeon::EnemyLevels::Flat { level: enemy_level, given_xp },
+            blades_lib::util::dungeon::EnemyLevels::Flat {
+                level: enemy_level,
+                given_xp,
+            },
             loot_shift,
         )?;
 
@@ -4306,8 +4520,17 @@ pub(crate) mod jobs_gen {
         pools_def: &Value,
         level: u16,
     ) -> Option<DungeonGeneratedData> {
-        let mut data = generated_data_for_job(game_data, job, scaling, loot_shift_for(pools_def, job, level))?;
-        blades_lib::features::beginner_economy::top_dungeon_soul_gems(&mut data, i64::from(level), false);
+        let mut data = generated_data_for_job(
+            game_data,
+            job,
+            scaling,
+            loot_shift_for(pools_def, job, level),
+        )?;
+        blades_lib::features::beginner_economy::top_dungeon_soul_gems(
+            &mut data,
+            i64::from(level),
+            false,
+        );
         Some(data)
     }
 
@@ -4321,9 +4544,19 @@ pub(crate) mod jobs_gen {
         pools_def: &Value,
         level: u16,
     ) -> Option<QuestDbEntry> {
-        let mut entry = job_quest_db_entry(job, character_id, game_data, scaling, loot_shift_for(pools_def, job, level))?;
+        let mut entry = job_quest_db_entry(
+            job,
+            character_id,
+            game_data,
+            scaling,
+            loot_shift_for(pools_def, job, level),
+        )?;
         if let Some(data) = entry.generated_data.0.as_mut() {
-            blades_lib::features::beginner_economy::top_dungeon_soul_gems(data, i64::from(level), false);
+            blades_lib::features::beginner_economy::top_dungeon_soul_gems(
+                data,
+                i64::from(level),
+                false,
+            );
         }
         Some(entry)
     }
@@ -4360,7 +4593,10 @@ pub(crate) mod jobs_gen {
         // boss job `{gems: 12}` (11253, 37130).
         let gems = get_u64(&setup, "rewardGemCount", 0);
         if gems > 0 {
-            *reward.currencies.entry(blades_lib::economy::GEMS).or_insert(0) += gems;
+            *reward
+                .currencies
+                .entry(blades_lib::economy::GEMS)
+                .or_insert(0) += gems;
         }
         reward
     }
@@ -4415,7 +4651,9 @@ pub(crate) mod jobs_gen {
             id: quest_id,
             character_id,
             info: JsonDbWrapper(quest),
-            generated_data: JsonDbWrapper(generated_data_for_job(game_data, job, scaling, loot_shift)),
+            generated_data: JsonDbWrapper(generated_data_for_job(
+                game_data, job, scaling, loot_shift,
+            )),
             dungeon_state: None,
         })
     }
@@ -5592,7 +5830,11 @@ mod report92_reward_curve {
     fn every_rolled_job_pays_retails_xp_for_its_difficulty() {
         let s = sample();
         for (d, xp, _, _) in &s {
-            assert_eq!(*xp, job_reward_xp(*d), "difficulty {d} job advertised {xp} xp");
+            assert_eq!(
+                *xp,
+                job_reward_xp(*d),
+                "difficulty {d} job advertised {xp} xp"
+            );
         }
     }
 
@@ -5630,7 +5872,11 @@ mod report92_reward_curve {
                         (gems > 0) != (gold > 0),
                         "a job pays gems or gold, never both or neither: {gems} gems, {gold} gold"
                     );
-                    if gems > 0 { gem_jobs += 1 } else { gold_jobs += 1 }
+                    if gems > 0 {
+                        gem_jobs += 1
+                    } else {
+                        gold_jobs += 1
+                    }
                 }
             }
         }
@@ -5700,7 +5946,11 @@ mod report337_job_xp {
     #[test]
     fn harder_jobs_never_pay_less() {
         for d in 1..=110 {
-            assert!(job_reward_xp(d + 1) > job_reward_xp(d), "difficulty {d} -> {}", d + 1);
+            assert!(
+                job_reward_xp(d + 1) > job_reward_xp(d),
+                "difficulty {d} -> {}",
+                d + 1
+            );
         }
     }
 
@@ -5846,8 +6096,14 @@ mod report85_job_generated_data_tests {
     fn every_job_on_the_board_has_generated_data() {
         let gd = game_data();
         let jobs = board();
-        let list =
-            assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling(), &Value::Null, 1);
+        let list = assemble_generated_data_list(
+            Vec::new(),
+            &gd,
+            &jobs,
+            &crate::quest::shipped_scaling(),
+            &Value::Null,
+            1,
+        );
 
         let job_ids: Vec<Uuid> = jobs
             .iter()
@@ -5891,21 +6147,39 @@ mod report85_job_generated_data_tests {
     /// hold 2 / 4 / 6 loot stacks by rarity (common / uncommon / rare).
     #[test]
     fn report_388_job_containers_hold_2_4_6_stacks() {
-        use blades_lib::features::beginner_economy::{container_stacks, JOB_CONTAINER_TABLE};
+        use blades_lib::features::beginner_economy::{JOB_CONTAINER_TABLE, container_stacks};
         let gd = game_data();
-        let spawns = &gd.dungeons[&jobs_gen::JOB_SPAWN_GROUPS_REFERENCE].spawn_info.item;
+        let spawns = &gd.dungeons[&jobs_gen::JOB_SPAWN_GROUPS_REFERENCE]
+            .spawn_info
+            .item;
         let mut by_size = std::collections::BTreeMap::new();
         for job in board() {
-            let data = jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0).unwrap();
+            let data =
+                jobs_gen::generated_data_for_job(&gd, &job, &crate::quest::shipped_scaling(), 0)
+                    .unwrap();
             for (spawn, pile) in &data.item_generated_data {
-                for loot in pile.iter().filter_map(|r| r.loot_table_loot.get(&JOB_CONTAINER_TABLE)) {
-                    let want = container_stacks(&JOB_CONTAINER_TABLE, spawns[spawn].name.as_deref()).unwrap();
-                    assert_eq!(loot.stackable_items.len(), want, "job {} spawn {spawn}", job["questId"]);
+                for loot in pile
+                    .iter()
+                    .filter_map(|r| r.loot_table_loot.get(&JOB_CONTAINER_TABLE))
+                {
+                    let want =
+                        container_stacks(&JOB_CONTAINER_TABLE, spawns[spawn].name.as_deref())
+                            .unwrap();
+                    assert_eq!(
+                        loot.stackable_items.len(),
+                        want,
+                        "job {} spawn {spawn}",
+                        job["questId"]
+                    );
                     *by_size.entry(want).or_insert(0) += 1;
                 }
             }
         }
-        assert_eq!(by_size.keys().copied().collect::<Vec<_>>(), vec![2, 4, 6], "{by_size:?}");
+        assert_eq!(
+            by_size.keys().copied().collect::<Vec<_>>(),
+            vec![2, 4, 6],
+            "{by_size:?}"
+        );
     }
 
     /// An entry the client cannot populate a level from is no better than a missing one:
@@ -6096,8 +6370,9 @@ mod report85_job_generated_data_tests {
         let mut checked = 0usize;
 
         for job in jobs.iter().filter(|j| j["jobSetup"]["jobType"] != 5) {
-            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling(), 0)
-                .expect("job generates");
+            let data =
+                jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling(), 0)
+                    .expect("job generates");
             let has = |u: Uuid| data.item_generated_data.contains_key(&u);
 
             assert!(
@@ -6186,8 +6461,9 @@ mod report85_job_generated_data_tests {
 
         for job in jobs.iter().filter(|j| j["jobSetup"]["jobType"] != 5) {
             let setup = &job["jobSetup"];
-            let data = jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling(), 0)
-                .expect("job generates");
+            let data =
+                jobs_gen::generated_data_for_job(&gd, job, &crate::quest::shipped_scaling(), 0)
+                    .expect("job generates");
             let has_secret_boss = !setup["secretBossEnemyFamilyId"].is_null();
             let carries = data
                 .enemy_generated_data
@@ -6355,8 +6631,14 @@ mod report85_job_generated_data_tests {
     fn a_job_entry_serializes_to_retails_key_set() {
         let gd = game_data();
         let jobs = board();
-        let list =
-            assemble_generated_data_list(Vec::new(), &gd, &jobs, &crate::quest::shipped_scaling(), &Value::Null, 1);
+        let list = assemble_generated_data_list(
+            Vec::new(),
+            &gd,
+            &jobs,
+            &crate::quest::shipped_scaling(),
+            &Value::Null,
+            1,
+        );
         let entry = serde_json::to_value(&list[0]).expect("entry serializes");
         let mut keys: Vec<&str> = entry
             .as_object()
@@ -6405,8 +6687,14 @@ mod report85_job_generated_data_tests {
             vec![(story_id, story_quest.clone(), story_data.clone())].into_iter(),
             &Default::default(),
         );
-        let generated =
-            assemble_generated_data_list(from_rows, &gd, &jobs, &crate::quest::shipped_scaling(), &Value::Null, 1);
+        let generated = assemble_generated_data_list(
+            from_rows,
+            &gd,
+            &jobs,
+            &crate::quest::shipped_scaling(),
+            &Value::Null,
+            1,
+        );
 
         assert_eq!(quests_out.len(), 1, "the control quest is advertised");
 
@@ -6778,19 +7066,71 @@ mod event_quest_tests {
     fn the_last_tier_pays_what_retail_paid_on_its_final_complete() {
         let sd = static_data();
         let cases: &[(u32, &str, &str)] = &[
-            (1928, "a846b491-b439-447d-a8a1-9c2611522610", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":27,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":63000},"stackableItems":{"bafe6ed5-6473-4a4c-aef5-421d3af5c8cb":5}}"#),
-            (14396, "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":15},"stackableItems":{"b74a5c55-a687-4604-aa59-ba3ddfddcd2a":96}}"#),
-            (27198, "26eb6ab5-2d8c-4993-820e-ada79f6f00a8", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":20},"stackableItems":{"19ce1a65-057f-4f34-a0ed-27de7c085662":5}}"#),
-            (34025, "2d1200ee-ecb8-4ea6-9892-54d1f538d83d", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"f11fb90b-b441-4d72-a33f-50d14d3d6778":140,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
-            (36532, "816ff4c8-b56f-4645-bd2a-29bc7c1baf96", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":16,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":25200}}"#),
-            (38669, "a85408a6-7107-433d-b616-50105080574e", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5":3,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
-            (39364, "f4023a38-195a-4977-bfbc-f443a257566f", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":20,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":38000},"stackableItems":{"21e6557f-17ca-4bd3-9379-00184efe0edc":24}}"#),
-            (40877, "a008cbbc-a164-4183-8b69-470ac8cd5707", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":15,"c64bcb53-41f4-41ba-892a-fe2cca423caa":21},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
-            (43620, "2290ab73-8f56-4dba-a4f0-7a23270eb93c", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":22},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":372,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":560}}"#),
-            (48242, "9181f784-9eb8-4872-953d-30ba8b6bc9d1", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":32},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"85ed5500-3581-4699-8095-4b5ff6514355":96}}"#),
-            (49507, "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"1c5c5ce3-178b-4938-89f3-faf3fa7f0664":24,"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
-            (52104, "cd66c93c-5086-4311-b0f6-e90af54099b2", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":24},"stackableItems":{"790a188b-3fa0-4f38-99d9-bc8d3675bc46":5}}"#),
-            (62711, "01121c2f-6806-4b8c-998e-adc5d0e21db7", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"e7193116-d761-479b-8a20-5633737977f5":276}}"#),
+            (
+                1928,
+                "a846b491-b439-447d-a8a1-9c2611522610",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":27,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":63000},"stackableItems":{"bafe6ed5-6473-4a4c-aef5-421d3af5c8cb":5}}"#,
+            ),
+            (
+                14396,
+                "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":15},"stackableItems":{"b74a5c55-a687-4604-aa59-ba3ddfddcd2a":96}}"#,
+            ),
+            (
+                27198,
+                "26eb6ab5-2d8c-4993-820e-ada79f6f00a8",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":20},"stackableItems":{"19ce1a65-057f-4f34-a0ed-27de7c085662":5}}"#,
+            ),
+            (
+                34025,
+                "2d1200ee-ecb8-4ea6-9892-54d1f538d83d",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"f11fb90b-b441-4d72-a33f-50d14d3d6778":140,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#,
+            ),
+            (
+                36532,
+                "816ff4c8-b56f-4645-bd2a-29bc7c1baf96",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":16,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":25200}}"#,
+            ),
+            (
+                38669,
+                "a85408a6-7107-433d-b616-50105080574e",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5":3,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#,
+            ),
+            (
+                39364,
+                "f4023a38-195a-4977-bfbc-f443a257566f",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":20,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":38000},"stackableItems":{"21e6557f-17ca-4bd3-9379-00184efe0edc":24}}"#,
+            ),
+            (
+                40877,
+                "a008cbbc-a164-4183-8b69-470ac8cd5707",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":15,"c64bcb53-41f4-41ba-892a-fe2cca423caa":21},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":410}}"#,
+            ),
+            (
+                43620,
+                "2290ab73-8f56-4dba-a4f0-7a23270eb93c",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":22},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":372,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":560}}"#,
+            ),
+            (
+                48242,
+                "9181f784-9eb8-4872-953d-30ba8b6bc9d1",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":32},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"85ed5500-3581-4699-8095-4b5ff6514355":96}}"#,
+            ),
+            (
+                49507,
+                "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"1c5c5ce3-178b-4938-89f3-faf3fa7f0664":24,"e7193116-d761-479b-8a20-5633737977f5":410}}"#,
+            ),
+            (
+                52104,
+                "cd66c93c-5086-4311-b0f6-e90af54099b2",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":24},"stackableItems":{"790a188b-3fa0-4f38-99d9-bc8d3675bc46":5}}"#,
+            ),
+            (
+                62711,
+                "01121c2f-6806-4b8c-998e-adc5d0e21db7",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"e7193116-d761-479b-8a20-5633737977f5":276}}"#,
+            ),
         ];
         for (capture, gld, retail) in cases {
             let gld: Uuid = gld.parse().unwrap();
@@ -6811,15 +7151,52 @@ mod event_quest_tests {
     /// 10-15, band 2 at 17-25, band 3 at 26-35, band 4 at 37-43, band 5 at 47-100
     /// (47: re-measured 2026-10-13 for #385). Family 5's band 1 was never captured.
     const RETAIL_SIGIL_BANDS: &[(u64, [Option<[u64; 5]>; 5])] = &[
-        (1, [Some([1, 2, 5, 7, 10]), Some([1, 3, 6, 9, 12]), Some([1, 4, 7, 11, 16]), Some([1, 4, 8, 12, 18]), Some([1, 4, 9, 14, 22])]),
-        (3, [Some([3, 4, 7, 10, 15]), Some([3, 6, 9, 12, 16]), Some([3, 6, 9, 15, 21]), Some([3, 6, 10, 16, 24]), Some([3, 6, 12, 18, 27])]),
-        (4, [Some([4, 5, 8, 12, 17]), Some([4, 6, 10, 14, 20]), Some([4, 7, 11, 17, 24]), Some([4, 7, 12, 19, 29]), Some([4, 8, 14, 22, 34])]),
-        (5, [None, Some([5, 8, 12, 18, 26]), Some([5, 8, 14, 21, 32]), Some([5, 9, 15, 24, 37]), Some([5, 9, 16, 27, 43])]),
+        (
+            1,
+            [
+                Some([1, 2, 5, 7, 10]),
+                Some([1, 3, 6, 9, 12]),
+                Some([1, 4, 7, 11, 16]),
+                Some([1, 4, 8, 12, 18]),
+                Some([1, 4, 9, 14, 22]),
+            ],
+        ),
+        (
+            3,
+            [
+                Some([3, 4, 7, 10, 15]),
+                Some([3, 6, 9, 12, 16]),
+                Some([3, 6, 9, 15, 21]),
+                Some([3, 6, 10, 16, 24]),
+                Some([3, 6, 12, 18, 27]),
+            ],
+        ),
+        (
+            4,
+            [
+                Some([4, 5, 8, 12, 17]),
+                Some([4, 6, 10, 14, 20]),
+                Some([4, 7, 11, 17, 24]),
+                Some([4, 7, 12, 19, 29]),
+                Some([4, 8, 14, 22, 34]),
+            ],
+        ),
+        (
+            5,
+            [
+                None,
+                Some([5, 8, 12, 18, 26]),
+                Some([5, 8, 14, 21, 32]),
+                Some([5, 9, 15, 24, 37]),
+                Some([5, 9, 16, 27, 43]),
+            ],
+        ),
     ];
 
     fn sigils_paid(r: &RewardGrant) -> u64 {
         let id: Uuid = SIGIL.parse().unwrap();
-        r.currencies.get(&id).copied().unwrap_or(0) + r.stackable_items.get(&id).copied().unwrap_or(0)
+        r.currencies.get(&id).copied().unwrap_or(0)
+            + r.stackable_items.get(&id).copied().unwrap_or(0)
     }
 
     /// Every event row minted for a character of `level` over 50 days of the
@@ -6853,11 +7230,16 @@ mod event_quest_tests {
         // players stopped.
         for (level, band) in [(57i64, 4usize), (49, 4), (45, 4), (44, 3), (10, 0)] {
             let paid = sigils_by_event_at(level);
-            assert!(paid.len() >= 30, "level {level}: only {} events minted", paid.len());
+            assert!(
+                paid.len() >= 30,
+                "level {level}: only {} events minted",
+                paid.len()
+            );
             let mut wrong = Vec::new();
             let mut checked = 0;
             for (gld, ladder) in &paid {
-                let (_, bands) = family(ladder).unwrap_or_else(|| panic!("{gld}: family {ladder:?}"));
+                let (_, bands) =
+                    family(ladder).unwrap_or_else(|| panic!("{gld}: family {ladder:?}"));
                 let Some(want) = bands[band] else { continue };
                 checked += 1;
                 if ladder[..] != want[..] {
@@ -6865,7 +7247,12 @@ mod event_quest_tests {
                 }
             }
             assert!(checked >= 30, "level {level}: checked {checked}");
-            assert!(wrong.is_empty(), "level {level}, {} of {checked} events:\n{}", wrong.len(), wrong.join("\n"));
+            assert!(
+                wrong.is_empty(),
+                "level {level}, {} of {checked} events:\n{}",
+                wrong.len(),
+                wrong.join("\n")
+            );
         }
     }
 
@@ -6878,13 +7265,20 @@ mod event_quest_tests {
             let mins: Vec<i64> = tmpl.level_bands.iter().map(|b| b.min_level).collect();
             assert_eq!(mins, [1, 16, 26, 36, 46], "{gld}");
             let fam = sigils_paid(&tmpl.level_bands[4].rewards[0]);
-            let (_, rows) = RETAIL_SIGIL_BANDS.iter().find(|(f, _)| *f == fam).expect("family");
+            let (_, rows) = RETAIL_SIGIL_BANDS
+                .iter()
+                .find(|(f, _)| *f == fam)
+                .expect("family");
             for (i, band) in tmpl.level_bands.iter().enumerate() {
                 let got: Vec<u64> = band.rewards.iter().map(sigils_paid).collect();
                 match rows[i] {
                     Some(want) => assert_eq!(got, want, "{gld} band {}", i + 1),
                     // Family 5's band 1 is not known; it stays at band 2's.
-                    None => assert_eq!(Some(got.as_slice()), rows[i + 1].as_ref().map(|r| &r[..]), "{gld} band 1"),
+                    None => assert_eq!(
+                        Some(got.as_slice()),
+                        rows[i + 1].as_ref().map(|r| &r[..]),
+                        "{gld} band 1"
+                    ),
                 }
             }
         }
@@ -6897,9 +7291,25 @@ mod event_quest_tests {
     #[test]
     fn report_333_band_thresholds() {
         let sd = static_data();
-        let tmpl = &sd.event_quests.templates[&"7486296a-335a-4b46-aee1-5102090ce34f".parse::<Uuid>().unwrap()];
+        let tmpl = &sd.event_quests.templates[&"7486296a-335a-4b46-aee1-5102090ce34f"
+            .parse::<Uuid>()
+            .unwrap()];
         let first_tier = |level| sigils_paid(&tmpl.rewards_for_level(level)[4]);
-        for (level, want) in [(0, 17), (1, 17), (15, 17), (16, 20), (25, 20), (26, 24), (35, 24), (36, 29), (44, 29), (45, 34), (46, 34), (57, 34), (100, 34)] {
+        for (level, want) in [
+            (0, 17),
+            (1, 17),
+            (15, 17),
+            (16, 20),
+            (25, 20),
+            (26, 24),
+            (35, 24),
+            (36, 29),
+            (44, 29),
+            (45, 34),
+            (46, 34),
+            (57, 34),
+            (100, 34),
+        ] {
             assert_eq!(first_tier(level), want, "level {level}");
         }
     }
@@ -6911,23 +7321,48 @@ mod event_quest_tests {
     fn report_385_full_sigils_from_level_45_for_every_template() {
         let sd = static_data();
         assert!(sd.event_quests.templates.len() >= 39);
-        let ladder = |rewards: &[RewardGrant]| rewards.iter().map(sigils_paid).collect::<Vec<u64>>();
+        let ladder =
+            |rewards: &[RewardGrant]| rewards.iter().map(sigils_paid).collect::<Vec<u64>>();
         // Counts only: the material item is re-stepped to the level (#362), the
         // amounts are the band's.
         let amounts = |r: &RewardGrant| {
             let r = materials_blind(r);
-            let mut v: Vec<u64> = r.stackable_items.values().chain(r.currencies.values()).copied().collect();
+            let mut v: Vec<u64> = r
+                .stackable_items
+                .values()
+                .chain(r.currencies.values())
+                .copied()
+                .collect();
             v.sort_unstable();
             v
         };
         for (gld, tmpl) in &sd.event_quests.templates {
-            let top = tmpl.level_bands.iter().max_by_key(|b| b.min_level).expect("bands");
-            let below = tmpl.level_bands.iter().filter(|b| b.min_level <= 44).max_by_key(|b| b.min_level).unwrap();
-            assert!(ladder(&top.rewards) > ladder(&below.rewards), "{gld}: the top band pays more sigils");
+            let top = tmpl
+                .level_bands
+                .iter()
+                .max_by_key(|b| b.min_level)
+                .expect("bands");
+            let below = tmpl
+                .level_bands
+                .iter()
+                .filter(|b| b.min_level <= 44)
+                .max_by_key(|b| b.min_level)
+                .unwrap();
+            assert!(
+                ladder(&top.rewards) > ladder(&below.rewards),
+                "{gld}: the top band pays more sigils"
+            );
             for level in [45i64, 46, 49] {
-                assert!(std::ptr::eq(tmpl.band_for_level(level).unwrap(), top), "{gld} level {level}: top band");
+                assert!(
+                    std::ptr::eq(tmpl.band_for_level(level).unwrap(), top),
+                    "{gld} level {level}: top band"
+                );
                 let minted = tmpl.rewards_for_level(level);
-                assert_eq!(ladder(&minted), ladder(&top.rewards), "{gld} level {level}: sigils");
+                assert_eq!(
+                    ladder(&minted),
+                    ladder(&top.rewards),
+                    "{gld} level {level}: sigils"
+                );
                 // The band's, its gems 20% more (owner-approved deviation, #388).
                 let bonus = |r: &RewardGrant| {
                     let mut r = r.clone();
@@ -6943,8 +7378,15 @@ mod event_quest_tests {
                     "{gld} level {level}: final bonus"
                 );
             }
-            assert!(std::ptr::eq(tmpl.band_for_level(44).unwrap(), below), "{gld} level 44: unchanged");
-            assert_eq!(ladder(&tmpl.rewards_for_level(44)), ladder(&below.rewards), "{gld} level 44: sigils");
+            assert!(
+                std::ptr::eq(tmpl.band_for_level(44).unwrap(), below),
+                "{gld} level 44: unchanged"
+            );
+            assert_eq!(
+                ladder(&tmpl.rewards_for_level(44)),
+                ladder(&below.rewards),
+                "{gld} level 44: sigils"
+            );
         }
     }
 
@@ -6956,19 +7398,84 @@ mod event_quest_tests {
     fn report_333_an_instance_pays_the_band_it_was_minted_at() {
         let sd = static_data();
         let cases: &[(u32, i64, &str, &str)] = &[
-            (1928, 86, "a846b491-b439-447d-a8a1-9c2611522610", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":27,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":63000},"stackableItems":{"bafe6ed5-6473-4a4c-aef5-421d3af5c8cb":5}}"#),
-            (14396, 10, "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":15},"stackableItems":{"b74a5c55-a687-4604-aa59-ba3ddfddcd2a":96}}"#),
-            (27198, 19, "26eb6ab5-2d8c-4993-820e-ada79f6f00a8", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":20},"stackableItems":{"19ce1a65-057f-4f34-a0ed-27de7c085662":5}}"#),
-            (34025, 22, "2d1200ee-ecb8-4ea6-9892-54d1f538d83d", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"f11fb90b-b441-4d72-a33f-50d14d3d6778":140,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
-            (36532, 23, "816ff4c8-b56f-4645-bd2a-29bc7c1baf96", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":16,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":25200}}"#),
-            (38669, 24, "a85408a6-7107-433d-b616-50105080574e", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5":3,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#),
-            (39364, 24, "f4023a38-195a-4977-bfbc-f443a257566f", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":20,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":38000},"stackableItems":{"21e6557f-17ca-4bd3-9379-00184efe0edc":24}}"#),
-            (40877, 26, "a008cbbc-a164-4183-8b69-470ac8cd5707", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":15,"c64bcb53-41f4-41ba-892a-fe2cca423caa":21},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
-            (43620, 86, "2290ab73-8f56-4dba-a4f0-7a23270eb93c", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":22},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":372,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":560}}"#),
-            (48242, 28, "9181f784-9eb8-4872-953d-30ba8b6bc9d1", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":32},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"85ed5500-3581-4699-8095-4b5ff6514355":96}}"#),
-            (49507, 28, "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"1c5c5ce3-178b-4938-89f3-faf3fa7f0664":24,"e7193116-d761-479b-8a20-5633737977f5":410}}"#),
-            (52104, 29, "cd66c93c-5086-4311-b0f6-e90af54099b2", r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":24},"stackableItems":{"790a188b-3fa0-4f38-99d9-bc8d3675bc46":5}}"#),
-            (62711, 30, "01121c2f-6806-4b8c-998e-adc5d0e21db7", r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"e7193116-d761-479b-8a20-5633737977f5":276}}"#),
+            (
+                1928,
+                86,
+                "a846b491-b439-447d-a8a1-9c2611522610",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":27,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":63000},"stackableItems":{"bafe6ed5-6473-4a4c-aef5-421d3af5c8cb":5}}"#,
+            ),
+            (
+                14396,
+                10,
+                "0dd37f6b-28ad-4cb7-8e12-2ebbf43fb366",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":15},"stackableItems":{"b74a5c55-a687-4604-aa59-ba3ddfddcd2a":96}}"#,
+            ),
+            (
+                27198,
+                19,
+                "26eb6ab5-2d8c-4993-820e-ada79f6f00a8",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":20},"stackableItems":{"19ce1a65-057f-4f34-a0ed-27de7c085662":5}}"#,
+            ),
+            (
+                34025,
+                22,
+                "2d1200ee-ecb8-4ea6-9892-54d1f538d83d",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"f11fb90b-b441-4d72-a33f-50d14d3d6778":140,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#,
+            ),
+            (
+                36532,
+                23,
+                "816ff4c8-b56f-4645-bd2a-29bc7c1baf96",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":16,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":25200}}"#,
+            ),
+            (
+                38669,
+                24,
+                "a85408a6-7107-433d-b616-50105080574e",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"3ec6cf6f-d90e-4b76-bb7f-82da251ab5e5":3,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":216}}"#,
+            ),
+            (
+                39364,
+                24,
+                "f4023a38-195a-4977-bfbc-f443a257566f",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":20,"f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2":38000},"stackableItems":{"21e6557f-17ca-4bd3-9379-00184efe0edc":24}}"#,
+            ),
+            (
+                40877,
+                26,
+                "a008cbbc-a164-4183-8b69-470ac8cd5707",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":15,"c64bcb53-41f4-41ba-892a-fe2cca423caa":21},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":410}}"#,
+            ),
+            (
+                43620,
+                86,
+                "2290ab73-8f56-4dba-a4f0-7a23270eb93c",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":22},"stackableItems":{"e7193116-d761-479b-8a20-5633737977f5":372,"fd67bbc6-20f4-44a3-9614-28265ebb8c67":560}}"#,
+            ),
+            (
+                48242,
+                28,
+                "9181f784-9eb8-4872-953d-30ba8b6bc9d1",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":32},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"85ed5500-3581-4699-8095-4b5ff6514355":96}}"#,
+            ),
+            (
+                49507,
+                28,
+                "a1aafdc9-a35c-45c9-89f6-27f7d3a628e6",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"1c5c5ce3-178b-4938-89f3-faf3fa7f0664":24,"e7193116-d761-479b-8a20-5633737977f5":410}}"#,
+            ),
+            (
+                52104,
+                29,
+                "cd66c93c-5086-4311-b0f6-e90af54099b2",
+                r#"{"characterXp":700,"currencies":{"470c8f58-a8dd-4c07-8c92-843b785e1139":36,"c64bcb53-41f4-41ba-892a-fe2cca423caa":24},"stackableItems":{"790a188b-3fa0-4f38-99d9-bc8d3675bc46":5}}"#,
+            ),
+            (
+                62711,
+                30,
+                "01121c2f-6806-4b8c-998e-adc5d0e21db7",
+                r#"{"characterXp":700,"currencies":{"c64bcb53-41f4-41ba-892a-fe2cca423caa":16},"stackableItems":{"16e102fb-b1c0-42de-8106-0aa27e77f7f0":3,"e7193116-d761-479b-8a20-5633737977f5":276}}"#,
+            ),
         ];
         let mut wrong = Vec::new();
         for (capture, minted_at, gld, retail) in cases {
@@ -6978,7 +7485,8 @@ mod event_quest_tests {
             row.rewards = Some(tmpl.rewards_for_level(*minted_at));
             row.final_reward = tmpl.final_reward_for_level(*minted_at);
             // Finished two levels later: the row's band still decides.
-            let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &row, 4).expect("last tier pays");
+            let paid = event_milestone_reward(&sd, Uuid::from_u128(0xE7), &row, 4)
+                .expect("last tier pays");
             let mut retail: RewardGrant = serde_json::from_str(retail).unwrap();
             // Retail's, its gems 20% more (owner-approved deviation, #388, 2026-10-16).
             blades_lib::features::beginner_economy::add_gem_bonus(&mut retail);
@@ -6988,17 +7496,30 @@ mod event_quest_tests {
             // unlock — and the per-level material now pays it exactly (#362).
             let same = materials_blind(&paid) == materials_blind(&retail);
             if !same {
-                wrong.push(format!("capture {capture} ({gld}, minted at {minted_at}): paid {}, retail {}",
-                    serde_json::to_string(&paid).unwrap(), serde_json::to_string(&retail).unwrap()));
+                wrong.push(format!(
+                    "capture {capture} ({gld}, minted at {minted_at}): paid {}, retail {}",
+                    serde_json::to_string(&paid).unwrap(),
+                    serde_json::to_string(&retail).unwrap()
+                ));
             }
         }
-        assert!(wrong.is_empty(), "{} of {}:\n{}", wrong.len(), cases.len(), wrong.join("\n"));
+        assert!(
+            wrong.is_empty(),
+            "{} of {}:\n{}",
+            wrong.len(),
+            cases.len(),
+            wrong.join("\n")
+        );
     }
 
     /// The milestone + final material a row minted at `level` actually PAYS on its
     /// last completion — through `event_milestone_reward`, the grant path, not just
     /// the ladder the row displays.
-    fn materials_paid_at(sd: &StaticData, gld: Uuid, level: i64) -> std::collections::HashMap<Uuid, u64> {
+    fn materials_paid_at(
+        sd: &StaticData,
+        gld: Uuid,
+        level: i64,
+    ) -> std::collections::HashMap<Uuid, u64> {
         let tmpl = &sd.event_quests.templates[&gld];
         let mut row = quest(gld);
         row.rewards = Some(tmpl.rewards_for_level(level));
@@ -7038,18 +7559,29 @@ mod event_quest_tests {
             let metal: Uuid = metal.parse().unwrap();
             // Retail: 96 ingots, kept while #388's EVENT_LADDER_STACKS_FIXED is
             // off; on, one stack of 5, 10 or 20, or milestone + final bonus.
-            let want: &[u64] = if blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED {
+            let want: &[u64] = if blades_lib::features::beginner_economy::EVENT_LADDER_STACKS_FIXED
+            {
                 &[5, 10, 20, 40]
             } else {
                 &[96]
             };
-            assert!(paid.get(&metal).is_some_and(|q| want.contains(q)), "level {level}: paid {paid:?}");
-            assert_eq!(paid.len(), 1, "level {level}: one metal, nothing else: {paid:?}");
+            assert!(
+                paid.get(&metal).is_some_and(|q| want.contains(q)),
+                "level {level}: paid {paid:?}"
+            );
+            assert_eq!(
+                paid.len(),
+                1,
+                "level {level}: one metal, nothing else: {paid:?}"
+            );
         }
         // The report itself: no Ebony below Ebony's unlock level.
         let ebony: Uuid = EBONY.parse().unwrap();
         for level in [20, 26, 32] {
-            assert!(!materials_paid_at(&sd, gld, level).contains_key(&ebony), "level {level} paid Ebony");
+            assert!(
+                !materials_paid_at(&sd, gld, level).contains_key(&ebony),
+                "level {level} paid Ebony"
+            );
         }
     }
 
@@ -7068,23 +7600,23 @@ mod event_quest_tests {
         let sd = static_data();
         let gld: Uuid = "26eb6ab5-2d8c-4993-820e-ada79f6f00a8".parse().unwrap();
         for (level, gem) in [
-            (20, "19ce1a65-057f-4f34-a0ed-27de7c085662"),  // Petty
-            (26, "19ce1a65-057f-4f34-a0ed-27de7c085662"),  // Petty
-            (35, "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029"),  // Middling
-            (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
-            (44, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"),  // Common
+            (20, "19ce1a65-057f-4f34-a0ed-27de7c085662"), // Petty
+            (26, "19ce1a65-057f-4f34-a0ed-27de7c085662"), // Petty
+            (35, "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029"), // Middling
+            (40, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"), // Common
+            (44, "1ba210b4-8cca-4f2f-b942-8fab80a52fd8"), // Common
             // Retail paid Exceptional at 47-48; since #388 (owner-approved
             // deviation, 2026-10-16) 45-48 are paid the event's best, Grand.
-            (45, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
-            (47, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
-            (48, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
+            (45, "68d7941e-8c8d-47bf-9f66-becb058f1817"), // Grand
+            (47, "68d7941e-8c8d-47bf-9f66-becb058f1817"), // Grand
+            (48, "68d7941e-8c8d-47bf-9f66-becb058f1817"), // Grand
             // From 49 the level-100 character's rewards (#398), but its soul gem
             // stays Grand to 60 (HauDrauf #398, 2026-10-16: "at the end of events
             // you get Grand instead of Glorious ... Grand from level 49").
-            (49, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
-            (55, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
-            (60, "68d7941e-8c8d-47bf-9f66-becb058f1817"),  // Grand
-            (61, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"),  // Glorious
+            (49, "68d7941e-8c8d-47bf-9f66-becb058f1817"), // Grand
+            (55, "68d7941e-8c8d-47bf-9f66-becb058f1817"), // Grand
+            (60, "68d7941e-8c8d-47bf-9f66-becb058f1817"), // Grand
+            (61, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"), // Glorious
             (100, "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb"), // Glorious
         ] {
             let paid = materials_paid_at(&sd, gld, level);
@@ -7108,7 +7640,11 @@ mod event_quest_tests {
         }
         let raw = include_str!("../../blades_lib/src/event_material_observations.json");
         let file: File = serde_json::from_str(raw).expect("observations parse");
-        assert!(file.observations.len() >= 400, "{} observations", file.observations.len());
+        assert!(
+            file.observations.len() >= 400,
+            "{} observations",
+            file.observations.len()
+        );
 
         let sd = static_data();
         let mut wrong = Vec::new();
@@ -7122,7 +7658,9 @@ mod event_quest_tests {
             }
             // At 45-48 a soul gem is Grand since #388 (owner-approved deviation
             // from retail, 2026-10-16); its other materials still hold.
-            if (45..=48).contains(level) && blades_lib::features::beginner_economy::SOUL_GEMS.contains(item) {
+            if (45..=48).contains(level)
+                && blades_lib::features::beginner_economy::SOUL_GEMS.contains(item)
+            {
                 continue;
             }
             let carried = match slot.as_str() {
@@ -7139,7 +7677,13 @@ mod event_quest_tests {
                 wrong.push(format!("{gld} level {level} {slot}: retail paid {item}"));
             }
         }
-        assert!(wrong.is_empty(), "{} of {}:\n{}", wrong.len(), file.observations.len(), wrong.join("\n"));
+        assert!(
+            wrong.is_empty(),
+            "{} of {}:\n{}",
+            wrong.len(),
+            file.observations.len(),
+            wrong.join("\n")
+        );
     }
 
     /// No event milestone may grant gold, sigils or gems as a backpack item:
@@ -7172,7 +7716,9 @@ mod event_quest_tests {
         let sd = static_data();
         let mut added = 0;
         for (gld, tmpl) in &sd.event_quests.templates {
-            let Some(bonus) = tmpl.final_reward.as_ref() else { continue };
+            let Some(bonus) = tmpl.final_reward.as_ref() else {
+                continue;
+            };
             let last = tmpl.milestone_count() - 1;
             let base = tmpl.payout(last).expect("last tier");
             if reward_already_carries(&base, bonus) {
@@ -7189,7 +7735,10 @@ mod event_quest_tests {
             }
             added += 1;
         }
-        assert!(added > 0, "the committed data has such templates (20 at the time of #324)");
+        assert!(
+            added > 0,
+            "the committed data has such templates (20 at the time of #324)"
+        );
     }
 
     /// An ordinary quest resolves its reward through `gldQuestId`, and every quest
@@ -8883,8 +9432,10 @@ mod quest_map_wedge_2026_09_25 {
             goblins["dungeonTemplateId"],
             "dbfd45fe-8c8c-4c8d-83c6-9b4566afc788"
         );
-        assert!(!jobs_gen::DUEL_DUNGEON_TEMPLATES
-            .contains(&goblins["dungeonTemplateId"].as_str().unwrap()));
+        assert!(
+            !jobs_gen::DUEL_DUNGEON_TEMPLATES
+                .contains(&goblins["dungeonTemplateId"].as_str().unwrap())
+        );
         assert_eq!(
             goblins["questName"]["dynamicElements"][0]["localizationValue"],
             "Enemy.Name.DremoraRaider"
@@ -9270,7 +9821,10 @@ mod report_313_job_difficulty_bands {
             hard_or_above * 100.0
         );
         // Retail mean +0.58 over initialEPL; the uniform roll's was +3.5.
-        assert!((0.0..=1.5).contains(&mean), "mean offset {mean:.2}; retail +0.58");
+        assert!(
+            (0.0..=1.5).contains(&mean),
+            "mean offset {mean:.2}; retail +0.58"
+        );
         // The whole retail span is still reachable, the very-hard top included.
         assert_eq!(offs.iter().min(), Some(&-2));
         assert_eq!(offs.iter().max(), Some(&9));
@@ -9330,7 +9884,10 @@ mod report_313_job_difficulty_bands {
             })
             .collect();
         assert!(offs.iter().all(|o| *o <= 5), "board offsets {offs:?}");
-        assert!(offs.iter().filter(|o| **o <= 1).count() >= 3, "board offsets {offs:?}");
+        assert!(
+            offs.iter().filter(|o| **o <= 1).count() >= 3,
+            "board offsets {offs:?}"
+        );
     }
 
     /// Replenishing after a completion keeps every surviving job exactly as it was.
@@ -9345,7 +9902,10 @@ mod report_313_job_difficulty_bands {
         let (after, _) =
             jobs_gen::generate_replenished(&pools, character, 9, 17, boundary, NOW, &done);
         for job in &base[1..] {
-            let same = after.iter().find(|j| j["questId"] == job["questId"]).expect("kept");
+            let same = after
+                .iter()
+                .find(|j| j["questId"] == job["questId"])
+                .expect("kept");
             assert_eq!(same["difficultyLevel"], job["difficultyLevel"]);
         }
     }
@@ -9386,7 +9946,9 @@ mod report_306_daily_job_hang {
         Uuid::parse_str(s).unwrap()
     }
     fn ids(jobs: &[Value]) -> HashSet<Uuid> {
-        jobs.iter().map(|j| uuid(j["questId"].as_str().unwrap())).collect()
+        jobs.iter()
+            .map(|j| uuid(j["questId"].as_str().unwrap()))
+            .collect()
     }
     fn board(now: u64, completed: &[&str]) -> Vec<Value> {
         let pools = pools();
@@ -9416,7 +9978,10 @@ mod report_306_daily_job_hang {
         let untouched = board(OCT1_FETCH, &[]);
         // Control: these really are his Oct 1 board's boss and featured jobs.
         assert_eq!(job(&untouched, DONE_BOSS)["jobPoolId"], BOSS_POOL);
-        assert_eq!(job(&untouched, DONE_FEATURED)["jobPoolId"], THURSDAY_FEATURED_POOL);
+        assert_eq!(
+            job(&untouched, DONE_FEATURED)["jobPoolId"],
+            THURSDAY_FEATURED_POOL
+        );
         assert_eq!(untouched.len(), 6, "4 standard + boss + featured");
 
         let after = board(OCT1_FETCH, &[DONE_BOSS, DONE_FEATURED]);
@@ -9428,7 +9993,11 @@ mod report_306_daily_job_hang {
             after.iter().all(|j| j["jobPoolId"] == STANDARD_POOL),
             "retail leaves a completed maxTotal-1 pool empty for the window"
         );
-        assert_eq!(after.len(), 4, "the board shrinks by the two, as retail's did");
+        assert_eq!(
+            after.len(),
+            4,
+            "the board shrinks by the two, as retail's did"
+        );
         let standard: HashSet<Uuid> = untouched
             .iter()
             .filter(|j| j["jobPoolId"] == STANDARD_POOL)
@@ -9485,17 +10054,34 @@ mod report_306_daily_job_hang {
 
         // (id, type, arena it was in, values prod served that must not move)
         for (id, ty, old_arena, gems, xp, name_key) in [
-            ("a4a54f84-390f-4031-bf3a-c8fc9e8e11ed", 4, "19a3b1b0-c18b-4f2f-b73f-780f3759fe48", 0, 1516, "UI.Jobs.Names.Gather.004"),
+            (
+                "a4a54f84-390f-4031-bf3a-c8fc9e8e11ed",
+                4,
+                "19a3b1b0-c18b-4f2f-b73f-780f3759fe48",
+                0,
+                1516,
+                "UI.Jobs.Names.Gather.004",
+            ),
             // XP 1526: retail's for difficulty 75 (#337). Prod served 1593 before
             // tracker #313 re-banded the difficulty; the draw itself is unchanged.
             // Gems 0: prod served a 10-gem secret-room roll on this standard job;
             // retail pays standard jobs no gems (#306, `report_306_job_gems`).
-            ("72217ae0-4bdb-4079-973b-4ca252ee487f", 3, "e7418cc7-01de-4c84-ba00-e221f8783d51", 0, 1526, "UI.Jobs.Names.Rescue.003"),
+            (
+                "72217ae0-4bdb-4079-973b-4ca252ee487f",
+                3,
+                "e7418cc7-01de-4c84-ba00-e221f8783d51",
+                0,
+                1526,
+                "UI.Jobs.Names.Rescue.003",
+            ),
         ] {
             let j = job(&jobs, id);
             let js = &j["jobSetup"];
             assert_eq!(js["jobType"], ty);
-            assert_ne!(js["dungeonTemplateId"], old_arena, "{id} still in its arena");
+            assert_ne!(
+                js["dungeonTemplateId"], old_arena,
+                "{id} still in its arena"
+            );
             assert!(!is_arena(j), "{id} moved into another arena");
             let names = js["questName"]["dynamicElements"].as_array().unwrap();
             let place = names.last().unwrap()["localizationValue"].as_str().unwrap();
@@ -9505,18 +10091,37 @@ mod report_306_daily_job_hang {
             assert_eq!(js["questName"]["key"], name_key);
         }
         let gather = &job(&jobs, "a4a54f84-390f-4031-bf3a-c8fc9e8e11ed")["jobSetup"];
-        assert_eq!(gather["gatherItemId"], "da767378-8c00-43c1-a5eb-705d7d2f7306");
+        assert_eq!(
+            gather["gatherItemId"],
+            "da767378-8c00-43c1-a5eb-705d7d2f7306"
+        );
         assert_eq!(gather["gatherItemCount"], 6);
 
         // Control: the jobs that were not in an arena keep the dungeon prod served.
         for (id, dungeon) in [
-            ("f5a09068-c422-4fe8-a5ab-e028233e1dcd", "18e81559-3561-47ef-b73e-9f3bc34ba0b8"),
-            ("1220dc37-9166-4364-be77-a3ff32fe40aa", "86e6a720-caa4-4b13-b8b8-73f3dcf049a2"),
-            ("de78d8f4-bff9-4942-a6d0-dd288b44535d", "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712"),
+            (
+                "f5a09068-c422-4fe8-a5ab-e028233e1dcd",
+                "18e81559-3561-47ef-b73e-9f3bc34ba0b8",
+            ),
+            (
+                "1220dc37-9166-4364-be77-a3ff32fe40aa",
+                "86e6a720-caa4-4b13-b8b8-73f3dcf049a2",
+            ),
+            (
+                "de78d8f4-bff9-4942-a6d0-dd288b44535d",
+                "57d639c2-ec4c-4e6b-9995-ff6a7ef3e712",
+            ),
             // The Duel stays in its arena.
-            ("8e86eb3a-4398-4ef3-9a8d-7e63e27605f7", "a9386df1-5b26-462b-9c56-de9cb371c790"),
+            (
+                "8e86eb3a-4398-4ef3-9a8d-7e63e27605f7",
+                "a9386df1-5b26-462b-9c56-de9cb371c790",
+            ),
         ] {
-            assert_eq!(job(&jobs, id)["jobSetup"]["dungeonTemplateId"], dungeon, "{id}");
+            assert_eq!(
+                job(&jobs, id)["jobSetup"]["dungeonTemplateId"],
+                dungeon,
+                "{id}"
+            );
         }
     }
 
@@ -9531,8 +10136,14 @@ mod report_306_daily_job_hang {
             for day in 0..28u64 {
                 let now = OCT2_FETCH + day * 86_400;
                 let boundary = jobs_gen::current_reset_boundary(&pools, now);
-                let (jobs, _) =
-                    jobs_gen::generate(&pools, Uuid::from_u128(c * 0x9E37_79B9), 60, 0, boundary, now);
+                let (jobs, _) = jobs_gen::generate(
+                    &pools,
+                    Uuid::from_u128(c * 0x9E37_79B9),
+                    60,
+                    0,
+                    boundary,
+                    now,
+                );
                 for j in jobs {
                     let js = &j["jobSetup"];
                     let ty = js["jobType"].as_i64().unwrap();
@@ -9587,7 +10198,7 @@ mod report_306_daily_job_hang {
 mod report_306_job_gems {
     use super::jobs_gen;
     use blades_lib::economy::GEMS;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use uuid::Uuid;
 
     const HAUDRAUF: &str = "489620db-7f90-4a03-bb7c-f7e92a9c73cb";
@@ -9642,9 +10253,16 @@ mod report_306_job_gems {
     #[test]
     fn a_featured_job_pays_four_gems_and_no_gold() {
         let featured: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 1).collect();
-        assert!(featured.len() >= 7 * 40, "every weekday rolls a featured job");
+        assert!(
+            featured.len() >= 7 * 40,
+            "every weekday rolls a featured job"
+        );
         for (_, j) in &featured {
-            assert_eq!(gems(j), 5, "retail: 84 of 84 featured jobs paid 4 gems; +20% rounded up (#388)");
+            assert_eq!(
+                gems(j),
+                5,
+                "retail: 84 of 84 featured jobs paid 4 gems; +20% rounded up (#388)"
+            );
             assert_eq!(gold(j), 0, "retail: 84 of 84 featured jobs paid no gold");
         }
     }
@@ -9654,7 +10272,11 @@ mod report_306_job_gems {
         let boss: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 2).collect();
         assert!(!boss.is_empty());
         for (_, j) in &boss {
-            assert_eq!(gems(j), 15, "retail: 27 of 27 boss jobs paid 12 gems; +20% rounded up (#388)");
+            assert_eq!(
+                gems(j),
+                15,
+                "retail: 27 of 27 boss jobs paid 12 gems; +20% rounded up (#388)"
+            );
             assert_eq!(gold(j), 0, "retail: 27 of 27 boss jobs paid no gold");
         }
     }
@@ -9663,8 +10285,14 @@ mod report_306_job_gems {
     #[test]
     fn a_standard_job_pays_gold_and_never_gems_secret_room_or_not() {
         let standard: Vec<_> = sample().into_iter().filter(|(p, _)| *p == 0).collect();
-        let secret = standard.iter().filter(|(_, j)| j["jobSetup"]["secretRoom"] == true).count();
-        assert!(secret > 100, "the sample holds secret-room standard jobs ({secret})");
+        let secret = standard
+            .iter()
+            .filter(|(_, j)| j["jobSetup"]["secretRoom"] == true)
+            .count();
+        assert!(
+            secret > 100,
+            "the sample holds secret-room standard jobs ({secret})"
+        );
         for (_, j) in &standard {
             assert_eq!(gems(j), 0, "retail: 0 of 352 standard jobs paid gems");
             assert!(gold(j) > 0, "retail: 352 of 352 standard jobs paid gold");
@@ -9712,18 +10340,69 @@ mod report_306_job_gems {
         let jobs = jobs_gen::generate(&pools, c, 100, 60, boundary, OCT3_FETCH).0;
         // (id, pool prefix, difficulty, xp, name, gems, gold)
         let want = [
-            ("a398cf65-6793-4a69-928e-f3492bb78ea9", "4956c6ab", 76, 1536, "UI.Jobs.Names.Defeat.009", 0, 1640),
-            ("346135d3-ad76-4658-b0f2-af7fb77c4a0d", "4956c6ab", 79, 1566, "UI.Jobs.Names.Rescue.006", 0, 1650),
-            ("01cda05c-b403-4ef6-97ed-a987f47b4a69", "4956c6ab", 75, 1526, "UI.Jobs.Names.Rescue.004", 0, 1650),
-            ("de1a54e3-7889-4e9b-a6d3-e24f344fdb5d", "4956c6ab", 73, 1506, "UI.Jobs.Names.Rescue.001", 0, 1570),
+            (
+                "a398cf65-6793-4a69-928e-f3492bb78ea9",
+                "4956c6ab",
+                76,
+                1536,
+                "UI.Jobs.Names.Defeat.009",
+                0,
+                1640,
+            ),
+            (
+                "346135d3-ad76-4658-b0f2-af7fb77c4a0d",
+                "4956c6ab",
+                79,
+                1566,
+                "UI.Jobs.Names.Rescue.006",
+                0,
+                1650,
+            ),
+            (
+                "01cda05c-b403-4ef6-97ed-a987f47b4a69",
+                "4956c6ab",
+                75,
+                1526,
+                "UI.Jobs.Names.Rescue.004",
+                0,
+                1650,
+            ),
+            (
+                "de1a54e3-7889-4e9b-a6d3-e24f344fdb5d",
+                "4956c6ab",
+                73,
+                1506,
+                "UI.Jobs.Names.Rescue.001",
+                0,
+                1570,
+            ),
             // boss Duel: prod served 0 gems / 1620 gold; retail 12 gems, 15 since #388
-            ("4b25489e-7f63-4bac-8680-69f150deaa40", "361da91e", 75, 1526, "UI.Jobs.Names.Duel.002", 15, 0),
+            (
+                "4b25489e-7f63-4bac-8680-69f150deaa40",
+                "361da91e",
+                75,
+                1526,
+                "UI.Jobs.Names.Duel.002",
+                15,
+                0,
+            ),
             // Friday featured Rescue: prod served 0 gems / 1660 gold; retail 4, 5 since #388
-            ("71b53f82-cab9-4580-8012-ffba1c12d9c5", "8501a030", 81, 1586, "UI.Jobs.Names.Rescue.001", 5, 0),
+            (
+                "71b53f82-cab9-4580-8012-ffba1c12d9c5",
+                "8501a030",
+                81,
+                1586,
+                "UI.Jobs.Names.Rescue.001",
+                5,
+                0,
+            ),
         ];
         assert_eq!(jobs.len(), want.len());
         for (id, pool, d, xp, name, gem, gold_) in want {
-            let j = jobs.iter().find(|j| j["questId"] == id).unwrap_or_else(|| panic!("{id} missing"));
+            let j = jobs
+                .iter()
+                .find(|j| j["questId"] == id)
+                .unwrap_or_else(|| panic!("{id} missing"));
             let s = &j["jobSetup"];
             assert!(j["jobPoolId"].as_str().unwrap().starts_with(pool), "{id}");
             assert_eq!(j["difficultyLevel"], d, "{id}");
@@ -9733,8 +10412,9 @@ mod report_306_job_gems {
             assert_eq!(s["rewardItemCount"], gold_, "{id}");
         }
         assert_eq!(
-            jobs.iter().find(|j| j["questId"] == "4b25489e-7f63-4bac-8680-69f150deaa40").unwrap()
-                ["jobSetup"]["duelBossId"],
+            jobs.iter()
+                .find(|j| j["questId"] == "4b25489e-7f63-4bac-8680-69f150deaa40")
+                .unwrap()["jobSetup"]["duelBossId"],
             "01d82726-527f-4601-929c-182acd3fa9b7"
         );
     }
@@ -9798,7 +10478,10 @@ mod report323_event_row_stage_repair_tests {
         );
 
         let fresh = event_row_fresh(&gd, scaling, row.quest_id, &row.quest, 1).unwrap();
-        assert!(add_missing_dungeon_sections(&mut stored, &fresh), "the row is repaired");
+        assert!(
+            add_missing_dungeon_sections(&mut stored, &fresh),
+            "the row is repaired"
+        );
 
         for group in gd.dungeons[&b].spawn_info.enemy_spawn_groups.keys() {
             let rolls = &stored.enemy_generated_data[group];
@@ -9814,7 +10497,11 @@ mod report323_event_row_stage_repair_tests {
                 );
             }
         }
-        assert_eq!(stored.chest_generated_data.len(), 2, "stage _B's two chests");
+        assert_eq!(
+            stored.chest_generated_data.len(),
+            2,
+            "stage _B's two chests"
+        );
         for (group, rolls) in &before.enemy_generated_data {
             assert_eq!(
                 serde_json::to_value(&stored.enemy_generated_data[group]).unwrap(),
@@ -9822,7 +10509,10 @@ mod report323_event_row_stage_repair_tests {
                 "stage _A group {group} keeps what the client was shown"
             );
         }
-        assert!(!add_missing_dungeon_sections(&mut stored, &fresh), "idempotent");
+        assert!(
+            !add_missing_dungeon_sections(&mut stored, &fresh),
+            "idempotent"
+        );
 
         // And a row minted now needs no repair at all.
         let mut current = row.dungeon.clone().unwrap();
@@ -9834,7 +10524,7 @@ mod report323_event_row_stage_repair_tests {
 #[cfg(test)]
 mod report_337_job_drops_and_families {
     use super::jobs_gen;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::{HashMap, HashSet};
     use uuid::Uuid;
 
@@ -9899,7 +10589,10 @@ mod report_337_job_drops_and_families {
         })
     }
 
-    fn generated(gd: &blades_lib::game_data::GameData, j: &Value) -> blades_lib::user_data::DungeonGeneratedData {
+    fn generated(
+        gd: &blades_lib::game_data::GameData,
+        j: &Value,
+    ) -> blades_lib::user_data::DungeonGeneratedData {
         jobs_gen::generated_data_for_job(gd, j, &crate::quest::shipped_scaling(), 0)
             .expect("the reference dungeon is in the corpus")
     }
@@ -9939,8 +10632,16 @@ mod report_337_job_drops_and_families {
             primary.insert(loot_of(&data, PRIMARY));
             secondary.insert(loot_of(&data, SECONDARY));
         }
-        assert!(primary.len() >= 10, "12 jobs, {} distinct primary loots", primary.len());
-        assert!(secondary.len() >= 10, "12 jobs, {} distinct secondary loots", secondary.len());
+        assert!(
+            primary.len() >= 10,
+            "12 jobs, {} distinct primary loots",
+            primary.len()
+        );
+        assert!(
+            secondary.len() >= 10,
+            "12 jobs, {} distinct secondary loots",
+            secondary.len()
+        );
     }
 
     /// The control: one job is described identically every time it is asked
@@ -9985,17 +10686,38 @@ mod report_337_job_drops_and_families {
         }
         let pct = |s: Uuid, t: i64| 100.0 * *seen.get(&(s, t)).unwrap_or(&0) as f64 / n as f64;
         // Cycle: 86 / 10 / 4 per 100. Retail measured 89.0 / 7.6 / 3.5.
-        assert!((2.5..=5.5).contains(&pct(main, 3)), "main gold {:.1}%", pct(main, 3));
-        assert!((7.0..=12.5).contains(&pct(main, 2)), "main silver {:.1}%", pct(main, 2));
+        assert!(
+            (2.5..=5.5).contains(&pct(main, 3)),
+            "main gold {:.1}%",
+            pct(main, 3)
+        );
+        assert!(
+            (7.0..=12.5).contains(&pct(main, 2)),
+            "main silver {:.1}%",
+            pct(main, 2)
+        );
         assert!(pct(main, 1) > 80.0, "main wooden {:.1}%", pct(main, 1));
         // Cycle: 89.4 / 10 / 0.6 per 100. Retail measured 90.7 / 8.6 / 0.65.
-        assert!((7.5..=12.5).contains(&pct(secret, 3)), "secret gold {:.1}%", pct(secret, 3));
-        assert!((0.1..=1.5).contains(&pct(secret, 4)), "secret Elder {:.2}%", pct(secret, 4));
-        assert!(pct(secret, 2) > 85.0, "secret silver {:.1}%", pct(secret, 2));
+        assert!(
+            (7.5..=12.5).contains(&pct(secret, 3)),
+            "secret gold {:.1}%",
+            pct(secret, 3)
+        );
+        assert!(
+            (0.1..=1.5).contains(&pct(secret, 4)),
+            "secret Elder {:.2}%",
+            pct(secret, 4)
+        );
+        assert!(
+            pct(secret, 2) > 85.0,
+            "secret silver {:.1}%",
+            pct(secret, 2)
+        );
         // Nothing outside the cycles' own rarities.
         for ((spawn, tier), _) in &seen {
             assert!(
-                (*spawn == main && (1..=3).contains(tier)) || (*spawn == secret && (2..=4).contains(tier)),
+                (*spawn == main && (1..=3).contains(tier))
+                    || (*spawn == secret && (2..=4).contains(tier)),
                 "unexpected chest {spawn} tier {tier}"
             );
         }
@@ -10009,14 +10731,26 @@ mod report_337_job_drops_and_families {
         for j in &jobs {
             let s = &j["jobSetup"];
             let fam = |k: &str| s[k].as_str().map(str::to_string);
-            for k in ["primaryEnemyFamilyId", "secondaryEnemyFamilyId", "bossEnemyFamilyId", "secretBossEnemyFamilyId"] {
+            for k in [
+                "primaryEnemyFamilyId",
+                "secondaryEnemyFamilyId",
+                "bossEnemyFamilyId",
+                "secretBossEnemyFamilyId",
+            ] {
                 if let Some(f) = fam(k) {
                     assert!(!DUELISTS.contains(&f.as_str()), "{k} is a Duelist: {j}");
                 }
             }
-            for k in ["primaryEnemyFamilyId", "bossEnemyFamilyId", "secretBossEnemyFamilyId"] {
+            for k in [
+                "primaryEnemyFamilyId",
+                "bossEnemyFamilyId",
+                "secretBossEnemyFamilyId",
+            ] {
                 if let Some(f) = fam(k) {
-                    assert!(!CRITTERS.contains(&f.as_str()), "{k} is a critter family: {j}");
+                    assert!(
+                        !CRITTERS.contains(&f.as_str()),
+                        "{k} is a critter family: {j}"
+                    );
                 }
             }
         }
@@ -10051,7 +10785,11 @@ mod report_337_job_drops_and_families {
             // And the boss comes from the primary's or the secondary's boss list.
             let bosses = |k: &str| {
                 let id = s[k].as_str().unwrap();
-                jobs_gen::JOB_FAMILIES.iter().find(|x| x.id == id).unwrap().bosses
+                jobs_gen::JOB_FAMILIES
+                    .iter()
+                    .find(|x| x.id == id)
+                    .unwrap()
+                    .bosses
             };
             let boss = s["bossEnemyFamilyId"].as_str().unwrap();
             assert!(
@@ -10082,7 +10820,11 @@ mod report_337_job_drops_and_families {
             })
             .count();
         // Retail: 12 of 16.
-        assert!(own * 2 > merc.len(), "{own} of {} Mercenary jobs kept a human boss", merc.len());
+        assert!(
+            own * 2 > merc.len(),
+            "{own} of {} Mercenary jobs kept a human boss",
+            merc.len()
+        );
     }
 }
 
@@ -10235,11 +10977,15 @@ mod report353_quest_town_xp_db {
         let mut conn = AsyncPgConnection::establish(&url)
             .await
             .expect("TEST_DATABASE_URL is set but unreachable");
-        conn.begin_test_transaction().await.expect("test transaction");
-        let schema = format!("t{}", Uuid::new_v4().simple());
-        conn.batch_execute(&format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"))
+        conn.begin_test_transaction()
             .await
-            .unwrap();
+            .expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"
+        ))
+        .await
+        .unwrap();
         conn.batch_execute(TABLES).await.unwrap();
         Some(conn)
     }
@@ -10258,7 +11004,8 @@ mod report353_quest_town_xp_db {
 
     /// The town retail's MQ04 completion found: level 1, 525 XP, unnamed. Both
     /// one-time backfills are marked done so the payout is the only movement.
-    const TOWN_BEFORE: &str = r#"{"levelInfo":{"level":1,"experiencePoints":525},"validationFlags":0,"districts":[]}"#;
+    const TOWN_BEFORE: &str =
+        r#"{"levelInfo":{"level":1,"experiencePoints":525},"validationFlags":0,"districts":[]}"#;
 
     /// A character holding one quest row built from `quest`; returns
     /// `(user, character, quest_id)`.
@@ -10334,7 +11081,15 @@ mod report353_quest_town_xp_db {
     ) -> Value {
         let w = world();
         let out = complete_quest_in_tx(
-            conn, &w.sd, &w.gd, &json!({}), statics(), user, character, quest, NOW,
+            conn,
+            &w.sd,
+            &w.gd,
+            &json!({}),
+            statics(),
+            user,
+            character,
+            quest,
+            NOW,
         )
         .await
         .expect("/complete answers");
@@ -10357,12 +11112,25 @@ mod report353_quest_town_xp_db {
             "retail capture 6206's town block"
         );
         let town = stored_town(&mut conn, ids.1).await;
-        assert_eq!(town["levelInfo"]["experiencePoints"], json!(725), "paid into the row");
-        assert!(town.get("districts").is_some(), "the stored town keeps its districts");
+        assert_eq!(
+            town["levelInfo"]["experiencePoints"],
+            json!(725),
+            "paid into the row"
+        );
+        assert!(
+            town.get("districts").is_some(),
+            "the stored town keeps its districts"
+        );
 
         let replay = complete(&mut conn, ids).await;
-        assert!(replay.get("town").is_none(), "a replayed /complete pays nothing");
-        assert_eq!(stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"], json!(725));
+        assert!(
+            replay.get("town").is_none(),
+            "a replayed /complete pays nothing"
+        );
+        assert_eq!(
+            stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"],
+            json!(725)
+        );
     }
 
     /// Control: a reward with no `townXp` neither touches the town nor answers with it.
@@ -10371,13 +11139,23 @@ mod report353_quest_town_xp_db {
         let mut conn = db!();
         let reward = &world().sd.quest_rewards[&NO_TOWN_XP];
         assert_eq!(reward.town_xp, 0);
-        assert!(reward.character_xp > 0, "it pays something, so the path runs");
+        assert!(
+            reward.character_xp > 0,
+            "it pays something, so the path runs"
+        );
         let ids = seed(&mut conn, quest_row("NORMAL", NO_TOWN_XP)).await;
 
         let out = complete(&mut conn, ids).await;
         assert!(out["reward"]["characterXp"].as_u64().unwrap() > 0);
-        assert!(out.get("town").is_none(), "no town without townXp: {:?}", out.get("town"));
-        assert_eq!(stored_town(&mut conn, ids.1).await, serde_json::from_str::<Value>(TOWN_BEFORE).unwrap());
+        assert!(
+            out.get("town").is_none(),
+            "no town without townXp: {:?}",
+            out.get("town")
+        );
+        assert_eq!(
+            stored_town(&mut conn, ids.1).await,
+            serde_json::from_str::<Value>(TOWN_BEFORE).unwrap()
+        );
     }
 
     /// A town job pays what its own `jobSetup` reward says, town XP included.
@@ -10391,7 +11169,10 @@ mod report353_quest_town_xp_db {
 
         let out = complete(&mut conn, ids).await;
         assert_eq!(out["town"]["levelInfo"]["experiencePoints"], json!(555));
-        assert_eq!(stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"], json!(555));
+        assert_eq!(
+            stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"],
+            json!(555)
+        );
     }
 
     async fn objectives(
@@ -10404,7 +11185,14 @@ mod report353_quest_town_xp_db {
         }))
         .unwrap();
         let out = update_quest_objectives_in_tx(
-            conn, gd, &world().repair, statics(), user, character, quest, body,
+            conn,
+            gd,
+            &world().repair,
+            statics(),
+            user,
+            character,
+            quest,
+            body,
         )
         .await
         .expect("/objectives answers");
@@ -10430,7 +11218,10 @@ mod report353_quest_town_xp_db {
         let out = objectives(&mut conn, &gd, ids).await;
         assert_eq!(out["reward"]["townXp"], json!(25));
         assert_eq!(out["town"]["levelInfo"]["experiencePoints"], json!(550));
-        assert_eq!(stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"], json!(550));
+        assert_eq!(
+            stored_town(&mut conn, ids.1).await["levelInfo"]["experiencePoints"],
+            json!(550)
+        );
     }
 
     /// Control: the objective as shipped pays its items and no town.
@@ -10440,8 +11231,14 @@ mod report353_quest_town_xp_db {
         let ids = seed(&mut conn, quest_row("NORMAL", OBJ_QUEST)).await;
 
         let out = objectives(&mut conn, &world().gd, ids).await;
-        assert!(out.get("reward").is_some(), "the objective pays, so the path runs: {out}");
+        assert!(
+            out.get("reward").is_some(),
+            "the objective pays, so the path runs: {out}"
+        );
         assert!(out.get("town").is_none(), "no town without town XP");
-        assert_eq!(stored_town(&mut conn, ids.1).await, serde_json::from_str::<Value>(TOWN_BEFORE).unwrap());
+        assert_eq!(
+            stored_town(&mut conn, ids.1).await,
+            serde_json::from_str::<Value>(TOWN_BEFORE).unwrap()
+        );
     }
 }

@@ -81,7 +81,10 @@ impl ChestLootTables {
     /// another tier's table. Asserted at startup for every grantable tier.
     pub fn has_own_pool(&self, tier: u64) -> bool {
         self.tiers.get(&tier).is_some_and(|p| !p.is_empty())
-            || self.provisional_tiers.get(&tier).is_some_and(|p| !p.is_empty())
+            || self
+                .provisional_tiers
+                .get(&tier)
+                .is_some_and(|p| !p.is_empty())
     }
 
     /// The pool to draw a `tier` chest's loot from, and whether it is that tier's own.
@@ -157,7 +160,10 @@ pub fn neighbourhood(pool: &[ChestLootSample], level: u64) -> Vec<&ChestLootSamp
 
 /// [`neighbourhood`] over any set of openings.
 fn nearest(samples: Vec<&ChestLootSample>, level: u64) -> Vec<&ChestLootSample> {
-    let mut distances: Vec<u64> = samples.iter().map(|s| s.chest_level.abs_diff(level)).collect();
+    let mut distances: Vec<u64> = samples
+        .iter()
+        .map(|s| s.chest_level.abs_diff(level))
+        .collect();
     if distances.is_empty() {
         return Vec::new();
     }
@@ -201,8 +207,17 @@ pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<
     let stacks = draw(&near, mix(seed ^ 0x2545_F491_4F6C_DD1D));
 
     let mut stackable_items = compose_stackables(&near, stacks, mix(seed ^ 0x381_5EED_C4E5_7381));
-    settle_enchanting(&mut stackable_items, pool, level, mix(seed ^ 0x0E4C_4A47_0381_0381));
-    restock_stackables(&near, &mut stackable_items, mix(seed ^ 0x0404_C4E5_7E3B_7404));
+    settle_enchanting(
+        &mut stackable_items,
+        pool,
+        level,
+        mix(seed ^ 0x0E4C_4A47_0381_0381),
+    );
+    restock_stackables(
+        &near,
+        &mut stackable_items,
+        mix(seed ^ 0x0404_C4E5_7E3B_7404),
+    );
     let mut grant = RewardGrant {
         currencies: base.reward.currencies.clone(),
         stackable_items,
@@ -217,7 +232,9 @@ pub fn compose_loot(pool: &[ChestLootSample], level: u64, nonce: u64) -> Option<
             .filter(|s| s.reward.items.len() > slot)
             .collect();
         let slot_seed = mix(seed ^ 0xA076_1D64_78BD_642F_u64.wrapping_mul(slot as u64 + 1));
-        grant.items.push(draw(&filled, slot_seed).reward.items[slot].clone());
+        grant
+            .items
+            .push(draw(&filled, slot_seed).reward.items[slot].clone());
     }
     Some(grant)
 }
@@ -253,7 +270,10 @@ fn compose_stackables(
 ) -> std::collections::HashMap<Uuid, u64> {
     use crate::features::store_bundles::mix;
 
-    let everywhere = |id: &Uuid| near.iter().all(|s| s.reward.stackable_items.contains_key(id));
+    let everywhere = |id: &Uuid| {
+        near.iter()
+            .all(|s| s.reward.stackable_items.contains_key(id))
+    };
     // Sorted, so the draw does not depend on HashMap iteration order.
     let mut pool: Vec<(Uuid, u64)> = near
         .iter()
@@ -301,7 +321,9 @@ pub(crate) const ENCHANTING_INGREDIENTS: [Uuid; 7] = [
 ];
 
 fn holds_enchanting(r: &RewardGrant) -> bool {
-    r.stackable_items.keys().any(|id| ENCHANTING_INGREDIENTS.contains(id))
+    r.stackable_items
+        .keys()
+        .any(|id| ENCHANTING_INGREDIENTS.contains(id))
 }
 
 /// Share of chests holding an enchanting ingredient, for the tiers that paid any
@@ -334,7 +356,10 @@ fn settle_enchanting(
 ) {
     use crate::features::store_bundles::mix;
 
-    let paid: Vec<&ChestLootSample> = pool.iter().filter(|s| holds_enchanting(&s.reward)).collect();
+    let paid: Vec<&ChestLootSample> = pool
+        .iter()
+        .filter(|s| holds_enchanting(&s.reward))
+        .collect();
     if paid.is_empty() {
         return;
     }
@@ -417,21 +442,27 @@ pub fn roll_loot(
     // No other tier below 1 exists in the APK enum; treat one as tier 1.
     let tier = tier.max(1) as u64;
     let nonce = stable_nonce(chest_key);
-    let mut grant = crate::features::store_bundles::roll_treasury_chest(tier, level, nonce, owned, Some(tables))
-        .or_else(|| {
-            let (pool, _) = tables.pool_for(tier)?;
-            let mut grant = compose_loot(pool, level, nonce)?;
-            if tier == 1 {
-                widen_wooden_metals(tables, &mut grant, level, nonce);
-            }
-            generate_treasury_gear(&mut grant, nonce);
-            if tier == 3 {
-                add_gold_chest_artifact(&mut grant, level, nonce, owned);
-                pay_top_band_gold_soul_gems(pool, &mut grant, level, nonce);
-            }
-            fill_jewelry_grading(&mut grant, nonce);
-            Some(grant)
-        })?;
+    let mut grant = crate::features::store_bundles::roll_treasury_chest(
+        tier,
+        level,
+        nonce,
+        owned,
+        Some(tables),
+    )
+    .or_else(|| {
+        let (pool, _) = tables.pool_for(tier)?;
+        let mut grant = compose_loot(pool, level, nonce)?;
+        if tier == 1 {
+            widen_wooden_metals(tables, &mut grant, level, nonce);
+        }
+        generate_treasury_gear(&mut grant, nonce);
+        if tier == 3 {
+            add_gold_chest_artifact(&mut grant, level, nonce, owned);
+            pay_top_band_gold_soul_gems(pool, &mut grant, level, nonce);
+        }
+        fill_jewelry_grading(&mut grant, nonce);
+        Some(grant)
+    })?;
     pay_chest_gems(&mut grant, tier, nonce);
     size_chest_materials(&mut grant, nonce);
     Some(grant)
@@ -454,7 +485,10 @@ fn size_chest_materials(grant: &mut RewardGrant, nonce: u64) {
 /// (none today) pay 20% more. Owner-approved deviation from retail, #388, 2026-10-16.
 fn pay_chest_gems(grant: &mut RewardGrant, tier: u64, nonce: u64) {
     use crate::features::beginner_economy::{add_gem_bonus, chest_gems};
-    match chest_gems(tier, crate::features::store_bundles::mix(nonce ^ 0x388_6E35_C4E5_7388)) {
+    match chest_gems(
+        tier,
+        crate::features::store_bundles::mix(nonce ^ 0x388_6E35_C4E5_7388),
+    ) {
         Some(gems) => {
             grant.currencies.insert(crate::economy::GEMS, gems);
         }
@@ -492,17 +526,27 @@ pub const TOP_BAND_GOLD_CHEST_LEVEL: u64 = 61;
 /// #421 rule then sets the kind and count of these soul gems
 /// ([`crate::features::chest_soul_gems`]); this roll still decides whether the
 /// chest holds any.
-fn pay_top_band_gold_soul_gems(pool: &[ChestLootSample], grant: &mut RewardGrant, level: u64, nonce: u64) {
-    use crate::features::store_bundles::{mix, SOUL_GEMS};
+fn pay_top_band_gold_soul_gems(
+    pool: &[ChestLootSample],
+    grant: &mut RewardGrant,
+    level: u64,
+    nonce: u64,
+) {
+    use crate::features::store_bundles::{SOUL_GEMS, mix};
     if level < crate::features::loot_level::TOP_LOOT_FROM_LEVEL as u64 {
         return;
     }
-    let band: Vec<&ChestLootSample> = pool.iter().filter(|s| s.chest_level >= TOP_BAND_GOLD_CHEST_LEVEL).collect();
+    let band: Vec<&ChestLootSample> = pool
+        .iter()
+        .filter(|s| s.chest_level >= TOP_BAND_GOLD_CHEST_LEVEL)
+        .collect();
     if band.is_empty() {
         return;
     }
     let source = draw(&band, mix(nonce ^ 0x0421_5011_6E35_0421));
-    grant.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+    grant
+        .stackable_items
+        .retain(|id, _| !SOUL_GEMS.contains(id));
     for (id, q) in &source.reward.stackable_items {
         if SOUL_GEMS.contains(id) {
             grant.stackable_items.insert(*id, *q);
@@ -541,7 +585,8 @@ fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
         if is_artifact(&reward.item.item_template_id) {
             continue;
         }
-        let seed = mix(nonce ^ 0x3C79_AC49_2BA7_B653 ^ (slot as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93));
+        let seed =
+            mix(nonce ^ 0x3C79_AC49_2BA7_B653 ^ (slot as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93));
         if let Some(mut item) = super::legendary_gear::generate(&reward.item, seed) {
             super::legendary_gear::regrade_jewelry(&mut item, mix(seed ^ 0x393));
             reward.item = item;
@@ -556,7 +601,8 @@ fn generate_treasury_gear(grant: &mut RewardGrant, nonce: u64) {
 fn fill_jewelry_grading(grant: &mut RewardGrant, nonce: u64) {
     use crate::features::store_bundles::mix;
     for (slot, item) in grant.items.iter_mut().enumerate() {
-        let seed = mix(nonce ^ 0x6A4F_3D2C_0392_A0D1 ^ (slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let seed =
+            mix(nonce ^ 0x6A4F_3D2C_0392_A0D1 ^ (slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         super::legendary_gear::fill_missing_grading(&mut item.item, seed);
     }
 }
@@ -615,7 +661,13 @@ pub fn wooden_metal_stacks_near(tables: &ChestLootTables, level: u64) -> usize {
         .into_iter()
         .flatten()
         .filter(|s| s.chest_level.abs_diff(level) <= METAL_WINDOW)
-        .map(|s| s.reward.stackable_items.keys().filter(|id| is_metal(id)).count())
+        .map(|s| {
+            s.reward
+                .stackable_items
+                .keys()
+                .filter(|id| is_metal(id))
+                .count()
+        })
         .sum()
 }
 
@@ -656,7 +708,8 @@ fn widen_wooden_metals(tables: &ChestLootTables, grant: &mut RewardGrant, level:
         .collect();
     metals.sort_unstable();
     for (slot, (id, qty)) in metals.into_iter().enumerate() {
-        let roll = mix(nonce ^ 0x0381_4E7A_15D0_0381 ^ (slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        let roll =
+            mix(nonce ^ 0x0381_4E7A_15D0_0381 ^ (slot as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let kind = kinds[(roll % kinds.len() as u64) as usize];
         if kind == id || grant.stackable_items.contains_key(&kind) {
             continue;
@@ -833,9 +886,13 @@ mod tests {
     fn lower_tiers_still_use_the_treasury_table() {
         let t = tables();
         for i in 0..20 {
-            let gold = roll_loot(&t, 1, 1, &format!("k{i}"), &HashSet::new()).unwrap().currencies
-                [&GOLD];
-            assert!([100, 900].contains(&gold), "tier 1 paid {gold}, not a tier-1 value");
+            let gold = roll_loot(&t, 1, 1, &format!("k{i}"), &HashSet::new())
+                .unwrap()
+                .currencies[&GOLD];
+            assert!(
+                [100, 900].contains(&gold),
+                "tier 1 paid {gold}, not a tier-1 value"
+            );
         }
     }
 
@@ -900,7 +957,11 @@ mod tests {
         let old: HashSet<String> = (0..ROLLS)
             .map(|i| fingerprint(pick_loot(&t, 3, 80, &format!("k{i}")).unwrap()))
             .collect();
-        assert_eq!(old.len(), 1, "control: the nearest-level pick is a one-reward trap at 80");
+        assert_eq!(
+            old.len(),
+            1,
+            "control: the nearest-level pick is a one-reward trap at 80"
+        );
     }
 
     /// Report #421. From level 49 a Gold chest pays the soul gems of retail's
@@ -924,7 +985,10 @@ mod tests {
                     .enumerate()
                     .filter_map(|(k, id)| r.stackable_items.get(id).map(|n| (k, *n)))
                     .collect();
-                assert!(gems.len() <= 1, "level {level}: two kinds of soul gem in one Gold chest: {gems:?}");
+                assert!(
+                    gems.len() <= 1,
+                    "level {level}: two kinds of soul gem in one Gold chest: {gems:?}"
+                );
                 for (k, n) in gems {
                     with_gems += 1;
                     kinds[k] += 1;
@@ -932,21 +996,55 @@ mod tests {
                 }
             }
             let share = with_gems as f64 / ROLLS as f64;
-            assert!((0.30..=0.40).contains(&share), "level {level}: {share:.3} of Gold chests paid soul gems");
+            assert!(
+                (0.30..=0.40).contains(&share),
+                "level {level}: {share:.3} of Gold chests paid soul gems"
+            );
             let of = |k: usize| kinds[k] as f64 / with_gems as f64;
-            assert_eq!(kinds[..7].iter().sum::<usize>(), 0, "level {level}: below Grand: {kinds:?}");
-            assert!((0.62..=0.78).contains(&of(7)), "level {level}: Grand {:.3}", of(7));
-            assert!((0.10..=0.21).contains(&of(8)), "level {level}: Glorious {:.3}", of(8));
-            assert!((0.10..=0.21).contains(&of(9)), "level {level}: Transcendent {:.3}", of(9));
-            assert_eq!(counts[&7], HashSet::from([1, 2, 3, 4]), "level {level}: Grand counts");
-            assert_eq!(counts[&8], HashSet::from([2, 3]), "level {level}: Glorious counts");
-            assert_eq!(counts[&9], HashSet::from([1, 2]), "level {level}: Transcendent counts");
+            assert_eq!(
+                kinds[..7].iter().sum::<usize>(),
+                0,
+                "level {level}: below Grand: {kinds:?}"
+            );
+            assert!(
+                (0.62..=0.78).contains(&of(7)),
+                "level {level}: Grand {:.3}",
+                of(7)
+            );
+            assert!(
+                (0.10..=0.21).contains(&of(8)),
+                "level {level}: Glorious {:.3}",
+                of(8)
+            );
+            assert!(
+                (0.10..=0.21).contains(&of(9)),
+                "level {level}: Transcendent {:.3}",
+                of(9)
+            );
+            assert_eq!(
+                counts[&7],
+                HashSet::from([1, 2, 3, 4]),
+                "level {level}: Grand counts"
+            );
+            assert_eq!(
+                counts[&8],
+                HashSet::from([2, 3]),
+                "level {level}: Glorious counts"
+            );
+            assert_eq!(
+                counts[&9],
+                HashSet::from([1, 2]),
+                "level {level}: Transcendent counts"
+            );
         }
         // Below 49 the chest keeps its own neighbourhood's soul gems: never
         // Glorious or Transcendent at 45 (retail paid Exceptional/Greater there).
         for i in 0..ROLLS {
             let r = roll_loot(&t, 3, 45, &format!("421:{i}:3:45"), &HashSet::new()).unwrap();
-            assert!(!r.stackable_items.contains_key(&SOUL_GEMS[8]) && !r.stackable_items.contains_key(&SOUL_GEMS[9]));
+            assert!(
+                !r.stackable_items.contains_key(&SOUL_GEMS[8])
+                    && !r.stackable_items.contains_key(&SOUL_GEMS[9])
+            );
         }
     }
 
@@ -958,12 +1056,16 @@ mod tests {
     #[test]
     fn a_silver_or_gold_chest_at_45_to_100_pays_the_owners_soul_gems() {
         use crate::features::chest_soul_gems::pay_chest_soul_gems;
-        use crate::features::store_bundles::SOUL_GEMS;
         use crate::features::loot_level::effective_loot_level_u64;
+        use crate::features::store_bundles::SOUL_GEMS;
         let t = committed();
         const ROLLS: usize = 4000;
         let soul_gems_of = |r: &RewardGrant| -> Vec<(usize, u64)> {
-            SOUL_GEMS.iter().enumerate().filter_map(|(k, id)| r.stackable_items.get(id).map(|n| (k, *n))).collect()
+            SOUL_GEMS
+                .iter()
+                .enumerate()
+                .filter_map(|(k, id)| r.stackable_items.get(id).map(|n| (k, *n)))
+                .collect()
         };
         for (tier, counts_expected) in [(2i64, 1u64..=2), (3, 3..=7)] {
             for level in [45i64, 70, 100] {
@@ -973,14 +1075,27 @@ mod tests {
                     let key = format!("421d21:{i}:{tier}:{level}");
                     let before = roll_loot(&t, tier, chest_level, &key, &HashSet::new()).unwrap();
                     let mut after = before.clone();
-                    pay_chest_soul_gems(&mut after.stackable_items, tier as u64, level, crate::features::beginner_economy::key_seed(&key));
+                    pay_chest_soul_gems(
+                        &mut after.stackable_items,
+                        tier as u64,
+                        level,
+                        crate::features::beginner_economy::key_seed(&key),
+                    );
                     let (was, now) = (soul_gems_of(&before), soul_gems_of(&after));
-                    assert_eq!(was.is_empty(), now.is_empty(), "tier {tier} L{level} chest {i}: soul-gem frequency moved");
+                    assert_eq!(
+                        was.is_empty(),
+                        now.is_empty(),
+                        "tier {tier} L{level} chest {i}: soul-gem frequency moved"
+                    );
                     // Nothing but the soul gems moves.
                     let mut rest_before = before.clone();
-                    rest_before.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    rest_before
+                        .stackable_items
+                        .retain(|id, _| !SOUL_GEMS.contains(id));
                     let mut rest_after = after.clone();
-                    rest_after.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    rest_after
+                        .stackable_items
+                        .retain(|id, _| !SOUL_GEMS.contains(id));
                     assert_eq!(fingerprint(&rest_before), fingerprint(&rest_after));
                     assert!(now.len() <= 1, "tier {tier} L{level}: {now:?}");
                     for (k, n) in now {
@@ -990,13 +1105,36 @@ mod tests {
                     }
                 }
                 let share = with_gems as f64 / ROLLS as f64;
-                assert!((0.20..=0.45).contains(&share), "tier {tier} L{level}: {share:.3} held soul gems");
+                assert!(
+                    (0.20..=0.45).contains(&share),
+                    "tier {tier} L{level}: {share:.3} held soul gems"
+                );
                 let of = |k: usize| kinds[k] as f64 / with_gems as f64;
-                assert_eq!(kinds[..7].iter().sum::<usize>(), 0, "tier {tier} L{level}: below Grand {kinds:?}");
-                assert!((0.54..=0.66).contains(&of(7)), "tier {tier} L{level}: Grand {:.3}", of(7));
-                assert!((0.15..=0.25).contains(&of(8)), "tier {tier} L{level}: Glorious {:.3}", of(8));
-                assert!((0.15..=0.25).contains(&of(9)), "tier {tier} L{level}: Transcendent {:.3}", of(9));
-                assert_eq!(counts, counts_expected.clone().collect::<HashSet<u64>>(), "tier {tier} L{level}: counts");
+                assert_eq!(
+                    kinds[..7].iter().sum::<usize>(),
+                    0,
+                    "tier {tier} L{level}: below Grand {kinds:?}"
+                );
+                assert!(
+                    (0.54..=0.66).contains(&of(7)),
+                    "tier {tier} L{level}: Grand {:.3}",
+                    of(7)
+                );
+                assert!(
+                    (0.15..=0.25).contains(&of(8)),
+                    "tier {tier} L{level}: Glorious {:.3}",
+                    of(8)
+                );
+                assert!(
+                    (0.15..=0.25).contains(&of(9)),
+                    "tier {tier} L{level}: Transcendent {:.3}",
+                    of(9)
+                );
+                assert_eq!(
+                    counts,
+                    counts_expected.clone().collect::<HashSet<u64>>(),
+                    "tier {tier} L{level}: counts"
+                );
             }
         }
         // Level 44 is paid exactly as rolled, in every chest tier.
@@ -1005,8 +1143,17 @@ mod tests {
                 let key = format!("421d21-same:{i}:{tier}:44");
                 let before = roll_loot(&t, tier, 44, &key, &HashSet::new()).unwrap();
                 let mut after = before.clone();
-                pay_chest_soul_gems(&mut after.stackable_items, tier as u64, 44, crate::features::beginner_economy::key_seed(&key));
-                assert_eq!(fingerprint(&before), fingerprint(&after), "tier {tier} L44 chest {i} moved");
+                pay_chest_soul_gems(
+                    &mut after.stackable_items,
+                    tier as u64,
+                    44,
+                    crate::features::beginner_economy::key_seed(&key),
+                );
+                assert_eq!(
+                    fingerprint(&before),
+                    fingerprint(&after),
+                    "tier {tier} L44 chest {i} moved"
+                );
             }
         }
     }
@@ -1019,12 +1166,16 @@ mod tests {
     #[test]
     fn an_elder_or_legendary_chest_at_45_to_100_regrades_its_soul_gems() {
         use crate::features::chest_soul_gems::pay_chest_soul_gems;
-        use crate::features::store_bundles::SOUL_GEMS;
         use crate::features::loot_level::effective_loot_level_u64;
+        use crate::features::store_bundles::SOUL_GEMS;
         let t = committed();
         const ROLLS: usize = 3000;
         let total = |r: &RewardGrant| -> u64 {
-            r.stackable_items.iter().filter(|(id, _)| SOUL_GEMS.contains(id)).map(|(_, n)| n).sum()
+            r.stackable_items
+                .iter()
+                .filter(|(id, _)| SOUL_GEMS.contains(id))
+                .map(|(_, n)| n)
+                .sum()
         };
         for tier in [4i64, 5] {
             for level in [45i64, 70, 100] {
@@ -1034,18 +1185,41 @@ mod tests {
                     let key = format!("429:{i}:{tier}:{level}");
                     let before = roll_loot(&t, tier, chest_level, &key, &HashSet::new()).unwrap();
                     let mut after = before.clone();
-                    pay_chest_soul_gems(&mut after.stackable_items, tier as u64, level, crate::features::beginner_economy::key_seed(&key));
-                    assert_eq!(total(&before), total(&after), "tier {tier} L{level} chest {i}: soul-gem count moved");
+                    pay_chest_soul_gems(
+                        &mut after.stackable_items,
+                        tier as u64,
+                        level,
+                        crate::features::beginner_economy::key_seed(&key),
+                    );
+                    assert_eq!(
+                        total(&before),
+                        total(&after),
+                        "tier {tier} L{level} chest {i}: soul-gem count moved"
+                    );
                     let mut rest_before = before.clone();
-                    rest_before.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    rest_before
+                        .stackable_items
+                        .retain(|id, _| !SOUL_GEMS.contains(id));
                     let mut rest_after = after.clone();
-                    rest_after.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    rest_after
+                        .stackable_items
+                        .retain(|id, _| !SOUL_GEMS.contains(id));
                     assert_eq!(fingerprint(&rest_before), fingerprint(&rest_after));
-                    assert!(after.stackable_items.keys().all(|id| !SOUL_GEMS[..7].contains(id)), "tier {tier} L{level}: below Grand");
+                    assert!(
+                        after
+                            .stackable_items
+                            .keys()
+                            .all(|id| !SOUL_GEMS[..7].contains(id)),
+                        "tier {tier} L{level}: below Grand"
+                    );
                     if total(&before) > 0 {
                         with_gems += 1;
                     }
-                    let stacks_before = before.stackable_items.keys().filter(|id| SOUL_GEMS.contains(id)).count();
+                    let stacks_before = before
+                        .stackable_items
+                        .keys()
+                        .filter(|id| SOUL_GEMS.contains(id))
+                        .count();
                     if stacks_before == 1 {
                         single += 1;
                         for (k, id) in SOUL_GEMS.iter().enumerate() {
@@ -1053,12 +1227,30 @@ mod tests {
                         }
                     }
                 }
-                assert!(with_gems > 0, "tier {tier} L{level}: no chest held soul gems");
-                assert!(single >= 300, "tier {tier} L{level}: {single} one-stack chests");
+                assert!(
+                    with_gems > 0,
+                    "tier {tier} L{level}: no chest held soul gems"
+                );
+                assert!(
+                    single >= 300,
+                    "tier {tier} L{level}: {single} one-stack chests"
+                );
                 let of = |k: usize| kinds[k] as f64 / single as f64;
-                assert!((0.53..=0.67).contains(&of(7)), "tier {tier} L{level}: Grand {:.3}", of(7));
-                assert!((0.14..=0.26).contains(&of(8)), "tier {tier} L{level}: Glorious {:.3}", of(8));
-                assert!((0.14..=0.26).contains(&of(9)), "tier {tier} L{level}: Transcendent {:.3}", of(9));
+                assert!(
+                    (0.53..=0.67).contains(&of(7)),
+                    "tier {tier} L{level}: Grand {:.3}",
+                    of(7)
+                );
+                assert!(
+                    (0.14..=0.26).contains(&of(8)),
+                    "tier {tier} L{level}: Glorious {:.3}",
+                    of(8)
+                );
+                assert!(
+                    (0.14..=0.26).contains(&of(9)),
+                    "tier {tier} L{level}: Transcendent {:.3}",
+                    of(9)
+                );
             }
         }
     }
@@ -1080,7 +1272,10 @@ mod tests {
             .flat_map(|s| &s.reward.items)
             .map(|i| required_level(&i.item.item_template_id))
             .collect();
-        assert!(!high_tiers.contains(&None), "control: every retail piece has a tier");
+        assert!(
+            !high_tiers.contains(&None),
+            "control: every retail piece has a tier"
+        );
         let gold_of = |r: &RewardGrant| r.currencies.get(&GOLD).copied().unwrap_or(0);
         let lo = high.iter().map(|s| gold_of(&s.reward)).min().unwrap();
         let hi = high.iter().map(|s| gold_of(&s.reward)).max().unwrap();
@@ -1088,9 +1283,15 @@ mod tests {
         for i in 0..300 {
             let r = roll_loot(&t, 3, 100, &format!("c:{i}:3:100:{i}"), &HashSet::new()).unwrap();
             // Two items; a third only in the rare artifact slot (#378).
-            assert!((2..=3).contains(&r.items.len()), "a Gold chest pays two items");
+            assert!(
+                (2..=3).contains(&r.items.len()),
+                "a Gold chest pays two items"
+            );
             let gold = gold_of(&r);
-            assert!((lo..=hi).contains(&gold), "level-100 Gold chest paid {gold} gold");
+            assert!(
+                (lo..=hi).contains(&gold),
+                "level-100 Gold chest paid {gold} gold"
+            );
             for item in &r.items[..2] {
                 assert!(
                     high_tiers.contains(&required_level(&item.item.item_template_id)),
@@ -1100,7 +1301,11 @@ mod tests {
             }
         }
         for s in neighbourhood(pool, 100) {
-            assert!(s.chest_level >= 85, "a level-100 roll drew on a level-{} opening", s.chest_level);
+            assert!(
+                s.chest_level >= 85,
+                "a level-100 roll drew on a level-{} opening",
+                s.chest_level
+            );
         }
     }
 
@@ -1121,14 +1326,21 @@ mod tests {
                         _ => assert!((2..=3).contains(&r.items.len())),
                     }
                     if tier == 1 {
-                        assert!(r.currencies.contains_key(&gem), "every Wooden chest paid gems");
+                        assert!(
+                            r.currencies.contains_key(&gem),
+                            "every Wooden chest paid gems"
+                        );
                     }
                     if tier == 3 {
                         assert!(!r.currencies.contains_key(&gem), "no Gold chest paid gems");
                     }
                     let key = format!("s{i}");
                     let again = roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap();
-                    assert_eq!(fingerprint(&r), fingerprint(&again), "a retried open pays the same");
+                    assert_eq!(
+                        fingerprint(&r),
+                        fingerprint(&again),
+                        "a retried open pays the same"
+                    );
                 }
             }
         }
@@ -1187,7 +1399,15 @@ mod tests {
 
     /// The enchanting ingredients: the non-soul-gem inputs of `enchanting.json`.
     fn enchanting() -> HashSet<Uuid> {
-        let names = ["Frost Salts", "Fire Salts", "Void Salts", "Glow Dust", "Imp Stool", "Honeycomb", "Beehive Husk"];
+        let names = [
+            "Frost Salts",
+            "Fire Salts",
+            "Void Salts",
+            "Glow Dust",
+            "Imp Stool",
+            "Honeycomb",
+            "Beehive Husk",
+        ];
         let raw: serde_json::Value =
             serde_json::from_str(include_str!("../ingredient_values.json")).unwrap();
         let ids: HashSet<Uuid> = raw["_meta"]["names"]
@@ -1197,7 +1417,11 @@ mod tests {
             .filter(|(_, v)| names.contains(&v.as_str().unwrap()))
             .map(|(k, _)| k.parse().unwrap())
             .collect();
-        assert_eq!(ids.len(), names.len(), "every enchanting ingredient is named");
+        assert_eq!(
+            ids.len(),
+            names.len(),
+            "every enchanting ingredient is named"
+        );
         ids
     }
 
@@ -1239,11 +1463,15 @@ mod tests {
                 let ours: Vec<Vec<Uuid>> = (0..400)
                     .map(|i| {
                         let key = format!("381:{i}:{tier}:{level}");
-                        stack_ids(&roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap())
+                        stack_ids(
+                            &roll_loot(&t, tier as i64, level, &key, &HashSet::new()).unwrap(),
+                        )
                     })
                     .collect();
                 let ours = same_pair_share(&ours);
-                println!("tier {tier} L{level}: same-set pairs retail {retail:.3}, old roll {old:.3}, now {ours:.3}");
+                println!(
+                    "tier {tier} L{level}: same-set pairs retail {retail:.3}, old roll {old:.3}, now {ours:.3}"
+                );
                 assert!(old >= 0.025, "control: the old roll repeated ({old:.3})");
                 assert!(
                     ours <= 0.03 && ours * 2.0 <= old,
@@ -1268,21 +1496,35 @@ mod tests {
         let enchanting = enchanting();
         assert_eq!(
             enchanting,
-            ENCHANTING_INGREDIENTS.into_iter().collect::<HashSet<Uuid>>(),
+            ENCHANTING_INGREDIENTS
+                .into_iter()
+                .collect::<HashSet<Uuid>>(),
             "ENCHANTING_INGREDIENTS names the enchanting ingredients"
         );
         let pooled = |tier: u64| {
             let pool = &t.tiers[&tier];
-            (pool.iter().filter(|s| holds_enchanting(&s.reward)).count(), pool.len())
+            (
+                pool.iter().filter(|s| holds_enchanting(&s.reward)).count(),
+                pool.len(),
+            )
         };
-        assert_eq!(pooled(1), (51, 154), "Wooden: retail's pooled enchanting rate");
-        assert_eq!(pooled(2).0 + pooled(3).0, 0, "Silver and Gold never paid one");
+        assert_eq!(
+            pooled(1),
+            (51, 154),
+            "Wooden: retail's pooled enchanting rate"
+        );
+        assert_eq!(
+            pooled(2).0 + pooled(3).0,
+            0,
+            "Silver and Gold never paid one"
+        );
         let clay: Uuid = "42d91529-c88b-4c5b-815b-b55508b4e7ef".parse().unwrap();
         let rolls = 3000;
         for tier in 1..=3u64 {
             for level in [15u64, 30, 45, 70, 90] {
                 let near = neighbourhood(&t.tiers[&tier], level);
-                let share = |rewards: &mut dyn Iterator<Item = &RewardGrant>, test: &dyn Fn(&RewardGrant) -> bool| {
+                let share = |rewards: &mut dyn Iterator<Item = &RewardGrant>,
+                             test: &dyn Fn(&RewardGrant) -> bool| {
                     let (mut hit, mut n) = (0.0f64, 0.0f64);
                     for r in rewards {
                         n += 1.0;
@@ -1294,8 +1536,14 @@ mod tests {
                 };
                 let ours: Vec<RewardGrant> = (0..rolls)
                     .map(|i| {
-                        roll_loot(&t, tier as i64, level, &format!("rate:{i}:{tier}:{level}"), &HashSet::new())
-                            .unwrap()
+                        roll_loot(
+                            &t,
+                            tier as i64,
+                            level,
+                            &format!("rate:{i}:{tier}:{level}"),
+                            &HashSet::new(),
+                        )
+                        .unwrap()
                     })
                     .collect();
                 let has_enchanting =
@@ -1312,11 +1560,21 @@ mod tests {
                 if k == 0 {
                     assert_eq!(ours_e, 0.0, "tier {tier} L{level}: retail never paid one");
                 } else {
-                    assert!((ours_e - want).abs() <= 0.04, "tier {tier} L{level}: {ours_e:.2} vs target {want:.2}");
+                    assert!(
+                        (ours_e - want).abs() <= 0.04,
+                        "tier {tier} L{level}: {ours_e:.2} vs target {want:.2}"
+                    );
                     // Given a chest holds one, which ones follow the nearest retail
                     // openings that paid any.
-                    let paid = nearest(t.tiers[&tier].iter().filter(|s| holds_enchanting(&s.reward)).collect(), level);
-                    let with: Vec<&RewardGrant> = ours.iter().filter(|r| has_enchanting(r)).collect();
+                    let paid = nearest(
+                        t.tiers[&tier]
+                            .iter()
+                            .filter(|s| holds_enchanting(&s.reward))
+                            .collect(),
+                        level,
+                    );
+                    let with: Vec<&RewardGrant> =
+                        ours.iter().filter(|r| has_enchanting(r)).collect();
                     for id in &enchanting {
                         let has = |r: &RewardGrant| r.stackable_items.contains_key(id);
                         let retail = share(&mut paid.iter().map(|s| &s.reward), &has);
@@ -1340,7 +1598,10 @@ mod tests {
                     let has_metal = |r: &RewardGrant| r.stackable_items.keys().any(is_metal);
                     let retail = share(&mut near.iter().map(|s| &s.reward), &has_metal);
                     let ours = share(&mut ours.iter(), &has_metal);
-                    assert!((ours - retail).abs() <= 0.08, "tier {tier} L{level} any metal: {ours:.2} vs retail {retail:.2}");
+                    assert!(
+                        (ours - retail).abs() <= 0.08,
+                        "tier {tier} L{level} any metal: {ours:.2} vs retail {retail:.2}"
+                    );
                 }
                 for id in materials {
                     if widened && is_metal(&id) {
@@ -1349,15 +1610,22 @@ mod tests {
                     let has = |r: &RewardGrant| r.stackable_items.contains_key(&id);
                     let retail = share(&mut near.iter().map(|s| &s.reward), &has);
                     let ours = share(&mut ours.iter(), &has);
-                    assert!((ours - retail).abs() <= 0.08, "tier {tier} L{level} {id}: {ours:.2} vs retail {retail:.2}");
+                    assert!(
+                        (ours - retail).abs() <= 0.08,
+                        "tier {tier} L{level} {id}: {ours:.2} vs retail {retail:.2}"
+                    );
                 }
                 for r in &ours {
                     let potions = r.stackable_items.keys().filter(|id| {
-                        crate::economy::missing_resources::gem_cost_for_ingredient(**id, 1).is_none()
+                        crate::economy::missing_resources::gem_cost_for_ingredient(**id, 1)
+                            .is_none()
                     });
                     assert!(potions.count() <= 1, "two potions in one chest");
                     if tier >= 2 {
-                        assert!(r.stackable_items.contains_key(&clay), "tier {tier}: Clay in every chest");
+                        assert!(
+                            r.stackable_items.contains_key(&clay),
+                            "tier {tier}: Clay in every chest"
+                        );
                     }
                 }
             }
@@ -1376,7 +1644,14 @@ mod tests {
         let quicksilver = Uuid::from_u128(0xe80bee76_f92c_4005_9eff_20d1e8c64d24);
         let rolls = 3000;
         let roll = |level: u64, i: usize| {
-            roll_loot(&t, 1, level, &format!("381-metal:{i}:{level}"), &HashSet::new()).unwrap()
+            roll_loot(
+                &t,
+                1,
+                level,
+                &format!("381-metal:{i}:{level}"),
+                &HashSet::new(),
+            )
+            .unwrap()
         };
         // The unwidened composition, as live before this change: the control.
         let before = |level: u64, i: usize| {
@@ -1384,11 +1659,18 @@ mod tests {
             compose_loot(&t.tiers[&1], level, stable_nonce(&key)).unwrap()
         };
         for level in [46u64, 49] {
-            let (mut kinds, mut was_kinds) = (HashMap::<Uuid, usize>::new(), HashMap::<Uuid, usize>::new());
+            let (mut kinds, mut was_kinds) =
+                (HashMap::<Uuid, usize>::new(), HashMap::<Uuid, usize>::new());
             let (mut with_metal, mut was_with_metal) = (0usize, 0usize);
             for i in 0..rolls {
                 let (now, was) = (roll(level, i), before(level, i));
-                let metal = |r: &RewardGrant| r.stackable_items.keys().copied().filter(is_metal).collect::<Vec<_>>();
+                let metal = |r: &RewardGrant| {
+                    r.stackable_items
+                        .keys()
+                        .copied()
+                        .filter(is_metal)
+                        .collect::<Vec<_>>()
+                };
                 with_metal += usize::from(!metal(&now).is_empty());
                 was_with_metal += usize::from(!metal(&was).is_empty());
                 for id in metal(&now) {
@@ -1400,29 +1682,62 @@ mod tests {
                 // As many metal stacks as before; since #388 (owner-approved deviation
                 // from retail, 2026-10-16) each is 5, 10 or 20.
                 let amounts = |r: &RewardGrant| {
-                    let mut a: Vec<u64> = r.stackable_items.iter().filter(|(id, _)| is_metal(id)).map(|(_, q)| *q).collect();
+                    let mut a: Vec<u64> = r
+                        .stackable_items
+                        .iter()
+                        .filter(|(id, _)| is_metal(id))
+                        .map(|(_, q)| *q)
+                        .collect();
                     a.sort_unstable();
                     a
                 };
-                assert_eq!(amounts(&now).len(), amounts(&was).len(), "L{level} chest {i}: metal stacks moved");
-                assert!(amounts(&now).iter().all(|q| [5, 10, 20].contains(q)), "L{level} chest {i}: {:?}", amounts(&now));
+                assert_eq!(
+                    amounts(&now).len(),
+                    amounts(&was).len(),
+                    "L{level} chest {i}: metal stacks moved"
+                );
+                assert!(
+                    amounts(&now).iter().all(|q| [5, 10, 20].contains(q)),
+                    "L{level} chest {i}: {:?}",
+                    amounts(&now)
+                );
             }
             let total: usize = kinds.values().sum();
             let was_total: usize = was_kinds.values().sum();
             let qs = *kinds.get(&quicksilver).unwrap_or(&0) as f64 / total as f64;
-            let was_qs = *was_kinds.get(&quicksilver).unwrap_or(&0) as f64 / was_total.max(1) as f64;
-            println!("L{level}: Quicksilver {was_qs:.2} -> {qs:.2} of metal stacks; kinds {} -> {}; chests with a metal {was_with_metal} -> {with_metal}",
-                was_kinds.len(), kinds.len());
-            assert_eq!(with_metal, was_with_metal, "L{level}: how often a chest pays a metal moved");
-            assert!(kinds.len() >= 4, "L{level}: only {} metal kinds", kinds.len());
-            assert!(qs > 0.10 && qs <= 0.35, "L{level}: Quicksilver is {qs:.2} of metal stacks");
+            let was_qs =
+                *was_kinds.get(&quicksilver).unwrap_or(&0) as f64 / was_total.max(1) as f64;
+            println!(
+                "L{level}: Quicksilver {was_qs:.2} -> {qs:.2} of metal stacks; kinds {} -> {}; chests with a metal {was_with_metal} -> {with_metal}",
+                was_kinds.len(),
+                kinds.len()
+            );
+            assert_eq!(
+                with_metal, was_with_metal,
+                "L{level}: how often a chest pays a metal moved"
+            );
+            assert!(
+                kinds.len() >= 4,
+                "L{level}: only {} metal kinds",
+                kinds.len()
+            );
+            assert!(
+                qs > 0.10 && qs <= 0.35,
+                "L{level}: Quicksilver is {qs:.2} of metal stacks"
+            );
         }
         // Control: the level-46 composition alone was mostly Quicksilver.
         let was: Vec<RewardGrant> = (0..rolls).map(|i| before(46, i)).collect();
-        let (qs, all) = was.iter().flat_map(|r| r.stackable_items.keys().filter(|id| is_metal(id))).fold((0, 0), |(q, a), id| {
-            (q + usize::from(*id == quicksilver), a + 1)
-        });
-        assert!(qs * 100 >= all * 60, "control: Quicksilver was {qs}/{all} of level-46 metal stacks");
+        let (qs, all) = was
+            .iter()
+            .flat_map(|r| r.stackable_items.keys().filter(|id| is_metal(id)))
+            .fold((0, 0), |(q, a), id| {
+                (q + usize::from(*id == quicksilver), a + 1)
+            });
+        assert!(
+            qs * 100 >= all * 60,
+            "control: Quicksilver was {qs}/{all} of level-46 metal stacks"
+        );
         // Where the Wooden table is rich, nothing changes: the same stacks (their
         // material quantities are #388's 5 / 10 / 20, owner-approved deviation).
         let kinds_of = |r: &RewardGrant| {
@@ -1431,24 +1746,39 @@ mod tests {
             k
         };
         for level in [10u64, 20, 30, 40] {
-            assert!(wooden_metal_stacks_near(&t, level) >= THIN_WOODEN_METALS, "L{level} is not thin");
+            assert!(
+                wooden_metal_stacks_near(&t, level) >= THIN_WOODEN_METALS,
+                "L{level} is not thin"
+            );
             for i in 0..300 {
-                assert_eq!(kinds_of(&roll(level, i)), kinds_of(&before(level, i)), "L{level} chest {i} moved");
+                assert_eq!(
+                    kinds_of(&roll(level, i)),
+                    kinds_of(&before(level, i)),
+                    "L{level} chest {i} moved"
+                );
             }
         }
         // Retail's richer tiers are untouched at every level. (A Gold chest's
         // soul gems from 49 come from retail's 61-100 band, #421, and are
         // checked in `a_gold_chest_from_49_pays_retails_top_band_soul_gems`.)
         let without_soul_gems = |r: &RewardGrant| -> Vec<Uuid> {
-            kinds_of(r).into_iter().filter(|id| !crate::features::store_bundles::SOUL_GEMS.contains(id)).collect()
+            kinds_of(r)
+                .into_iter()
+                .filter(|id| !crate::features::store_bundles::SOUL_GEMS.contains(id))
+                .collect()
         };
         for tier in [2i64, 3] {
             for level in [46u64, 100] {
                 for i in 0..200 {
                     let key = format!("381-metal:{i}:{level}");
                     let now = roll_loot(&t, tier, level, &key, &HashSet::new()).unwrap();
-                    let was = compose_loot(&t.tiers[&(tier as u64)], level, stable_nonce(&key)).unwrap();
-                    assert_eq!(without_soul_gems(&now), without_soul_gems(&was), "tier {tier} L{level} chest {i} moved");
+                    let was =
+                        compose_loot(&t.tiers[&(tier as u64)], level, stable_nonce(&key)).unwrap();
+                    assert_eq!(
+                        without_soul_gems(&now),
+                        without_soul_gems(&was),
+                        "tier {tier} L{level} chest {i} moved"
+                    );
                 }
             }
         }
@@ -1554,7 +1884,10 @@ mod tests {
             .filter(|i| is_jewel(&i.item.item_template_id))
             .filter(|i| i.item.grade.is_some() && i.item.properties.grading.is_empty())
             .count();
-        assert!(bare > 50, "control: {bare} bare graded jewels in the corpus");
+        assert!(
+            bare > 50,
+            "control: {bare} bare graded jewels in the corpus"
+        );
 
         let mut jewels = 0;
         let mut distinct = HashSet::new();
@@ -1569,9 +1902,14 @@ mod tests {
                         }
                         jewels += 1;
                         let grade = item.grade.expect("chest jewellery is graded");
-                        let mut tiers: Vec<u64> = item.properties.grading.iter().map(|p| p.tier).collect();
+                        let mut tiers: Vec<u64> =
+                            item.properties.grading.iter().map(|p| p.tier).collect();
                         tiers.sort_unstable_by(|a, b| b.cmp(a));
-                        let want = JEWELRY_GRADES.iter().find(|(g, _, _)| *g == grade).unwrap().2;
+                        let want = JEWELRY_GRADES
+                            .iter()
+                            .find(|(g, _, _)| *g == grade)
+                            .unwrap()
+                            .2;
                         assert_eq!(tiers, want, "grade {grade} GRADING tiers");
                         assert_eq!(rule_broken(item), None, "{item:?}");
                         distinct.insert(serde_json::to_string(&item.properties.grading).unwrap());
@@ -1605,11 +1943,16 @@ mod tests {
         while count.iter().sum::<u64>() < 3000 && i < 200_000 {
             let tier = 1 + (i % 3) as i64;
             let level = [5u64, 20, 35, 45, 60, 80, 100][(i / 3 % 7) as usize];
-            let reward = roll_loot(&t, tier, level, &format!("split:{i}"), &HashSet::new()).unwrap();
+            let reward =
+                roll_loot(&t, tier, level, &format!("split:{i}"), &HashSet::new()).unwrap();
             for item in reward.items.iter().map(|r| &r.item) {
                 if matches!(kind_of(&item.item_template_id), Some("ring" | "necklace")) {
                     let g = &item.properties.grading;
-                    assert_eq!(item.grade, Some(g.iter().map(|p| p.tier).sum()), "grade = sum of tiers");
+                    assert_eq!(
+                        item.grade,
+                        Some(g.iter().map(|p| p.tier).sum()),
+                        "grade = sum of tiers"
+                    );
                     count[g.len()] += 1;
                     by_tier[tier as usize] += 1;
                 }
@@ -1622,7 +1965,10 @@ mod tests {
         assert_eq!(count[0], 0, "a chest jewel without GRADING");
         for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
             let got = count[props] as f64 * 100.0 / n as f64;
-            assert!((got - f64::from(pct)).abs() <= 3.0, "{props} properties: {got:.1}% (want {pct}%)");
+            assert!(
+                (got - f64::from(pct)).abs() <= 3.0,
+                "{props} properties: {got:.1}% (want {pct}%)"
+            );
         }
     }
 
@@ -1649,7 +1995,9 @@ mod tests {
                         items += 1;
                         assert_eq!(rule_broken(item), None, "tier {tier} L{level}: {item:?}");
                         tiers_paid.insert(required_level(&item.item_template_id));
-                        *seen.entry(serde_json::to_string(item).unwrap()).or_insert(0) += 1;
+                        *seen
+                            .entry(serde_json::to_string(item).unwrap())
+                            .or_insert(0) += 1;
                     }
                 }
                 if items < 20 {
@@ -1669,7 +2017,10 @@ mod tests {
                     .flat_map(|s| &s.reward.items)
                     .map(|i| required_level(&i.item.item_template_id))
                     .collect();
-                assert!(tiers_paid.is_subset(&retail), "tier {tier} L{level}: {tiers_paid:?} vs {retail:?}");
+                assert!(
+                    tiers_paid.is_subset(&retail),
+                    "tier {tier} L{level}: {tiers_paid:?} vs {retail:?}"
+                );
             }
         }
     }
@@ -1685,11 +2036,18 @@ mod tests {
         let key = "3170b1d3-47ff-49bc-926c-45009ec0a15a:2:1:2:6";
         let g = roll_loot(&t, 1, 2, key, &HashSet::new()).expect("rolls");
         assert!(
-            g.stackable_items.keys().any(|id| !ENCHANTING_INGREDIENTS.contains(id)),
+            g.stackable_items
+                .keys()
+                .any(|id| !ENCHANTING_INGREDIENTS.contains(id)),
             "{key} paid no stackable but enchanting ones: {:?}",
             g.stackable_items
         );
-        assert!(serde_json::to_value(&g).unwrap().get("stackableItems").is_some());
+        assert!(
+            serde_json::to_value(&g)
+                .unwrap()
+                .get("stackableItems")
+                .is_some()
+        );
     }
 
     /// Retail: 729 of 729 tier 1-3 openings held a stackable other than an
@@ -1703,7 +2061,9 @@ mod tests {
                     let key = format!("404:{tier}:{level}:{k}");
                     let g = roll_loot(&t, tier, level, &key, &HashSet::new()).expect("rolls");
                     assert!(
-                        g.stackable_items.keys().any(|id| !ENCHANTING_INGREDIENTS.contains(id)),
+                        g.stackable_items
+                            .keys()
+                            .any(|id| !ENCHANTING_INGREDIENTS.contains(id)),
                         "tier {tier} L{level} {key}: {:?}",
                         g.stackable_items
                     );
@@ -1733,7 +2093,8 @@ mod tests {
             HashMap::from([(Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5), 5)])
         );
         // A chest that already holds a plain stackable is untouched.
-        let mut kept = HashMap::from([(Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef), 1)]);
+        let mut kept =
+            HashMap::from([(Uuid::from_u128(0x42d91529_c88b_4c5b_815b_b55508b4e7ef), 1)]);
         let before = kept.clone();
         restock_stackables(&[&a], &mut kept, 7);
         assert_eq!(kept, before);

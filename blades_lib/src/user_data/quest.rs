@@ -156,7 +156,6 @@ pub struct QuestWithId {
     pub quest: Quest,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +304,10 @@ mod tests {
             .unwrap_or_else(|e| panic!("cannot read corpus {path}: {e}"));
         let rows: Vec<serde_json::Value> =
             serde_json::from_str(&raw).expect("corpus must be a JSON array");
-        assert!(!rows.is_empty(), "an empty corpus proves nothing — check the query");
+        assert!(
+            !rows.is_empty(),
+            "an empty corpus proves nothing — check the query"
+        );
 
         let mut failures = Vec::new();
         let mut above_i64 = 0usize;
@@ -346,19 +348,20 @@ mod tests {
             "this corpus contains no seed above i64::MAX, so it does not exercise \
              the bug it exists to catch — widen the query",
         );
-        assert!(failures.is_empty(), "{} row(s) failed:\n{}", failures.len(), failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "{} row(s) failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     /// `u64::MAX` and `i64::MIN`, the two ends. Guards against a future "tidy this
     /// up into an untagged enum" that quietly loses one boundary.
     #[test]
     fn the_extremes_of_both_ranges_round_trip() {
-        for seed in [
-            serde_json::json!(u64::MAX),
-            serde_json::json!(i64::MIN),
-        ] {
-            let q: QuestWithId =
-                serde_json::from_value(quest_with_seed(seed.clone())).unwrap();
+        for seed in [serde_json::json!(u64::MAX), serde_json::json!(i64::MIN)] {
+            let q: QuestWithId = serde_json::from_value(quest_with_seed(seed.clone())).unwrap();
             assert_eq!(serde_json::to_value(&q).unwrap()["seed"], seed);
         }
     }

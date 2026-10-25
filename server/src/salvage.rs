@@ -21,8 +21,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
 
 #[derive(Deserialize)]

@@ -153,7 +153,9 @@ impl PerkBonuses {
     /// Flat perk damage added to a weapon of this weight class; 0.0 if unperked or
     /// if the weapon's class is unknown (bots and the starter loadout).
     pub fn weapon_bonus(&self, weight: Option<Weight>) -> f32 {
-        weight.map(|w| self.weapon_damage[w as usize]).unwrap_or(0.0)
+        weight
+            .map(|w| self.weapon_damage[w as usize])
+            .unwrap_or(0.0)
     }
 
     /// The Healing Surge rate at this stamina fraction.
@@ -353,8 +355,7 @@ impl<'a> CasterPerks<'a> {
 /// Compared without dividing by it so a zero-max fighter cannot produce a NaN.
 pub fn health_is_critical(health: u32, max_health: u32) -> bool {
     let multiplier = super::state::ARENA_HEALTH_MULTIPLIER.max(1) as f32;
-    max_health > 0
-        && (health as f32) * multiplier <= max_health as f32 * CRITICAL_HEALTH_THRESHOLD
+    max_health > 0 && (health as f32) * multiplier <= max_health as f32 * CRITICAL_HEALTH_THRESHOLD
 }
 
 /// [`health_is_critical`] for a fighter, against the pool's full maximum
@@ -390,7 +391,8 @@ impl CasterPerks<'_> {
     /// for Mettle to scale.
     pub fn magnitude_multiplier(&self, is_spell: bool) -> f32 {
         if is_spell {
-            self.perks.spell_multiplier(self.magicka_full, self.health_critical)
+            self.perks
+                .spell_multiplier(self.magicka_full, self.health_critical)
         } else {
             1.0
         }
@@ -454,7 +456,10 @@ mod tests {
     #[test]
     fn out_of_scope_perks_resolve_to_nothing() {
         let p = PerkBonuses::resolve(&[perk(LOAD_BEARER, 9)], true);
-        assert!(p.is_empty(), "LoadBearer is inventory size, not combat: {p:?}");
+        assert!(
+            p.is_empty(),
+            "LoadBearer is inventory size, not combat: {p:?}"
+        );
     }
 
     /// Maximum Power is CONDITIONAL on full magicka — the owner's recollection was
@@ -519,12 +524,19 @@ mod tests {
     /// 35 % of the un-multiplied 1000 — not <= 1050 (35 % of the tripled bar).
     #[test]
     fn critical_health_is_35_percent_of_the_unmultiplied_bar() {
-        assert_eq!(crate::arena::combat::state::ARENA_HEALTH_MULTIPLIER, 3, "fixture assumes x3");
+        assert_eq!(
+            crate::arena::combat::state::ARENA_HEALTH_MULTIPLIER,
+            3,
+            "fixture assumes x3"
+        );
         assert!(health_is_critical(350, 3000));
         assert!(!health_is_critical(351, 3000));
         // The old gate: 1050 of 3000 counted as critical. It must not now.
         assert!(!health_is_critical(1050, 3000));
-        assert!(!health_is_critical(0, 0), "a zero-max pool is never critical");
+        assert!(
+            !health_is_critical(0, 0),
+            "a zero-max pool is never critical"
+        );
     }
 
     /// The Atronach Powers are `enemy_only` and must not resolve for a player even
@@ -573,7 +585,10 @@ mod tests {
     /// `=` typo where `+=` is meant, which no single-perk test would catch.
     #[test]
     fn duplicate_perk_entries_accumulate() {
-        let p = PerkBonuses::resolve(&[perk(AUGMENTED_FLAMES, 1), perk(AUGMENTED_FLAMES, 1)], false);
+        let p = PerkBonuses::resolve(
+            &[perk(AUGMENTED_FLAMES, 1), perk(AUGMENTED_FLAMES, 1)],
+            false,
+        );
         assert_eq!(p.element_bonus(DamageType::Fire), 10.08);
     }
 

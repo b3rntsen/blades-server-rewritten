@@ -43,7 +43,9 @@ use diesel::{
     ExpressionMethods, OptionalExtension, QueryDsl, QueryableByName, SelectableHelper,
     sql_types::{BigInt, Jsonb, Nullable, Text, Uuid as SqlUuid},
 };
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -85,12 +87,11 @@ pub(crate) async fn any_test_alt(
         #[diesel(sql_type = BigInt)]
         n: i64,
     }
-    let hit: Hit = diesel::sql_query(
-        "SELECT COUNT(*) AS n FROM test_characters WHERE alt_uuid = ANY($1)",
-    )
-    .bind::<diesel::sql_types::Array<SqlUuid>, _>(alts.to_vec())
-    .get_result(conn)
-    .await?;
+    let hit: Hit =
+        diesel::sql_query("SELECT COUNT(*) AS n FROM test_characters WHERE alt_uuid = ANY($1)")
+            .bind::<diesel::sql_types::Array<SqlUuid>, _>(alts.to_vec())
+            .get_result(conn)
+            .await?;
     Ok(hit.n > 0)
 }
 
@@ -215,11 +216,9 @@ pub async fn mark_test_character(
         .get()
         .await
         .map_err(|_| refuse(StatusCode::SERVICE_UNAVAILABLE, NO_CONNECTION))?;
-    conn.transaction(move |conn| {
-        async move { apply_mark(conn, &body, &actor).await }.scope_boxed()
-    })
-    .await
-    .map(Json)
+    conn.transaction(move |conn| async move { apply_mark(conn, &body, &actor).await }.scope_boxed())
+        .await
+        .map(Json)
 }
 
 async fn apply_mark(
@@ -416,14 +415,13 @@ async fn apply_set_level(
     data: &level_up::LevelUpData,
 ) -> Result<SetTestCharacterLevelResponse, BladeApiError> {
     // The marker is the ONLY way in: the row written below is found through it.
-    let user_id: Option<Uuid> = diesel::sql_query(
-        "SELECT user_id FROM test_characters WHERE alt_uuid = $1",
-    )
-    .bind::<SqlUuid, _>(alt_uuid)
-    .get_result::<UserIdRow>(conn)
-    .await
-    .optional()?
-    .map(|r| r.user_id);
+    let user_id: Option<Uuid> =
+        diesel::sql_query("SELECT user_id FROM test_characters WHERE alt_uuid = $1")
+            .bind::<SqlUuid, _>(alt_uuid)
+            .get_result::<UserIdRow>(conn)
+            .await
+            .optional()?
+            .map(|r| r.user_id);
     let Some(user_id) = user_id else {
         return Err(refuse(StatusCode::FORBIDDEN, NOT_A_TEST_CHARACTER));
     };
@@ -585,7 +583,10 @@ async fn load_listing(
     )
     .get_results(conn)
     .await?;
-    Ok(TestCharactersResponse { test_characters, audit })
+    Ok(TestCharactersResponse {
+        test_characters,
+        audit,
+    })
 }
 
 /// The marker tables, as the real migration creates them — for the test
@@ -637,8 +638,12 @@ mod tests {
     fn an_unlabelled_import_cannot_land_on_a_test_alt() {
         let src = include_str!("admin.rs");
         let body = src.split("pub async fn import_character(").nth(1).unwrap();
-        let guard = body.find("import_into_test_alt_refusal").expect("the import checks the marker");
-        let write = body.find("characters::character.eq(entry.character)").unwrap();
+        let guard = body
+            .find("import_into_test_alt_refusal")
+            .expect("the import checks the marker");
+        let write = body
+            .find("characters::character.eq(entry.character)")
+            .unwrap();
         assert!(guard < write, "before the live row is overwritten");
         assert!(body[..guard].contains("incoming_alt.is_none()"));
     }
@@ -663,9 +668,14 @@ mod tests {
             .nth(1)
             .expect("the live increment exists");
         let body = &body[..body.find("\n}\n").unwrap()];
-        let check = body.find("testchar::any_test_alt").expect("it checks the marker");
+        let check = body
+            .find("testchar::any_test_alt")
+            .expect("it checks the marker");
         let first_write = body.find("upsert_h2h_state").expect("it writes ratings");
-        assert!(check < first_write, "the check comes before any rating is written");
+        assert!(
+            check < first_write,
+            "the check comes before any rating is written"
+        );
     }
 
     mod db {
@@ -837,16 +847,26 @@ mod tests {
             let (id, user, alt) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
             seed(&mut c, id, user, Some(alt), "Fresh", 48).await;
             assert_eq!(
-                refused(apply_mark(&mut c, &mark_named(user, alt, "Wrong"), "ops").await.unwrap_err()),
+                refused(
+                    apply_mark(&mut c, &mark_named(user, alt, "Wrong"), "ops")
+                        .await
+                        .unwrap_err()
+                ),
                 NAME_MISMATCH,
                 "a name that is not the live character's"
             );
-            assert!(apply_mark(&mut c, &mark_named(user, alt, "Fresh"), "ops").await.is_ok());
+            assert!(
+                apply_mark(&mut c, &mark_named(user, alt, "Fresh"), "ops")
+                    .await
+                    .is_ok()
+            );
 
             // The original character: alt id == row id (an imported capture).
             let (id, user) = (Uuid::new_v4(), Uuid::new_v4());
             seed(&mut c, id, user, Some(id), "HauDrauf", 100).await;
-            let e = apply_mark(&mut c, &mark_named(user, id, "HauDrauf"), "ops").await.unwrap_err();
+            let e = apply_mark(&mut c, &mark_named(user, id, "HauDrauf"), "ops")
+                .await
+                .unwrap_err();
             assert_eq!(refused(e), ORIGINAL_CHARACTER);
 
             // An alt with arena history, stamped or legacy (NULL = the live alt).
@@ -862,7 +882,9 @@ mod tests {
                 .execute(&mut c)
                 .await
                 .unwrap();
-                let e = apply_mark(&mut c, &mark_named(user, alt, "Veteran"), "ops").await.unwrap_err();
+                let e = apply_mark(&mut c, &mark_named(user, alt, "Veteran"), "ops")
+                    .await
+                    .unwrap_err();
                 assert_eq!(refused(e), HAS_ARENA_HISTORY, "stamped={stamped}");
                 assert_eq!(live(&mut c, id).await.name, "Veteran");
             }
@@ -878,21 +900,35 @@ mod tests {
             .execute(&mut c)
             .await
             .unwrap();
-            let e = apply_mark(&mut c, &mark_named(user, alt, "Laureate"), "ops").await.unwrap_err();
+            let e = apply_mark(&mut c, &mark_named(user, alt, "Laureate"), "ops")
+                .await
+                .unwrap_err();
             assert_eq!(refused(e), UNCLAIMED_LEGACY_AWARD);
             // …a claimed one is harmless.
-            diesel::sql_query("UPDATE arena_season_awards SET granted_at = 1 WHERE character_id = $1")
-                .bind::<SqlUuid, _>(id)
-                .execute(&mut c)
-                .await
-                .unwrap();
-            assert!(apply_mark(&mut c, &mark_named(user, alt, "Laureate"), "ops").await.is_ok());
+            diesel::sql_query(
+                "UPDATE arena_season_awards SET granted_at = 1 WHERE character_id = $1",
+            )
+            .bind::<SqlUuid, _>(id)
+            .execute(&mut c)
+            .await
+            .unwrap();
+            assert!(
+                apply_mark(&mut c, &mark_named(user, alt, "Laureate"), "ops")
+                    .await
+                    .is_ok()
+            );
 
             // An alt that is not live (parked in a version).
-            let (id, user, live_alt, parked) =
-                (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let (id, user, live_alt, parked) = (
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+            );
             seed(&mut c, id, user, Some(live_alt), "Main", 90).await;
-            let e = apply_mark(&mut c, &mark_named(user, parked, "Main"), "ops").await.unwrap_err();
+            let e = apply_mark(&mut c, &mark_named(user, parked, "Main"), "ops")
+                .await
+                .unwrap_err();
             assert_eq!(refused(e), NOT_LIVE);
 
             let marked: Vec<_> = load_listing(&mut c)
@@ -909,11 +945,17 @@ mod tests {
         #[actix_web::test]
         async fn live_alt_is_test_follows_the_alt_not_the_row() {
             let mut c = db!();
-            let (id, user, test_alt, real_alt) =
-                (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let (id, user, test_alt, real_alt) = (
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+            );
             seed(&mut c, id, user, Some(test_alt), "Tester", 48).await;
             assert!(!live_alt_is_test(&mut c, id).await.unwrap(), "unmarked");
-            apply_mark(&mut c, &mark(user, test_alt), "ops").await.unwrap();
+            apply_mark(&mut c, &mark(user, test_alt), "ops")
+                .await
+                .unwrap();
             assert!(live_alt_is_test(&mut c, id).await.unwrap());
             diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
                 .bind::<SqlUuid, _>(real_alt)
@@ -921,7 +963,10 @@ mod tests {
                 .execute(&mut c)
                 .await
                 .unwrap();
-            assert!(!live_alt_is_test(&mut c, id).await.unwrap(), "the real alt is live again");
+            assert!(
+                !live_alt_is_test(&mut c, id).await.unwrap(),
+                "the real alt is live again"
+            );
         }
 
         #[actix_web::test]
@@ -932,18 +977,31 @@ mod tests {
             seed(&mut c, id, user, Some(alt), "Tester", 48).await;
             apply_mark(&mut c, &mark(user, alt), "ops").await.unwrap();
 
-            let done = apply_set_level(&mut c, alt, 90, "ops", &data).await.unwrap();
+            let done = apply_set_level(&mut c, alt, 90, "ops", &data)
+                .await
+                .unwrap();
             assert_eq!((done.from_level, done.level, done.experience), (48, 90, 0));
             let ch = live(&mut c, id).await;
             assert_eq!((ch.level, ch.experience), (90, 0));
-            assert_eq!(ch.stamina_attribute_points + ch.magicka_attribute_points, 49);
+            assert_eq!(
+                ch.stamina_attribute_points + ch.magicka_attribute_points,
+                49
+            );
             assert_eq!(ch.name, "Tester (Test)");
 
-            let e = apply_set_level(&mut c, alt, 0, "ops", &data).await.unwrap_err();
+            let e = apply_set_level(&mut c, alt, 0, "ops", &data)
+                .await
+                .unwrap_err();
             assert_eq!(code(&e), "400 Bad Request");
-            let e = apply_set_level(&mut c, alt, 101, "ops", &data).await.unwrap_err();
+            let e = apply_set_level(&mut c, alt, 101, "ops", &data)
+                .await
+                .unwrap_err();
             assert_eq!(code(&e), "400 Bad Request");
-            assert_eq!(live(&mut c, id).await.level, 90, "a refusal changes nothing");
+            assert_eq!(
+                live(&mut c, id).await.level,
+                90,
+                "a refusal changes nothing"
+            );
 
             assert_eq!(audit_actions(&mut c).await, ["set-level:ops", "mark:ops"]);
         }
@@ -956,25 +1014,39 @@ mod tests {
             // Not marked at all — the tester's real character.
             let (id, user) = (Uuid::new_v4(), Uuid::new_v4());
             seed(&mut c, id, user, Some(id), "HauDrauf", 100).await;
-            let e = apply_set_level(&mut c, id, 10, "ops", &data).await.unwrap_err();
+            let e = apply_set_level(&mut c, id, 10, "ops", &data)
+                .await
+                .unwrap_err();
             assert_eq!(code(&e), "403 Forbidden");
             assert_eq!(live(&mut c, id).await.level, 100);
 
             // Marked, but the user has switched back to his real character: the live
             // row is NOT the test alt and must not be written.
-            let (id, user, test_alt, real_alt) =
-                (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let (id, user, test_alt, real_alt) = (
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+            );
             seed(&mut c, id, user, Some(test_alt), "Tester", 48).await;
-            apply_mark(&mut c, &mark(user, test_alt), "ops").await.unwrap();
+            apply_mark(&mut c, &mark(user, test_alt), "ops")
+                .await
+                .unwrap();
             diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
                 .bind::<SqlUuid, _>(real_alt)
                 .bind::<SqlUuid, _>(id)
                 .execute(&mut c)
                 .await
                 .unwrap();
-            let e = apply_set_level(&mut c, test_alt, 10, "ops", &data).await.unwrap_err();
+            let e = apply_set_level(&mut c, test_alt, 10, "ops", &data)
+                .await
+                .unwrap_err();
             assert_eq!(code(&e), "409 Conflict");
-            assert_eq!(live(&mut c, id).await.level, 48, "the real alt's row is untouched");
+            assert_eq!(
+                live(&mut c, id).await.level,
+                48,
+                "the real alt's row is untouched"
+            );
             assert_eq!(audit_actions(&mut c).await, ["mark:ops"]);
 
             let listed = load_listing(&mut c).await.unwrap().test_characters;

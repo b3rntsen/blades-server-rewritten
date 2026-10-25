@@ -11,7 +11,7 @@ use std::ops::RangeInclusive;
 
 use uuid::Uuid;
 
-use crate::economy::{RewardGrant, GEMS};
+use crate::economy::{GEMS, RewardGrant};
 use crate::features::store_bundles::mix;
 
 // ---------------------------------------------------------------------------
@@ -74,9 +74,18 @@ pub struct ContainerClass {
 /// Owner-approved deviation from retail, #388, 2026-10-16: "small containers hold
 /// 2 items, medium 4, large 6", in event and quest/job dungeons.
 pub fn container_class(table: &Uuid, group_name: Option<&str>) -> Option<ContainerClass> {
-    let small = ContainerClass { stacks: SMALL_CONTAINER_STACKS, fill_table: SMALL_CONTAINER_TABLE };
-    let medium = ContainerClass { stacks: MEDIUM_CONTAINER_STACKS, fill_table: MEDIUM_CONTAINER_TABLE };
-    let large = ContainerClass { stacks: LARGE_CONTAINER_STACKS, fill_table: LARGE_CONTAINER_TABLE };
+    let small = ContainerClass {
+        stacks: SMALL_CONTAINER_STACKS,
+        fill_table: SMALL_CONTAINER_TABLE,
+    };
+    let medium = ContainerClass {
+        stacks: MEDIUM_CONTAINER_STACKS,
+        fill_table: MEDIUM_CONTAINER_TABLE,
+    };
+    let large = ContainerClass {
+        stacks: LARGE_CONTAINER_STACKS,
+        fill_table: LARGE_CONTAINER_TABLE,
+    };
     match *table {
         SMALL_CONTAINER_TABLE => Some(small),
         MEDIUM_CONTAINER_TABLE => Some(medium),
@@ -183,7 +192,10 @@ pub fn event_rewards(tiers: &mut [RewardGrant], level: i64, event: Uuid) {
         add_gem_bonus(tier);
         top_event_soul_gems(&mut tier.stackable_items, level);
         if EVENT_LADDER_STACKS_FIXED {
-            size_material_stacks_in_order(&mut tier.stackable_items, event_material_seed(event, milestone));
+            size_material_stacks_in_order(
+                &mut tier.stackable_items,
+                event_material_seed(event, milestone),
+            );
         }
     }
 }
@@ -194,11 +206,19 @@ pub fn event_rewards(tiers: &mut [RewardGrant], level: i64, event: Uuid) {
 /// bonus, it still does.
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub fn event_final_reward(reward: &mut RewardGrant, level: i64, event: Uuid, last_milestone: usize) {
+pub fn event_final_reward(
+    reward: &mut RewardGrant,
+    level: i64,
+    event: Uuid,
+    last_milestone: usize,
+) {
     add_gem_bonus(reward);
     top_event_soul_gems(&mut reward.stackable_items, level);
     if EVENT_LADDER_STACKS_FIXED {
-        size_material_stacks_in_order(&mut reward.stackable_items, event_material_seed(event, last_milestone));
+        size_material_stacks_in_order(
+            &mut reward.stackable_items,
+            event_material_seed(event, last_milestone),
+        );
     }
 }
 
@@ -206,7 +226,9 @@ pub fn event_final_reward(reward: &mut RewardGrant, level: i64, event: Uuid, las
 /// milestone, never the level.
 fn event_material_seed(event: Uuid, milestone: usize) -> u64 {
     let id = event.as_u128();
-    (id as u64) ^ ((id >> 64) as u64).rotate_left(17) ^ (milestone as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+    (id as u64)
+        ^ ((id >> 64) as u64).rotate_left(17)
+        ^ (milestone as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
 /// The gems a treasury chest of `tier` pays: [`WOODEN_CHEST_GEMS`] for tier 1,
@@ -248,8 +270,11 @@ pub const TRANSCENDENT_SOUL_GEM: Uuid = crate::features::loot_level::SOUL_GEMS_A
 /// Transcendent 41) steps.
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub const TOP_SOUL_GEM_WEIGHTS: [(Uuid, u64); 3] =
-    [(GRAND_SOUL_GEM, 1), (GLORIOUS_SOUL_GEM, 2), (TRANSCENDENT_SOUL_GEM, 1)];
+pub const TOP_SOUL_GEM_WEIGHTS: [(Uuid, u64); 3] = [
+    (GRAND_SOUL_GEM, 1),
+    (GLORIOUS_SOUL_GEM, 2),
+    (TRANSCENDENT_SOUL_GEM, 1),
+];
 
 /// Pay every soul-gem stack below Grand in `stacks` as one of the three best
 /// kinds ([`TOP_SOUL_GEM_WEIGHTS`]), same count, for a character of `level` in
@@ -266,7 +291,14 @@ pub fn top_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
         let mut at = mix(seed ^ (id.as_u128() as u64)) % total;
         let kind = TOP_SOUL_GEM_WEIGHTS
             .iter()
-            .find(|(_, w)| if at < *w { true } else { at -= w; false })
+            .find(|(_, w)| {
+                if at < *w {
+                    true
+                } else {
+                    at -= w;
+                    false
+                }
+            })
             .map_or(GRAND_SOUL_GEM, |(k, _)| *k);
         *stacks.entry(kind).or_insert(0) += count;
     }
@@ -293,7 +325,10 @@ pub fn top_event_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64) {
 /// Remove and return the soul-gem stacks below Grand, in id order.
 fn lower_soul_gems(stacks: &mut HashMap<Uuid, u64>) -> Vec<(Uuid, u64)> {
     let soul_gems = &SOUL_GEMS;
-    let mut lower: Vec<(Uuid, u64)> = soul_gems[..7].iter().filter_map(|id| stacks.remove(id).map(|n| (*id, n))).collect();
+    let mut lower: Vec<(Uuid, u64)> = soul_gems[..7]
+        .iter()
+        .filter_map(|id| stacks.remove(id).map(|n| (*id, n)))
+        .collect();
     lower.sort_unstable();
     lower
 }
@@ -304,12 +339,21 @@ fn lower_soul_gems(stacks: &mut HashMap<Uuid, u64>) -> Vec<(Uuid, u64)> {
 /// stack below Grand is left to move.
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
-pub fn top_dungeon_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level: i64, event: bool) {
+pub fn top_dungeon_soul_gems(
+    data: &mut crate::user_data::DungeonGeneratedData,
+    level: i64,
+    event: bool,
+) {
     top_corpse_soul_gems(data, level, event);
     top_container_soul_gems(data, level, event);
 }
 
-fn pay_dungeon_loot(loot: &mut crate::user_data::LootTableResult, level: i64, event: bool, seed: u64) {
+fn pay_dungeon_loot(
+    loot: &mut crate::user_data::LootTableResult,
+    level: i64,
+    event: bool,
+    seed: u64,
+) {
     if event {
         top_event_soul_gems(&mut loot.stackable_items, level);
     } else {
@@ -317,7 +361,11 @@ fn pay_dungeon_loot(loot: &mut crate::user_data::LootTableResult, level: i64, ev
     }
 }
 
-fn top_corpse_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level: i64, event: bool) {
+fn top_corpse_soul_gems(
+    data: &mut crate::user_data::DungeonGeneratedData,
+    level: i64,
+    event: bool,
+) {
     if !TOP_SOUL_GEM_LEVELS.contains(&level) {
         return;
     }
@@ -336,14 +384,20 @@ fn top_corpse_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level
 
 /// The container half of [`top_dungeon_soul_gems`]. An Abyss floor takes only
 /// this half: its corpses' soul gems are the #383 bonus, paid at its draw.
-pub fn top_container_soul_gems(data: &mut crate::user_data::DungeonGeneratedData, level: i64, event: bool) {
+pub fn top_container_soul_gems(
+    data: &mut crate::user_data::DungeonGeneratedData,
+    level: i64,
+    event: bool,
+) {
     if !TOP_SOUL_GEM_LEVELS.contains(&level) {
         return;
     }
     for (group, pile) in &mut data.item_generated_data {
         for (a, result) in pile.iter_mut().enumerate() {
             for (table, loot) in &mut result.loot_table_loot {
-                let seed = mix(group.as_u128() as u64 ^ (a as u64).rotate_left(48) ^ table.as_u128() as u64);
+                let seed = mix(group.as_u128() as u64
+                    ^ (a as u64).rotate_left(48)
+                    ^ table.as_u128() as u64);
                 pay_dungeon_loot(loot, level, event, seed);
             }
         }
@@ -352,7 +406,9 @@ pub fn top_container_soul_gems(data: &mut crate::user_data::DungeonGeneratedData
 
 /// A stable seed for a string key (a chest's loot key, a reward id).
 pub fn key_seed(key: &str) -> u64 {
-    key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3))
+    key.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -420,11 +476,17 @@ pub fn size_material_stacks(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
 pub fn size_material_stacks_in_order(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
-    let mut materials: Vec<Uuid> =
-        stacks.iter().filter(|(id, q)| **q > 0 && is_crafting_material(id)).map(|(id, _)| *id).collect();
+    let mut materials: Vec<Uuid> = stacks
+        .iter()
+        .filter(|(id, q)| **q > 0 && is_crafting_material(id))
+        .map(|(id, _)| *id)
+        .collect();
     materials.sort_unstable();
     for (i, id) in materials.into_iter().enumerate() {
-        stacks.insert(id, MATERIAL_STACK_SIZES[(mix(seed ^ (i as u64).rotate_left(32)) % 3) as usize]);
+        stacks.insert(
+            id,
+            MATERIAL_STACK_SIZES[(mix(seed ^ (i as u64).rotate_left(32)) % 3) as usize],
+        );
     }
 }
 
@@ -447,11 +509,23 @@ mod tests {
     #[test]
     fn container_classes_are_2_4_6() {
         assert_eq!(container_stacks(&SMALL_CONTAINER_TABLE, None), Some(2));
-        assert_eq!(container_stacks(&MEDIUM_CONTAINER_TABLE, Some("Breakable_T2")), Some(4));
+        assert_eq!(
+            container_stacks(&MEDIUM_CONTAINER_TABLE, Some("Breakable_T2")),
+            Some(4)
+        );
         assert_eq!(container_stacks(&LARGE_CONTAINER_TABLE, None), Some(6));
-        assert_eq!(container_stacks(&JOB_CONTAINER_TABLE, Some("Not in secret, common rarity")), Some(2));
-        assert_eq!(container_stacks(&JOB_CONTAINER_TABLE, Some("In secret, uncommon rarity")), Some(4));
-        assert_eq!(container_stacks(&JOB_CONTAINER_TABLE, Some("In secret, rare rarity")), Some(6));
+        assert_eq!(
+            container_stacks(&JOB_CONTAINER_TABLE, Some("Not in secret, common rarity")),
+            Some(2)
+        );
+        assert_eq!(
+            container_stacks(&JOB_CONTAINER_TABLE, Some("In secret, uncommon rarity")),
+            Some(4)
+        );
+        assert_eq!(
+            container_stacks(&JOB_CONTAINER_TABLE, Some("In secret, rare rarity")),
+            Some(6)
+        );
         assert_eq!(container_stacks(&JOB_CONTAINER_TABLE, None), None);
         assert_eq!(container_stacks(&Uuid::nil(), Some("Breakable_T1")), None);
         let job = container_class(&JOB_CONTAINER_TABLE, Some("In secret, rare rarity")).unwrap();
@@ -460,7 +534,19 @@ mod tests {
 
     #[test]
     fn gems_pay_20_percent_more() {
-        for (before, after) in [(0, 0), (1, 2), (2, 3), (4, 5), (5, 6), (9, 11), (10, 12), (12, 15), (15, 18), (36, 44), (50, 60)] {
+        for (before, after) in [
+            (0, 0),
+            (1, 2),
+            (2, 3),
+            (4, 5),
+            (5, 6),
+            (9, 11),
+            (10, 12),
+            (12, 15),
+            (15, 18),
+            (36, 44),
+            (50, 60),
+        ] {
             assert_eq!(with_gem_bonus(before), after, "{before}");
         }
         // Drawn: a single gem pays 1.2 on average, never less than 1 nor more than 2.
@@ -468,7 +554,11 @@ mod tests {
         assert!(paid.iter().all(|g| (1..=2).contains(g)));
         let mean = paid.iter().sum::<u64>() as f64 / paid.len() as f64;
         assert!((mean - 1.2).abs() < 0.02, "{mean}");
-        assert_eq!(with_gem_bonus_drawn(5, 7), 6, "an exact 20% is never rounded");
+        assert_eq!(
+            with_gem_bonus_drawn(5, 7),
+            6,
+            "an exact 20% is never rounded"
+        );
         let mut r = RewardGrant::default();
         r.currencies.insert(GEMS, 4);
         r.stackable_items.insert(GEMS, 36);
@@ -479,7 +569,8 @@ mod tests {
     #[test]
     fn wooden_chests_pay_3_to_5_gems_and_silver_6_to_8() {
         for (tier, range) in [(1, 3..=5), (2, 6..=8)] {
-            let seen: std::collections::BTreeSet<u64> = (0..300).filter_map(|s| chest_gems(tier, s)).collect();
+            let seen: std::collections::BTreeSet<u64> =
+                (0..300).filter_map(|s| chest_gems(tier, s)).collect();
             assert_eq!(seen, range.collect(), "tier {tier}");
         }
         assert_eq!(chest_gems(3, 1), None);
@@ -492,11 +583,27 @@ mod tests {
         let mut seen = std::collections::BTreeMap::new();
         for seed in 0..400 {
             for level in [45, 46, 47, 48] {
-                let mut s = HashMap::from([(SOUL_GEMS[0], 3), (SOUL_GEMS[6], 2), (GLORIOUS_SOUL_GEM, 1), (lumber, 9)]);
+                let mut s = HashMap::from([
+                    (SOUL_GEMS[0], 3),
+                    (SOUL_GEMS[6], 2),
+                    (GLORIOUS_SOUL_GEM, 1),
+                    (lumber, 9),
+                ]);
                 top_soul_gems(&mut s, level, seed);
                 assert_eq!(s[&lumber], 9);
-                assert!(s.keys().all(|k| *k == lumber || [GRAND_SOUL_GEM, GLORIOUS_SOUL_GEM, TRANSCENDENT_SOUL_GEM].contains(k)), "{s:?}");
-                assert_eq!(s.iter().filter(|(k, _)| **k != lumber).map(|(_, n)| n).sum::<u64>(), 6, "counts kept");
+                assert!(
+                    s.keys().all(|k| *k == lumber
+                        || [GRAND_SOUL_GEM, GLORIOUS_SOUL_GEM, TRANSCENDENT_SOUL_GEM].contains(k)),
+                    "{s:?}"
+                );
+                assert_eq!(
+                    s.iter()
+                        .filter(|(k, _)| **k != lumber)
+                        .map(|(_, n)| n)
+                        .sum::<u64>(),
+                    6,
+                    "counts kept"
+                );
                 for k in s.keys() {
                     *seen.entry(*k).or_insert(0) += 1;
                 }
@@ -525,12 +632,23 @@ mod tests {
         }
         let mut counts = [0u32; 3];
         for seed in 0..9_000u64 {
-            let mut s = HashMap::from([(frost_salts, 7), (lumber, 50), (door_key, 1), (GRAND_SOUL_GEM, 3)]);
+            let mut s = HashMap::from([
+                (frost_salts, 7),
+                (lumber, 50),
+                (door_key, 1),
+                (GRAND_SOUL_GEM, 3),
+            ]);
             size_material_stacks(&mut s, seed);
             assert_eq!((s[&lumber], s[&door_key], s[&GRAND_SOUL_GEM]), (50, 1, 3));
-            counts[MATERIAL_STACK_SIZES.iter().position(|q| *q == s[&frost_salts]).unwrap()] += 1;
+            counts[MATERIAL_STACK_SIZES
+                .iter()
+                .position(|q| *q == s[&frost_salts])
+                .unwrap()] += 1;
         }
-        assert!(counts.iter().all(|c| (2_850..=3_150).contains(c)), "{counts:?}");
+        assert!(
+            counts.iter().all(|c| (2_850..=3_150).contains(c)),
+            "{counts:?}"
+        );
         let mut end = HashMap::from([(frost_salts, 7), (GRAND_SOUL_GEM, 3)]);
         size_abyss_end_materials(&mut end);
         assert_eq!(end, HashMap::from([(frost_salts, 20), (GRAND_SOUL_GEM, 3)]));

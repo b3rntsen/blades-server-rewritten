@@ -122,8 +122,17 @@ mod parsed_json_load_test {
         let gd: GameData = serde_json::from_str(&s).expect("parse parsed.json into GameData");
         assert!(gd.quests.len() > 100, "quests: {}", gd.quests.len());
         assert!(gd.dungeons.len() > 100, "dungeons: {}", gd.dungeons.len());
-        assert!(gd.items_template.len() > 100, "items: {}", gd.items_template.len());
-        eprintln!("GameData loaded: {} items, {} interactables, {} quests, {} dungeons",
-            gd.items_template.len(), gd.interactables.len(), gd.quests.len(), gd.dungeons.len());
+        assert!(
+            gd.items_template.len() > 100,
+            "items: {}",
+            gd.items_template.len()
+        );
+        eprintln!(
+            "GameData loaded: {} items, {} interactables, {} quests, {} dungeons",
+            gd.items_template.len(),
+            gd.interactables.len(),
+            gd.quests.len(),
+            gd.dungeons.len()
+        );
     }
 }

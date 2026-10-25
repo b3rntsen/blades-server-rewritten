@@ -104,7 +104,11 @@ impl Session {
 
     /// The gear rating the client last reported for `character_id`, if any.
     pub fn gear_rating(&self, character_id: Uuid) -> Option<u32> {
-        self.client_gear_ratings.lock().ok()?.get(&character_id).copied()
+        self.client_gear_ratings
+            .lock()
+            .ok()?
+            .get(&character_id)
+            .copied()
     }
 
     pub fn generate_token(&self, session_id: &Uuid) -> String {
@@ -114,9 +118,7 @@ impl Session {
     /// Last REST request index accepted for this session. The middleware increments
     /// before handling a request, matching the `/public/sync` response semantics.
     pub fn current_request_index(&self) -> u64 {
-        self.request_count
-            .load(Ordering::Relaxed)
-            .saturating_sub(1)
+        self.request_count.load(Ordering::Relaxed).saturating_sub(1)
     }
 
     /// Claim the matchmaking-feed slot for a freshly opened rms WebSocket.
@@ -266,7 +268,10 @@ impl Session {
 
     /// The remembered `MatchmakingSucceeded`, if any.
     pub fn pending_match(&self) -> Option<PendingMatch> {
-        self.rms_feed.lock().ok().and_then(|feed| feed.pending.clone())
+        self.rms_feed
+            .lock()
+            .ok()
+            .and_then(|feed| feed.pending.clone())
     }
 
     /// Forget the remembered match — all of it with `None`, or only if it belongs to
@@ -303,18 +308,29 @@ mod matchmaking_slot_tests {
     async fn losing_the_socket_records_when() {
         let s = session();
         let now = std::time::Instant::now();
-        assert_eq!(s.rms_down_for(now).await, Some(StdDuration::MAX), "never connected");
+        assert_eq!(
+            s.rms_down_for(now).await,
+            Some(StdDuration::MAX),
+            "never connected"
+        );
 
         let (a, _ra) = unbounded_channel();
         s.set_matchmaking_ws(a.clone()).await;
-        assert_eq!(s.rms_down_for(std::time::Instant::now()).await, None, "live");
+        assert_eq!(
+            s.rms_down_for(std::time::Instant::now()).await,
+            None,
+            "live"
+        );
 
         assert!(s.clear_matchmaking_ws_if_owner(&a).await);
         let down = s
             .rms_down_for(std::time::Instant::now())
             .await
             .expect("down after the socket closed");
-        assert!(down < StdDuration::from_secs(1), "lost just now, not never-connected");
+        assert!(
+            down < StdDuration::from_secs(1),
+            "lost just now, not never-connected"
+        );
 
         let (b, _rb) = unbounded_channel();
         s.set_matchmaking_ws(b).await;
@@ -736,7 +752,6 @@ async fn sync(session: SessionLookedUpMaybe) -> Result<web::Json<SyncResponse>, 
     }))
 }
 
-
 /// Make `session_id` the only live session for this user, in memory and in the
 /// `sessions` table.
 ///
@@ -793,11 +808,11 @@ pub async fn claim_account_for_this_device_keeping(
     if let Err(e) = diesel::sql_query(
         "DELETE FROM sessions WHERE user_id = $1 AND session_id <> $2 AND session_id <> $3",
     )
-        .bind::<diesel::sql_types::Uuid, _>(user_id)
-        .bind::<diesel::sql_types::Uuid, _>(session_id)
-        .bind::<diesel::sql_types::Uuid, _>(same_device.unwrap_or(session_id))
-        .execute(&mut conn)
-        .await
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .bind::<diesel::sql_types::Uuid, _>(session_id)
+    .bind::<diesel::sql_types::Uuid, _>(same_device.unwrap_or(session_id))
+    .execute(&mut conn)
+    .await
     {
         log::warn!("session: could not evict old sessions from the database: {e}");
     }
@@ -836,7 +851,11 @@ mod one_device_owns_the_account {
     fn add(s: &SessionStore, id: Uuid, user: Uuid) -> Uuid {
         s.insert_existing(
             id,
-            Arc::new(Session::new(user, Uuid::new_v4(), Duration::from_secs(3600))),
+            Arc::new(Session::new(
+                user,
+                Uuid::new_v4(),
+                Duration::from_secs(3600),
+            )),
         );
         id
     }
@@ -854,8 +873,15 @@ mod one_device_owns_the_account {
 
         let evicted = s.evict_other_sessions_for_user_keeping(user, &[fresh, callers_own]);
 
-        assert_eq!(evicted, vec![other_device], "only the other device is displaced");
-        assert!(s.contains(callers_own), "the caller's own session survives the login");
+        assert_eq!(
+            evicted,
+            vec![other_device],
+            "only the other device is displaced"
+        );
+        assert!(
+            s.contains(callers_own),
+            "the caller's own session survives the login"
+        );
         assert!(s.contains(fresh));
         assert!(!s.contains(other_device));
     }
@@ -881,12 +907,18 @@ mod one_device_owns_the_account {
         let user = Uuid::new_v4();
 
         let device1 = add(&s, Uuid::new_v4(), user);
-        assert!(s.get(device1).is_some(), "device 1 is live after signing in");
+        assert!(
+            s.get(device1).is_some(),
+            "device 1 is live after signing in"
+        );
 
         let device2 = add(&s, Uuid::new_v4(), user);
         s.evict_other_sessions_for_user(user, device2);
 
-        assert!(s.get(device2).is_some(), "the newest device keeps its session");
+        assert!(
+            s.get(device2).is_some(),
+            "the newest device keeps its session"
+        );
         assert!(
             s.get(device1).is_none(),
             "the older device's session is gone — its next request 401s and it reloads"
@@ -913,7 +945,10 @@ mod one_device_owns_the_account {
         let evicted = s.evict_other_sessions_for_user(me, my_second);
 
         assert_eq!(evicted, vec![my_first], "only my own older session goes");
-        assert!(s.get(their_session).is_some(), "the other player is untouched");
+        assert!(
+            s.get(their_session).is_some(),
+            "the other player is untouched"
+        );
         assert!(s.get(my_second).is_some());
     }
 
@@ -952,7 +987,9 @@ mod one_device_owns_the_account {
         let src = include_str!("authentification.rs");
         let mints = src.matches("store_new_session(").count();
         let claims = src.matches("claim_account_for_this_device(").count()
-            + src.matches("claim_account_for_this_device_keeping(").count();
+            + src
+                .matches("claim_account_for_this_device_keeping(")
+                .count();
         assert!(mints > 0, "there is at least one login path");
         assert!(
             claims >= mints,

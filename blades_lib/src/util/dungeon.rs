@@ -161,11 +161,36 @@ const CHEST_CYCLES: &[ChestCycle] = &[
         length: 100,
         base: 1,
         rules: &[
-            CycleRule { chests: 1, rarity: 3, start: 2, end: 24 },
-            CycleRule { chests: 1, rarity: 3, start: 26, end: 49 },
-            CycleRule { chests: 1, rarity: 3, start: 51, end: 74 },
-            CycleRule { chests: 1, rarity: 3, start: 76, end: 99 },
-            CycleRule { chests: 10, rarity: 2, start: 2, end: 99 },
+            CycleRule {
+                chests: 1,
+                rarity: 3,
+                start: 2,
+                end: 24,
+            },
+            CycleRule {
+                chests: 1,
+                rarity: 3,
+                start: 26,
+                end: 49,
+            },
+            CycleRule {
+                chests: 1,
+                rarity: 3,
+                start: 51,
+                end: 74,
+            },
+            CycleRule {
+                chests: 1,
+                rarity: 3,
+                start: 76,
+                end: 99,
+            },
+            CycleRule {
+                chests: 10,
+                rarity: 2,
+                start: 2,
+                end: 99,
+            },
         ],
     },
     // "Job Secrets Chest Cycle": 500 x silver; per pass three Elder and fifty gold.
@@ -174,14 +199,54 @@ const CHEST_CYCLES: &[ChestCycle] = &[
         length: 500,
         base: 2,
         rules: &[
-            CycleRule { chests: 1, rarity: 4, start: 50, end: 125 },
-            CycleRule { chests: 1, rarity: 4, start: 175, end: 300 },
-            CycleRule { chests: 1, rarity: 4, start: 350, end: 475 },
-            CycleRule { chests: 10, rarity: 3, start: 5, end: 100 },
-            CycleRule { chests: 10, rarity: 3, start: 101, end: 200 },
-            CycleRule { chests: 10, rarity: 3, start: 201, end: 300 },
-            CycleRule { chests: 10, rarity: 3, start: 301, end: 400 },
-            CycleRule { chests: 10, rarity: 3, start: 401, end: 499 },
+            CycleRule {
+                chests: 1,
+                rarity: 4,
+                start: 50,
+                end: 125,
+            },
+            CycleRule {
+                chests: 1,
+                rarity: 4,
+                start: 175,
+                end: 300,
+            },
+            CycleRule {
+                chests: 1,
+                rarity: 4,
+                start: 350,
+                end: 475,
+            },
+            CycleRule {
+                chests: 10,
+                rarity: 3,
+                start: 5,
+                end: 100,
+            },
+            CycleRule {
+                chests: 10,
+                rarity: 3,
+                start: 101,
+                end: 200,
+            },
+            CycleRule {
+                chests: 10,
+                rarity: 3,
+                start: 201,
+                end: 300,
+            },
+            CycleRule {
+                chests: 10,
+                rarity: 3,
+                start: 301,
+                end: 400,
+            },
+            CycleRule {
+                chests: 10,
+                rarity: 3,
+                start: 401,
+                end: 499,
+            },
         ],
     },
 ];
@@ -199,7 +264,9 @@ fn cycle_tier(cycle: &ChestCycle, ctx: LootSeedContext, spawn_id: &Uuid, index: 
     let position = h % cycle.length;
     let pass = h / cycle.length;
     for (r, rule) in cycle.rules.iter().enumerate() {
-        let mut rng = LootRng(mix64(pass ^ (r as u64).rotate_left(48) ^ cycle.id.as_u128() as u64));
+        let mut rng = LootRng(mix64(
+            pass ^ (r as u64).rotate_left(48) ^ cycle.id.as_u128() as u64,
+        ));
         let width = rule.end - rule.start + 1;
         let mut placed: Vec<u64> = Vec::with_capacity(rule.chests);
         while placed.len() < rule.chests.min(width as usize) {
@@ -257,7 +324,11 @@ fn floor_pile_size(spawn_id: &Uuid) -> usize {
         .and_then(|s| s.get(&key))
         .and_then(|e| e.get("results"))
         .and_then(|n| n.as_u64())
-        .or_else(|| item_spawn_quantities()["groups"].get(&key).and_then(|n| n.as_u64()))
+        .or_else(|| {
+            item_spawn_quantities()["groups"]
+                .get(&key)
+                .and_then(|n| n.as_u64())
+        })
         .unwrap_or(1)
         .max(1) as usize
 }
@@ -306,11 +377,16 @@ fn interactable_loot_by_level() -> &'static serde_json::Value {
 /// The results one floor table draws from at `enemy_level`: the retail results
 /// rolled at the levels nearest it when retail was observed often enough to
 /// band the table, otherwise the pooled table.
-fn interactable_table_results(table_id: &Uuid, enemy_level: i64) -> Option<Vec<&'static serde_json::Value>> {
+fn interactable_table_results(
+    table_id: &Uuid,
+    enemy_level: i64,
+) -> Option<Vec<&'static serde_json::Value>> {
     let key = table_id.to_string();
     let by_level = interactable_loot_by_level();
     if let Some(entry) = by_level["tables"].get(&key) {
-        let window = by_level["_meta"]["windowObservations"].as_u64().unwrap_or(0);
+        let window = by_level["_meta"]["windowObservations"]
+            .as_u64()
+            .unwrap_or(0);
         return floor_window_results(entry, enemy_level, window);
     }
     interactable_loot()
@@ -525,14 +601,20 @@ fn roll_loot_table_with_context(
             continue;
         }
         let loot = r.get("loot");
-        if let Some(items) = loot.and_then(|l| l.get("stackableItems")).and_then(|v| v.as_object()) {
+        if let Some(items) = loot
+            .and_then(|l| l.get("stackableItems"))
+            .and_then(|v| v.as_object())
+        {
             for (id, qty) in items {
                 if let (Ok(uuid), Some(q)) = (Uuid::parse_str(id), qty.as_u64()) {
                     out.stackable_items.insert(uuid, q);
                 }
             }
         }
-        if let Some(curs) = loot.and_then(|l| l.get("currencies")).and_then(|v| v.as_object()) {
+        if let Some(curs) = loot
+            .and_then(|l| l.get("currencies"))
+            .and_then(|v| v.as_object())
+        {
             for (id, amt) in curs {
                 if let (Ok(uuid), Some(a)) = (Uuid::parse_str(id), amt.as_u64()) {
                     out.currencies.insert(uuid, a);
@@ -564,13 +646,16 @@ fn roll_container_table(
     result_index: usize,
     enemy_level: i64,
 ) -> LootTableResult {
-    use crate::features::beginner_economy::{container_class, CONTAINER_FILL_MAX_DRAWS};
+    use crate::features::beginner_economy::{CONTAINER_FILL_MAX_DRAWS, container_class};
 
     let mut out = roll_loot_table_with_context(ctx, spawn_id, table_id, result_index, enemy_level);
     // Crafting materials come in 5, 10 or 20 (owner-approved deviation, #388).
     let material_seed = loot_seed(ctx, spawn_id, table_id, result_index) ^ 0x388_C047_A1E5;
     let Some(class) = container_class(table_id, group_name).filter(|_| !ctx.abyss) else {
-        crate::features::beginner_economy::size_material_stacks(&mut out.stackable_items, material_seed);
+        crate::features::beginner_economy::size_material_stacks(
+            &mut out.stackable_items,
+            material_seed,
+        );
         return out;
     };
     let want = class.stacks;
@@ -580,7 +665,10 @@ fn roll_container_table(
         v
     };
     if out.stackable_items.len() > want {
-        out.stackable_items = sorted(&out.stackable_items).into_iter().take(want).collect();
+        out.stackable_items = sorted(&out.stackable_items)
+            .into_iter()
+            .take(want)
+            .collect();
     }
     for draw in 1..=CONTAINER_FILL_MAX_DRAWS {
         if out.stackable_items.len() >= want {
@@ -589,14 +677,18 @@ fn roll_container_table(
         // Far past any pile's own indices, so a fill draw is never another
         // container's draw.
         let index = result_index + (draw << 20);
-        let extra = roll_loot_table_with_context(ctx, spawn_id, &class.fill_table, index, enemy_level);
+        let extra =
+            roll_loot_table_with_context(ctx, spawn_id, &class.fill_table, index, enemy_level);
         for (id, q) in sorted(&extra.stackable_items) {
             if out.stackable_items.len() < want {
                 out.stackable_items.entry(id).or_insert(q);
             }
         }
     }
-    crate::features::beginner_economy::size_material_stacks(&mut out.stackable_items, material_seed);
+    crate::features::beginner_economy::size_material_stacks(
+        &mut out.stackable_items,
+        material_seed,
+    );
     out
 }
 
@@ -680,8 +772,7 @@ const GOLD_LOOT_TABLE_ID: u128 = 0x871c2e9b_7e7a_4564_a022_e435dfb8a436;
 fn enemy_loot() -> &'static serde_json::Value {
     static TABLE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
-        serde_json::from_str(ENEMY_LOOT_RAW)
-            .unwrap_or_else(|_| serde_json::json!({ "tables": {} }))
+        serde_json::from_str(ENEMY_LOOT_RAW).unwrap_or_else(|_| serde_json::json!({ "tables": {} }))
     })
 }
 
@@ -745,7 +836,10 @@ fn draw_weighted<'a, V: std::borrow::Borrow<serde_json::Value>>(
     rng: &mut LootRng,
     options: &'a [V],
 ) -> Option<&'a serde_json::Value> {
-    let total: u64 = options.iter().filter_map(|o| o.borrow()["n"].as_u64()).sum();
+    let total: u64 = options
+        .iter()
+        .filter_map(|o| o.borrow()["n"].as_u64())
+        .sum();
     if total == 0 {
         return None;
     }
@@ -770,7 +864,10 @@ fn draw_weighted<'a, V: std::borrow::Borrow<serde_json::Value>>(
 /// band is used when no band contains the level, which is what happens above
 /// and below the level range retail was observed at -- clamping is better than
 /// dropping the table, whose only alternative outcome is an empty corpse.
-fn enemy_table_results<'a>(entry: &'a serde_json::Value, enemy_level: i64) -> Option<&'a Vec<serde_json::Value>> {
+fn enemy_table_results<'a>(
+    entry: &'a serde_json::Value,
+    enemy_level: i64,
+) -> Option<&'a Vec<serde_json::Value>> {
     if entry["levelKeyed"].as_bool() != Some(true) {
         return entry["results"].as_array();
     }
@@ -782,7 +879,11 @@ fn enemy_table_results<'a>(entry: &'a serde_json::Value, enemy_level: i64) -> Op
         if enemy_level >= lo && enemy_level <= hi {
             return band["results"].as_array();
         }
-        let distance = if enemy_level < lo { lo - enemy_level } else { enemy_level - hi };
+        let distance = if enemy_level < lo {
+            lo - enemy_level
+        } else {
+            enemy_level - hi
+        };
         if nearest.map_or(true, |(d, _)| distance < d) {
             nearest = Some((distance, band));
         }
@@ -841,7 +942,9 @@ fn roll_enemy_loot_with_context(
             .map(|g| &g["sets"])
             .or(Some(&abyss_enemy_loot()["pooledSets"]))
     } else {
-        enemy_group_tables()["groups"].get(spawn_group_id.to_string()).map(|g| &g["sets"])
+        enemy_group_tables()["groups"]
+            .get(spawn_group_id.to_string())
+            .map(|g| &g["sets"])
     };
     let tables: Vec<Uuid> = match group.and_then(|sets| sets.as_array()) {
         Some(sets) => draw_weighted(&mut rng, sets)
@@ -857,18 +960,17 @@ fn roll_enemy_loot_with_context(
             .abyss
             .then(|| abyss_enemy_loot()["tables"].get(table_id.to_string()))
             .flatten();
-        let results: Option<Vec<&serde_json::Value>> = match abyss_table
-            .or_else(|| enemy_loot()["tables"].get(table_id.to_string()))
-        {
-            Some(entry) => enemy_table_results(entry, enemy_level).map(|r| r.iter().collect()),
-            // A table left out of the ENEMY corpus as too thin to model. The
-            // floor-loot corpus may still know it: 8858f284 is the DoorKey table,
-            // 25 enemy observations (too few to keep) but 269 of 269 DoorKeys on
-            // the pots it also hangs on. Sending it empty meant the key-holder
-            // in EQ13 (101b2285) and the three in SQ205_B never dropped their key,
-            // and the door behind them never opened (report #236).
-            None => interactable_table_results(&table_id, enemy_level),
-        };
+        let results: Option<Vec<&serde_json::Value>> =
+            match abyss_table.or_else(|| enemy_loot()["tables"].get(table_id.to_string())) {
+                Some(entry) => enemy_table_results(entry, enemy_level).map(|r| r.iter().collect()),
+                // A table left out of the ENEMY corpus as too thin to model. The
+                // floor-loot corpus may still know it: 8858f284 is the DoorKey table,
+                // 25 enemy observations (too few to keep) but 269 of 269 DoorKeys on
+                // the pots it also hangs on. Sending it empty meant the key-holder
+                // in EQ13 (101b2285) and the three in SQ205_B never dropped their key,
+                // and the door behind them never opened (report #236).
+                None => interactable_table_results(&table_id, enemy_level),
+            };
         let mut result = LootTableResult::default();
         // Known to neither corpus: retail keyed it on this enemy, so the key is
         // still sent, empty -- dropping the key would be a shape retail never sent.
@@ -1041,10 +1143,16 @@ pub type BonusCandidate = (Uuid, u64, u64);
 /// each with how often retail's table paid that exact stack; the draw weighs
 /// them by [`abyss_bonus_weight`].
 pub fn abyss_bonus_candidates(level: i64, enchanting: bool) -> &'static [BonusCandidate] {
-    static BY_LEVEL: std::sync::OnceLock<Vec<[Vec<BonusCandidate>; 2]>> = std::sync::OnceLock::new();
+    static BY_LEVEL: std::sync::OnceLock<Vec<[Vec<BonusCandidate>; 2]>> =
+        std::sync::OnceLock::new();
     let table = BY_LEVEL.get_or_init(|| {
         (0..=ABYSS_BONUS_MAX_LEVEL)
-            .map(|level| [build_bonus_candidates(level, false), build_bonus_candidates(level, true)])
+            .map(|level| {
+                [
+                    build_bonus_candidates(level, false),
+                    build_bonus_candidates(level, true),
+                ]
+            })
             .collect()
     });
     &table[level.clamp(1, ABYSS_BONUS_MAX_LEVEL) as usize][usize::from(enchanting)]
@@ -1071,8 +1179,14 @@ fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
         for result in band["results"].as_array().into_iter().flatten() {
             let n = result["n"].as_u64().unwrap_or(0);
             // `stackableItems` only: a result's `items` (gear) is never a candidate.
-            for (id, qty) in result["loot"]["stackableItems"].as_object().into_iter().flatten() {
-                let (Ok(item), Some(qty)) = (Uuid::parse_str(id), qty.as_u64()) else { continue };
+            for (id, qty) in result["loot"]["stackableItems"]
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                let (Ok(item), Some(qty)) = (Uuid::parse_str(id), qty.as_u64()) else {
+                    continue;
+                };
                 if qty == 0 || item.as_u128() == DOOR_KEY_ITEM_ID {
                     continue;
                 }
@@ -1087,9 +1201,15 @@ fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
         }
         out
     };
-    let (lo, hi) = (level - ABYSS_BONUS_LEVEL_WINDOW, level + ABYSS_BONUS_LEVEL_WINDOW);
+    let (lo, hi) = (
+        level - ABYSS_BONUS_LEVEL_WINDOW,
+        level + ABYSS_BONUS_LEVEL_WINDOW,
+    );
     let mut window: Vec<BonusCandidate> = Vec::new();
-    for band in bands.iter().filter(|b| range(b).0 <= hi && range(b).1 >= lo) {
+    for band in bands
+        .iter()
+        .filter(|b| range(b).0 <= hi && range(b).1 >= lo)
+    {
         for c in stacks(band) {
             match window.iter_mut().find(|w| w.0 == c.0 && w.1 == c.1) {
                 Some(w) => w.2 += c.2,
@@ -1104,11 +1224,21 @@ fn build_bonus_candidates(level: i64, enchanting: bool) -> Vec<BonusCandidate> {
     // Nothing of this kind near the level: the nearest band that has some.
     let distance = |band: &serde_json::Value| {
         let (min, max) = range(band);
-        if level < min { min - level } else if level > max { level - max } else { 0 }
+        if level < min {
+            min - level
+        } else if level > max {
+            level - max
+        } else {
+            0
+        }
     };
     let mut nearest: Vec<&serde_json::Value> = bands.iter().collect();
     nearest.sort_by_key(|b| distance(b));
-    let mut found = nearest.into_iter().map(stacks).find(|c| !c.is_empty()).unwrap_or_default();
+    let mut found = nearest
+        .into_iter()
+        .map(stacks)
+        .find(|c| !c.is_empty())
+        .unwrap_or_default();
     found.sort();
     found
 }
@@ -1138,19 +1268,37 @@ fn effect_ingredient_candidates(level: i64) -> Vec<BonusCandidate> {
     };
     let distance = |band: &serde_json::Value| {
         let (min, max) = range(band);
-        if level < min { min - level } else if level > max { level - max } else { 0 }
+        if level < min {
+            min - level
+        } else if level > max {
+            level - max
+        } else {
+            0
+        }
     };
     let mut nearest: Vec<&serde_json::Value> = bands.iter().collect();
     nearest.sort_by_key(|b| distance(b));
-    let (lo, hi) = (level - ABYSS_BONUS_LEVEL_WINDOW, level + ABYSS_BONUS_LEVEL_WINDOW);
+    let (lo, hi) = (
+        level - ABYSS_BONUS_LEVEL_WINDOW,
+        level + ABYSS_BONUS_LEVEL_WINDOW,
+    );
 
     let mut out: Vec<BonusCandidate> = Vec::new();
     for id in EFFECT_INGREDIENTS {
         let item = Uuid::from_u128(id);
         let key = item.to_string();
-        let mut stacks = effect_stack_sizes(&key, bands.iter().filter(|b| range(b).0 <= hi && range(b).1 >= lo));
+        let mut stacks = effect_stack_sizes(
+            &key,
+            bands
+                .iter()
+                .filter(|b| range(b).0 <= hi && range(b).1 >= lo),
+        );
         if stacks.is_empty() {
-            stacks = nearest.iter().map(|b| effect_stack_sizes(&key, [*b])).find(|s| !s.is_empty()).unwrap_or_default();
+            stacks = nearest
+                .iter()
+                .map(|b| effect_stack_sizes(&key, [*b]))
+                .find(|s| !s.is_empty())
+                .unwrap_or_default();
         }
         if stacks.is_empty() {
             stacks.push((1, 1)); // never paid at all: one at a time
@@ -1160,21 +1308,41 @@ fn effect_ingredient_candidates(level: i64) -> Vec<BonusCandidate> {
         // rounding remainder on its most common size, so every ingredient's total
         // is exactly the same.
         let observed: u64 = stacks.iter().map(|s| s.1).sum();
-        let mut weights: Vec<u64> = stacks.iter().map(|s| s.1 * EFFECT_INGREDIENT_WEIGHT / observed).collect();
+        let mut weights: Vec<u64> = stacks
+            .iter()
+            .map(|s| s.1 * EFFECT_INGREDIENT_WEIGHT / observed)
+            .collect();
         let most = (0..stacks.len()).max_by_key(|i| stacks[*i].1).unwrap_or(0);
         weights[most] += EFFECT_INGREDIENT_WEIGHT - weights.iter().sum::<u64>();
-        out.extend(stacks.iter().zip(weights).filter(|(_, w)| *w > 0).map(|((qty, _), w)| (item, *qty, w)));
+        out.extend(
+            stacks
+                .iter()
+                .zip(weights)
+                .filter(|(_, w)| *w > 0)
+                .map(|((qty, _), w)| (item, *qty, w)),
+        );
     }
     out.sort();
     out
 }
 
 /// (quantity, times observed) of every stack of `item` retail's table paid in `bands`.
-fn effect_stack_sizes<'a>(item: &str, bands: impl IntoIterator<Item = &'a serde_json::Value>) -> Vec<(u64, u64)> {
+fn effect_stack_sizes<'a>(
+    item: &str,
+    bands: impl IntoIterator<Item = &'a serde_json::Value>,
+) -> Vec<(u64, u64)> {
     let mut out: Vec<(u64, u64)> = Vec::new();
-    for result in bands.into_iter().flat_map(|band| band["results"].as_array().into_iter().flatten()) {
+    for result in bands
+        .into_iter()
+        .flat_map(|band| band["results"].as_array().into_iter().flatten())
+    {
         let n = result["n"].as_u64().unwrap_or(0);
-        let Some(qty) = result["loot"]["stackableItems"][item].as_u64().filter(|q| *q > 0 && n > 0) else { continue };
+        let Some(qty) = result["loot"]["stackableItems"][item]
+            .as_u64()
+            .filter(|q| *q > 0 && n > 0)
+        else {
+            continue;
+        };
         match out.iter_mut().find(|s| s.0 == qty) {
             Some(s) => s.1 += n,
             None => out.push((qty, n)),
@@ -1211,10 +1379,13 @@ fn roll_abyss_bonus(
 ) -> Option<(Uuid, u64)> {
     // Banded to the level the character is PAID as: a level-49 character finds what
     // a level-100 one does (#398).
-    let level = crate::features::loot_level::effective_loot_level(ctx.bonus_level.filter(|_| ctx.abyss)?);
+    let level =
+        crate::features::loot_level::effective_loot_level(ctx.bonus_level.filter(|_| ctx.abyss)?);
     // Salted, so the stream is independent of the retail draws for this corpse.
     const SALT: u64 = 0x0383_ab55_b0b5_0383;
-    let mut rng = LootRng(mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ SALT));
+    let mut rng = LootRng(mix64(
+        enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ SALT,
+    ));
     let unit = |x: u64| (x >> 11) as f64 / (1u64 << 53) as f64;
     if unit(rng.next()) >= ABYSS_BONUS_MATERIAL_SHARE {
         return None;
@@ -1269,7 +1440,8 @@ pub fn spawn_group_loot(spawn_group_id: &Uuid, spawner_index: usize) -> LootTabl
     }
     for (group, item, quantity) in SPAWN_GROUP_LOOT {
         if spawn_group_id.as_u128() == *group {
-            out.stackable_items.insert(Uuid::from_u128(*item), *quantity);
+            out.stackable_items
+                .insert(Uuid::from_u128(*item), *quantity);
         }
     }
     out
@@ -1428,7 +1600,10 @@ pub fn generate_for_dungeon(
         game_data,
         dungeon_uuid,
         default_seed_context(dungeon_uuid),
-        EnemyLevels::Flat { level: enemy_level, given_xp },
+        EnemyLevels::Flat {
+            level: enemy_level,
+            given_xp,
+        },
     )
 }
 
@@ -1443,7 +1618,10 @@ pub fn generate_for_dungeon_with_seed(
         game_data,
         dungeon_uuid,
         seeded_context(dungeon_uuid, run_seed),
-        EnemyLevels::Flat { level: enemy_level, given_xp },
+        EnemyLevels::Flat {
+            level: enemy_level,
+            given_xp,
+        },
     )
 }
 
@@ -1468,7 +1646,10 @@ pub fn generate_for_abyss_floor(
             bonus_level: character_level,
             ..seeded_context(dungeon_uuid, run_seed)
         },
-        EnemyLevels::Flat { level: enemy_level, given_xp: 0 },
+        EnemyLevels::Flat {
+            level: enemy_level,
+            given_xp: 0,
+        },
     )?;
     // The three best soul gems at 45-48 (owner-approved deviation, #388); the
     // corpses' bonus gem is paid so where it is merged ([`abyss_bonus_as_paid`]).
@@ -1493,7 +1674,12 @@ pub fn generate_for_dungeon_with_loot_shift(
         Some(seed) => seeded_context(dungeon_uuid, seed),
         None => default_seed_context(dungeon_uuid),
     };
-    generate_for_dungeon_inner(game_data, dungeon_uuid, LootSeedContext { loot_shift, ..ctx }, levels)
+    generate_for_dungeon_inner(
+        game_data,
+        dungeon_uuid,
+        LootSeedContext { loot_shift, ..ctx },
+        levels,
+    )
 }
 
 /// [`generate_for_dungeon`] with each enemy's level and XP from `levels`, unseeded.
@@ -1502,7 +1688,12 @@ pub fn generate_for_dungeon_levelled(
     dungeon_uuid: &Uuid,
     levels: EnemyLevels,
 ) -> Option<DungeonGeneratedData> {
-    generate_for_dungeon_inner(game_data, dungeon_uuid, default_seed_context(dungeon_uuid), levels)
+    generate_for_dungeon_inner(
+        game_data,
+        dungeon_uuid,
+        default_seed_context(dungeon_uuid),
+        levels,
+    )
 }
 
 /// [`generate_for_dungeon_with_seed`] with each enemy's level and XP from `levels`.
@@ -1577,9 +1768,7 @@ fn generate_for_dungeon_inner(
                 // sent -1 for that chest in all 5 captured generations, so tier 1
                 // was our invention. A spawn genuinely absent from the corpus
                 // (a future dungeon) still falls back to 1.
-                let tier = definition
-                    .map(|d| d.rarity)
-                    .unwrap_or(1);
+                let tier = definition.map(|d| d.rarity).unwrap_or(1);
                 let quantity = definition.map(|d| d.quantity).unwrap_or(1).max(1);
                 let cycle = definition
                     .and_then(|d| d.chest_cycle)
@@ -1589,7 +1778,9 @@ fn generate_for_dungeon_inner(
                     (0..quantity as usize)
                         .map(|index| ChestGeneratedData {
                             tier: match cycle {
-                                Some(cycle) => cycle_tier(cycle, seed_context, chest_spawn_id, index),
+                                Some(cycle) => {
+                                    cycle_tier(cycle, seed_context, chest_spawn_id, index)
+                                }
                                 None => tier,
                             },
                         })
@@ -1651,7 +1842,8 @@ fn size_corpse_materials(
     enemy_index: usize,
     out: &mut HashMap<Uuid, LootTableResult>,
 ) {
-    let corpse = enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_5743_4B53_0388;
+    let corpse =
+        enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_5743_4B53_0388;
     for (table, loot) in out.iter_mut() {
         let seed = mix64(corpse ^ (table.as_u128() as u64).rotate_left(13));
         crate::features::beginner_economy::size_material_stacks(&mut loot.stackable_items, seed);
@@ -1669,8 +1861,11 @@ fn bonus_as_paid(
     enemy_index: usize,
     drawn: (Uuid, u64),
 ) -> (Uuid, u64) {
-    let Some(level) = ctx.bonus_level else { return drawn };
-    let seed = mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_B045_5EED_0388);
+    let Some(level) = ctx.bonus_level else {
+        return drawn;
+    };
+    let seed =
+        mix64(enemy_rng(ctx, spawn_group_id, spawner_index, enemy_index).0 ^ 0x0388_B045_5EED_0388);
     let mut stack = HashMap::from([drawn]);
     crate::features::beginner_economy::top_soul_gems(&mut stack, level, seed);
     crate::features::beginner_economy::size_material_stacks(&mut stack, mix64(seed));
@@ -1703,7 +1898,8 @@ pub fn abyss_bonus_as_paid(
 /// Owner-approved deviation from retail, #388, 2026-10-16.
 fn beginner_economy_loot(data: &mut DungeonGeneratedData, ctx: LootSeedContext) {
     use crate::features::beginner_economy::add_drawn_gem_bonus;
-    let base = mix64(ctx.dungeon_uuid.as_u128() as u64 ^ ctx.run_seed.rotate_left(7) ^ 0x388_0000_6E35);
+    let base =
+        mix64(ctx.dungeon_uuid.as_u128() as u64 ^ ctx.run_seed.rotate_left(7) ^ 0x388_0000_6E35);
     let key = |group: &Uuid, a: usize, b: usize, table: &Uuid| {
         mix64(
             base ^ (group.as_u128() as u64).rotate_left(13)
@@ -1715,7 +1911,10 @@ fn beginner_economy_loot(data: &mut DungeonGeneratedData, ctx: LootSeedContext) 
     for (group, spawners) in &mut data.enemy_generated_data {
         for (a, enemies) in spawners.iter_mut().enumerate() {
             for (b, enemy) in enemies.iter_mut().enumerate() {
-                add_drawn_gem_bonus(&mut enemy.spawn_group_loot.currencies, key(group, a, b, &Uuid::nil()));
+                add_drawn_gem_bonus(
+                    &mut enemy.spawn_group_loot.currencies,
+                    key(group, a, b, &Uuid::nil()),
+                );
                 for (table, loot) in &mut enemy.loot_table_loot {
                     add_drawn_gem_bonus(&mut loot.currencies, key(group, a, b, table));
                 }
@@ -1738,7 +1937,11 @@ mod chest_generation_tests {
     #[test]
     fn apk_chest_corpus_is_complete_and_not_the_old_stub() {
         let corpus = chest_tiers();
-        assert_eq!(corpus.chests.len(), 292, "the APK has 292 chest spawn groups");
+        assert_eq!(
+            corpus.chests.len(),
+            292,
+            "the APK has 292 chest spawn groups"
+        );
         assert_eq!(
             corpus.chests.values().filter(|c| c.tier == Some(1)).count(),
             136
@@ -1751,7 +1954,10 @@ mod chest_generation_tests {
             corpus.chests.values().filter(|c| c.tier == Some(3)).count(),
             48
         );
-        assert_eq!(corpus.chests.values().filter(|c| c.tier.is_none()).count(), 1);
+        assert_eq!(
+            corpus.chests.values().filter(|c| c.tier.is_none()).count(),
+            1
+        );
         assert_eq!(
             corpus.chests.values().filter(|c| c.quantity > 1).count(),
             7,
@@ -1780,13 +1986,19 @@ mod chest_generation_tests {
                     .chest_generated_data
                     .get(chest_id)
                     .expect("generated chest group");
-                assert_eq!(actual.len(), expected.quantity.max(1) as usize, "{chest_id}");
+                assert_eq!(
+                    actual.len(),
+                    expected.quantity.max(1) as usize,
+                    "{chest_id}"
+                );
                 // The two job chests draw from a chest cycle instead (#337), whose
                 // base is this same rarity; their mix is pinned in server's
                 // `report_337_job_drops_and_families`.
                 if expected.chest_cycle.is_some() {
                     assert!(
-                        CHEST_CYCLES.iter().any(|c| Some(c.id) == expected.chest_cycle && c.base == expected.rarity),
+                        CHEST_CYCLES.iter().any(
+                            |c| Some(c.id) == expected.chest_cycle && c.base == expected.rarity
+                        ),
                         "{chest_id} names a cycle we do not model, or one whose base is not its rarity"
                     );
                     checked += 1;
@@ -1828,7 +2040,11 @@ mod interactable_loot_tests {
     #[test]
     fn the_loot_table_corpus_loads() {
         let tables = table()["tables"].as_object().expect("tables object");
-        assert!(tables.len() >= 20, "expected the mined tables, got {}", tables.len());
+        assert!(
+            tables.len() >= 20,
+            "expected the mined tables, got {}",
+            tables.len()
+        );
         let observations: u64 = tables
             .values()
             .flat_map(|t| t["results"].as_array().cloned().unwrap_or_default())
@@ -1883,7 +2099,10 @@ mod interactable_loot_tests {
                 }
             }
         }
-        assert!(empty > 0, "every one of {total} rolls paid out; retail's did not");
+        assert!(
+            empty > 0,
+            "every one of {total} rolls paid out; retail's did not"
+        );
         assert!(empty < total, "no roll paid out at all");
     }
 
@@ -1899,7 +2118,10 @@ mod interactable_loot_tests {
         let s = Uuid::from_u128(9);
         let a = roll_loot_table(&d, &s, &tid, 0, 30);
         let b = roll_loot_table(&d, &s, &tid, 0, 30);
-        assert_eq!(a.stackable_items, b.stackable_items, "same barrel, different loot");
+        assert_eq!(
+            a.stackable_items, b.stackable_items,
+            "same barrel, different loot"
+        );
 
         // control: a DIFFERENT spawn should not be forced to match, or the
         // stability check above would hold trivially for everything.
@@ -1911,7 +2133,10 @@ mod interactable_loot_tests {
                 break;
             }
         }
-        assert!(differs, "every spawn rolls identically — the seed is not varying");
+        assert!(
+            differs,
+            "every spawn rolls identically — the seed is not varying"
+        );
     }
 
     /// Every item id we hand out must be one retail actually placed in that table.
@@ -1983,7 +2208,10 @@ mod interactable_loot_tests {
         );
         // Control: single-item results must still dominate, or we have swung too
         // far and made every barrel a jackpot.
-        assert!(single > multi, "multi-item rolls ({multi}) outnumber single ({single})");
+        assert!(
+            single > multi,
+            "multi-item rolls ({multi}) outnumber single ({single})"
+        );
     }
 }
 
@@ -2041,7 +2269,11 @@ mod floor_loot_level_tests {
                 .contains_key(&TUTORIAL_EBONY_PILE.parse().unwrap()),
             "the pile from the report is still generated, so the test is looking at it"
         );
-        assert_eq!(ebony_piles(&generated), Vec::<Uuid>::new(), "Ebony in a level-2 tutorial");
+        assert_eq!(
+            ebony_piles(&generated),
+            Vec::<Uuid>::new(),
+            "Ebony in a level-2 tutorial"
+        );
     }
 
     /// Not only the tutorial: no floor pile in any dungeon may roll Ebony below
@@ -2065,8 +2297,14 @@ mod floor_loot_level_tests {
                 high += ebony_piles(&g).len();
             }
         }
-        assert!(low.is_empty(), "Ebony rolled on the floor below level 31: {low:?}");
-        assert!(high > 0, "no floor pile rolls Ebony even at level 75 -- the control failed");
+        assert!(
+            low.is_empty(),
+            "Ebony rolled on the floor below level 31: {low:?}"
+        );
+        assert!(
+            high > 0,
+            "no floor pile rolls Ebony even at level 75 -- the control failed"
+        );
     }
 
     /// The band is the level's, not the nearest pooled guess: the materials
@@ -2085,10 +2323,17 @@ mod floor_loot_level_tests {
         );
         // A table too thin to band still draws pooled, as before.
         let thin: Uuid = "b9240d3c-dffc-474b-a773-b7588bf9bb71".parse().unwrap();
-        assert!(interactable_loot_by_level()["tables"].get(thin.to_string()).is_none());
+        assert!(
+            interactable_loot_by_level()["tables"]
+                .get(thin.to_string())
+                .is_none()
+        );
         assert_eq!(
-            interactable_table_results(&thin, 2).map(|r| r.into_iter().cloned().collect::<Vec<_>>()),
-            interactable_loot()["tables"][thin.to_string()]["results"].as_array().cloned()
+            interactable_table_results(&thin, 2)
+                .map(|r| r.into_iter().cloned().collect::<Vec<_>>()),
+            interactable_loot()["tables"][thin.to_string()]["results"]
+                .as_array()
+                .cloned()
         );
     }
 }
@@ -2123,7 +2368,9 @@ mod container_pay_by_level_374 {
         let total: f64 = results.iter().map(|r| r["n"].as_f64().unwrap()).sum();
         results
             .iter()
-            .map(|r| r["loot"]["currencies"][GOLD].as_f64().unwrap_or(0.0) * r["n"].as_f64().unwrap())
+            .map(|r| {
+                r["loot"]["currencies"][GOLD].as_f64().unwrap_or(0.0) * r["n"].as_f64().unwrap()
+            })
             .sum::<f64>()
             / total
     }
@@ -2181,9 +2428,15 @@ mod container_pay_by_level_374 {
     #[test]
     fn the_large_container_grows_with_the_players_level() {
         let ratio = expected_gold(LARGE, 78) / expected_gold(LARGE, 43);
-        assert!(ratio >= 1.3, "level 78 / level 43 large-container gold = {ratio:.2}");
+        assert!(
+            ratio >= 1.3,
+            "level 78 / level 43 large-container gold = {ratio:.2}"
+        );
         let ratio = expected_gold(MEDIUM, 78) / expected_gold(MEDIUM, 43);
-        assert!(ratio >= 1.2, "level 78 / level 43 medium-container gold = {ratio:.2}");
+        assert!(
+            ratio >= 1.2,
+            "level 78 / level 43 medium-container gold = {ratio:.2}"
+        );
     }
 
     /// The window is centred on the player: a level-43 draw reads nothing retail
@@ -2193,9 +2446,15 @@ mod container_pay_by_level_374 {
         for table in [MEDIUM, LARGE] {
             let mid = levels_read(table, 43);
             assert!(mid.iter().all(|&l| l < 70), "{table} at 43 reads {mid:?}");
-            assert!(mid[0] <= 43 && 43 <= mid[mid.len() - 1], "{table} at 43 reads {mid:?}");
+            assert!(
+                mid[0] <= 43 && 43 <= mid[mid.len() - 1],
+                "{table} at 43 reads {mid:?}"
+            );
             let high = levels_read(table, 78);
-            assert!(high.iter().all(|&l| l >= 60), "{table} at 78 reads {high:?}");
+            assert!(
+                high.iter().all(|&l| l >= 60),
+                "{table} at 78 reads {high:?}"
+            );
         }
     }
 
@@ -2244,7 +2503,8 @@ mod variant_owner_tests {
         let mut families: std::collections::HashMap<String, Vec<&str>> = Default::default();
         for (id, d) in dungeons {
             let h = d["handle"].as_str().unwrap_or("");
-            if let Some(stem) = h.strip_suffix("_A")
+            if let Some(stem) = h
+                .strip_suffix("_A")
                 .or_else(|| h.strip_suffix("_B"))
                 .or_else(|| h.strip_suffix("_C"))
                 .or_else(|| h.strip_suffix("_D"))
@@ -2253,7 +2513,10 @@ mod variant_owner_tests {
             }
         }
         let multi: Vec<_> = families.values().filter(|v| v.len() > 1).collect();
-        assert!(!multi.is_empty(), "no variant families found — the premise is gone");
+        assert!(
+            !multi.is_empty(),
+            "no variant families found — the premise is gone"
+        );
 
         let groups_of = |id: &str| -> std::collections::HashSet<String> {
             dungeons[id]["spawn_info"]["enemy_spawn_groups"]
@@ -2264,7 +2527,8 @@ mod variant_owner_tests {
         for fam in &multi {
             for (i, a) in fam.iter().enumerate() {
                 for b in fam.iter().skip(i + 1) {
-                    let overlap: Vec<_> = groups_of(a).intersection(&groups_of(b)).cloned().collect();
+                    let overlap: Vec<_> =
+                        groups_of(a).intersection(&groups_of(b)).cloned().collect();
                     assert!(
                         overlap.is_empty(),
                         "variants {a} and {b} share spawn group(s) {overlap:?} — a reported \
@@ -2289,7 +2553,13 @@ mod variant_owner_tests {
         let (want_dungeon, want_group) = gd
             .dungeons
             .iter()
-            .find_map(|(id, d)| d.spawn_info.enemy_spawn_groups.keys().next().map(|g| (*id, *g)))
+            .find_map(|(id, d)| {
+                d.spawn_info
+                    .enemy_spawn_groups
+                    .keys()
+                    .next()
+                    .map(|g| (*id, *g))
+            })
             .expect("some dungeon has an enemy spawn group");
         assert_eq!(
             dungeon_owning_spawn_group(&gd, &want_group),
@@ -2338,7 +2608,9 @@ mod effect_ingredient_tests {
         let items = static_json("parsed.json");
         let mut singles = Vec::new();
         for offer in offers["offers"].as_object().unwrap().values() {
-            let Some(name) = offer["editorName"].as_str().and_then(|n| n.strip_prefix("SigilShop_EffectIngredients_"))
+            let Some(name) = offer["editorName"]
+                .as_str()
+                .and_then(|n| n.strip_prefix("SigilShop_EffectIngredients_"))
             else {
                 continue;
             };
@@ -2353,24 +2625,35 @@ mod effect_ingredient_tests {
             }
             assert_eq!(paid.len(), 1, "{name}");
             let id = *paid.first().unwrap();
-            assert_eq!(items["items_template"][id.to_string()]["name"], format!("Items.Name.{name}"), "{id}");
+            assert_eq!(
+                items["items_template"][id.to_string()]["name"],
+                format!("Items.Name.{name}"),
+                "{id}"
+            );
             singles.push(id);
         }
         assert_eq!(set(singles.iter().copied()), effect_ingredients());
         assert_eq!(singles.len(), 7);
         assert!(effect_ingredients().contains(&Uuid::parse_str(DEATHBELL).unwrap()));
-        assert_eq!(items["items_template"][DEATHBELL]["name"], "Items.Name.Deathbell");
+        assert_eq!(
+            items["items_template"][DEATHBELL]["name"],
+            "Items.Name.Deathbell"
+        );
         assert_eq!(ENCHANTING_INGREDIENTS, EFFECT_INGREDIENTS);
     }
 
     /// The quantities retail's table paid `item` in, in bands overlapping `lo..=hi`.
     fn retail_sizes(item: &Uuid, lo: i64, hi: i64) -> std::collections::BTreeSet<u64> {
-        let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
-            .as_array()
-            .unwrap();
+        let bands =
+            enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+                .as_array()
+                .unwrap();
         bands
             .iter()
-            .filter(|b| b["minEnemyLevel"].as_i64().unwrap() <= hi && b["maxEnemyLevel"].as_i64().unwrap() >= lo)
+            .filter(|b| {
+                b["minEnemyLevel"].as_i64().unwrap() <= hi
+                    && b["maxEnemyLevel"].as_i64().unwrap() >= lo
+            })
             .flat_map(|b| b["results"].as_array().unwrap())
             .filter_map(|r| r["loot"]["stackableItems"][item.to_string()].as_u64())
             .filter(|q| *q > 0)
@@ -2384,28 +2667,50 @@ mod effect_ingredient_tests {
     fn every_level_offers_all_seven_with_equal_weight_at_retail_stack_sizes() {
         for level in 1..=ABYSS_BONUS_MAX_LEVEL {
             let candidates = abyss_bonus_candidates(level, true);
-            assert_eq!(set(candidates.iter().map(|c| c.0)), effect_ingredients(), "level {level}");
+            assert_eq!(
+                set(candidates.iter().map(|c| c.0)),
+                effect_ingredients(),
+                "level {level}"
+            );
             for item in effect_ingredients() {
-                let mine: Vec<&BonusCandidate> = candidates.iter().filter(|c| c.0 == item).collect();
+                let mine: Vec<&BonusCandidate> =
+                    candidates.iter().filter(|c| c.0 == item).collect();
                 let weight: u64 = mine.iter().map(|c| c.2).sum();
                 assert_eq!(weight, EFFECT_INGREDIENT_WEIGHT, "level {level}: {item}");
-                let near = retail_sizes(&item, level - ABYSS_BONUS_LEVEL_WINDOW, level + ABYSS_BONUS_LEVEL_WINDOW);
+                let near = retail_sizes(
+                    &item,
+                    level - ABYSS_BONUS_LEVEL_WINDOW,
+                    level + ABYSS_BONUS_LEVEL_WINDOW,
+                );
                 // Where retail paid it near the level, exactly those sizes; otherwise
                 // the sizes of the nearest band that paid it (some band within 12).
                 let expected = if near.is_empty() {
                     (1..=12)
                         .map(|d| {
                             let below = retail_sizes(&item, level - d, level - d);
-                            if below.is_empty() { retail_sizes(&item, level + d, level + d) } else { below }
+                            if below.is_empty() {
+                                retail_sizes(&item, level + d, level + d)
+                            } else {
+                                below
+                            }
                         })
                         .find(|s| !s.is_empty())
-                        .unwrap_or_else(|| panic!("level {level}: {item} never paid within 12 levels"))
+                        .unwrap_or_else(|| {
+                            panic!("level {level}: {item} never paid within 12 levels")
+                        })
                 } else {
                     near
                 };
                 let drawn: std::collections::BTreeSet<u64> = mine.iter().map(|c| c.1).collect();
-                assert_eq!(drawn.len(), mine.len(), "level {level}: {item} lists a size twice");
-                assert!(drawn.is_subset(&expected), "level {level}: {item} {drawn:?} not in {expected:?}");
+                assert_eq!(
+                    drawn.len(),
+                    mine.len(),
+                    "level {level}: {item} lists a size twice"
+                );
+                assert!(
+                    drawn.is_subset(&expected),
+                    "level {level}: {item} {drawn:?} not in {expected:?}"
+                );
             }
         }
         // Control: retail's table never paid Frost Salts above level 88, so level 100
@@ -2413,9 +2718,17 @@ mod effect_ingredient_tests {
         // kind -- no effect ingredient in it.
         let frost = Uuid::parse_str(FROST_SALTS).unwrap();
         assert!(retail_sizes(&frost, 98, 100).is_empty());
-        assert!(abyss_bonus_candidates(100, true).iter().any(|c| c.0 == frost));
+        assert!(
+            abyss_bonus_candidates(100, true)
+                .iter()
+                .any(|c| c.0 == frost)
+        );
         for level in 1..=ABYSS_BONUS_MAX_LEVEL {
-            assert!(abyss_bonus_candidates(level, false).iter().all(|c| !EFFECT_INGREDIENTS.contains(&c.0.as_u128())));
+            assert!(
+                abyss_bonus_candidates(level, false)
+                    .iter()
+                    .all(|c| !EFFECT_INGREDIENTS.contains(&c.0.as_u128()))
+            );
         }
     }
 
@@ -2425,7 +2738,12 @@ mod effect_ingredient_tests {
     #[test]
     fn the_enchanting_bonus_draws_each_ingredient_equally() {
         let names = static_json("parsed.json");
-        let name = |id: &Uuid| names["items_template"][id.to_string()]["name"].as_str().unwrap_or("?").to_string();
+        let name = |id: &Uuid| {
+            names["items_template"][id.to_string()]["name"]
+                .as_str()
+                .unwrap_or("?")
+                .to_string()
+        };
         let dungeon = Uuid::from_u128(0x383e);
         let deathbell = Uuid::parse_str(DEATHBELL).unwrap();
         for level in [7i64, 20, 45, 100] {
@@ -2434,7 +2752,9 @@ mod effect_ingredient_tests {
             for i in 0..150_000usize {
                 let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
                 let run_seed = (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D);
-                let Some((item, qty)) = abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level) else {
+                let Some((item, qty)) =
+                    abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level)
+                else {
                     continue;
                 };
                 if !EFFECT_INGREDIENTS.contains(&item.as_u128()) {
@@ -2448,17 +2768,23 @@ mod effect_ingredient_tests {
             let retail: HashMap<Uuid, u64> = effect_ingredients()
                 .into_iter()
                 .map(|item| {
-                    let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+                    let bands = enemy_loot()["tables"]
+                        [Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
                         .as_array()
                         .unwrap();
                     let n = bands
                         .iter()
                         .filter(|b| {
                             b["minEnemyLevel"].as_i64().unwrap() <= level + ABYSS_BONUS_LEVEL_WINDOW
-                                && b["maxEnemyLevel"].as_i64().unwrap() >= level - ABYSS_BONUS_LEVEL_WINDOW
+                                && b["maxEnemyLevel"].as_i64().unwrap()
+                                    >= level - ABYSS_BONUS_LEVEL_WINDOW
                         })
                         .flat_map(|b| b["results"].as_array().unwrap())
-                        .filter(|r| r["loot"]["stackableItems"][item.to_string()].as_u64().is_some_and(|q| q > 0))
+                        .filter(|r| {
+                            r["loot"]["stackableItems"][item.to_string()]
+                                .as_u64()
+                                .is_some_and(|q| q > 0)
+                        })
                         .map(|r| r["n"].as_u64().unwrap())
                         .sum();
                     (item, n)
@@ -2474,11 +2800,21 @@ mod effect_ingredient_tests {
                     100.0 * share,
                     100.0 * retail[&item] as f64 / retail_total as f64
                 ));
-                assert!((share - 1.0 / 7.0).abs() <= 0.03, "level {level}: {} {share}", name(&item));
+                assert!(
+                    (share - 1.0 / 7.0).abs() <= 0.03,
+                    "level {level}: {} {share}",
+                    name(&item)
+                );
             }
-            println!("level {level}: {total} enchanting draws: {}", line.join(", "));
+            println!(
+                "level {level}: {total} enchanting draws: {}",
+                line.join(", ")
+            );
             assert!(total >= 3000, "level {level}: {total} draws is too few");
-            assert!(drawn.get(&deathbell).copied().unwrap_or(0) > 0, "level {level}: no Deathbell");
+            assert!(
+                drawn.get(&deathbell).copied().unwrap_or(0) > 0,
+                "level {level}: no Deathbell"
+            );
         }
     }
 }
@@ -2498,13 +2834,16 @@ mod abyss_bonus_material_tests {
     /// The levels retail's general enemy table paid each stack at, read straight
     /// from the corpus (independent of the candidate builder).
     fn retail_levels(item: &Uuid) -> (i64, i64) {
-        let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
-            .as_array()
-            .unwrap();
+        let bands =
+            enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+                .as_array()
+                .unwrap();
         let (mut lo, mut hi) = (i64::MAX, i64::MIN);
         for band in bands {
             let paid = band["results"].as_array().unwrap().iter().any(|r| {
-                r["loot"]["stackableItems"].as_object().is_some_and(|m| m.contains_key(&item.to_string()))
+                r["loot"]["stackableItems"]
+                    .as_object()
+                    .is_some_and(|m| m.contains_key(&item.to_string()))
             });
             if paid {
                 lo = lo.min(band["minEnemyLevel"].as_i64().unwrap());
@@ -2519,10 +2858,26 @@ mod abyss_bonus_material_tests {
         for level in 1..=100 {
             let materials = abyss_bonus_candidates(level, false);
             let enchanting = abyss_bonus_candidates(level, true);
-            assert!(!materials.is_empty() && !enchanting.is_empty(), "level {level}");
-            assert!(enchanting.iter().all(|c| ENCHANTING_INGREDIENTS.contains(&c.0.as_u128())));
-            assert!(materials.iter().all(|c| !ENCHANTING_INGREDIENTS.contains(&c.0.as_u128())));
-            assert!(materials.iter().chain(enchanting).all(|c| c.1 > 0 && c.2 > 0));
+            assert!(
+                !materials.is_empty() && !enchanting.is_empty(),
+                "level {level}"
+            );
+            assert!(
+                enchanting
+                    .iter()
+                    .all(|c| ENCHANTING_INGREDIENTS.contains(&c.0.as_u128()))
+            );
+            assert!(
+                materials
+                    .iter()
+                    .all(|c| !ENCHANTING_INGREDIENTS.contains(&c.0.as_u128()))
+            );
+            assert!(
+                materials
+                    .iter()
+                    .chain(enchanting)
+                    .all(|c| c.1 > 0 && c.2 > 0)
+            );
         }
     }
 
@@ -2532,7 +2887,10 @@ mod abyss_bonus_material_tests {
     #[test]
     fn candidates_are_what_retail_paid_at_the_characters_level() {
         for level in 1..=100i64 {
-            for c in abyss_bonus_candidates(level, false).iter().chain(abyss_bonus_candidates(level, true)) {
+            for c in abyss_bonus_candidates(level, false)
+                .iter()
+                .chain(abyss_bonus_candidates(level, true))
+            {
                 let (lo, hi) = retail_levels(&c.0);
                 assert!(
                     lo <= level + ABYSS_BONUS_LEVEL_WINDOW + 2 && hi + 12 >= level,
@@ -2542,7 +2900,10 @@ mod abyss_bonus_material_tests {
             }
         }
         let at = |level| {
-            abyss_bonus_candidates(level, false).iter().map(|c| c.0).collect::<std::collections::HashSet<_>>()
+            abyss_bonus_candidates(level, false)
+                .iter()
+                .map(|c| c.0)
+                .collect::<std::collections::HashSet<_>>()
         };
         assert!(!at(100).contains(&uuid(PEARL)) && !at(100).contains(&uuid(GARLIC)));
         assert!(!at(7).contains(&uuid(DRAGON_SCALE)));
@@ -2562,7 +2923,10 @@ mod abyss_bonus_material_tests {
                 let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
                 let run_seed = (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D);
                 let drawn = abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level);
-                assert_eq!(drawn, abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level));
+                assert_eq!(
+                    drawn,
+                    abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level)
+                );
                 if let Some((item, _)) = drawn {
                     bonus += 1;
                     enchanting += usize::from(ENCHANTING_INGREDIENTS.contains(&item.as_u128()));
@@ -2571,8 +2935,14 @@ mod abyss_bonus_material_tests {
             let share = bonus as f64 / draws as f64;
             let ench = enchanting as f64 / bonus as f64;
             println!("level {level}: bonus {share:.4}, enchanting {ench:.4}");
-            assert!((share - ABYSS_BONUS_MATERIAL_SHARE).abs() < 0.01, "level {level}: {share}");
-            assert!((ench - ABYSS_BONUS_ENCHANTING_SHARE).abs() < 0.02, "level {level}: {ench}");
+            assert!(
+                (share - ABYSS_BONUS_MATERIAL_SHARE).abs() < 0.01,
+                "level {level}: {share}"
+            );
+            assert!(
+                (ench - ABYSS_BONUS_ENCHANTING_SHARE).abs() < 0.02,
+                "level {level}: {ench}"
+            );
         }
         // No bonus on a non-Abyss context or without a level.
         let group = Uuid::from_u128(1);
@@ -2590,12 +2960,18 @@ mod abyss_bonus_material_tests {
         }
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
         let raw = std::fs::read_to_string(path).expect("read parsed.json");
-        serde_json::from_str::<Items>(&raw).expect("parsed.json items").items_template
+        serde_json::from_str::<Items>(&raw)
+            .expect("parsed.json items")
+            .items_template
     }
 
     fn every_candidate() -> std::collections::BTreeSet<Uuid> {
         (1..=ABYSS_BONUS_MAX_LEVEL)
-            .flat_map(|level| abyss_bonus_candidates(level, false).iter().chain(abyss_bonus_candidates(level, true)))
+            .flat_map(|level| {
+                abyss_bonus_candidates(level, false)
+                    .iter()
+                    .chain(abyss_bonus_candidates(level, true))
+            })
             .map(|c| c.0)
             .collect()
     }
@@ -2606,16 +2982,24 @@ mod abyss_bonus_material_tests {
     fn every_candidate_is_a_material_never_gear() {
         let items = item_templates();
         for id in every_candidate() {
-            let item = items.get(&id).unwrap_or_else(|| panic!("{id} is not an item template"));
+            let item = items
+                .get(&id)
+                .unwrap_or_else(|| panic!("{id} is not an item template"));
             assert_eq!(item.r#type, 8, "{id} ({}) is not a material", item.name);
         }
         // Control: the table this draws from does pay gear, which is never read.
-        let bands = enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
-            .as_array()
-            .unwrap();
-        assert!(bands.iter().flat_map(|b| b["results"].as_array().unwrap()).any(|r| r["loot"]["items"]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())));
+        let bands =
+            enemy_loot()["tables"][Uuid::from_u128(GOLD_LOOT_TABLE_ID).to_string()]["byLevel"]
+                .as_array()
+                .unwrap();
+        assert!(
+            bands
+                .iter()
+                .flat_map(|b| b["results"].as_array().unwrap())
+                .any(|r| r["loot"]["items"]
+                    .as_array()
+                    .is_some_and(|items| !items.is_empty()))
+        );
     }
 
     /// [`TOWN_MATERIALS`] is the game data's own classification: of everything the
@@ -2629,37 +3013,63 @@ mod abyss_bonus_material_tests {
             .into_iter()
             .filter(|id| {
                 let name = &items[id].name;
-                name.starts_with("Item.TownResource.") || name.starts_with("Item.DecorationResource.")
+                name.starts_with("Item.TownResource.")
+                    || name.starts_with("Item.DecorationResource.")
             })
             .collect();
-        let shipped: std::collections::BTreeSet<Uuid> = TOWN_MATERIALS.iter().map(|id| Uuid::from_u128(*id)).collect();
+        let shipped: std::collections::BTreeSet<Uuid> = TOWN_MATERIALS
+            .iter()
+            .map(|id| Uuid::from_u128(*id))
+            .collect();
         assert_eq!(town_named, shipped);
 
         let file = |name: &str| {
-            std::fs::read_to_string(format!("{}/../deploy/static/{name}", env!("CARGO_MANIFEST_DIR")))
-                .or_else(|_| std::fs::read_to_string(format!("{}/src/{name}", env!("CARGO_MANIFEST_DIR"))))
-                .unwrap_or_else(|e| panic!("{name}: {e}"))
+            std::fs::read_to_string(format!(
+                "{}/../deploy/static/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .or_else(|_| {
+                std::fs::read_to_string(format!("{}/src/{name}", env!("CARGO_MANIFEST_DIR")))
+            })
+            .unwrap_or_else(|e| panic!("{name}: {e}"))
         };
-        let gear_inputs =
-            ["smithing_inputs.json", "enchanting.json", "item_mod_recipes.json", "repair_costs.json"].map(file);
+        let gear_inputs = [
+            "smithing_inputs.json",
+            "enchanting.json",
+            "item_mod_recipes.json",
+            "repair_costs.json",
+        ]
+        .map(file);
         let buildings = file("building_upgrades.json");
         for id in &shipped {
             let id = id.to_string();
-            assert!(gear_inputs.iter().all(|f| !f.contains(&id)), "{id} is a gear-crafting input");
+            assert!(
+                gear_inputs.iter().all(|f| !f.contains(&id)),
+                "{id} is a gear-crafting input"
+            );
         }
         // Controls: the building materials really are building inputs (Marble and
         // Bronze as building styles), and Animal Hide, asked about with them, is a
         // smithing input -- so it stays at full weight.
-        for id in [0xe7193116_d761_479b_8a20_5633737977f5u128, 0xfd67bbc6_20f4_44a3_9614_28265ebb8c67,
-            0x42d91529_c88b_4c5b_815b_b55508b4e7ef, 0x61d5e5c7_78b8_4fc3_ba6a_5b7c2a15866d,
-            0x38d32048_ce01_4390_a4f0_cdb94ef3ce72]
-        {
-            assert!(buildings.contains(&Uuid::from_u128(id).to_string()), "{id:x} builds nothing");
+        for id in [
+            0xe7193116_d761_479b_8a20_5633737977f5u128,
+            0xfd67bbc6_20f4_44a3_9614_28265ebb8c67,
+            0x42d91529_c88b_4c5b_815b_b55508b4e7ef,
+            0x61d5e5c7_78b8_4fc3_ba6a_5b7c2a15866d,
+            0x38d32048_ce01_4390_a4f0_cdb94ef3ce72,
+        ] {
+            assert!(
+                buildings.contains(&Uuid::from_u128(id).to_string()),
+                "{id:x} builds nothing"
+            );
         }
         let animal_hide = uuid("51f7612f-a797-4417-8a92-493b0aae7f45");
         assert!(every_candidate().contains(&animal_hide));
         assert_eq!(items[&animal_hide].name, "Items.Name.AnimalHide");
-        assert!(gear_inputs[0].contains(&animal_hide.to_string()), "Animal Hide is a smithing input");
+        assert!(
+            gear_inputs[0].contains(&animal_hide.to_string()),
+            "Animal Hide is a smithing input"
+        );
         assert!(!shipped.contains(&animal_hide));
     }
 
@@ -2685,7 +3095,10 @@ mod abyss_bonus_material_tests {
             );
         }
         // The enchanting draw has no town material, so it is untouched.
-        assert!((1..=ABYSS_BONUS_MAX_LEVEL).all(|l| abyss_bonus_candidates(l, true).iter().all(|c| !town(&c))));
+        assert!(
+            (1..=ABYSS_BONUS_MAX_LEVEL)
+                .all(|l| abyss_bonus_candidates(l, true).iter().all(|c| !town(&c)))
+        );
 
         let dungeon = Uuid::from_u128(0x383b);
         for level in [7i64, 20, 45, 100] {
@@ -2693,7 +3106,9 @@ mod abyss_bonus_material_tests {
             for i in 0..60_000usize {
                 let group = Uuid::from_u128(i as u128 * 0x9E37_79B9);
                 let run_seed = (i as u64).wrapping_mul(0x2545_F491_4F6C_DD1D);
-                let Some((item, _)) = abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level) else {
+                let Some((item, _)) =
+                    abyss_bonus_material(&dungeon, run_seed, &group, i % 3, i % 2, level)
+                else {
                     continue;
                 };
                 if ENCHANTING_INGREDIENTS.contains(&item.as_u128()) {
@@ -2702,13 +3117,19 @@ mod abyss_bonus_material_tests {
                 materials += 1;
                 towns += usize::from(TOWN_MATERIALS.contains(&item.as_u128()));
             }
-            let (before, after) = (share(level, &|c| c.2 as f64), share(level, &abyss_bonus_weight));
+            let (before, after) = (
+                share(level, &|c| c.2 as f64),
+                share(level, &abyss_bonus_weight),
+            );
             let measured = towns as f64 / materials as f64;
             println!(
                 "level {level}: town share of non-enchanting bonus stacks: retail {before:.3}, \
                  half weight {after:.3}, drawn {measured:.3} ({towns}/{materials})"
             );
-            assert!((measured - after).abs() < 0.02, "level {level}: drew {measured}, expected {after}");
+            assert!(
+                (measured - after).abs() < 0.02,
+                "level {level}: drew {measured}, expected {after}"
+            );
         }
     }
 }
@@ -2777,7 +3198,10 @@ mod enemy_loot_tests {
                 unknown.push(group);
             }
         }
-        assert!(unknown.is_empty(), "corpus groups absent from parsed.json: {unknown:?}");
+        assert!(
+            unknown.is_empty(),
+            "corpus groups absent from parsed.json: {unknown:?}"
+        );
     }
 
     /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): a ring or
@@ -2800,7 +3224,11 @@ mod enemy_loot_tests {
                         continue;
                     }
                     let g = &item.properties.grading;
-                    assert_eq!(item.grade, Some(g.iter().map(|p| p.tier).sum()), "grade = sum of tiers");
+                    assert_eq!(
+                        item.grade,
+                        Some(g.iter().map(|p| p.tier).sum()),
+                        "grade = sum of tiers"
+                    );
                     count[g.len()] += 1;
                 }
             }
@@ -2811,7 +3239,10 @@ mod enemy_loot_tests {
         eprintln!("#393 enemy loot: {count:?} of {n}");
         for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
             let got = count[props] as f64 * 100.0 / n as f64;
-            assert!((got - f64::from(pct)).abs() <= 3.0, "{props} properties: {got:.1}% (want {pct}%)");
+            assert!(
+                (got - f64::from(pct)).abs() <= 3.0,
+                "{props} properties: {got:.1}% (want {pct}%)"
+            );
         }
     }
 
@@ -2830,7 +3261,10 @@ mod enemy_loot_tests {
                 paid += 1;
             }
         }
-        assert!(total > 1_900, "expected every parsed.json spawn group, got {total}");
+        assert!(
+            total > 1_900,
+            "expected every parsed.json spawn group, got {total}"
+        );
         assert!(
             paid * 2 > total,
             "only {paid} of {total} enemies dropped anything -- corpses are still mostly empty"
@@ -2856,7 +3290,10 @@ mod enemy_loot_tests {
                 }
             }
         }
-        assert!(empty > 0, "every one of {total} corpses paid out; retail's did not");
+        assert!(
+            empty > 0,
+            "every one of {total} corpses paid out; retail's did not"
+        );
         assert!(empty < total, "not one of {total} corpses paid out");
     }
 
@@ -2878,7 +3315,10 @@ mod enemy_loot_tests {
             for (dungeon_id, group_id) in &groups {
                 for spawner in 0..4 {
                     let loot = roll_enemy_loot(dungeon_id, group_id, spawner, 0, level);
-                    sum += loot.values().filter_map(|l| l.currencies.get(&gold)).sum::<u64>();
+                    sum += loot
+                        .values()
+                        .filter_map(|l| l.currencies.get(&gold))
+                        .sum::<u64>();
                     n += 1;
                 }
             }
@@ -2897,7 +3337,10 @@ mod enemy_loot_tests {
             high > 150.0,
             "level-90 enemies averaged only {high:.1} gold -- retail's is 343"
         );
-        assert!(high > low * 10.0, "gold barely moved with level: {low:.1} -> {high:.1}");
+        assert!(
+            high > low * 10.0,
+            "gold barely moved with level: {low:.1} -> {high:.1}"
+        );
     }
 
     /// A group the corpus never saw still pays, and pays only gold.
@@ -2929,7 +3372,10 @@ mod enemy_loot_tests {
                 paid += 1;
             }
         }
-        assert!(paid > 100, "only {paid} of 200 unobserved enemies paid gold");
+        assert!(
+            paid > 100,
+            "only {paid} of 200 unobserved enemies paid gold"
+        );
     }
 
     /// Only tables the group was actually observed rolling may come back.
@@ -2980,8 +3426,16 @@ mod enemy_loot_tests {
                 for (table, result) in &loot {
                     let repeat = &again[table];
                     assert_eq!(
-                        result.item.0.keys().collect::<std::collections::HashSet<_>>(),
-                        repeat.item.0.keys().collect::<std::collections::HashSet<_>>(),
+                        result
+                            .item
+                            .0
+                            .keys()
+                            .collect::<std::collections::HashSet<_>>(),
+                        repeat
+                            .item
+                            .0
+                            .keys()
+                            .collect::<std::collections::HashSet<_>>(),
                         "the same corpse was described with different instance ids"
                     );
                     for (id, item) in &result.item.0 {
@@ -2995,8 +3449,14 @@ mod enemy_loot_tests {
                 }
             }
         }
-        assert!(items > 50, "only {items} gear drops over the whole game -- expected more");
-        assert_eq!(collisions, 0, "{collisions} of {items} gear drops shared an instance id");
+        assert!(
+            items > 50,
+            "only {items} gear drops over the whole game -- expected more"
+        );
+        assert_eq!(
+            collisions, 0,
+            "{collisions} of {items} gear drops shared an instance id"
+        );
     }
 
     /// The loot the client is told about is the loot the server will pay out:
@@ -3042,8 +3502,8 @@ mod floor_pile_tests {
     /// silently degrading to "every pile is one".
     #[test]
     fn the_pile_size_sidecar_loads() {
-        let v: serde_json::Value = serde_json::from_str(FLOOR_PILE_SIZES_RAW)
-            .expect("floor_pile_sizes.json must parse");
+        let v: serde_json::Value =
+            serde_json::from_str(FLOOR_PILE_SIZES_RAW).expect("floor_pile_sizes.json must parse");
         let spawns = v["spawns"].as_object().expect("spawns object");
         assert_eq!(spawns.len(), 1285, "the mined floor spawn points");
         assert_eq!(v["_meta"]["dungeons"].as_u64(), Some(3033));
@@ -3068,7 +3528,10 @@ mod floor_pile_tests {
                 unknown.push(spawn);
             }
         }
-        assert!(unknown.is_empty(), "mined spawns absent from parsed.json: {unknown:?}");
+        assert!(
+            unknown.is_empty(),
+            "mined spawns absent from parsed.json: {unknown:?}"
+        );
     }
 
     /// THE BUG: every floor pile held exactly one result, where retail put more
@@ -3099,7 +3562,10 @@ mod floor_pile_tests {
             multi >= 90,
             "only {multi} of {piles} piles hold more than one result; 97 spawn points do"
         );
-        assert!(biggest >= 7, "the biggest pile generated held {biggest}; retail's holds 24");
+        assert!(
+            biggest >= 7,
+            "the biggest pile generated held {biggest}; retail's holds 24"
+        );
     }
 
     /// A pile of seven must be seven DRAWS, not one draw repeated — otherwise
@@ -3165,7 +3631,11 @@ mod floor_pile_tests {
                     .item_generated_data
                     .get(spawn)
                     .unwrap_or_else(|| panic!("spawn {spawn} vanished between descriptions"));
-                assert_eq!(first.len(), second.len(), "pile size moved for spawn {spawn}");
+                assert_eq!(
+                    first.len(),
+                    second.len(),
+                    "pile size moved for spawn {spawn}"
+                );
                 for (x, y) in first.iter().zip(second.iter()) {
                     assert_eq!(
                         serde_json::to_value(&x.loot_table_loot).unwrap(),
@@ -3263,7 +3733,11 @@ mod spawn_table_tests {
             })
             .map(|(k, _)| k)
             .collect();
-        assert_eq!(on_key_table.len(), 11, "spawn points carrying the DoorKey table");
+        assert_eq!(
+            on_key_table.len(),
+            11,
+            "spawn points carrying the DoorKey table"
+        );
     }
 
     #[test]
@@ -3281,7 +3755,10 @@ mod spawn_table_tests {
             .keys()
             .filter(|id| !known.contains(&uuid(id)))
             .collect();
-        assert!(unknown.is_empty(), "mined spawns absent from parsed.json: {unknown:?}");
+        assert!(
+            unknown.is_empty(),
+            "mined spawns absent from parsed.json: {unknown:?}"
+        );
     }
 
     /// THE BUG (#192). Three of the sixty pots in The Wizard's Challenge hold
@@ -3293,7 +3770,11 @@ mod spawn_table_tests {
         let game_data = game_data();
         let generated =
             generate_for_dungeon(&game_data, &uuid(WIZARDS_CHALLENGE), 20, 5).expect("dungeon");
-        assert_eq!(generated.item_generated_data.len(), 60, "retail's sixty pots");
+        assert_eq!(
+            generated.item_generated_data.len(),
+            60,
+            "retail's sixty pots"
+        );
 
         for spawn in KEY_SPAWNS {
             let results = generated
@@ -3333,7 +3814,10 @@ mod spawn_table_tests {
             })
             .map(|(spawn, _)| *spawn)
             .collect();
-        assert!(stray.is_empty(), "pots that should hold no key do: {stray:?}");
+        assert!(
+            stray.is_empty(),
+            "pots that should hold no key do: {stray:?}"
+        );
     }
 
     /// The union never takes a table away. Six of the 1,285 mined spawns name
@@ -3392,9 +3876,17 @@ mod spawn_table_tests {
             .expect("the interactable's own table is still rolled");
         // The pot's table is the medium breakable's, filled to its stack count
         // (#388) under the table's own seeds — still independent of the key table.
-        let name = game_data.dungeons[&dungeon].spawn_info.item[&spawn].name.clone();
-        let direct =
-            roll_container_table(default_seed_context(&dungeon), &spawn, name.as_deref(), &lumber, 0, 20);
+        let name = game_data.dungeons[&dungeon].spawn_info.item[&spawn]
+            .name
+            .clone();
+        let direct = roll_container_table(
+            default_seed_context(&dungeon),
+            &spawn,
+            name.as_deref(),
+            &lumber,
+            0,
+            20,
+        );
         assert_eq!(
             serde_json::to_value(from_generation).unwrap(),
             serde_json::to_value(&direct).unwrap(),
@@ -3420,13 +3912,18 @@ mod spawn_table_tests {
                     .and_then(|a| game_data.interactables.get(&a.interactable_uuid))
                     .map(|i| i.loot_table.len())
                     .unwrap_or(0);
-                let rolled = results.first().map(|r| r.loot_table_loot.len()).unwrap_or(0);
+                let rolled = results
+                    .first()
+                    .map(|r| r.loot_table_loot.len())
+                    .unwrap_or(0);
                 if rolled > from_interactable {
                     with_extra_table += 1;
                 }
                 if results.iter().any(|r| {
                     r.loot_table_loot.values().any(|l| {
-                        !l.stackable_items.is_empty() || !l.currencies.is_empty() || !l.item.is_empty()
+                        !l.stackable_items.is_empty()
+                            || !l.currencies.is_empty()
+                            || !l.item.is_empty()
                     })
                 }) {
                     paying += 1;
@@ -3456,11 +3953,26 @@ mod key_holder_tests {
     /// The groups retail keyed the DoorKey loot TABLE on: EQ13's key-holder,
     /// SQ201's, and three in SQ205_B.
     const KEY_TABLE_GROUPS: [(&str, &str); 5] = [
-        ("413d5dfb-13b6-4a7c-84b1-81e008648f19", "101b2285-0679-4d5c-92d5-a34045f145ce"),
-        ("0ded6e84-d942-434b-8563-33ef301f6189", "379775a2-8015-4c8c-a503-0691597528a0"),
-        ("7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0", "51ccfdc2-e8f5-4ff3-bc62-0d72eee97387"),
-        ("7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0", "7c4c0cc5-4240-4676-a372-6fc06bbeb5d9"),
-        ("7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0", "bd3eecc3-5f10-41ad-8a6f-f796e17d7d6e"),
+        (
+            "413d5dfb-13b6-4a7c-84b1-81e008648f19",
+            "101b2285-0679-4d5c-92d5-a34045f145ce",
+        ),
+        (
+            "0ded6e84-d942-434b-8563-33ef301f6189",
+            "379775a2-8015-4c8c-a503-0691597528a0",
+        ),
+        (
+            "7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0",
+            "51ccfdc2-e8f5-4ff3-bc62-0d72eee97387",
+        ),
+        (
+            "7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0",
+            "7c4c0cc5-4240-4676-a372-6fc06bbeb5d9",
+        ),
+        (
+            "7f3ca11c-bfc7-40ec-bf72-7fb5c45ddbd0",
+            "bd3eecc3-5f10-41ad-8a6f-f796e17d7d6e",
+        ),
     ];
 
     fn game_data() -> GameData {
@@ -3492,7 +4004,11 @@ mod key_holder_tests {
             let mercs = &generated.enemy_generated_data[&uuid(MERCENARY)];
             assert_eq!(mercs.len(), 1, "one Mercenary spawner");
             let merc = &mercs[0][0];
-            assert_eq!(keys_on(merc), 1, "level {level}: the Mercenary holds no key");
+            assert_eq!(
+                keys_on(merc),
+                1,
+                "level {level}: the Mercenary holds no key"
+            );
             // Where retail put it: the bare spawnGroupLoot result.
             assert_eq!(
                 serde_json::to_value(&merc.spawn_group_loot).unwrap(),
@@ -3579,21 +4095,33 @@ mod key_holder_tests {
             .as_object()
             .unwrap()
             .iter()
-            .filter(|(_, g)| g.to_string().contains("2d366ee0-8087-4d1d-8161-64a7b3e14f93"))
+            .filter(|(_, g)| {
+                g.to_string()
+                    .contains("2d366ee0-8087-4d1d-8161-64a7b3e14f93")
+            })
             .map(|(id, _)| uuid(id))
             .collect();
-        assert!(!groups.is_empty(), "the corpus keys this table on some group");
+        assert!(
+            !groups.is_empty(),
+            "the corpus keys this table on some group"
+        );
         let game_data = game_data();
         for group in groups {
             let dungeon = dungeon_owning_spawn_group(&game_data, &group).unwrap_or(uuid(EQ15));
             for spawner in 0..4 {
-                if let Some(roll) = roll_enemy_loot(&dungeon, &group, spawner, 0, 30).get(&unknown) {
-                    assert!(roll.is_empty(), "{group}: invented loot for an unknown table");
+                if let Some(roll) = roll_enemy_loot(&dungeon, &group, spawner, 0, 30).get(&unknown)
+                {
+                    assert!(
+                        roll.is_empty(),
+                        "{group}: invented loot for an unknown table"
+                    );
                 }
             }
         }
         // And the gold table is modelled, so it is never "unmodelled".
-        assert!(!enemy_table_is_unmodelled(&Uuid::from_u128(GOLD_LOOT_TABLE_ID)));
+        assert!(!enemy_table_is_unmodelled(&Uuid::from_u128(
+            GOLD_LOOT_TABLE_ID
+        )));
     }
 }
 

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 use uuid::Uuid;
-use std::{collections::{HashMap, HashSet}, fmt};
 
 use crate::user_data::{B64EncodedData, Items};
 
@@ -154,7 +157,11 @@ impl DungeonGeneratedData {
             .and_then(|enemy_data| enemy_data.get(index.enemy_index))
     }
 
-    pub fn get_chest(&self, spawn_group_id: &Uuid, spawn_group_index: usize) -> Option<&ChestGeneratedData> {
+    pub fn get_chest(
+        &self,
+        spawn_group_id: &Uuid,
+        spawn_group_index: usize,
+    ) -> Option<&ChestGeneratedData> {
         self.chest_generated_data
             .get(spawn_group_id)
             .and_then(|chests| chests.get(spawn_group_index))
@@ -344,9 +351,8 @@ mod report61_tests {
     /// This is the property the fix is for: no single omission can fail an import.
     #[test]
     fn the_minimal_dungeon_body_deserializes() {
-        let d: DungeonGeneratedData =
-            serde_json::from_str(r#"{"algorithmVersion":1,"version":1}"#)
-                .expect("no collection on this path may be required");
+        let d: DungeonGeneratedData = serde_json::from_str(r#"{"algorithmVersion":1,"version":1}"#)
+            .expect("no collection on this path may be required");
         assert!(d.enemy_generated_data.is_empty());
         assert!(d.item_generated_data.is_empty());
         assert!(d.chest_generated_data.is_empty());
@@ -383,7 +389,10 @@ mod report61_tests {
         let r: DungeonEnemyResult = serde_json::from_value(src).unwrap();
         assert_eq!(r.loot_table_loot.len(), 1);
         let back = serde_json::to_value(&r).unwrap();
-        assert!(back.get("lootTableLoot").is_some(), "real loot must survive");
+        assert!(
+            back.get("lootTableLoot").is_some(),
+            "real loot must survive"
+        );
         assert_eq!(r.merged_loot_table().stackable_items.len(), 1);
     }
 }
@@ -430,13 +439,19 @@ mod collected_chests_compat {
             "currentState":{"b64":"AAAA"},"enemyStatus":{},"seed":0,"level":1,"version":1}"#;
         let mut s: DungeonStatus = serde_json::from_str(raw).unwrap();
         let out = serde_json::to_value(&s).unwrap();
-        assert!(out.get("collectedChests").is_none(), "empty set must be omitted: {out:?}");
+        assert!(
+            out.get("collectedChests").is_none(),
+            "empty set must be omitted: {out:?}"
+        );
 
         // control: once something IS collected the field appears, so the assertion
         // above is about emptiness and not about the field never existing.
         s.collected_chests.insert(Uuid::nil().to_string());
         let out = serde_json::to_value(&s).unwrap();
-        assert!(out.get("collectedChests").is_some(), "a non-empty set must be sent");
+        assert!(
+            out.get("collectedChests").is_some(),
+            "a non-empty set must be sent"
+        );
     }
 }
 
@@ -453,7 +468,7 @@ mod collected_chests_compat {
 #[cfg(test)]
 mod enemy_loot_wire_shape {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn enemy(json_text: Value) -> DungeonEnemyResult {
         serde_json::from_value(json_text).expect("enemy result parses")
@@ -473,11 +488,17 @@ mod enemy_loot_wire_shape {
 
     #[test]
     fn loot_items_go_on_the_wire_under_the_plural_key() {
-        let result = LootTableResult { item: one_item(), ..Default::default() };
+        let result = LootTableResult {
+            item: one_item(),
+            ..Default::default()
+        };
         let wire = serde_json::to_value(&result).unwrap();
 
         // 9,542 captured results carry `items`. Zero carry `item`.
-        assert!(wire.get("items").is_some(), "expected retail's `items`, got {wire}");
+        assert!(
+            wire.get("items").is_some(),
+            "expected retail's `items`, got {wire}"
+        );
         assert!(
             wire.get("item").is_none(),
             "`item` is a key retail never sent; got {wire}"
@@ -499,7 +520,11 @@ mod enemy_loot_wire_shape {
             }]
         });
         let parsed: LootTableResult = serde_json::from_value(retail).unwrap();
-        assert_eq!(parsed.item.0.len(), 1, "retail's item was silently discarded");
+        assert_eq!(
+            parsed.item.0.len(),
+            1,
+            "retail's item was silently discarded"
+        );
         assert_eq!(parsed.currencies.len(), 1);
     }
 

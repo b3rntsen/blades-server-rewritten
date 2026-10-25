@@ -22,8 +22,8 @@ use serde::Deserializer;
 use serde_json::Value;
 
 use super::damage::{
-    attack_type_multiplier, is_elemental, is_health_type, is_physical, mirrored_drain,
-    DamageModel, RetailDamageModel,
+    DamageModel, RetailDamageModel, attack_type_multiplier, is_elemental, is_health_type,
+    is_physical, mirrored_drain,
 };
 use super::state::{ActiveSide, DamageSource, DamageType, Fighter, Loadout, WeaponProfile};
 use super::{gamedata, tables};
@@ -475,7 +475,15 @@ fn oracle_v4_fork_finding_synergy_scope() {
         .perks
         .element_damage
         .push((DamageType::Shock, 15.19));
-    let target = Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, std::time::Instant::now());
+    let target = Fighter::new(
+        1,
+        565,
+        Loadout {
+            level: 100,
+            ..Default::default()
+        },
+        std::time::Instant::now(),
+    );
     let got = RetailDamageModel.resolve_attack(
         &attacker,
         &target,

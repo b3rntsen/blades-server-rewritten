@@ -33,8 +33,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
 
 const CHALLENGE_SERVICE_ID: u64 = 9005;
@@ -87,16 +86,15 @@ fn sync_rewards(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
 /// cursor. The server mints the fresh instance/objective UUIDs (this crate has
 /// no uuid-v4).
 fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
-    state
-        .active
-        .retain(|c| c.status == ChallengeStatus::Active);
+    state.active.retain(|c| c.status == ChallengeStatus::Active);
     if pool.is_empty() {
         return;
     }
     sync_rewards(state, pool);
     let free = ACTIVE_CHALLENGE_COUNT.saturating_sub(state.active.len());
     let held: Vec<Uuid> = state.active.iter().map(|c| c.template_id).collect();
-    let (picked, cursor) = challenges::pick_templates(pool, state.cursor % pool.len(), level, &held, free);
+    let (picked, cursor) =
+        challenges::pick_templates(pool, state.cursor % pool.len(), level, &held, free);
     state.cursor = cursor;
     let (secs, ms) = (now_secs(), now_ms());
     for idx in picked {
@@ -157,7 +155,10 @@ pub async fn get_challenges(
             let character = entry.character.0.clone();
             write_back(&mut conn, entry).await?;
             Ok::<_, BladeApiError>(Json(GetChallengesResult {
-                character: CompleteCharacterWithIdWithoutData { id: character_id, character },
+                character: CompleteCharacterWithIdWithoutData {
+                    id: character_id,
+                    character,
+                },
                 challenge_status: ChallengeStatusBlock { active },
             }))
         }
@@ -179,7 +180,9 @@ struct ProgressResponse {
 }
 
 /// Update a challenge's progress (client reports an absolute value).
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/challenges/{challenge_id}")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/challenges/{challenge_id}"
+)]
 pub async fn update_challenge(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -235,7 +238,9 @@ struct ResolveResponse {
 }
 
 /// Complete a challenge: grant the reward, bump season points, rotate in a fresh one.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/challenges/{challenge_id}/complete")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/challenges/{challenge_id}/complete"
+)]
 pub async fn complete_challenge(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -245,7 +250,9 @@ pub async fn complete_challenge(
 }
 
 /// Abandon a challenge: no reward, just rotate in a fresh one.
-#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/challenges/{challenge_id}/abandon")]
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/challenges/{challenge_id}/abandon"
+)]
 pub async fn abandon_challenge(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -269,7 +276,10 @@ async fn resolve(
     conn.transaction(move |mut conn| {
         async move {
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
-            sync_rewards(&mut entry.server_state.0.challenges, &globals.static_data.challenge_templates);
+            sync_rewards(
+                &mut entry.server_state.0.challenges,
+                &globals.static_data.challenge_templates,
+            );
 
             // Resolve the targeted challenge in place.
             let mut resolved = {
@@ -302,7 +312,8 @@ async fn resolve(
                     &mut entry.character.0,
                     &mut tracker,
                 );
-                if !resolved.reward.stackable_items.is_empty() || !resolved.reward.items.is_empty() {
+                if !resolved.reward.stackable_items.is_empty() || !resolved.reward.items.is_empty()
+                {
                     entry.inventory.0.backpack_version += 1;
                 }
                 entry.character.0.challenge_season.points += 1;
@@ -311,7 +322,11 @@ async fn resolve(
 
             // Drop the resolved challenge and refill the active set.
             let level = entry.character.0.level;
-            refill(&mut entry.server_state.0.challenges, &globals.static_data.challenge_templates, level);
+            refill(
+                &mut entry.server_state.0.challenges,
+                &globals.static_data.challenge_templates,
+                level,
+            );
 
             let character = entry.character.0.clone();
             let inventory = entry.inventory.0.generate_client_update(&tracker);
@@ -320,7 +335,10 @@ async fn resolve(
             write_back(&mut conn, entry).await?;
 
             Ok::<_, BladeApiError>(Json(ResolveResponse {
-                character: CompleteCharacterWithIdWithoutData { id: character_id, character },
+                character: CompleteCharacterWithIdWithoutData {
+                    id: character_id,
+                    character,
+                },
                 challenge: resolved,
                 next_challenge_categories: vec![NextCategory {
                     category_id,
@@ -361,17 +379,39 @@ mod tests {
             .iter()
             .find(|t| t.reward.currencies.get(&blades_lib::economy::GOLD) == Some(&750))
             .expect("a 750-gold template");
-        let mut stale = ChallengeInstance::from_template(gold_template, Uuid::from_u128(1), Uuid::from_u128(2), 0, 0);
+        let mut stale = ChallengeInstance::from_template(
+            gold_template,
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            0,
+            0,
+        );
         stale.reward = gold_template.reward.clone(); // as stored before #388
-        let mut state = ChallengeState { active: vec![stale], cursor: 0, points: 0 };
+        let mut state = ChallengeState {
+            active: vec![stale],
+            cursor: 0,
+            points: 0,
+        };
         for _ in 0..2 {
             sync_rewards(&mut state, &pool);
-            assert_eq!(state.active[0].reward.currencies, HashMap::from([(GEMS, 6)]), "750 gold = 3 gems, doubled");
-            assert_eq!(category_id_for_reward(&state.active[0].reward), GEM_CATEGORY_ID);
+            assert_eq!(
+                state.active[0].reward.currencies,
+                HashMap::from([(GEMS, 6)]),
+                "750 gold = 3 gems, doubled"
+            );
+            assert_eq!(
+                category_id_for_reward(&state.active[0].reward),
+                GEM_CATEGORY_ID
+            );
         }
         refill(&mut state, &pool, 30);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
-        assert!(state.active.iter().all(|c| c.reward.currencies.keys().all(|k| *k == GEMS)));
+        assert!(
+            state
+                .active
+                .iter()
+                .all(|c| c.reward.currencies.keys().all(|k| *k == GEMS))
+        );
     }
 
     /// The enemy family a `targetEnemyGroup` challenge asks for, as the job
@@ -391,18 +431,37 @@ mod tests {
     fn report_406_offered_enemy_challenges_spawn_at_the_characters_level() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let pool = crate::static_loader::load(&dir).challenge_templates;
-        let targets: Vec<&ChallengeTemplate> = pool.iter().filter(|t| t.target_enemy_group.is_some()).collect();
-        assert!(!targets.is_empty(), "the pool has an enemy-target challenge to check");
+        let targets: Vec<&ChallengeTemplate> = pool
+            .iter()
+            .filter(|t| t.target_enemy_group.is_some())
+            .collect();
+        assert!(
+            !targets.is_empty(),
+            "the pool has an enemy-target challenge to check"
+        );
         for level in 1..=100u16 {
             for cursor in 0..pool.len() {
-                let mut state = ChallengeState { active: vec![], cursor, points: 0 };
+                let mut state = ChallengeState {
+                    active: vec![],
+                    cursor,
+                    points: 0,
+                };
                 refill(&mut state, &pool, level);
                 assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT, "level {level}");
                 for c in &state.active {
-                    let t = pool.iter().find(|t| t.template_id == c.template_id).unwrap();
-                    let Some(group) = t.target_enemy_group else { continue };
-                    let family = job_family_of_group(group).unwrap_or_else(|| panic!("no family for group {group}"));
-                    let f = crate::quest::jobs_gen::JOB_FAMILIES.iter().find(|f| f.id == family).unwrap();
+                    let t = pool
+                        .iter()
+                        .find(|t| t.template_id == c.template_id)
+                        .unwrap();
+                    let Some(group) = t.target_enemy_group else {
+                        continue;
+                    };
+                    let family = job_family_of_group(group)
+                        .unwrap_or_else(|| panic!("no family for group {group}"));
+                    let f = crate::quest::jobs_gen::JOB_FAMILIES
+                        .iter()
+                        .find(|f| f.id == family)
+                        .unwrap();
                     assert!(
                         (f.min_level..=f.max_level).contains(&(level as i64)),
                         "level {level}: {} asks for a family that spawns at {}..={}",
@@ -412,7 +471,10 @@ mod tests {
                     );
                 }
                 if level == 65 {
-                    assert!(state.active.iter().all(|c| t_is_not_skeever(c)), "Skeevers offered at 65");
+                    assert!(
+                        state.active.iter().all(|c| t_is_not_skeever(c)),
+                        "Skeevers offered at 65"
+                    );
                 }
             }
         }
@@ -434,15 +496,30 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let pool = crate::static_loader::load(&dir).challenge_templates;
         let stored = |tid: u128, id: u128| {
-            let t = pool.iter().find(|t| t.template_id == Uuid::from_u128(tid)).unwrap();
+            let t = pool
+                .iter()
+                .find(|t| t.template_id == Uuid::from_u128(tid))
+                .unwrap();
             ChallengeInstance::from_template(t, Uuid::from_u128(id), Uuid::new_v4(), 0, 0)
         };
         let mut state = ChallengeState {
             active: vec![
-                stored(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf, 0xc95a9d24_4028_4549_bfb5_54a465f76eec), // TUTORIAL_CraftDecoration
-                stored(0x78826178_9291_4255_a204_6ac312affda5, 0xd45e5b08_c16c_4f02_b17e_aa9bda1da692), // Salvage_Legendary
-                stored(0xcb497c2f_9354_4545_a3d1_bfdab358579f, 0xef4301fd_7215_4579_ace4_021181b9b994), // Perform3HitCombos_15
-                stored(0xba98f140_5dbb_4b58_b7f2_66c080651d8d, 0x606553ba_9aa0_4da6_b298_1e94daf0041f), // CollectChests_15
+                stored(
+                    0xbce21d12_8f3b_444b_ad1f_740478f1d0cf,
+                    0xc95a9d24_4028_4549_bfb5_54a465f76eec,
+                ), // TUTORIAL_CraftDecoration
+                stored(
+                    0x78826178_9291_4255_a204_6ac312affda5,
+                    0xd45e5b08_c16c_4f02_b17e_aa9bda1da692,
+                ), // Salvage_Legendary
+                stored(
+                    0xcb497c2f_9354_4545_a3d1_bfdab358579f,
+                    0xef4301fd_7215_4579_ace4_021181b9b994,
+                ), // Perform3HitCombos_15
+                stored(
+                    0xba98f140_5dbb_4b58_b7f2_66c080651d8d,
+                    0x606553ba_9aa0_4da6_b298_1e94daf0041f,
+                ), // CollectChests_15
             ],
             cursor: 11,
             points: 36,
@@ -451,11 +528,23 @@ mod tests {
         refill(&mut state, &pool, 77);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         let ids: Vec<Uuid> = state.active.iter().map(|c| c.id).collect();
-        assert!(!ids.contains(&Uuid::from_u128(0xc95a9d24_4028_4549_bfb5_54a465f76eec)), "tutorial retired");
-        for kept in [0xd45e5b08_c16c_4f02_b17e_aa9bda1da692u128, 0xef4301fd_7215_4579_ace4_021181b9b994, 0x606553ba_9aa0_4da6_b298_1e94daf0041f] {
+        assert!(
+            !ids.contains(&Uuid::from_u128(0xc95a9d24_4028_4549_bfb5_54a465f76eec)),
+            "tutorial retired"
+        );
+        for kept in [
+            0xd45e5b08_c16c_4f02_b17e_aa9bda1da692u128,
+            0xef4301fd_7215_4579_ace4_021181b9b994,
+            0x606553ba_9aa0_4da6_b298_1e94daf0041f,
+        ] {
             assert!(ids.contains(&Uuid::from_u128(kept)), "{kept:x} kept");
         }
-        assert!(state.active.iter().all(|c| c.template_id != Uuid::from_u128(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf)));
+        assert!(
+            state
+                .active
+                .iter()
+                .all(|c| c.template_id != Uuid::from_u128(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf))
+        );
     }
 
     #[test]
@@ -463,7 +552,10 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let pool = crate::static_loader::load(&dir).challenge_templates;
         let stored = |tid: u128| {
-            let t = pool.iter().find(|t| t.template_id == Uuid::from_u128(tid)).unwrap();
+            let t = pool
+                .iter()
+                .find(|t| t.template_id == Uuid::from_u128(tid))
+                .unwrap();
             ChallengeInstance::from_template(t, Uuid::new_v4(), Uuid::new_v4(), 0, 0)
         };
         let mut state = ChallengeState {
@@ -477,13 +569,22 @@ mod tests {
             points: 0,
         };
         retire_out_of_band(&mut state, &pool, 65);
-        assert!(state.active.is_empty(), "all four are out of band at 65 and untouched");
+        assert!(
+            state.active.is_empty(),
+            "all four are out of band at 65 and untouched"
+        );
         refill(&mut state, &pool, 65);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         for c in &state.active {
-            let t = pool.iter().find(|t| t.template_id == c.template_id).unwrap();
+            let t = pool
+                .iter()
+                .find(|t| t.template_id == c.template_id)
+                .unwrap();
             assert!(t.offered_at(65), "{}", c.template_id);
-            assert!(c.reward.currencies.keys().all(|k| *k == GEMS), "#388 gems-only reward kept");
+            assert!(
+                c.reward.currencies.keys().all(|k| *k == GEMS),
+                "#388 gems-only reward kept"
+            );
         }
     }
 }

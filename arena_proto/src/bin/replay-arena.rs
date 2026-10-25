@@ -13,15 +13,17 @@
 use std::process::ExitCode;
 
 use arena_proto::enet::{first_opcode_in_plaintext, reconstruct_plaintext};
-use arena_proto::reassembly::{reassemble_session, resolve_fragment, Frame, KeyCandidate};
+use arena_proto::reassembly::{Frame, KeyCandidate, reassemble_session, resolve_fragment};
 use base64::Engine;
 use rusqlite::{Connection, OpenFlags};
 
 fn b64(s: &str) -> Option<Vec<u8>> {
     let e = &base64::engine::general_purpose::STANDARD;
-    e.decode(s.trim())
-        .ok()
-        .or_else(|| base64::engine::general_purpose::URL_SAFE.decode(s.trim()).ok())
+    e.decode(s.trim()).ok().or_else(|| {
+        base64::engine::general_purpose::URL_SAFE
+            .decode(s.trim())
+            .ok()
+    })
 }
 
 fn main() -> ExitCode {
@@ -129,7 +131,10 @@ fn main() -> ExitCode {
 
     // --- Pass 0: fragment reassembly --------------------------------------
     let reassembly = reassemble_session(&frames, &keys);
-    println!("reassembled {} complete fragment group(s)", reassembly.len());
+    println!(
+        "reassembled {} complete fragment group(s)",
+        reassembly.len()
+    );
 
     // --- Per-frame parity -------------------------------------------------
     let mut ok_total = 0usize;
@@ -152,7 +157,16 @@ fn main() -> ExitCode {
         let dir = f.direction.clone();
         let resolver = |ch: u8, ss: u16, fo: u32, dl: usize| {
             resolve_fragment(
-                &reassembly, &dir, &gl_ip, gl_port, &peer_ip, peer_port, ch, ss, fo, dl,
+                &reassembly,
+                &dir,
+                &gl_ip,
+                gl_port,
+                &peer_ip,
+                peer_port,
+                ch,
+                ss,
+                fo,
+                dl,
             )
         };
 
@@ -196,7 +210,11 @@ fn main() -> ExitCode {
     println!("plaintext match   : {pt_match}/{ok_total}");
     println!("opcode match      : {op_match}/{ok_total}");
     if !pt_miss.is_empty() {
-        println!("plaintext MISMATCH frame ids (first {}): {:?}", pt_miss.len(), pt_miss);
+        println!(
+            "plaintext MISMATCH frame ids (first {}): {:?}",
+            pt_miss.len(),
+            pt_miss
+        );
     }
     if !op_miss.is_empty() {
         println!(
@@ -214,7 +232,9 @@ fn main() -> ExitCode {
     println!("\nframes containing fragments: {frag_frames}");
 
     if pt_miss.is_empty() && ok_total > 0 {
-        println!("\nPASS: Rust pipeline reproduces all {pt_match} stored plaintexts byte-for-byte.");
+        println!(
+            "\nPASS: Rust pipeline reproduces all {pt_match} stored plaintexts byte-for-byte."
+        );
         ExitCode::SUCCESS
     } else if ok_total == 0 {
         eprintln!("\nno ok frames to check");

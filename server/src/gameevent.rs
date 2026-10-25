@@ -26,7 +26,9 @@ struct GetGameEventsResponse {
 }
 
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/gameevents")]
-pub async fn get_game_events(app_state: web::Data<Arc<ServerGlobal>>) -> Json<GetGameEventsResponse> {
+pub async fn get_game_events(
+    app_state: web::Data<Arc<ServerGlobal>>,
+) -> Json<GetGameEventsResponse> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -85,10 +87,12 @@ mod tests {
         let mut checked = 0;
         for day in 0..44 {
             let now = start + day * 86_400;
-            if game_events::active_events(&lib, now)
-                .len()
+            if game_events::active_events(&lib, now).len()
                 != game_events::active_events(
-                    &lib.iter().filter(|d| !d.annual).cloned().collect::<Vec<_>>(),
+                    &lib.iter()
+                        .filter(|d| !d.annual)
+                        .cloned()
+                        .collect::<Vec<_>>(),
                     now,
                 )
                 .len()
@@ -152,12 +156,22 @@ mod tests {
         while now < theme.end_secs + 3 * 86_400 {
             let out = response_events(&lib, Some(&theme), now);
             assert_eq!(out.len(), 3, "t={now}");
-            assert_eq!(out.iter().filter(|e| e.start_time_secs <= now).count(), 2, "t={now}");
-            assert_eq!(out.iter().filter(|e| e.start_time_secs > now).count(), 1, "t={now}");
+            assert_eq!(
+                out.iter().filter(|e| e.start_time_secs <= now).count(),
+                2,
+                "t={now}"
+            );
+            assert_eq!(
+                out.iter().filter(|e| e.start_time_secs > now).count(),
+                1,
+                "t={now}"
+            );
             let quests: BTreeSet<_> = out.iter().map(|e| e.quest_id).collect();
             assert_eq!(quests.len(), 3, "t={now}: a quest listed twice");
             for e in out.iter().filter(|e| e.start_time_secs <= now) {
-                seen.entry(e.quest_id).or_default().insert(e.start_time_secs);
+                seen.entry(e.quest_id)
+                    .or_default()
+                    .insert(e.start_time_secs);
             }
             now += 3_600;
         }

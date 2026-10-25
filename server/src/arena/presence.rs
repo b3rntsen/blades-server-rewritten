@@ -42,8 +42,8 @@ use std::sync::Arc;
 
 use actix_web::{HttpResponse, get, web};
 use diesel::QueryableByName;
-use diesel::sql_types::{BigInt, Integer};
 use diesel::sql_query;
+use diesel::sql_types::{BigInt, Integer};
 use diesel_async::RunQueryDsl;
 use log::warn;
 use serde::Serialize;
@@ -165,11 +165,10 @@ async fn build(
         .await?
         .n;
 
-    let human_vs_human_all_time =
-        sql_query("SELECT COUNT(*) AS n FROM arena_matches WHERE paired")
-            .get_result::<CountRow>(&mut conn)
-            .await?
-            .n;
+    let human_vs_human_all_time = sql_query("SELECT COUNT(*) AS n FROM arena_matches WHERE paired")
+        .get_result::<CountRow>(&mut conn)
+        .await?
+        .n;
 
     let heatmap: Vec<HeatCell> = sql_query(format!(
         "SELECT EXTRACT(DOW FROM recorded_at)::int AS dow, \
@@ -209,8 +208,14 @@ mod tests {
     #[test]
     fn the_windows_are_sane_and_published() {
         assert!(QUEUE_WINDOW_MIN > 0 && QUEUE_WINDOW_MIN <= 15);
-        assert!(MATCH_WINDOW_MIN >= QUEUE_WINDOW_MIN, "a match outlasts a search");
-        assert!(HEATMAP_DAYS >= 7, "a weekday heatmap needs at least one of each day");
+        assert!(
+            MATCH_WINDOW_MIN >= QUEUE_WINDOW_MIN,
+            "a match outlasts a search"
+        );
+        assert!(
+            HEATMAP_DAYS >= 7,
+            "a weekday heatmap needs at least one of each day"
+        );
     }
 
     /// `dow` must mean the same thing on both sides. Postgres `EXTRACT(DOW)` and
@@ -218,7 +223,12 @@ mod tests {
     /// and an off-by-one here silently rotates the whole chart.
     #[test]
     fn dow_zero_is_sunday_on_both_sides() {
-        let cell = HeatCell { dow: 0, hour: 13, tickets: 3, humans: 1 };
+        let cell = HeatCell {
+            dow: 0,
+            hour: 13,
+            tickets: 3,
+            humans: 1,
+        };
         let json = serde_json::to_string(&cell).expect("serialises");
         assert!(json.contains("\"dow\":0"));
         assert!(json.contains("\"humans\":1"));

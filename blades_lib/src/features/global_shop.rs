@@ -51,7 +51,9 @@ pub fn sanitize_prices(prices: &[Price]) -> Result<(), PurchaseError> {
         return Err(PurchaseError::InvalidPrice);
     }
     for p in prices {
-        if !economy::is_currency(p.currency_id) || p.quantity == 0 || p.quantity > MAX_PRICE_QUANTITY
+        if !economy::is_currency(p.currency_id)
+            || p.quantity == 0
+            || p.quantity > MAX_PRICE_QUANTITY
         {
             return Err(PurchaseError::InvalidPrice);
         }
@@ -176,10 +178,7 @@ mod tests {
 
     #[test]
     fn purchases_list_is_sorted_and_complete() {
-        let counts = HashMap::from([
-            (Uuid::from_u128(2), 3u64),
-            (Uuid::from_u128(1), 1u64),
-        ]);
+        let counts = HashMap::from([(Uuid::from_u128(2), 3u64), (Uuid::from_u128(1), 1u64)]);
         let list = purchases_list(&counts);
         assert_eq!(list.len(), 2);
         assert!(list[0].id < list[1].id, "deterministic sorted order");

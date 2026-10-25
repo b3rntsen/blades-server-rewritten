@@ -39,7 +39,11 @@ const POWER_ATTACK: &str = "ce6b63e9-9f18-49c4-aee0-51f7985f9892";
 const RESIST_ELEMENTS: &str = "91078132-ef5c-492a-97f2-ac69be5140a8";
 
 fn perk(uuid: &str, level: u8) -> EquippedAbility {
-    EquippedAbility { instance_uuid: uuid.to_string(), level, tag: AbilityTag::Perk }
+    EquippedAbility {
+        instance_uuid: uuid.to_string(),
+        level,
+        tag: AbilityTag::Perk,
+    }
 }
 
 fn perks(list: &[EquippedAbility]) -> PerkBonuses {
@@ -47,11 +51,23 @@ fn perks(list: &[EquippedAbility]) -> PerkBonuses {
 }
 
 fn plain_target() -> Fighter {
-    Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, Instant::now())
+    Fighter::new(
+        1,
+        565,
+        Loadout {
+            level: 100,
+            ..Default::default()
+        },
+        Instant::now(),
+    )
 }
 
 fn comp(rd: &ResolvedDamage, ty: DamageType) -> f32 {
-    rd.components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+    rd.components
+        .iter()
+        .filter(|(t, _)| *t == ty)
+        .map(|(_, v)| *v)
+        .sum()
 }
 
 /// A heavy weapon dealing a single physical type, for the weight-class perks.
@@ -84,7 +100,15 @@ fn barbarian_adds_its_shipped_damage_to_a_heavy_weapon() {
     let control = heavy_weapon_loadout();
 
     let hit = |lo: &Loadout| {
-        m.resolve_attack(lo, &plain_target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now)
+        m.resolve_attack(
+            lo,
+            &plain_target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        )
     };
     let with = comp(&hit(&perked), DamageType::Slashing);
     let without = comp(&hit(&control), DamageType::Slashing);
@@ -110,7 +134,15 @@ fn barbarian_pays_nothing_for_a_light_weapon() {
     perked.perks = perks(&[perk(BARBARIAN, 11)]);
 
     let hit = |lo: &Loadout| {
-        m.resolve_attack(lo, &plain_target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now)
+        m.resolve_attack(
+            lo,
+            &plain_target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        )
     };
     assert_eq!(
         comp(&hit(&perked), DamageType::Slashing),
@@ -130,14 +162,37 @@ fn augmented_flames_raises_a_fire_spell() {
     let fireball = super::gamedata::ids::FIREBALL;
 
     let bonuses = perks(&[perk(AUGMENTED_FLAMES, 11)]);
-    let perked = CasterPerks { perks: &bonuses, magicka_full: false, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0, element_fortify: &[] };
+    let perked = CasterPerks {
+        perks: &bonuses,
+        magicka_full: false,
+        health_critical: false,
+        elem_resist_piercing: 0.0,
+        elem_resist_piercing_rating: 0.0,
+        element_fortify: &[],
+    };
 
-    let with = m.resolve_ability(fireball, 1, &perked, &plain_target(), ActiveSide::Middle, now);
-    let without =
-        m.resolve_ability(fireball, 1, &CasterPerks::none(), &plain_target(), ActiveSide::Middle, now);
+    let with = m.resolve_ability(
+        fireball,
+        1,
+        &perked,
+        &plain_target(),
+        ActiveSide::Middle,
+        now,
+    );
+    let without = m.resolve_ability(
+        fireball,
+        1,
+        &CasterPerks::none(),
+        &plain_target(),
+        ActiveSide::Middle,
+        now,
+    );
 
     let d = comp(&with, DamageType::Fire) - comp(&without, DamageType::Fire);
-    assert!((d - 22.5).abs() < 0.01, "expected +22.5 from Augmented Flames r11, got {d}");
+    assert!(
+        (d - 22.5).abs() < 0.01,
+        "expected +22.5 from Augmented Flames r11, got {d}"
+    );
 }
 
 /// MAXIMUM POWER — "{0}% more effective when cast while Magicka is full".
@@ -151,25 +206,63 @@ fn maximum_power_pays_only_at_full_magicka() {
     let fireball = super::gamedata::ids::FIREBALL;
 
     let bonuses = perks(&[perk(MAXIMUM_POWER, 6)]);
-    let full = CasterPerks { perks: &bonuses, magicka_full: true, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0, element_fortify: &[] };
-    let ravaged = CasterPerks { perks: &bonuses, magicka_full: false, health_critical: false, elem_resist_piercing: 0.0, elem_resist_piercing_rating: 0.0, element_fortify: &[] };
+    let full = CasterPerks {
+        perks: &bonuses,
+        magicka_full: true,
+        health_critical: false,
+        elem_resist_piercing: 0.0,
+        elem_resist_piercing_rating: 0.0,
+        element_fortify: &[],
+    };
+    let ravaged = CasterPerks {
+        perks: &bonuses,
+        magicka_full: false,
+        health_critical: false,
+        elem_resist_piercing: 0.0,
+        elem_resist_piercing_rating: 0.0,
+        element_fortify: &[],
+    };
 
     let a = comp(
         &m.resolve_ability(fireball, 1, &full, &plain_target(), ActiveSide::Middle, now),
         DamageType::Fire,
     );
     let b = comp(
-        &m.resolve_ability(fireball, 1, &ravaged, &plain_target(), ActiveSide::Middle, now),
+        &m.resolve_ability(
+            fireball,
+            1,
+            &ravaged,
+            &plain_target(),
+            ActiveSide::Middle,
+            now,
+        ),
         DamageType::Fire,
     );
     let c = comp(
-        &m.resolve_ability(fireball, 1, &CasterPerks::none(), &plain_target(), ActiveSide::Middle, now),
+        &m.resolve_ability(
+            fireball,
+            1,
+            &CasterPerks::none(),
+            &plain_target(),
+            ActiveSide::Middle,
+            now,
+        ),
         DamageType::Fire,
     );
 
-    assert!(b > 0.0, "fixture produced no damage at all — the test would be vacuous");
-    assert_eq!(b, c, "a ravaged caster must be identical to an unperked one");
-    assert!((a / b - 1.4).abs() < 0.01, "expected 40% more at full magicka, got {}x", a / b);
+    assert!(
+        b > 0.0,
+        "fixture produced no damage at all — the test would be vacuous"
+    );
+    assert_eq!(
+        b, c,
+        "a ravaged caster must be identical to an unperked one"
+    );
+    assert!(
+        (a / b - 1.4).abs() < 0.01,
+        "expected 40% more at full magicka, got {}x",
+        a / b
+    );
 }
 
 /// ELEMENTAL PROTECTION — "+{0} Block Rating against elemental damage while
@@ -184,7 +277,11 @@ fn elemental_protection_reduces_blocked_elemental_damage_only_with_a_shield() {
 
     // A defender mid-block, holding a shield.
     let blocking = |shield: bool, perked: bool| {
-        let mut lo = Loadout { level: 100, block_rating: 100.0, ..Default::default() };
+        let mut lo = Loadout {
+            level: 100,
+            block_rating: 100.0,
+            ..Default::default()
+        };
         lo.has_shield = shield;
         if perked {
             lo.perks = perks(&[perk(ELEMENTAL_PROTECTION, 11)]);
@@ -218,7 +315,10 @@ fn elemental_protection_reduces_blocked_elemental_damage_only_with_a_shield() {
     let perked_with_shield = fire(&blocking(true, true));
     let perked_no_shield = fire(&blocking(false, true));
 
-    assert!(unperked > 0.0, "fixture blocked everything — the test would be vacuous");
+    assert!(
+        unperked > 0.0,
+        "fixture blocked everything — the test would be vacuous"
+    );
     assert!(
         perked_with_shield < unperked,
         "Elemental Protection must reduce blocked fire: {perked_with_shield} vs {unperked}"
@@ -239,15 +339,36 @@ fn matching_set_armor_reduces_incoming_physical_damage() {
     let attacker = heavy_weapon_loadout();
 
     let defender = |armor: f32| {
-        Fighter::new(1, 565, Loadout { level: 100, armor_rating: armor, ..Default::default() }, now)
+        Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 100,
+                armor_rating: armor,
+                ..Default::default()
+            },
+            now,
+        )
     };
 
     // Matching Set r9 ships 141.0, folded into `armor_rating` at parse time.
     let bare = m.resolve_attack(
-        &attacker, &defender(0.0), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now,
+        &attacker,
+        &defender(0.0),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
     );
     let setted = m.resolve_attack(
-        &attacker, &defender(141.0), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now,
+        &attacker,
+        &defender(141.0),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
     );
     assert!(
         comp(&setted, DamageType::Slashing) < comp(&bare, DamageType::Slashing),
@@ -263,7 +384,15 @@ fn two_fighter_combat(now: Instant) -> MatchCombat {
     let mut c = MatchCombat::new(2, 2, now);
     for slot in 0..2 {
         let obj = c.alloc_net_object_id();
-        let mut f = Fighter::new(slot, obj, Loadout { level: 100, ..Default::default() }, now);
+        let mut f = Fighter::new(
+            slot,
+            obj,
+            Loadout {
+                level: 100,
+                ..Default::default()
+            },
+            now,
+        );
         // Casts are gated on the shipped resource cost; a fighter who cannot pay is
         // rejected before any effect runs, which would make these tests vacuous.
         f.max_magicka = 2000;
@@ -299,15 +428,31 @@ fn healing_surge_is_the_only_health_regen_and_needs_high_stamina() {
         c.fighters[0].health
     };
 
-    assert_eq!(run(false, 1.0), 501, "an UNPERKED fighter gains only base health regen");
-    assert_eq!(run(true, 0.25), 501, "low stamina pays only base health regen");
+    assert_eq!(
+        run(false, 1.0),
+        501,
+        "an UNPERKED fighter gains only base health regen"
+    );
+    assert_eq!(
+        run(true, 0.25),
+        501,
+        "low stamina pays only base health regen"
+    );
 
     // Rank 8 ships 15.4/s, at a 1 s tick, at full stamina.
-    assert_eq!(run(true, 1.0), 517, "expected base plus the full rank-8 rate at full stamina");
+    assert_eq!(
+        run(true, 1.0),
+        517,
+        "expected base plus the full rank-8 rate at full stamina"
+    );
 
     // The client's curve is `bonus x stamina^7` (`GetRegenerationBonus@0x1A7DFBC`):
     // 15.4 x 0.75^7 = 2.06 -> 2 HP. The old linear ramp paid 7.7 -> 8 HP here.
-    assert_eq!(run(true, 0.75), 503, "75% stamina pays 0.13x, not the old 0.50x");
+    assert_eq!(
+        run(true, 0.75),
+        503,
+        "75% stamina pays 0.13x, not the old 0.50x"
+    );
 }
 
 /// Healing Surge reads `Stamina.BoundedPercent`, which is against the pool's FULL
@@ -330,17 +475,28 @@ fn healing_surge_reads_stamina_against_the_unravaged_maximum() {
 
 /// Cast `ability` (equipped at rank 1) from slot 0 at `now` on a fresh combat whose
 /// slot-0 fighter carries `perk_list`.
-fn cast_with(perk_list: &[EquippedAbility], ability: &str, tag: AbilityTag, now: Instant) -> MatchCombat {
+fn cast_with(
+    perk_list: &[EquippedAbility],
+    ability: &str,
+    tag: AbilityTag,
+    now: Instant,
+) -> MatchCombat {
     let mut c = two_fighter_combat(now);
     c.fighters[0].loadout.perks = perks(perk_list);
-    c.fighters[0].loadout.abilities =
-        vec![EquippedAbility { instance_uuid: ability.to_string(), level: 1, tag }];
+    c.fighters[0].loadout.abilities = vec![EquippedAbility {
+        instance_uuid: ability.to_string(),
+        level: 1,
+        tag,
+    }];
     super::resolve::resolve_ability_cast(
         &mut c,
         0,
         1,
         &[],
-        &super::input::ExecuteAbility { role_offset: 0, ability_uuid: ability.to_string() },
+        &super::input::ExecuteAbility {
+            role_offset: 0,
+            ability_uuid: ability.to_string(),
+        },
         now,
     );
     c
@@ -354,17 +510,29 @@ fn cast_with(perk_list: &[EquippedAbility], ability: &str, tag: AbilityTag, now:
 #[test]
 fn combat_focus_is_on_during_a_maneuver_then_lapses() {
     let now = Instant::now();
-    let c = cast_with(&[perk(COMBAT_FOCUS, 10)], POWER_ATTACK, AbilityTag::Maneuver, now);
+    let c = cast_with(
+        &[perk(COMBAT_FOCUS, 10)],
+        POWER_ATTACK,
+        AbilityTag::Maneuver,
+        now,
+    );
 
     // Rank 10 ships 31.05, against EVERY type.
     let during = c.fighters[0].transient_resistance_against(DamageType::Fire, now);
-    assert!((during - 31.05).abs() < 0.01, "expected 31.05 during the maneuver, got {during}");
     assert!(
-        (c.fighters[0].transient_resistance_against(DamageType::Slashing, now) - 31.05).abs() < 0.01,
+        (during - 31.05).abs() < 0.01,
+        "expected 31.05 during the maneuver, got {during}"
+    );
+    assert!(
+        (c.fighters[0].transient_resistance_against(DamageType::Slashing, now) - 31.05).abs()
+            < 0.01,
         "\"to all damage\" must include physical"
     );
     // `GetResistanceBonus` returns 0 for DamageType.None.
-    assert_eq!(c.fighters[0].transient_resistance_against(DamageType::None, now), 0.0);
+    assert_eq!(
+        c.fighters[0].transient_resistance_against(DamageType::None, now),
+        0.0
+    );
 
     let later = now + Duration::from_secs(30);
     assert_eq!(
@@ -388,8 +556,14 @@ fn combat_focus_is_off_during_a_spell_cast() {
     );
     // The cast was accepted (it paid its magicka), so the zero below is not a
     // rejected cast in disguise.
-    assert!(c.fighters[0].magicka < c.fighters[0].max_magicka, "fixture cast was rejected");
-    assert_eq!(c.fighters[0].transient_resistance_against(DamageType::Fire, now), 0.0);
+    assert!(
+        c.fighters[0].magicka < c.fighters[0].max_magicka,
+        "fixture cast was rejected"
+    );
+    assert_eq!(
+        c.fighters[0].transient_resistance_against(DamageType::Fire, now),
+        0.0
+    );
 }
 
 /// COMBAT FOCUS is also on while Reckless Fury is up, with no maneuver in progress;
@@ -399,12 +573,21 @@ fn combat_focus_is_on_under_reckless_fury() {
     let now = Instant::now();
     let mut c = two_fighter_combat(now);
     c.fighters[0].loadout.perks = perks(&[perk(COMBAT_FOCUS, 1)]);
-    assert_eq!(c.fighters[0].transient_resistance_against(DamageType::Fire, now), 0.0);
+    assert_eq!(
+        c.fighters[0].transient_resistance_against(DamageType::Fire, now),
+        0.0
+    );
     c.fighters[0].reckless_fury_until = Some(now + Duration::from_secs(5));
     let on = c.fighters[0].transient_resistance_against(DamageType::Fire, now);
-    assert!((on - 8.78).abs() < 0.01, "Combat Focus r1 = 8.78 under Reckless Fury, got {on}");
+    assert!(
+        (on - 8.78).abs() < 0.01,
+        "Combat Focus r1 = 8.78 under Reckless Fury, got {on}"
+    );
     let after = now + Duration::from_secs(6);
-    assert_eq!(c.fighters[0].transient_resistance_against(DamageType::Fire, after), 0.0);
+    assert_eq!(
+        c.fighters[0].transient_resistance_against(DamageType::Fire, after),
+        0.0
+    );
 }
 
 /// WILLPOWER still covers spells (and only spells) — the Combat Focus split must
@@ -419,10 +602,21 @@ fn willpower_is_on_during_a_spell_and_off_during_a_maneuver() {
         now,
     );
     let on = spell.fighters[0].transient_resistance_against(DamageType::Fire, now);
-    assert!((on - 21.15).abs() < 0.01, "Willpower r10 = 21.15 during a spell, got {on}");
+    assert!(
+        (on - 21.15).abs() < 0.01,
+        "Willpower r10 = 21.15 during a spell, got {on}"
+    );
 
-    let maneuver = cast_with(&[perk(CONSERVATIONIST, 10)], POWER_ATTACK, AbilityTag::Maneuver, now);
-    assert_eq!(maneuver.fighters[0].transient_resistance_against(DamageType::Fire, now), 0.0);
+    let maneuver = cast_with(
+        &[perk(CONSERVATIONIST, 10)],
+        POWER_ATTACK,
+        AbilityTag::Maneuver,
+        now,
+    );
+    assert_eq!(
+        maneuver.fighters[0].transient_resistance_against(DamageType::Fire, now),
+        0.0
+    );
 }
 
 /// METTLE scales only the maneuver's flat `bonusDamage x grip`, and only at
@@ -448,7 +642,9 @@ fn mettle_scales_only_the_maneuver_bonus_and_only_at_critical_health() {
         if mettle {
             f.loadout.perks = perks(&[perk(METTLE, 6)]);
         }
-        f.health = ((f.max_health as f32) * health_fraction_of_bar).round().max(1.0) as u32;
+        f.health = ((f.max_health as f32) * health_fraction_of_bar)
+            .round()
+            .max(1.0) as u32;
         f.loadout.abilities = vec![EquippedAbility {
             instance_uuid: POWER_ATTACK.to_string(),
             level: 1,
@@ -460,7 +656,10 @@ fn mettle_scales_only_the_maneuver_bonus_and_only_at_critical_health() {
             0,
             1,
             &[],
-            &super::input::ExecuteAbility { role_offset: 0, ability_uuid: POWER_ATTACK.to_string() },
+            &super::input::ExecuteAbility {
+                role_offset: 0,
+                ability_uuid: POWER_ATTACK.to_string(),
+            },
             now,
         );
         super::resolve::land_due_impacts(&mut c, now + Duration::from_secs(5));
@@ -470,7 +669,10 @@ fn mettle_scales_only_the_maneuver_bonus_and_only_at_critical_health() {
     // 10 % of the tripled bar = 30 % of the un-multiplied one: critical.
     let plain = dealt(false, 0.10);
     let perked = dealt(true, 0.10);
-    assert!(plain > 100.0, "fixture dealt {plain} — the maneuver did not land");
+    assert!(
+        plain > 100.0,
+        "fixture dealt {plain} — the maneuver did not land"
+    );
     let gain = (perked - plain) / plain;
     assert!(
         (gain - 0.45 * 75.33 / 175.33).abs() < 0.01,
@@ -480,7 +682,11 @@ fn mettle_scales_only_the_maneuver_bonus_and_only_at_critical_health() {
 
     // 20 % of the tripled bar = 60 % un-multiplied: NOT critical. The old gate
     // (35 % of the tripled bar) opened here.
-    assert_eq!(dealt(true, 0.20), dealt(false, 0.20), "Mettle must not fire above 35 % of the base bar");
+    assert_eq!(
+        dealt(true, 0.20),
+        dealt(false, 0.20),
+        "Mettle must not fire above 35 % of the base bar"
+    );
 }
 
 /// MAXIMUM POWER is void while ravaged: a pool refilled to its ravage-lowered
@@ -524,9 +730,17 @@ fn maximum_power_is_void_at_a_ravaged_ceiling() {
     assert!(unperked > 0.0, "fixture Fireball dealt nothing");
     // Positive control: at a genuinely full pool the perk pays its 40 %.
     let full = fire(true, 0.0);
-    assert!((full / unperked - 1.4).abs() < 0.02, "expected x1.4 at full magicka, got x{}", full / unperked);
+    assert!(
+        (full / unperked - 1.4).abs() < 0.02,
+        "expected x1.4 at full magicka, got x{}",
+        full / unperked
+    );
     // At the ravaged ceiling it pays nothing.
-    assert_eq!(fire(true, 50.0), fire(false, 50.0), "Maximum Power must be void while ravaged");
+    assert_eq!(
+        fire(true, 50.0),
+        fire(false, 50.0),
+        "Maximum Power must be void while ravaged"
+    );
 }
 
 /// RESIST ELEMENTS CURES A CONDITION IN PLACE.
@@ -557,7 +771,10 @@ fn resist_elements_cures_the_conditions_already_burning() {
         });
     }
     assert!(
-        c.fighters[0].effects.iter().any(|e| e.effect == StatusEffectType::Burning),
+        c.fighters[0]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Burning),
         "fixture failed to apply Burning — the test would be vacuous"
     );
 
@@ -577,18 +794,27 @@ fn resist_elements_cures_the_conditions_already_burning() {
     // wind-up has to elapse before anything is applied or cured. Asserting on the
     // state right after the cast would test the wrong instant entirely.
     assert!(
-        c.fighters[0].effects.iter().any(|e| e.effect == StatusEffectType::Burning),
+        c.fighters[0]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Burning),
         "still burning during the wind-up — the cure must not be instant"
     );
     let landed = now + Duration::from_millis(1000);
     super::resolve::land_due_impacts(&mut c, landed);
 
     assert!(
-        !c.fighters[0].effects.iter().any(|e| e.effect == StatusEffectType::Burning),
+        !c.fighters[0]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Burning),
         "Resist Elements must put out an existing fire"
     );
     assert!(
-        !c.fighters[0].effects.iter().any(|e| e.effect == StatusEffectType::Frozen),
+        !c.fighters[0]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Frozen),
         "Resist Elements must clear Frozen too — its shipped list covers 4,5,6,7"
     );
 }
@@ -624,7 +850,10 @@ fn resist_elements_announces_no_cure_when_there_is_nothing_to_cure() {
     // without that check a rejected cast would pass this test trivially. What must
     // be true is that the cure path removed nothing: it only touches statuses the
     // fighter actually held, and this fighter held none.
-    assert!(!out.is_empty(), "RE must still emit its protective statuses");
+    assert!(
+        !out.is_empty(),
+        "RE must still emit its protective statuses"
+    );
     assert_eq!(
         c.fighters[0].transient_resistances.len(),
         before + 4,

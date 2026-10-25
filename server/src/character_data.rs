@@ -5,11 +5,7 @@ use actix_web::{
     post,
     web::{Data, Json, Path},
 };
-use diesel::{
-    ExpressionMethods, QueryDsl, SelectableHelper,
-    dsl::sql,
-    sql_types::Jsonb,
-};
+use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, dsl::sql, sql_types::Jsonb};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::Deserialize;
 use serde_json::Value;
@@ -100,8 +96,9 @@ async fn update_data(
                 let updated = diesel::update(characters)
                     .filter(id.eq(character_id))
                     .filter(user_id.eq(session.session.user_id))
-                    .set(data.eq(sql::<Jsonb>("data || ")
-                        .bind::<Jsonb, _>(serde_json::Value::Object(patch))))
+                    .set(data.eq(
+                        sql::<Jsonb>("data || ").bind::<Jsonb, _>(serde_json::Value::Object(patch)),
+                    ))
                     .execute(&mut conn)
                     .await?;
                 if updated == 0 {

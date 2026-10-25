@@ -54,19 +54,24 @@
 /// game data changed but `gamedata.rs` was not regenerated.
 pub mod source_hashes {
     /// sha256 of `reference/game-defs/combat_params.json`.
-    pub const COMBAT_PARAMS: &str = "e3ac4814eaed49e8cb297fa0caf45d2f048957268104d88703924de6d57dcc1c";
+    pub const COMBAT_PARAMS: &str =
+        "e3ac4814eaed49e8cb297fa0caf45d2f048957268104d88703924de6d57dcc1c";
     /// sha256 of `reference/game-defs/items.json`.
     pub const ITEMS: &str = "3ceae0018dff25af134ee69094f17da84374d2712d7f50b8a389faa2d78f9e56";
     /// sha256 of `reference/game-defs/abilities_full.json`.
-    pub const ABILITIES_FULL: &str = "a2c287755ca303adf038c64755402580dff0170457e3add698e36f9308c53c5d";
+    pub const ABILITIES_FULL: &str =
+        "a2c287755ca303adf038c64755402580dff0170457e3add698e36f9308c53c5d";
     /// sha256 of `reference/game-defs/enchantments.json`.
-    pub const ENCHANTMENTS: &str = "2ff3bb76d3b3776c84e02149b3cbf9f098d9e0fa710cb6438be0dab89b9573c1";
+    pub const ENCHANTMENTS: &str =
+        "2ff3bb76d3b3776c84e02149b3cbf9f098d9e0fa710cb6438be0dab89b9573c1";
     /// sha256 of `reference/game-defs/grade_properties.json`.
-    pub const GRADE_PROPERTIES: &str = "f969bfb9845a30d80e3bf602403724ace99dfe5a1673856c9e4986c7b4b8b3d3";
+    pub const GRADE_PROPERTIES: &str =
+        "f969bfb9845a30d80e3bf602403724ace99dfe5a1673856c9e4986c7b4b8b3d3";
     /// sha256 of `reference/game-defs/perks.json`.
     pub const PERKS: &str = "db00cb35d4a09b3c91d826164b73c38f3d509e257555a0a3716e5cf950080f07";
     /// sha256 of `reference/game-defs/consumables.json`.
-    pub const CONSUMABLES: &str = "f6b698fde782e66614d8a1c01eadab00be019c048ae174eb113cfa167297d5f9";
+    pub const CONSUMABLES: &str =
+        "f6b698fde782e66614d8a1c01eadab00be019c048ae174eb113cfa167297d5f9";
 
     /// `(filename, sha256)` for every source, in generation order.
     pub const ALL: &[(&str, &str)] = &[
@@ -260,7 +265,9 @@ pub mod combat_params {
 
     /// Look up the elemental status row for a `status_type` (4..=7).
     pub fn elemental_status(status_type: u8) -> Option<&'static ElementalStatus> {
-        ELEMENTAL_STATUSES.iter().find(|e| e.status_type == status_type)
+        ELEMENTAL_STATUSES
+            .iter()
+            .find(|e| e.status_type == status_type)
     }
 }
 
@@ -766,7 +773,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10)],
+        mandatory_properties: &[
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10),
+        ],
     },
     WeaponStats {
         uuid: "071f4b42-5356-49ca-b2f4-6df2056db241",
@@ -1102,7 +1113,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 10), ("bf107d7d-8777-4411-b07a-56819a58a709", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("c40ed851-8777-4d09-b169-0223dae8f67d", 10),
+            ("bf107d7d-8777-4411-b07a-56819a58a709", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "1201033d-4d70-405b-95a1-1e0cb827e180",
@@ -1214,7 +1229,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 8), ("a869f868-c23f-45bb-9159-d62b42236a4a", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
+        mandatory_properties: &[
+            ("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 8),
+            ("a869f868-c23f-45bb-9159-d62b42236a4a", 8),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8),
+        ],
     },
     WeaponStats {
         uuid: "14333bde-b5ea-4f3e-9347-69f76cc7390e",
@@ -1774,7 +1793,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10),
+            ("a869f868-c23f-45bb-9159-d62b42236a4a", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "1fc67296-aa50-4de8-b23e-11c80cee9361",
@@ -1802,7 +1825,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "21e0b402-b1be-4bdc-822b-033d41bf9e84",
@@ -1858,7 +1885,12 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 50,
         tier: 10,
-        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 9), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 9), ("6100fab3-3522-4ee3-bbdc-6063dba21c30", 0)],
+        mandatory_properties: &[
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", 9),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 9),
+            ("6100fab3-3522-4ee3-bbdc-6063dba21c30", 0),
+        ],
     },
     WeaponStats {
         uuid: "21f8b677-c1a9-4d5f-87ef-294fc6ba4ba5",
@@ -1886,7 +1918,10 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 33,
         tier: 7,
-        mandatory_properties: &[("cc432e27-813c-4afa-a3df-d587cfd550d2", 7), ("9e2361af-1893-4c3d-8ce0-3894937c9972", 0)],
+        mandatory_properties: &[
+            ("cc432e27-813c-4afa-a3df-d587cfd550d2", 7),
+            ("9e2361af-1893-4c3d-8ce0-3894937c9972", 0),
+        ],
     },
     WeaponStats {
         uuid: "21f9f03f-250c-4f37-b725-b96733183e4c",
@@ -2110,7 +2145,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 8), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
+        mandatory_properties: &[
+            ("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 8),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8),
+        ],
     },
     WeaponStats {
         uuid: "29a02cb7-048b-4dc7-96f3-f684e3707c99",
@@ -2166,7 +2205,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 8), ("bf107d7d-8777-4411-b07a-56819a58a709", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
+        mandatory_properties: &[
+            ("c40ed851-8777-4d09-b169-0223dae8f67d", 8),
+            ("bf107d7d-8777-4411-b07a-56819a58a709", 8),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8),
+        ],
     },
     WeaponStats {
         uuid: "2f49aa6b-dc14-4e07-887e-9068a752ce5f",
@@ -2194,7 +2237,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "309029c8-4c16-49f3-8947-ff643540af4c",
@@ -2474,7 +2521,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 8), ("bf107d7d-8777-4411-b07a-56819a58a709", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
+        mandatory_properties: &[
+            ("c40ed851-8777-4d09-b169-0223dae8f67d", 8),
+            ("bf107d7d-8777-4411-b07a-56819a58a709", 8),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8),
+        ],
     },
     WeaponStats {
         uuid: "3ae6d46a-bbc7-497c-8c1b-10d1f51a4453",
@@ -2614,7 +2665,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10), ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 10)],
+        mandatory_properties: &[
+            ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+            ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 10),
+        ],
     },
     WeaponStats {
         uuid: "3e09e1ea-8763-4b3b-b994-49e03107f5ee",
@@ -2726,7 +2781,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10),
+            ("a869f868-c23f-45bb-9159-d62b42236a4a", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "4345a3ab-1582-48e4-845e-6aa2ba5dd766",
@@ -2978,7 +3037,12 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::WarAxe,
         required_level: 23,
         tier: 5,
-        mandatory_properties: &[("139024a7-3965-4e90-a4c1-60e3d7ca3133", 4), ("1674a05b-355a-4c01-9994-7a28e2654d4c", 5), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 4), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 3)],
+        mandatory_properties: &[
+            ("139024a7-3965-4e90-a4c1-60e3d7ca3133", 4),
+            ("1674a05b-355a-4c01-9994-7a28e2654d4c", 5),
+            ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 4),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 3),
+        ],
     },
     WeaponStats {
         uuid: "4ca4837e-dbff-423a-8372-8c0a160c2e02",
@@ -3090,7 +3154,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 6,
         tier: 2,
-        mandatory_properties: &[("13a46a9b-3d02-48c7-b57c-f9424f10ab1d", 1), ("874f28f1-cdc3-4af5-af4e-4e4d0e2a4969", 1), ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 1)],
+        mandatory_properties: &[
+            ("13a46a9b-3d02-48c7-b57c-f9424f10ab1d", 1),
+            ("874f28f1-cdc3-4af5-af4e-4e4d0e2a4969", 1),
+            ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 1),
+        ],
     },
     WeaponStats {
         uuid: "4edb65be-0ebc-4698-bb97-2a012656c238",
@@ -3174,7 +3242,10 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 33,
         tier: 7,
-        mandatory_properties: &[("59c3b082-e57a-4243-ace5-9b55475e9b17", 8), ("8601e739-412b-4b6b-b4af-476cf1283a72", 0)],
+        mandatory_properties: &[
+            ("59c3b082-e57a-4243-ace5-9b55475e9b17", 8),
+            ("8601e739-412b-4b6b-b4af-476cf1283a72", 0),
+        ],
     },
     WeaponStats {
         uuid: "525c267a-1891-462e-a833-5465f9ce20c8",
@@ -3482,7 +3553,10 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 18,
         tier: 4,
-        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 3), ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 3)],
+        mandatory_properties: &[
+            ("9fdbb542-ff37-4199-93a3-d9444cca9090", 3),
+            ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 3),
+        ],
     },
     WeaponStats {
         uuid: "5a47b50c-76f3-4880-a560-5a35806bbc4e",
@@ -3510,7 +3584,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 10), ("bf107d7d-8777-4411-b07a-56819a58a709", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("c40ed851-8777-4d09-b169-0223dae8f67d", 10),
+            ("bf107d7d-8777-4411-b07a-56819a58a709", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "5a6c2eb7-b430-4574-aad9-72f0657fc694",
@@ -3930,7 +4008,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("139024a7-3965-4e90-a4c1-60e3d7ca3133", 7), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8)],
+        mandatory_properties: &[
+            ("139024a7-3965-4e90-a4c1-60e3d7ca3133", 7),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 8),
+        ],
     },
     WeaponStats {
         uuid: "667b42ba-190b-4600-a289-feaee6af2af8",
@@ -4126,7 +4208,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 18,
         tier: 4,
-        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 3), ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 1), ("4822df01-8163-4c11-8bde-3ffbb565de4b", 0)],
+        mandatory_properties: &[
+            ("9fdbb542-ff37-4199-93a3-d9444cca9090", 3),
+            ("fea58213-6a41-4500-9f09-cd9c745bcc1e", 1),
+            ("4822df01-8163-4c11-8bde-3ffbb565de4b", 0),
+        ],
     },
     WeaponStats {
         uuid: "6acaf2f5-3c5a-4529-9392-9a6dfba09e3e",
@@ -5050,7 +5136,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 44,
         tier: 9,
-        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 10), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10), ("eb885073-2576-4298-ae93-986f2cd261a2", 0)],
+        mandatory_properties: &[
+            ("9fdbb542-ff37-4199-93a3-d9444cca9090", 10),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10),
+            ("eb885073-2576-4298-ae93-986f2cd261a2", 0),
+        ],
     },
     WeaponStats {
         uuid: "7d7fe9d2-3965-416f-839a-42f30663b78e",
@@ -5106,7 +5196,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 7), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 8)],
+        mandatory_properties: &[
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", 7),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 8),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 8),
+        ],
     },
     WeaponStats {
         uuid: "7e354002-2d94-4296-a4a5-592f81ba04e3",
@@ -5470,7 +5564,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 13,
         tier: 3,
-        mandatory_properties: &[("f8e9dec5-c6e7-4976-b24b-2155f1921692", 1), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 1), ("10f57d40-98e9-4181-972b-d654f81afc27", 1)],
+        mandatory_properties: &[
+            ("f8e9dec5-c6e7-4976-b24b-2155f1921692", 1),
+            ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 1),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 1),
+        ],
     },
     WeaponStats {
         uuid: "89b885bf-cbd4-405a-a19b-3bb945955e7c",
@@ -5554,7 +5652,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 28,
         tier: 6,
-        mandatory_properties: &[("23746263-41c1-4023-8859-41e698dcf49d", 5), ("262ece9b-bd65-4876-b698-5926ca4422be", 5), ("59144365-ceb5-47a0-8f48-6eceecb15d2c", 0)],
+        mandatory_properties: &[
+            ("23746263-41c1-4023-8859-41e698dcf49d", 5),
+            ("262ece9b-bd65-4876-b698-5926ca4422be", 5),
+            ("59144365-ceb5-47a0-8f48-6eceecb15d2c", 0),
+        ],
     },
     WeaponStats {
         uuid: "8c6be63c-65e7-4855-b7f5-eb4e9fbdcb8d",
@@ -5778,7 +5880,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("139024a7-3965-4e90-a4c1-60e3d7ca3133", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("139024a7-3965-4e90-a4c1-60e3d7ca3133", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "905ee635-200e-445a-89de-db5ecbb17989",
@@ -5862,7 +5968,12 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 50,
         tier: 10,
-        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("be17fe64-c8f9-47e1-8803-49227119c2b3", 10), ("d6647f03-de86-40e2-9e7c-5b053f057d86", 0)],
+        mandatory_properties: &[
+            ("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10),
+            ("a869f868-c23f-45bb-9159-d62b42236a4a", 10),
+            ("be17fe64-c8f9-47e1-8803-49227119c2b3", 10),
+            ("d6647f03-de86-40e2-9e7c-5b053f057d86", 0),
+        ],
     },
     WeaponStats {
         uuid: "912cd6ac-d0ec-480e-8565-f721baf41c95",
@@ -6058,7 +6169,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Battleaxe,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("08ea75d0-5cf1-44a9-9816-d3c6740c4191", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "96a1a962-e2ab-4d0d-a0af-63978e67e818",
@@ -7346,7 +7461,10 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Warhammer,
         required_level: 28,
         tier: 6,
-        mandatory_properties: &[("9fdbb542-ff37-4199-93a3-d9444cca9090", 5), ("652d5ac9-3076-405b-a163-dde1a950fb26", 5)],
+        mandatory_properties: &[
+            ("9fdbb542-ff37-4199-93a3-d9444cca9090", 5),
+            ("652d5ac9-3076-405b-a163-dde1a950fb26", 5),
+        ],
     },
     WeaponStats {
         uuid: "b0e1d1b5-fbe5-484f-aa05-b2d7fe592783",
@@ -7766,7 +7884,12 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 23,
         tier: 5,
-        mandatory_properties: &[("464bedb7-a631-43b6-a2df-f65f089d39da", 6), ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 4), ("94aa3774-cd7e-400c-9d17-a4652fb88a93", 4), ("80980773-a388-4f71-9ba5-ac69a7e307be", 3)],
+        mandatory_properties: &[
+            ("464bedb7-a631-43b6-a2df-f65f089d39da", 6),
+            ("5a145cf8-3a20-4b8a-bf6d-8ee1607d3417", 4),
+            ("94aa3774-cd7e-400c-9d17-a4652fb88a93", 4),
+            ("80980773-a388-4f71-9ba5-ac69a7e307be", 3),
+        ],
     },
     WeaponStats {
         uuid: "be5b7eed-c53f-4dca-8853-eeda797804f8",
@@ -8382,7 +8505,12 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Longsword,
         required_level: 38,
         tier: 8,
-        mandatory_properties: &[("c40ed851-8777-4d09-b169-0223dae8f67d", 8), ("bf107d7d-8777-4411-b07a-56819a58a709", 8), ("98757a01-33b8-40ea-bb45-6acd89811ae3", 8), ("9c4f5df1-9c67-4557-a103-822797ce58b4", 0)],
+        mandatory_properties: &[
+            ("c40ed851-8777-4d09-b169-0223dae8f67d", 8),
+            ("bf107d7d-8777-4411-b07a-56819a58a709", 8),
+            ("98757a01-33b8-40ea-bb45-6acd89811ae3", 8),
+            ("9c4f5df1-9c67-4557-a103-822797ce58b4", 0),
+        ],
     },
     WeaponStats {
         uuid: "ca6ca2b2-5152-4b3a-822e-2293790b7454",
@@ -9278,7 +9406,12 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 50,
         tier: 10,
-        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 9), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 9), ("72893e14-4bfe-4eca-b556-3b217c8dc9bf", 0)],
+        mandatory_properties: &[
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", 9),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 9),
+            ("72893e14-4bfe-4eca-b556-3b217c8dc9bf", 0),
+        ],
     },
     WeaponStats {
         uuid: "da35b882-dde4-44ce-ad03-8d472c20b91b",
@@ -9390,7 +9523,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Mace,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10), ("a869f868-c23f-45bb-9159-d62b42236a4a", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10)],
+        mandatory_properties: &[
+            ("63b6c73a-af1a-4f95-8ffe-9434b8e68d56", 10),
+            ("a869f868-c23f-45bb-9159-d62b42236a4a", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+        ],
     },
     WeaponStats {
         uuid: "dc733e9f-d69e-4fb6-bcc3-4ba4cbfaf527",
@@ -9698,7 +9835,10 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Dagger,
         required_level: 13,
         tier: 3,
-        mandatory_properties: &[("a9b9695e-78f6-42cb-9f54-5f2e11e3cafd", 1), ("98d45845-ffd2-4e99-a2b4-acb270aa9666", 0)],
+        mandatory_properties: &[
+            ("a9b9695e-78f6-42cb-9f54-5f2e11e3cafd", 1),
+            ("98d45845-ffd2-4e99-a2b4-acb270aa9666", 0),
+        ],
     },
     WeaponStats {
         uuid: "ea66242a-82a2-42da-a3f0-ea37f33bc407",
@@ -9810,7 +9950,11 @@ pub const WEAPONS: [WeaponStats; 370] = [
         weapon_type: WeaponType::Greatsword,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("af1e56bf-1974-452c-aa70-36b2140cbb07", 10), ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10), ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10)],
+        mandatory_properties: &[
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", 10),
+            ("9be2e7e9-5ef5-4ee8-aeec-b864bca07f07", 10),
+            ("7cdb7179-4cd4-466e-8b77-4caf2fddb268", 10),
+        ],
     },
     WeaponStats {
         uuid: "ec9f3927-6a79-4ac0-a0a5-0babe46892ba",
@@ -10919,7 +11063,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 8,
         tier: 3,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 13), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 13)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 13),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 13),
+        ],
     },
     ArmorStats {
         uuid: "046053f6-21a8-46ec-8fa6-6eb8e520ac48",
@@ -10930,7 +11077,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 30),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30),
+        ],
     },
     ArmorStats {
         uuid: "0781c33a-d73c-4d61-894f-2fbc103b0a32",
@@ -10974,7 +11124,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", 8), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
+        mandatory_properties: &[
+            ("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", 8),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 8),
+        ],
     },
     ArmorStats {
         uuid: "0a407b83-d146-438b-bfe5-1ad95b7f2bf7",
@@ -10985,7 +11139,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 29), ("11af0ed4-72de-4884-90d1-d465078247bc", 29)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 29),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 29),
+        ],
     },
     ArmorStats {
         uuid: "0a7a1e8b-29ae-4053-9cbb-b1584386fe78",
@@ -10996,7 +11153,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 29), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 29)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 29),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 29),
+        ],
     },
     ArmorStats {
         uuid: "0b9263a4-e482-4bc7-a183-ba0aeda1eb22",
@@ -11018,7 +11178,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 20), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 20),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20),
+        ],
     },
     ArmorStats {
         uuid: "0c39d0f3-79c8-4e58-b435-3622a42e4d3d",
@@ -11029,7 +11192,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10)],
+        mandatory_properties: &[
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 10),
+        ],
     },
     ArmorStats {
         uuid: "0e24274c-1f9f-4a75-b724-59237776a6f5",
@@ -11062,7 +11229,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 10),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10),
+        ],
     },
     ArmorStats {
         uuid: "12ab9076-3c03-4e62-8f89-f36fbe08bd0c",
@@ -11084,7 +11254,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 6,
         tier: 2,
-        mandatory_properties: &[("dbc82d4d-3be1-4735-af21-316c54cfae55", 1), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 1), ("5d3eb782-7789-4f28-81b8-3b547f6633ea", 1), ("6c23174f-d4a4-4b4d-8dd7-88253b934b5a", 0), ("82f79c45-cf51-4287-9215-f53a75a19757", 42)],
+        mandatory_properties: &[
+            ("dbc82d4d-3be1-4735-af21-316c54cfae55", 1),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 1),
+            ("5d3eb782-7789-4f28-81b8-3b547f6633ea", 1),
+            ("6c23174f-d4a4-4b4d-8dd7-88253b934b5a", 0),
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 42),
+        ],
     },
     ArmorStats {
         uuid: "13694c03-9b48-4980-be36-408c1c5aa9d4",
@@ -11106,7 +11282,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 30),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30),
+        ],
     },
     ArmorStats {
         uuid: "167a5a42-9c76-4396-a02e-479ecaa15928",
@@ -11161,7 +11340,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 1,
         tier: 2,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 22), ("01842871-7f8c-48c1-86ce-6576601d6f02", 22)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 22),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 22),
+        ],
     },
     ArmorStats {
         uuid: "19dced7a-6fc2-41e4-961f-0ec6ec8faa0c",
@@ -11183,7 +11365,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 8), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 8), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 8), ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
+        mandatory_properties: &[
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 8),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 8),
+            ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 8),
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 20),
+        ],
     },
     ArmorStats {
         uuid: "1acd0bf2-db47-4fdd-ba0e-aa89d312f3f5",
@@ -11205,7 +11393,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 30),
+        ],
     },
     ArmorStats {
         uuid: "1ca43e6a-be5b-4161-9377-d626eab14740",
@@ -11238,7 +11429,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 18,
         tier: 5,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 15), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 15)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 15),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 15),
+        ],
     },
     ArmorStats {
         uuid: "207acfa0-2d32-4db6-8778-216dbe3a0e8e",
@@ -11260,7 +11454,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 8,
         tier: 3,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 23), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 23)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 23),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 23),
+        ],
     },
     ArmorStats {
         uuid: "21218dd7-596a-401c-a079-a30907a2fa66",
@@ -11271,7 +11468,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("5297713f-c60e-42fd-ade0-500daf0d632e", 7), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
+        mandatory_properties: &[
+            ("5297713f-c60e-42fd-ade0-500daf0d632e", 7),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 8),
+        ],
     },
     ArmorStats {
         uuid: "21a977f0-1382-4956-a7ce-afe9bb8f0fe7",
@@ -11282,7 +11483,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("5297713f-c60e-42fd-ade0-500daf0d632e", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
+        mandatory_properties: &[
+            ("5297713f-c60e-42fd-ade0-500daf0d632e", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 10),
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 30),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 30),
+        ],
     },
     ArmorStats {
         uuid: "228f2ef9-c63e-4f26-8616-274e3e3456c8",
@@ -11304,7 +11511,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 1,
         tier: 2,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 22), ("01842871-7f8c-48c1-86ce-6576601d6f02", 22)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 22),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 22),
+        ],
     },
     ArmorStats {
         uuid: "2571f818-6ae4-4355-b89a-4a6253089e6c",
@@ -11359,7 +11569,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 20),
+        ],
     },
     ArmorStats {
         uuid: "2af57d1b-2674-4dd5-b981-c3e7baca84bf",
@@ -11381,7 +11594,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 30),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30),
+        ],
     },
     ArmorStats {
         uuid: "2d870d4b-e242-4267-8d0f-b1bce775a0dc",
@@ -11414,7 +11630,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 19), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 19),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19),
+        ],
     },
     ArmorStats {
         uuid: "2f62ac95-a300-4bab-b39b-f2574224279a",
@@ -11447,7 +11666,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10)],
+        mandatory_properties: &[
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 10),
+        ],
     },
     ArmorStats {
         uuid: "3152a7c9-bdbc-46c8-b661-b99c58ce0a01",
@@ -11513,7 +11736,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 30),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30),
+        ],
     },
     ArmorStats {
         uuid: "36839916-9d47-4d9e-bace-d45acd184cbf",
@@ -11590,7 +11816,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 10), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 10)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 10),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 10),
+        ],
     },
     ArmorStats {
         uuid: "4079609b-9692-4742-aab7-6701d9b34d97",
@@ -11667,7 +11896,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 33,
         tier: 8,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 18), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 18)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 18),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 18),
+        ],
     },
     ArmorStats {
         uuid: "476f7ffd-130b-45c4-be06-9a1563af9aa1",
@@ -11744,7 +11976,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 30),
+        ],
     },
     ArmorStats {
         uuid: "4c52cf55-7d88-4506-91ce-648a7855de84",
@@ -11766,7 +12001,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 29), ("11af0ed4-72de-4884-90d1-d465078247bc", 29)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 29),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 29),
+        ],
     },
     ArmorStats {
         uuid: "4d1d2403-b721-4c84-b5ac-e331f1e11dcc",
@@ -11799,7 +12037,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 10), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 10)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 10),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 10),
+        ],
     },
     ArmorStats {
         uuid: "4fdf0640-c109-4f6c-ad1d-37c332d01180",
@@ -11832,7 +12073,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 19), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 19),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19),
+        ],
     },
     ArmorStats {
         uuid: "52d083b1-0770-4fd6-9e00-ed67b91c2b71",
@@ -11843,7 +12087,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 30),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 30),
+        ],
     },
     ArmorStats {
         uuid: "52db2806-124d-405e-b246-e74c758bb8dd",
@@ -11854,7 +12101,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30),
+        ],
     },
     ArmorStats {
         uuid: "52dc6085-3c3c-4a2e-96a2-2078f647272a",
@@ -11865,7 +12115,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 10),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10),
+        ],
     },
     ArmorStats {
         uuid: "54890366-e54e-4e87-9dd3-8984d7324926",
@@ -11887,7 +12140,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 9), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 9)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 9),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 9),
+        ],
     },
     ArmorStats {
         uuid: "55a5ccb3-445e-4cd6-abd3-f66bd44a302e",
@@ -11920,7 +12176,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30),
+        ],
     },
     ArmorStats {
         uuid: "5b1893b0-32d2-49e5-bd64-f270e4d28561",
@@ -11975,7 +12234,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 30),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30),
+        ],
     },
     ArmorStats {
         uuid: "622d1317-bb1a-4e0a-a0b6-cf85c6fc94b1",
@@ -12008,7 +12270,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 18,
         tier: 5,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 5), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 5)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 5),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 5),
+        ],
     },
     ArmorStats {
         uuid: "653a04ec-462c-4e58-9a2f-626d0efc53e2",
@@ -12030,7 +12295,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 10),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10),
+        ],
     },
     ArmorStats {
         uuid: "65cc3763-4f65-4565-887f-5cfedc236f10",
@@ -12052,7 +12320,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 33,
         tier: 8,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 28), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 28)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 28),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 28),
+        ],
     },
     ArmorStats {
         uuid: "68022d5a-21ff-4bce-b1f8-148ef1788ff5",
@@ -12096,7 +12367,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 8,
         tier: 3,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 3), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 3)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 3),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 3),
+        ],
     },
     ArmorStats {
         uuid: "6f6ed8a2-cb2a-42c9-af2c-31b8310d4b48",
@@ -12140,7 +12414,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 20), ("11af0ed4-72de-4884-90d1-d465078247bc", 20)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 20),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 20),
+        ],
     },
     ArmorStats {
         uuid: "7278524f-02b2-4f10-a277-a6378e1909c7",
@@ -12151,7 +12428,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 28,
         tier: 7,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 27), ("01842871-7f8c-48c1-86ce-6576601d6f02", 27)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 27),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 27),
+        ],
     },
     ArmorStats {
         uuid: "7381c72d-b8a9-4de0-bbb2-c542b76fdaa9",
@@ -12173,7 +12453,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 9), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 9), ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
+        mandatory_properties: &[
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 9),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 9),
+            ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 9),
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 20),
+        ],
     },
     ArmorStats {
         uuid: "75146589-f9dc-4ffc-85ba-b741ee5117fe",
@@ -12195,7 +12481,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 20), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 20)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 20),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 20),
+        ],
     },
     ArmorStats {
         uuid: "769fdae8-2341-494f-931e-40d8a4468286",
@@ -12206,7 +12495,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 10), ("11af0ed4-72de-4884-90d1-d465078247bc", 10)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 10),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 10),
+        ],
     },
     ArmorStats {
         uuid: "77017cae-e2c1-4de7-9f12-414b4c83b764",
@@ -12228,7 +12520,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("dbc82d4d-3be1-4735-af21-316c54cfae55", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 10), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10)],
+        mandatory_properties: &[
+            ("dbc82d4d-3be1-4735-af21-316c54cfae55", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 10),
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 10),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 10),
+        ],
     },
     ArmorStats {
         uuid: "7755f120-33da-4c9b-b4e0-d41a52650082",
@@ -12261,7 +12559,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 28,
         tier: 7,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 27), ("01842871-7f8c-48c1-86ce-6576601d6f02", 27)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 27),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 27),
+        ],
     },
     ArmorStats {
         uuid: "7a7d8acf-c3fb-4952-abc2-209c0e1965d2",
@@ -12338,7 +12639,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 10), ("01842871-7f8c-48c1-86ce-6576601d6f02", 10)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 10),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 10),
+        ],
     },
     ArmorStats {
         uuid: "86518ee9-45d5-4807-b27a-4629162c0d60",
@@ -12349,7 +12653,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("464bedb7-a631-43b6-a2df-f65f089d39da", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("b989c011-48de-492d-aca7-a2644fb3ca1b", 20), ("11af0ed4-72de-4884-90d1-d465078247bc", 20)],
+        mandatory_properties: &[
+            ("464bedb7-a631-43b6-a2df-f65f089d39da", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 10),
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 20),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 20),
+        ],
     },
     ArmorStats {
         uuid: "87fd054f-e38d-4d0d-8927-e59523b24312",
@@ -12360,7 +12670,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 13,
         tier: 4,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 14), ("11af0ed4-72de-4884-90d1-d465078247bc", 14)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 14),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 14),
+        ],
     },
     ArmorStats {
         uuid: "8851a883-40d2-4b04-9cce-8943a0ba9ac3",
@@ -12371,7 +12684,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("464bedb7-a631-43b6-a2df-f65f089d39da", 8), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
+        mandatory_properties: &[
+            ("464bedb7-a631-43b6-a2df-f65f089d39da", 8),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 8),
+        ],
     },
     ArmorStats {
         uuid: "887cbbef-19df-47e2-a226-4d5776e06e37",
@@ -12404,7 +12721,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 12,
         tier: 4,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 14), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 14), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 14)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 14),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 14),
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 14),
+        ],
     },
     ArmorStats {
         uuid: "89833d3d-bdea-4ed1-8604-d7b51851c7c8",
@@ -12437,7 +12758,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 30),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 30),
+        ],
     },
     ArmorStats {
         uuid: "9226cc62-0dbb-40b4-b547-e292542d53e6",
@@ -12481,7 +12805,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 30),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 30),
+        ],
     },
     ArmorStats {
         uuid: "95bed312-dd25-4907-b7c5-80f3e462251e",
@@ -12525,7 +12852,12 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 50,
         tier: 10,
-        mandatory_properties: &[("dbc82d4d-3be1-4735-af21-316c54cfae55", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("f1dff6c4-aa71-4989-ab77-448f9c220f0d", 0), ("d4b5dcd3-c08c-4a4a-83f9-e64e3b16f0fc", 0)],
+        mandatory_properties: &[
+            ("dbc82d4d-3be1-4735-af21-316c54cfae55", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("f1dff6c4-aa71-4989-ab77-448f9c220f0d", 0),
+            ("d4b5dcd3-c08c-4a4a-83f9-e64e3b16f0fc", 0),
+        ],
     },
     ArmorStats {
         uuid: "9935f4e7-74aa-4223-80c4-97fcfa4ee7f5",
@@ -12536,7 +12868,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 20), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 20),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20),
+        ],
     },
     ArmorStats {
         uuid: "9a92d6dc-4167-4f65-9541-37abdcdccaa3",
@@ -12580,7 +12915,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 30),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 30),
+        ],
     },
     ArmorStats {
         uuid: "9cdda3f8-eea5-40fd-9e36-bd7137392552",
@@ -12635,7 +12973,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 28,
         tier: 7,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 7), ("01842871-7f8c-48c1-86ce-6576601d6f02", 7)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 7),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 7),
+        ],
     },
     ArmorStats {
         uuid: "a0c419d0-613c-44fe-91a3-6e48f88e01cc",
@@ -12646,7 +12987,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 20), ("11af0ed4-72de-4884-90d1-d465078247bc", 20)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 20),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 20),
+        ],
     },
     ArmorStats {
         uuid: "a1865b9a-4582-479d-ae33-c914c7aac8a2",
@@ -12657,7 +13001,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 19), ("11af0ed4-72de-4884-90d1-d465078247bc", 19)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 19),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 19),
+        ],
     },
     ArmorStats {
         uuid: "a2c629d2-65a9-445d-9594-ca992aed624b",
@@ -12745,7 +13092,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30),
+        ],
     },
     ArmorStats {
         uuid: "aa7337ca-52dd-44ac-9ca4-2c8102a29f0e",
@@ -12756,7 +13106,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 18,
         tier: 5,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 25), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 25)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 25),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 25),
+        ],
     },
     ArmorStats {
         uuid: "aa96f1a4-9324-4dc6-83a0-5b24dc1b438a",
@@ -12789,7 +13142,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 28,
         tier: 7,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 17), ("01842871-7f8c-48c1-86ce-6576601d6f02", 17)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 17),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 17),
+        ],
     },
     ArmorStats {
         uuid: "ae6586c4-47df-4ff3-bf2e-adb37577015a",
@@ -12844,7 +13200,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 30), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 30),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 30),
+        ],
     },
     ArmorStats {
         uuid: "b1941146-f63a-4f96-9add-5a2be06117de",
@@ -12855,7 +13214,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 8,
         tier: 3,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 23), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 23)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 23),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 23),
+        ],
     },
     ArmorStats {
         uuid: "b4426e19-d9f6-4387-a23e-41c79247d886",
@@ -12888,7 +13250,12 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", 10), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10), ("10f57d40-98e9-4181-972b-d654f81afc27", 10), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 50)],
+        mandatory_properties: &[
+            ("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", 10),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 10),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 10),
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 50),
+        ],
     },
     ArmorStats {
         uuid: "b57d9da7-fb5b-411b-ab0b-70bf2932b80a",
@@ -12932,7 +13299,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 33,
         tier: 8,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 28), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 28)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 28),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 28),
+        ],
     },
     ArmorStats {
         uuid: "b755f9a5-8017-4224-8835-7b6c82604b58",
@@ -12954,7 +13324,12 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("94aa3774-cd7e-400c-9d17-a4652fb88a93", 10), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 10), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10), ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 70)],
+        mandatory_properties: &[
+            ("94aa3774-cd7e-400c-9d17-a4652fb88a93", 10),
+            ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 10),
+            ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10),
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 70),
+        ],
     },
     ArmorStats {
         uuid: "b7fa73f6-4a8b-40d6-b66f-5cd1b2b52b53",
@@ -12965,7 +13340,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("652d5ac9-3076-405b-a163-dde1a950fb26", 10), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 10), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10)],
+        mandatory_properties: &[
+            ("652d5ac9-3076-405b-a163-dde1a950fb26", 10),
+            ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 10),
+            ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10),
+        ],
     },
     ArmorStats {
         uuid: "b88a7da6-2acc-496b-a422-3691abbafdb0",
@@ -13009,7 +13388,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 19), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 19),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 19),
+        ],
     },
     ArmorStats {
         uuid: "bd2776db-a5a9-49cd-b1ac-244a3b36a995",
@@ -13020,7 +13402,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 1,
         tier: 2,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 12), ("01842871-7f8c-48c1-86ce-6576601d6f02", 12)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 12),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 12),
+        ],
     },
     ArmorStats {
         uuid: "be35f7a9-32b9-4055-9c0b-a1689b395ddd",
@@ -13108,7 +13493,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 33,
         tier: 8,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 8), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 8)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 8),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 8),
+        ],
     },
     ArmorStats {
         uuid: "c85ff78a-8e4f-469c-8b76-94df3b3f4cbb",
@@ -13185,7 +13573,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 20), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 20),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 20),
+        ],
     },
     ArmorStats {
         uuid: "d02538d2-5bba-4dbc-87b0-2347274d3b4f",
@@ -13196,7 +13587,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 9), ("11af0ed4-72de-4884-90d1-d465078247bc", 9)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 9),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 9),
+        ],
     },
     ArmorStats {
         uuid: "d0da3047-a813-412a-a16f-d42585110828",
@@ -13218,7 +13612,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30), ("01842871-7f8c-48c1-86ce-6576601d6f02", 30)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 30),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 30),
+        ],
     },
     ArmorStats {
         uuid: "d124bb0d-4653-40fc-be7c-076811540157",
@@ -13229,7 +13626,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 20),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 20),
+        ],
     },
     ArmorStats {
         uuid: "d3182227-5ec3-487c-a94d-8df708de76f5",
@@ -13262,7 +13662,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 13,
         tier: 4,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 24), ("11af0ed4-72de-4884-90d1-d465078247bc", 24)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 24),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 24),
+        ],
     },
     ArmorStats {
         uuid: "d7c9caba-4133-436e-b7bb-6d96f2283dcf",
@@ -13273,7 +13676,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 13,
         tier: 4,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 4), ("11af0ed4-72de-4884-90d1-d465078247bc", 4)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 4),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 4),
+        ],
     },
     ArmorStats {
         uuid: "d9530f4c-5a93-4491-9116-2b49805f93f7",
@@ -13295,7 +13701,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("11af0ed4-72de-4884-90d1-d465078247bc", 30)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 30),
+        ],
     },
     ArmorStats {
         uuid: "def810af-e9f5-4e23-9247-1edf391d82e1",
@@ -13306,7 +13715,12 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 28,
         tier: 6,
-        mandatory_properties: &[("2b8fd511-80da-4128-81b1-bd7ab6023223", 6), ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 6), ("7bb4c21c-c908-4d57-b406-eb402a5a0f9f", 0), ("4697a590-43e1-46a7-85e3-18975ea84d17", 0)],
+        mandatory_properties: &[
+            ("2b8fd511-80da-4128-81b1-bd7ab6023223", 6),
+            ("1d85511d-66bf-46ad-87b5-bd7a115afafd", 6),
+            ("7bb4c21c-c908-4d57-b406-eb402a5a0f9f", 0),
+            ("4697a590-43e1-46a7-85e3-18975ea84d17", 0),
+        ],
     },
     ArmorStats {
         uuid: "dfbf0135-2b27-4467-9e2b-3e88538f1d59",
@@ -13317,7 +13731,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 7,
         required_level: 18,
         tier: 5,
-        mandatory_properties: &[("b989c011-48de-492d-aca7-a2644fb3ca1b", 25), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 25)],
+        mandatory_properties: &[
+            ("b989c011-48de-492d-aca7-a2644fb3ca1b", 25),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 25),
+        ],
     },
     ArmorStats {
         uuid: "e06bc02b-f460-4f05-bcd9-b5f57e03b317",
@@ -13350,7 +13767,11 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 8), ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8), ("10f57d40-98e9-4181-972b-d654f81afc27", 8)],
+        mandatory_properties: &[
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 8),
+            ("33f866a5-f2f5-46af-ac13-fa5f02bedfbf", 8),
+            ("10f57d40-98e9-4181-972b-d654f81afc27", 8),
+        ],
     },
     ArmorStats {
         uuid: "e26330b3-fcba-41b2-8bd5-bd3b42f7e453",
@@ -13394,7 +13815,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 10), ("11af0ed4-72de-4884-90d1-d465078247bc", 10)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 10),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 10),
+        ],
     },
     ArmorStats {
         uuid: "e69b8df8-ecde-4c00-b2c5-884dca4740c4",
@@ -13416,7 +13840,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 20)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20),
+            ("0dc432cd-8971-4ec7-a2c4-4e60321c0c2e", 20),
+        ],
     },
     ArmorStats {
         uuid: "e7be6731-5db2-48d7-8072-8bfbf923b25f",
@@ -13449,7 +13876,13 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10), ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10), ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10), ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20), ("01842871-7f8c-48c1-86ce-6576601d6f02", 20)],
+        mandatory_properties: &[
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", 10),
+            ("64a15ab5-f7be-42be-ad25-4a136a4ec62a", 10),
+            ("8fd72d41-3e82-4865-b49e-b576b8384aa9", 10),
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 20),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 20),
+        ],
     },
     ArmorStats {
         uuid: "e9dd4127-cbe7-4701-a1b5-e31649091a9c",
@@ -13471,7 +13904,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 1,
         tier: 2,
-        mandatory_properties: &[("48516321-3bf3-42bc-9b31-cca7f0ffa992", 2), ("01842871-7f8c-48c1-86ce-6576601d6f02", 2)],
+        mandatory_properties: &[
+            ("48516321-3bf3-42bc-9b31-cca7f0ffa992", 2),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 2),
+        ],
     },
     ArmorStats {
         uuid: "ecbca865-c722-4e8d-9046-86407e226f8f",
@@ -13493,7 +13929,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 30),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 30),
+        ],
     },
     ArmorStats {
         uuid: "f11986c2-dc3c-4810-a5b8-7a5bd015013c",
@@ -13526,7 +13965,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 3,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 10), ("01842871-7f8c-48c1-86ce-6576601d6f02", 10)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 10),
+            ("01842871-7f8c-48c1-86ce-6576601d6f02", 10),
+        ],
     },
     ArmorStats {
         uuid: "f5159522-601a-4d4c-82d4-d059427c0c25",
@@ -13548,7 +13990,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 29), ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 29)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 29),
+            ("b1f4ffe8-141a-4c69-92a4-238f8359438f", 29),
+        ],
     },
     ArmorStats {
         uuid: "f9a87486-39c1-49f8-9024-0c08ee090165",
@@ -13603,7 +14048,10 @@ pub const ARMORS: [ArmorStats; 254] = [
         equipment_slot: 4,
         required_level: 13,
         tier: 4,
-        mandatory_properties: &[("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 24), ("11af0ed4-72de-4884-90d1-d465078247bc", 24)],
+        mandatory_properties: &[
+            ("93f65e60-b27b-42b4-b0da-44fd6314f1d3", 24),
+            ("11af0ed4-72de-4884-90d1-d465078247bc", 24),
+        ],
     },
     ArmorStats {
         uuid: "fe39aece-fab8-4447-a7db-e5827a793044",
@@ -13699,7 +14147,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 10), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 10)],
+        mandatory_properties: &[
+            ("d2f7ca93-7234-4890-886d-60820350716b", 10),
+            ("f5cba266-96df-45c2-b8c6-60bf37de2849", 10),
+        ],
     },
     ShieldStats {
         uuid: "0d491a77-762d-4c31-85ad-5baf39eb90a7",
@@ -13710,7 +14161,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 40), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 10)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 40),
+            ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 10),
+        ],
     },
     ShieldStats {
         uuid: "1d248608-7347-4122-8b42-840b6304c203",
@@ -13743,7 +14197,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 28,
         tier: 7,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 37), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 7)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 37),
+            ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 7),
+        ],
     },
     ShieldStats {
         uuid: "220a74e3-f4c8-474d-adfa-3ecac4ca4187",
@@ -13776,7 +14233,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 40), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 40),
+            ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10),
+        ],
     },
     ShieldStats {
         uuid: "4a0ee1ba-7e61-485b-9ed0-3a5eaabcadab",
@@ -13798,7 +14258,13 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("338ec948-d1b7-4390-8a88-ab6ac11841aa", 10), ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 10), ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 10), ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10)],
+        mandatory_properties: &[
+            ("338ec948-d1b7-4390-8a88-ab6ac11841aa", 10),
+            ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 10),
+            ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 10),
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10),
+            ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10),
+        ],
     },
     ShieldStats {
         uuid: "4e622931-ebfc-4a78-872c-5b52a8722212",
@@ -13809,7 +14275,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 13,
         tier: 4,
-        mandatory_properties: &[("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 4), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 4)],
+        mandatory_properties: &[
+            ("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 4),
+            ("f5cba266-96df-45c2-b8c6-60bf37de2849", 4),
+        ],
     },
     ShieldStats {
         uuid: "5250abf2-e4cb-419d-b18b-0edcca3b1c3e",
@@ -13831,7 +14300,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 10), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 10)],
+        mandatory_properties: &[
+            ("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 10),
+            ("f5cba266-96df-45c2-b8c6-60bf37de2849", 10),
+        ],
     },
     ShieldStats {
         uuid: "616b64ef-4184-4efb-af55-1a3f122431dc",
@@ -13864,7 +14336,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 10), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 10)],
+        mandatory_properties: &[
+            ("a99ab22b-9d16-46cd-9616-eb1ed40a135d", 10),
+            ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 10),
+        ],
     },
     ShieldStats {
         uuid: "7073b48c-fa9a-4451-ba34-55b4c66d0664",
@@ -13930,7 +14405,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("34469735-f126-46a5-bc26-ec8234c8c13f", 10)],
+        mandatory_properties: &[
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10),
+            ("34469735-f126-46a5-bc26-ec8234c8c13f", 10),
+        ],
     },
     ShieldStats {
         uuid: "863dd538-f520-40c5-886c-6e54539c1d23",
@@ -13941,7 +14419,13 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 30,
         tier: 8,
-        mandatory_properties: &[("38ca6ee2-1765-4122-a5e5-d036a7d31fe3", 8), ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 8), ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 8), ("67e1de28-c9e1-44cc-bad8-338b912ce352", 8), ("34469735-f126-46a5-bc26-ec8234c8c13f", 8)],
+        mandatory_properties: &[
+            ("38ca6ee2-1765-4122-a5e5-d036a7d31fe3", 8),
+            ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 8),
+            ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 8),
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 8),
+            ("34469735-f126-46a5-bc26-ec8234c8c13f", 8),
+        ],
     },
     ShieldStats {
         uuid: "86a4ad9d-e2e8-49cd-9642-b553475b6580",
@@ -13952,7 +14436,11 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 2,
         required_level: 18,
         tier: 4,
-        mandatory_properties: &[("b64fa9d4-4f13-4bb4-9129-16df08e84757", 3), ("366ce3d7-ac40-459b-b363-4565e3c5ce17", 3), ("2b253847-5061-4a07-acfe-fbdc3c702922", 3)],
+        mandatory_properties: &[
+            ("b64fa9d4-4f13-4bb4-9129-16df08e84757", 3),
+            ("366ce3d7-ac40-459b-b363-4565e3c5ce17", 3),
+            ("2b253847-5061-4a07-acfe-fbdc3c702922", 3),
+        ],
     },
     ShieldStats {
         uuid: "875aa16e-9d26-46a0-934e-6ba5b2a5299f",
@@ -13963,7 +14451,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 33,
         tier: 8,
-        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 8), ("34469735-f126-46a5-bc26-ec8234c8c13f", 8)],
+        mandatory_properties: &[
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 8),
+            ("34469735-f126-46a5-bc26-ec8234c8c13f", 8),
+        ],
     },
     ShieldStats {
         uuid: "909a4028-12df-4ac9-b333-102817c788e1",
@@ -13985,7 +14476,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 8,
         tier: 3,
-        mandatory_properties: &[("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 33), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 3)],
+        mandatory_properties: &[
+            ("1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc", 33),
+            ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 3),
+        ],
     },
     ShieldStats {
         uuid: "9a22b59a-cdbc-4987-bf4a-0cc812428aeb",
@@ -14007,7 +14501,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("82f79c45-cf51-4287-9215-f53a75a19757", 39), ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 9)],
+        mandatory_properties: &[
+            ("82f79c45-cf51-4287-9215-f53a75a19757", 39),
+            ("73e3dc29-0f39-4874-9761-b36ca07c4e59", 9),
+        ],
     },
     ShieldStats {
         uuid: "a6d3d7dd-2193-462b-b28e-1a4b1e902df1",
@@ -14018,7 +14515,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 1,
         tier: 2,
-        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 2), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 2)],
+        mandatory_properties: &[
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 2),
+            ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 2),
+        ],
     },
     ShieldStats {
         uuid: "aa4ffedf-ad74-4aa1-bd82-18a041100f79",
@@ -14029,7 +14529,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10)],
+        mandatory_properties: &[
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10),
+            ("0b414904-c1e5-40e0-9cdb-52969b0a4e65", 10),
+        ],
     },
     ShieldStats {
         uuid: "b20d466a-1720-4040-a8ed-941a53f7e3eb",
@@ -14040,7 +14543,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 18,
         tier: 5,
-        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 5), ("34469735-f126-46a5-bc26-ec8234c8c13f", 5)],
+        mandatory_properties: &[
+            ("d2f7ca93-7234-4890-886d-60820350716b", 5),
+            ("34469735-f126-46a5-bc26-ec8234c8c13f", 5),
+        ],
     },
     ShieldStats {
         uuid: "b59ec6b4-88ee-4424-8ca8-e86ce59b8bca",
@@ -14084,7 +14590,13 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("38ca6ee2-1765-4122-a5e5-d036a7d31fe3", 10), ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 10), ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 10), ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10), ("34469735-f126-46a5-bc26-ec8234c8c13f", 10)],
+        mandatory_properties: &[
+            ("38ca6ee2-1765-4122-a5e5-d036a7d31fe3", 10),
+            ("9701ded5-e1d1-4436-8b14-d5d726ff4434", 10),
+            ("2ac1e2f6-8f97-444e-97af-7efd46c71cca", 10),
+            ("67e1de28-c9e1-44cc-bad8-338b912ce352", 10),
+            ("34469735-f126-46a5-bc26-ec8234c8c13f", 10),
+        ],
     },
     ShieldStats {
         uuid: "d454df43-e765-449f-9a4d-8e807c36d023",
@@ -14183,7 +14695,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 45,
         tier: 10,
-        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 10), ("34469735-f126-46a5-bc26-ec8234c8c13f", 10)],
+        mandatory_properties: &[
+            ("d2f7ca93-7234-4890-886d-60820350716b", 10),
+            ("34469735-f126-46a5-bc26-ec8234c8c13f", 10),
+        ],
     },
     ShieldStats {
         uuid: "e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada",
@@ -14227,7 +14742,10 @@ pub const SHIELDS: [ShieldStats; 51] = [
         armor_class: 1,
         required_level: 39,
         tier: 9,
-        mandatory_properties: &[("d2f7ca93-7234-4890-886d-60820350716b", 9), ("f5cba266-96df-45c2-b8c6-60bf37de2849", 9)],
+        mandatory_properties: &[
+            ("d2f7ca93-7234-4890-886d-60820350716b", 9),
+            ("f5cba266-96df-45c2-b8c6-60bf37de2849", 9),
+        ],
     },
     ShieldStats {
         uuid: "fe9afa7b-3805-474c-9b6a-0a73561942e5",
@@ -15561,9 +16079,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 8.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 8.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15585,9 +16101,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.6_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.6_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15609,9 +16123,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 10.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 10.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15633,9 +16145,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15657,9 +16167,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15681,9 +16189,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 13.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 13.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15705,9 +16211,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.6_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.6_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15729,9 +16233,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15753,9 +16255,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(35),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15788,9 +16288,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(39),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15823,20 +16321,13 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(43),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (0, 16.0_f32),
-            (1, 12.7_f32),
-            (2, 16.0_f32),
-            (3, 20.17_f32),
-        ],
+        bonus_damages: &[(0, 16.0_f32), (1, 12.7_f32), (2, 16.0_f32), (3, 20.17_f32)],
         parameters: Some(ManeuverParams {
             animation: 24,
             bonus_damage: 0.0_f32,
@@ -15858,20 +16349,13 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(47),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (0, 17.0_f32),
-            (1, 13.49_f32),
-            (2, 17.0_f32),
-            (3, 21.43_f32),
-        ],
+        bonus_damages: &[(0, 17.0_f32), (1, 13.49_f32), (2, 17.0_f32), (3, 21.43_f32)],
         parameters: Some(ManeuverParams {
             animation: 24,
             bonus_damage: 0.0_f32,
@@ -15893,20 +16377,13 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(51),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (0, 18.0_f32),
-            (1, 14.29_f32),
-            (2, 18.0_f32),
-            (3, 22.69_f32),
-        ],
+        bonus_damages: &[(0, 18.0_f32), (1, 14.29_f32), (2, 18.0_f32), (3, 22.69_f32)],
         parameters: Some(ManeuverParams {
             animation: 24,
             bonus_damage: 0.0_f32,
@@ -15928,20 +16405,13 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(55),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (0, 19.0_f32),
-            (1, 15.08_f32),
-            (2, 19.0_f32),
-            (3, 23.95_f32),
-        ],
+        bonus_damages: &[(0, 19.0_f32), (1, 15.08_f32), (2, 19.0_f32), (3, 23.95_f32)],
         parameters: Some(ManeuverParams {
             animation: 24,
             bonus_damage: 0.0_f32,
@@ -15963,9 +16433,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(58),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -15998,9 +16466,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(61),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16033,9 +16499,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(10.5_f32),
         power_level: Some(64),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::Duration, 5.0_f32),
-        ],
+        effects: &[(AbilityField::Duration, 5.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16068,9 +16532,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 3.43_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 3.43_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16092,9 +16554,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 4.92_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 4.92_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16116,9 +16576,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 6.18_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 6.18_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16140,9 +16598,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 7.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 7.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16164,9 +16620,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 8.52_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 8.52_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16188,9 +16642,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.64_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.64_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16212,9 +16664,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 10.53_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 10.53_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16236,9 +16686,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.31_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.31_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16260,9 +16708,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.14_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.14_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16284,9 +16730,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 13.06_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 13.06_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -16308,9 +16752,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.48_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.48_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17409,9 +17851,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 7.9_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 7.9_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17433,9 +17873,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.62_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.62_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17457,9 +17895,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.14_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.14_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17481,9 +17917,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.66_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.66_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17505,9 +17939,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 13.89_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 13.89_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17529,9 +17961,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.97_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.97_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17553,9 +17983,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 16.05_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 16.05_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17577,9 +18005,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 17.09_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 17.09_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17601,9 +18027,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 18.6_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 18.6_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17937,9 +18361,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 6.3_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 6.3_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17961,9 +18383,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 8.64_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 8.64_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -17985,9 +18405,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 10.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 10.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18009,9 +18427,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.6_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.6_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18033,9 +18449,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18057,9 +18471,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.9_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.9_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18081,9 +18493,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 17.23_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 17.23_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18105,9 +18515,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 18.51_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 18.51_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18129,9 +18537,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 19.54_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 19.54_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18153,9 +18559,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 21.15_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 21.15_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18489,9 +18893,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 10.13_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 10.13_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18513,9 +18915,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.64_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.64_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18537,9 +18937,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.91_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.91_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18561,9 +18959,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.1_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.1_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18585,9 +18981,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.19_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.19_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18609,9 +19003,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 16.05_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 16.05_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18633,9 +19025,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 17.09_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 17.09_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18657,9 +19047,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 57.6_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 57.6_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18681,9 +19069,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 72.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 72.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18705,9 +19091,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 84.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 84.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18729,9 +19113,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 96.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 96.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18753,9 +19135,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 106.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 106.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18777,9 +19157,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 114.84_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 114.84_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18801,9 +19179,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 123.42_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 123.42_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18825,9 +19201,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 130.26_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 130.26_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18849,9 +19223,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 141.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 141.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18873,9 +19245,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 4.22_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 4.22_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18897,9 +19267,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 6.07_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 6.07_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18921,9 +19289,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 8.03_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 8.03_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18945,9 +19311,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.93_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.93_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18969,9 +19333,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.44_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.44_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -18993,9 +19355,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 13.02_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 13.02_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -19017,9 +19377,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.34_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.34_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -19041,9 +19399,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.46_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.46_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -19065,9 +19421,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 16.59_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 16.59_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -19089,9 +19443,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 17.57_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 17.57_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -19113,9 +19465,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 19.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 19.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20645,9 +20995,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 6.74_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 6.74_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20669,9 +21017,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.69_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.69_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20693,9 +21039,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.26_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.26_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20717,9 +21061,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.59_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.59_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20741,9 +21083,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 16.77_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 16.77_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20765,9 +21105,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 18.96_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 18.96_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20789,9 +21127,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 20.62_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 20.62_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20813,9 +21149,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 22.19_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 22.19_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20837,9 +21171,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 23.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 23.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20861,9 +21193,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 25.85_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 25.85_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -20885,9 +21215,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 28.34_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 28.34_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -21247,9 +21575,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(23),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 250.0_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 250.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21277,9 +21603,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(30),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 289.7_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 289.7_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21307,9 +21631,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(34),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 319.27_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 319.27_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21337,9 +21659,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(38),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 350.11_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 350.11_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21367,9 +21687,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(42),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 369.63_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 369.63_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21397,9 +21715,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(46),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 395.88_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 395.88_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21427,9 +21743,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(50),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 416.29_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 416.29_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21457,9 +21771,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(53),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 441.72_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 441.72_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21487,9 +21799,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(56),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 475.7_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 475.7_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21517,9 +21827,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(59),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 497.09_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 497.09_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21547,9 +21855,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(62),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 523.61_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 523.61_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -21577,9 +21883,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(2.75_f32),
         power_level: Some(65),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BonusResistance, 550.12_f32),
-        ],
+        effects: &[(AbilityField::BonusResistance, 550.12_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[4, 5, 6, 7, 8],
         resist_types: &[],
@@ -22023,9 +22327,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22047,9 +22349,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.1_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.1_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22071,9 +22371,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.9_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.9_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22095,9 +22393,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 14.7_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 14.7_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22119,9 +22415,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 16.2_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 16.2_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22143,9 +22437,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 17.48_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 17.48_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22167,9 +22459,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 18.77_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 18.77_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22191,9 +22481,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 19.8_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 19.8_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22215,9 +22503,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 21.6_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 21.6_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22673,9 +22959,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.07_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.07_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22697,9 +22981,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.1_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.1_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22721,9 +23003,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.13_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.13_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22745,9 +23025,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.16_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.16_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22769,9 +23047,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.19_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.19_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22793,9 +23069,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.22_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.22_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22817,9 +23091,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.25_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.25_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22841,9 +23113,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 32.5_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 32.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22865,9 +23135,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 48.75_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 48.75_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22889,9 +23157,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 69.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 69.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22913,9 +23179,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 87.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 87.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22937,9 +23201,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 102.5_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 102.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22961,9 +23223,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 117.5_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 117.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -22985,9 +23245,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 130.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 130.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23009,9 +23267,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 141.43_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 141.43_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23033,9 +23289,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 152.14_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 152.14_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23057,9 +23311,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 160.71_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 160.71_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23081,9 +23333,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 171.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 171.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23105,9 +23355,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 10.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 10.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23129,9 +23377,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23153,9 +23399,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 20.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 20.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23177,9 +23421,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 25.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 25.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23201,9 +23443,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 30.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 30.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23225,9 +23465,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 35.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 35.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23249,9 +23487,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 40.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 40.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23273,9 +23509,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 45.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 45.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -23297,9 +23531,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 50.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 50.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -24105,9 +24337,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.15_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.15_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -24129,9 +24359,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.2_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.2_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -24153,9 +24381,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.25_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.25_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -24177,9 +24403,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.3_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.3_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -24201,9 +24425,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.35_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.35_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -24225,9 +24447,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -26147,9 +26367,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 2.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 2.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -26171,9 +26389,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 4.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 4.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -26195,9 +26411,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 6.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 6.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -31021,9 +31235,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.2_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.2_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -31045,9 +31257,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.25_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.25_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -31069,9 +31279,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.3_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.3_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -31093,9 +31301,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.35_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.35_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -31117,9 +31323,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -31141,9 +31345,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 0.45_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 0.45_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32270,9 +32472,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 8.78_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 8.78_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32294,9 +32494,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 12.42_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 12.42_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32318,9 +32516,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.66_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.66_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32342,9 +32538,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 18.45_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 18.45_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32366,9 +32560,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 21.15_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 21.15_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32390,9 +32582,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 23.4_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 23.4_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32414,9 +32604,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 25.45_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 25.45_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32438,9 +32626,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 27.38_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 27.38_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32462,9 +32648,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 28.92_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 28.92_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -32486,9 +32670,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 31.05_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 31.05_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33777,9 +33959,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 5.04_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 5.04_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33801,9 +33981,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 7.56_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 7.56_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33825,9 +34003,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 9.72_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 9.72_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33849,9 +34025,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 11.7_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 11.7_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33873,9 +34047,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 13.5_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 13.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33897,9 +34069,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 15.3_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 15.3_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33921,9 +34091,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 16.71_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 16.71_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33945,9 +34113,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 18.0_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 18.0_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33969,9 +34135,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 19.28_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 19.28_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -33993,9 +34157,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 20.7_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 20.7_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34017,9 +34179,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: None,
         power_level: None,
         can_be_cast_out_of_combat: None,
-        effects: &[
-            (AbilityField::BonusValue, 22.5_f32),
-        ],
+        effects: &[(AbilityField::BonusValue, 22.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34402,11 +34562,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 95.84_f32),
-            (2, 108.03_f32),
-            (3, 123.7_f32),
-        ],
+        bonus_damages: &[(1, 95.84_f32), (2, 108.03_f32), (3, 123.7_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34431,11 +34587,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 103.15_f32),
-            (2, 116.19_f32),
-            (3, 132.97_f32),
-        ],
+        bonus_damages: &[(1, 103.15_f32), (2, 116.19_f32), (3, 132.97_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34460,11 +34612,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 109.47_f32),
-            (2, 123.24_f32),
-            (3, 140.94_f32),
-        ],
+        bonus_damages: &[(1, 109.47_f32), (2, 123.24_f32), (3, 140.94_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34489,11 +34637,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 116.21_f32),
-            (2, 130.83_f32),
-            (3, 149.64_f32),
-        ],
+        bonus_damages: &[(1, 116.21_f32), (2, 130.83_f32), (3, 149.64_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34518,11 +34662,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 122.51_f32),
-            (2, 138.0_f32),
-            (3, 157.91_f32),
-        ],
+        bonus_damages: &[(1, 122.51_f32), (2, 138.0_f32), (3, 157.91_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34547,11 +34687,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 128.82_f32),
-            (2, 145.17_f32),
-            (3, 166.19_f32),
-        ],
+        bonus_damages: &[(1, 128.82_f32), (2, 145.17_f32), (3, 166.19_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34576,11 +34712,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 134.62_f32),
-            (2, 151.54_f32),
-            (3, 173.3_f32),
-        ],
+        bonus_damages: &[(1, 134.62_f32), (2, 151.54_f32), (3, 173.3_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34605,11 +34737,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 140.43_f32),
-            (2, 157.92_f32),
-            (3, 180.42_f32),
-        ],
+        bonus_damages: &[(1, 140.43_f32), (2, 157.92_f32), (3, 180.42_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34634,11 +34762,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         resist_types: &[],
         vulnerable_damage_types: &[],
         slots_to_check: &[],
-        bonus_damages: &[
-            (1, 146.78_f32),
-            (2, 164.99_f32),
-            (3, 188.41_f32),
-        ],
+        bonus_damages: &[(1, 146.78_f32), (2, 164.99_f32), (3, 188.41_f32)],
         parameters: None,
         ward_uid: None,
     },
@@ -34654,9 +34778,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(4),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34684,9 +34806,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(11),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34714,9 +34834,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(18),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34744,9 +34862,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(25),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34774,9 +34890,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(32),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34804,9 +34918,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(39),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34834,9 +34946,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(43),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34864,9 +34974,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(47),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34894,9 +35002,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(51),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34924,9 +35030,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(55),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34954,9 +35058,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(59),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -34984,9 +35086,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(62),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -35014,9 +35114,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(65),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -35044,9 +35142,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(68),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -35074,9 +35170,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(71),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -35104,9 +35198,7 @@ pub const ABILITY_RANKS: [AbilityRank; 706] = [
         initial_cooldown: Some(1.77_f32),
         power_level: Some(74),
         can_be_cast_out_of_combat: Some(false),
-        effects: &[
-            (AbilityField::BlockDuration, 0.5_f32),
-        ],
+        effects: &[(AbilityField::BlockDuration, 0.5_f32)],
         resistances_to_add: &[],
         statuses_to_remove: &[],
         resist_types: &[],
@@ -35175,7 +35267,10 @@ impl EnchantFamily {
     }
     /// The magnitude for one tier, or `None` if this family has no such tier.
     pub fn value(&self, tier: u8) -> Option<f32> {
-        self.tiers().iter().find(|t| t.tier == tier).map(|t| t.value)
+        self.tiers()
+            .iter()
+            .find(|t| t.tier == tier)
+            .map(|t| t.value)
     }
 }
 
@@ -43638,7 +43733,10 @@ pub fn ability(ability_uuid: &str) -> Option<&'static Ability> {
 /// One rank of one ability. `rank` is 1-based, exactly as a character's
 /// `abilities` map stores it.
 pub fn ability_rank(ability_uuid: &str, rank: u16) -> Option<&'static AbilityRank> {
-    ability(ability_uuid)?.ranks().iter().find(|r| r.rank == rank)
+    ability(ability_uuid)?
+        .ranks()
+        .iter()
+        .find(|r| r.rank == rank)
 }
 
 /// One rank of one ability, clamped into the ranks that actually ship.
@@ -44094,7 +44192,6 @@ pub mod ids {
     pub const WEAPON_FIRE_DAMAGE: &str = "c40ed851-8777-4d09-b169-0223dae8f67d";
 }
 
-
 // ==========================================================================
 // Conformance tests
 // ==========================================================================
@@ -44361,7 +44458,11 @@ mod tests {
                 "{} rank slice length",
                 a.editor_name
             );
-            assert_eq!(a.ranks_start as usize, seen, "{} rank slice offset", a.editor_name);
+            assert_eq!(
+                a.ranks_start as usize, seen,
+                "{} rank slice offset",
+                a.editor_name
+            );
             seen += ranks.len();
             assert!(!ranks.is_empty(), "{} has no ranks", a.editor_name);
             for (i, r) in ranks.iter().enumerate() {
@@ -44421,8 +44522,14 @@ mod tests {
         assert_eq!(DamageType::from_raw(8), None);
         // Every weapon's class/type came back out of the raw enum intact.
         for w in WEAPONS.iter() {
-            assert_eq!(WeaponClass::from_raw(w.weapon_class.raw()), Some(w.weapon_class));
-            assert_eq!(WeaponType::from_raw(w.weapon_type.raw()), Some(w.weapon_type));
+            assert_eq!(
+                WeaponClass::from_raw(w.weapon_class.raw()),
+                Some(w.weapon_class)
+            );
+            assert_eq!(
+                WeaponType::from_raw(w.weapon_type.raw()),
+                Some(w.weapon_type)
+            );
         }
     }
 
@@ -44459,7 +44566,8 @@ mod tests {
             };
             let got = sha256_hex(&bytes);
             assert_eq!(
-                &got, expected,
+                &got,
+                expected,
                 "\n{} does not match the hash gamedata.rs was generated against.\n\n\
                  FIRST check that the capture repo is up to date:\n\
                  \x20   git -C <blades-capture> pull\n\
@@ -44600,660 +44708,1020 @@ pub const ENCHANT_MAGNITUDES: [EnchantMagnitude; 94] = [
     EnchantMagnitude {
         family_uuid: "01842871-7f8c-48c1-86ce-6576601d6f02",
         logic: "ResistShockMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "04228b59-5718-4b55-acb3-5557726a6df9",
         logic: "FortifyMagickaRegenerationPropertyLogic",
-        tiers: &[0.0_f32, 6.8_f32, 7.8_f32, 9.0_f32, 10.2_f32, 11.4_f32, 12.8_f32, 14.2_f32, 15.0_f32, 15.8_f32, 16.6_f32],
+        tiers: &[
+            0.0_f32, 6.8_f32, 7.8_f32, 9.0_f32, 10.2_f32, 11.4_f32, 12.8_f32, 14.2_f32, 15.0_f32,
+            15.8_f32, 16.6_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "0717438e-41e0-4414-913c-a089a60666c0",
         logic: "ShortenStaggerPropertyLogic",
-        tiers: &[0.0_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32],
+        tiers: &[
+            0.0_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32, 0.2_f32,
+            0.2_f32, 0.2_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "08ea75d0-5cf1-44a9-9816-d3c6740c4191",
         logic: "WeaponDamagePoisonPropertyLogic",
-        tiers: &[0.0_f32, 20.45_f32, 24.54_f32, 28.63_f32, 32.72_f32, 36.81_f32, 40.9_f32, 44.99_f32, 49.08_f32, 53.16_f32, 57.25_f32],
-        balanced: Some(&[0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32, 57.6_f32, 62.4_f32, 67.2_f32]),
-        heavy: Some(&[0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32, 67.28_f32, 72.88_f32, 78.49_f32]),
+        tiers: &[
+            0.0_f32, 20.45_f32, 24.54_f32, 28.63_f32, 32.72_f32, 36.81_f32, 40.9_f32, 44.99_f32,
+            49.08_f32, 53.16_f32, 57.25_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32,
+            57.6_f32, 62.4_f32, 67.2_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32,
+            67.28_f32, 72.88_f32, 78.49_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "0b414904-c1e5-40e0-9cdb-52969b0a4e65",
         logic: "BlockReductionShockPropertyLogic",
-        tiers: &[2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32],
+        tiers: &[
+            2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32,
+            2.667_f32, 2.667_f32, 2.667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "0dc432cd-8971-4ec7-a2c4-4e60321c0c2e",
         logic: "ResistFrostMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "10f57d40-98e9-4181-972b-d654f81afc27",
         logic: "MercyPhysicalPropertyLogic",
-        tiers: &[0.0_f32, 9.0_f32, 10.8_f32, 12.6_f32, 14.4_f32, 16.2_f32, 18.0_f32, 19.8_f32, 21.6_f32, 23.4_f32, 25.2_f32],
+        tiers: &[
+            0.0_f32, 9.0_f32, 10.8_f32, 12.6_f32, 14.4_f32, 16.2_f32, 18.0_f32, 19.8_f32, 21.6_f32,
+            23.4_f32, 25.2_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "11af0ed4-72de-4884-90d1-d465078247bc",
         logic: "ResistFireMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "139024a7-3965-4e90-a4c1-60e3d7ca3133",
         logic: "WeaponDamageShockPropertyLogic",
-        tiers: &[0.0_f32, 17.25_f32, 20.7_f32, 24.15_f32, 27.6_f32, 31.06_f32, 34.51_f32, 37.96_f32, 41.41_f32, 44.86_f32, 48.31_f32],
-        balanced: Some(&[0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32, 48.6_f32, 52.65_f32, 56.7_f32]),
-        heavy: Some(&[0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32, 56.76_f32, 61.5_f32, 66.23_f32]),
+        tiers: &[
+            0.0_f32, 17.25_f32, 20.7_f32, 24.15_f32, 27.6_f32, 31.06_f32, 34.51_f32, 37.96_f32,
+            41.41_f32, 44.86_f32, 48.31_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32,
+            48.6_f32, 52.65_f32, 56.7_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32,
+            56.76_f32, 61.5_f32, 66.23_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "13a46a9b-3d02-48c7-b57c-f9424f10ab1d",
         logic: "AbsorbHealthGainDurabilityPropertyLogic",
-        tiers: &[0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32, 3.95_f32, 4.15_f32],
-        balanced: Some(&[0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32, 3.95_f32, 4.15_f32]),
-        heavy: Some(&[0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32, 3.95_f32, 4.15_f32]),
+        tiers: &[
+            0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32,
+            3.95_f32, 4.15_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32,
+            3.95_f32, 4.15_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32,
+            3.95_f32, 4.15_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "1674a05b-355a-4c01-9994-7a28e2654d4c",
         logic: "FortifyEnervatedPropertyLogic",
-        tiers: &[0.0_f32, 5.06_f32, 6.08_f32, 7.09_f32, 8.1_f32, 9.11_f32, 10.13_f32, 11.14_f32, 12.15_f32, 13.16_f32, 14.18_f32],
+        tiers: &[
+            0.0_f32, 5.06_f32, 6.08_f32, 7.09_f32, 8.1_f32, 9.11_f32, 10.13_f32, 11.14_f32,
+            12.15_f32, 13.16_f32, 14.18_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "1691d3cf-4dec-4755-965a-ead0b451b052",
         logic: "FortifyStaminaRegenerationPropertyLogic",
-        tiers: &[0.0_f32, 6.8_f32, 7.8_f32, 9.0_f32, 10.2_f32, 11.4_f32, 12.8_f32, 14.2_f32, 15.0_f32, 15.8_f32, 16.6_f32],
+        tiers: &[
+            0.0_f32, 6.8_f32, 7.8_f32, 9.0_f32, 10.2_f32, 11.4_f32, 12.8_f32, 14.2_f32, 15.0_f32,
+            15.8_f32, 16.6_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
         logic: "RevengeFrostPropertyLogic",
-        tiers: &[0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32, 31.59_f32, 34.22_f32, 36.86_f32],
+        tiers: &[
+            0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32,
+            31.59_f32, 34.22_f32, 36.86_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "18ef65f2-7585-401b-b7a4-3fe66a830721",
         logic: "SpellRevengeFrostPropertyLogic",
-        tiers: &[0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32, 31.59_f32, 34.22_f32, 36.86_f32],
+        tiers: &[
+            0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32,
+            31.59_f32, 34.22_f32, 36.86_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "1bcf1ab8-f2f6-4e74-9f2d-a30a43c670dc",
         logic: "FortifyMagickaRegenerationMaterialPropertyLogic",
-        tiers: &[0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32],
+        tiers: &[
+            0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32,
+            0.035_f32, 0.035_f32, 0.035_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "1d85511d-66bf-46ad-87b5-bd7a115afafd",
         logic: "OpportunistPhysicalPropertyLogic",
-        tiers: &[0.0_f32, 9.0_f32, 10.8_f32, 12.6_f32, 14.4_f32, 16.2_f32, 18.0_f32, 19.8_f32, 21.6_f32, 23.4_f32, 25.2_f32],
+        tiers: &[
+            0.0_f32, 9.0_f32, 10.8_f32, 12.6_f32, 14.4_f32, 16.2_f32, 18.0_f32, 19.8_f32, 21.6_f32,
+            23.4_f32, 25.2_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "23746263-41c1-4023-8859-41e698dcf49d",
         logic: "FortifyFrostPropertyLogic",
-        tiers: &[0.0_f32, 3.45_f32, 4.14_f32, 4.83_f32, 5.52_f32, 6.21_f32, 6.9_f32, 7.59_f32, 8.28_f32, 8.97_f32, 9.66_f32],
+        tiers: &[
+            0.0_f32, 3.45_f32, 4.14_f32, 4.83_f32, 5.52_f32, 6.21_f32, 6.9_f32, 7.59_f32, 8.28_f32,
+            8.97_f32, 9.66_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "262ece9b-bd65-4876-b698-5926ca4422be",
         logic: "AdrenalineElementalPropertyLogic",
-        tiers: &[0.0_f32, 3.6_f32, 4.32_f32, 5.04_f32, 5.76_f32, 6.48_f32, 7.2_f32, 7.92_f32, 8.64_f32, 9.36_f32, 10.08_f32],
+        tiers: &[
+            0.0_f32, 3.6_f32, 4.32_f32, 5.04_f32, 5.76_f32, 6.48_f32, 7.2_f32, 7.92_f32, 8.64_f32,
+            9.36_f32, 10.08_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "2ac1e2f6-8f97-444e-97af-7efd46c71cca",
         logic: "ShieldRavageMagickaPropertyLogic",
-        tiers: &[0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32, 47.59_f32, 50.13_f32, 52.66_f32],
+        tiers: &[
+            0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32,
+            47.59_f32, 50.13_f32, 52.66_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "2b253847-5061-4a07-acfe-fbdc3c702922",
         logic: "ShieldShockDamagePropertyLogic",
-        tiers: &[0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32, 56.76_f32, 61.5_f32, 66.23_f32],
+        tiers: &[
+            0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32,
+            56.76_f32, 61.5_f32, 66.23_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "2b8fd511-80da-4128-81b1-bd7ab6023223",
         logic: "FortifyPoisonPropertyLogic",
-        tiers: &[0.0_f32, 4.09_f32, 4.91_f32, 5.73_f32, 6.54_f32, 7.36_f32, 8.18_f32, 9.0_f32, 9.82_f32, 10.63_f32, 11.45_f32],
+        tiers: &[
+            0.0_f32, 4.09_f32, 4.91_f32, 5.73_f32, 6.54_f32, 7.36_f32, 8.18_f32, 9.0_f32, 9.82_f32,
+            10.63_f32, 11.45_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "2e56b620-15ce-4db2-9eef-2faf139f6185",
         logic: "OpportunistElementalPropertyLogic",
-        tiers: &[0.0_f32, 3.6_f32, 4.32_f32, 5.04_f32, 5.76_f32, 6.48_f32, 7.2_f32, 7.92_f32, 8.64_f32, 9.36_f32, 10.08_f32],
+        tiers: &[
+            0.0_f32, 3.6_f32, 4.32_f32, 5.04_f32, 5.76_f32, 6.48_f32, 7.2_f32, 7.92_f32, 8.64_f32,
+            9.36_f32, 10.08_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
         logic: "ShieldPoisonDamagePropertyLogic",
-        tiers: &[0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32, 67.28_f32, 72.88_f32, 78.49_f32],
+        tiers: &[
+            0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32,
+            67.28_f32, 72.88_f32, 78.49_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "3335b921-b380-4144-8414-06832e29b011",
         logic: "FortifyStaminaPropertyLogic",
-        tiers: &[0.0_f32, 56.67_f32, 65.0_f32, 75.0_f32, 85.0_f32, 95.0_f32, 106.67_f32, 118.33_f32, 125.0_f32, 131.67_f32, 138.33_f32],
+        tiers: &[
+            0.0_f32, 56.67_f32, 65.0_f32, 75.0_f32, 85.0_f32, 95.0_f32, 106.67_f32, 118.33_f32,
+            125.0_f32, 131.67_f32, 138.33_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "334f4ed9-5402-4a5a-981c-44772c799b88",
         logic: "ResistCleavingPropertyLogic",
-        tiers: &[0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32, 15.6_f32, 16.8_f32],
+        tiers: &[
+            0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32,
+            15.6_f32, 16.8_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "338ec948-d1b7-4390-8a88-ab6ac11841aa",
         logic: "ShieldMagickaDamagePropertyLogic",
-        tiers: &[0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32, 201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32],
+        tiers: &[
+            0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32,
+            201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "33f866a5-f2f5-46af-ac13-fa5f02bedfbf",
         logic: "ResistSpellsPropertyLogic",
-        tiers: &[0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32, 15.6_f32, 16.8_f32],
+        tiers: &[
+            0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32,
+            15.6_f32, 16.8_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "34469735-f126-46a5-bc26-ec8234c8c13f",
         logic: "BlockReductionFrostPropertyLogic",
-        tiers: &[2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32],
+        tiers: &[
+            2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32,
+            2.667_f32, 2.667_f32, 2.667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "3464570d-156e-4b02-b882-6a6d9c2fd549",
         logic: "ConvertDamageFirePropertyLogic",
-        tiers: &[0.0_f32, 15.0_f32, 18.0_f32, 21.0_f32, 24.0_f32, 27.0_f32, 30.0_f32, 33.0_f32, 36.0_f32, 39.0_f32, 42.0_f32],
+        tiers: &[
+            0.0_f32, 15.0_f32, 18.0_f32, 21.0_f32, 24.0_f32, 27.0_f32, 30.0_f32, 33.0_f32,
+            36.0_f32, 39.0_f32, 42.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "366ce3d7-ac40-459b-b363-4565e3c5ce17",
         logic: "ShieldFrostDamagePropertyLogic",
-        tiers: &[0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32, 56.76_f32, 61.5_f32, 66.23_f32],
+        tiers: &[
+            0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32,
+            56.76_f32, 61.5_f32, 66.23_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
         logic: "ShieldStaminaDamagePropertyLogic",
-        tiers: &[0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32, 201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32],
+        tiers: &[
+            0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32,
+            201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "3d5b70bb-d2bd-4141-80d5-333ef603a8f2",
         logic: "ShieldRavageHealthPropertyLogic",
-        tiers: &[0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32, 47.59_f32, 50.13_f32, 52.66_f32],
+        tiers: &[
+            0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32,
+            47.59_f32, 50.13_f32, 52.66_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "464bedb7-a631-43b6-a2df-f65f089d39da",
         logic: "ResistFirePropertyLogic",
-        tiers: &[0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32, 57.6_f32, 62.4_f32, 67.2_f32],
+        tiers: &[
+            0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32,
+            57.6_f32, 62.4_f32, 67.2_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "47db94ff-4f83-4e17-9638-e726bf536a94",
         logic: "ConvertDamagePoisonPropertyLogic",
-        tiers: &[0.0_f32, 15.0_f32, 18.0_f32, 21.0_f32, 24.0_f32, 27.0_f32, 30.0_f32, 33.0_f32, 36.0_f32, 39.0_f32, 42.0_f32],
+        tiers: &[
+            0.0_f32, 15.0_f32, 18.0_f32, 21.0_f32, 24.0_f32, 27.0_f32, 30.0_f32, 33.0_f32,
+            36.0_f32, 39.0_f32, 42.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "48516321-3bf3-42bc-9b31-cca7f0ffa992",
         logic: "ResistBashingMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "4a50e3f9-eb0b-413d-8166-290eddeeac6a",
         logic: "RevengeShockPropertyLogic",
-        tiers: &[0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32, 31.59_f32, 34.22_f32, 36.86_f32],
+        tiers: &[
+            0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32,
+            31.59_f32, 34.22_f32, 36.86_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "5297713f-c60e-42fd-ade0-500daf0d632e",
         logic: "ResistShockPropertyLogic",
-        tiers: &[0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32, 48.6_f32, 52.65_f32, 56.7_f32],
+        tiers: &[
+            0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32,
+            48.6_f32, 52.65_f32, 56.7_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "5665da58-5fce-4b5e-863d-0395afdf3554",
         logic: "SpellRevengePoisonPropertyLogic",
-        tiers: &[0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32, 37.44_f32, 40.56_f32, 43.68_f32],
+        tiers: &[
+            0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32,
+            37.44_f32, 40.56_f32, 43.68_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "59c3b082-e57a-4243-ace5-9b55475e9b17",
         logic: "ArmorPiercingPhysicalPropertyLogic",
-        tiers: &[0.0_f32, 45.0_f32, 54.0_f32, 63.0_f32, 72.0_f32, 81.0_f32, 90.0_f32, 99.0_f32, 108.0_f32, 117.0_f32, 126.0_f32],
+        tiers: &[
+            0.0_f32, 45.0_f32, 54.0_f32, 63.0_f32, 72.0_f32, 81.0_f32, 90.0_f32, 99.0_f32,
+            108.0_f32, 117.0_f32, 126.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "5a145cf8-3a20-4b8a-bf6d-8ee1607d3417",
         logic: "WeaponDamageMagickaPropertyLogic",
-        tiers: &[0.0_f32, 54.94_f32, 65.92_f32, 76.91_f32, 87.9_f32, 98.88_f32, 109.87_f32, 120.86_f32, 131.85_f32, 142.83_f32, 153.82_f32],
-        balanced: Some(&[0.0_f32, 72.0_f32, 86.4_f32, 100.8_f32, 115.2_f32, 129.6_f32, 144.0_f32, 158.4_f32, 172.8_f32, 187.2_f32, 201.6_f32]),
-        heavy: Some(&[0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32, 201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32]),
+        tiers: &[
+            0.0_f32, 54.94_f32, 65.92_f32, 76.91_f32, 87.9_f32, 98.88_f32, 109.87_f32, 120.86_f32,
+            131.85_f32, 142.83_f32, 153.82_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 72.0_f32, 86.4_f32, 100.8_f32, 115.2_f32, 129.6_f32, 144.0_f32, 158.4_f32,
+            172.8_f32, 187.2_f32, 201.6_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32,
+            201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "5c1e1400-4f0d-4e03-8c48-4bc987e88a25",
         logic: "ConvertDamageFrostPropertyLogic",
-        tiers: &[0.0_f32, 8.45_f32, 10.15_f32, 11.84_f32, 13.53_f32, 15.22_f32, 16.91_f32, 18.6_f32, 20.29_f32, 21.98_f32, 23.67_f32],
+        tiers: &[
+            0.0_f32, 8.45_f32, 10.15_f32, 11.84_f32, 13.53_f32, 15.22_f32, 16.91_f32, 18.6_f32,
+            20.29_f32, 21.98_f32, 23.67_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "5d3eb782-7789-4f28-81b8-3b547f6633ea",
         logic: "ShortenElementalStatusPropertyLogic",
-        tiers: &[0.0_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32],
+        tiers: &[
+            0.0_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32,
+            0.15_f32, 0.15_f32, 0.15_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "626121b7-708d-455f-b32f-38e5b68bb80c",
         logic: "FortifyFirePropertyLogic",
-        tiers: &[0.0_f32, 4.09_f32, 4.91_f32, 5.73_f32, 6.54_f32, 7.36_f32, 8.18_f32, 9.0_f32, 9.82_f32, 10.63_f32, 11.45_f32],
+        tiers: &[
+            0.0_f32, 4.09_f32, 4.91_f32, 5.73_f32, 6.54_f32, 7.36_f32, 8.18_f32, 9.0_f32, 9.82_f32,
+            10.63_f32, 11.45_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
         logic: "WeaponDamageFrostPropertyLogic",
-        tiers: &[0.0_f32, 17.25_f32, 20.7_f32, 24.15_f32, 27.6_f32, 31.06_f32, 34.51_f32, 37.96_f32, 41.41_f32, 44.86_f32, 48.31_f32],
-        balanced: Some(&[0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32, 48.6_f32, 52.65_f32, 56.7_f32]),
-        heavy: Some(&[0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32, 56.76_f32, 61.5_f32, 66.23_f32]),
+        tiers: &[
+            0.0_f32, 17.25_f32, 20.7_f32, 24.15_f32, 27.6_f32, 31.06_f32, 34.51_f32, 37.96_f32,
+            41.41_f32, 44.86_f32, 48.31_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32,
+            48.6_f32, 52.65_f32, 56.7_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 23.65_f32, 28.38_f32, 33.11_f32, 37.84_f32, 42.57_f32, 47.3_f32, 52.03_f32,
+            56.76_f32, 61.5_f32, 66.23_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "64a15ab5-f7be-42be-ad25-4a136a4ec62a",
         logic: "FortifyPrimaryEnchantPropertyLogic",
-        tiers: &[0.0_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32],
+        tiers: &[
+            0.0_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32,
+            0.15_f32, 0.15_f32, 0.15_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "652d5ac9-3076-405b-a163-dde1a950fb26",
         logic: "AbsorbStaminaPropertyLogic",
-        tiers: &[0.0_f32, 3.89_f32, 4.46_f32, 5.15_f32, 5.84_f32, 6.52_f32, 7.32_f32, 8.13_f32, 8.58_f32, 9.04_f32, 9.5_f32],
-        balanced: Some(&[0.0_f32, 5.1_f32, 5.85_f32, 6.75_f32, 7.65_f32, 8.55_f32, 9.6_f32, 10.65_f32, 11.25_f32, 11.85_f32, 12.45_f32]),
-        heavy: Some(&[0.0_f32, 6.47_f32, 7.42_f32, 8.57_f32, 9.71_f32, 10.85_f32, 12.18_f32, 13.51_f32, 14.28_f32, 15.04_f32, 15.8_f32]),
+        tiers: &[
+            0.0_f32, 3.89_f32, 4.46_f32, 5.15_f32, 5.84_f32, 6.52_f32, 7.32_f32, 8.13_f32,
+            8.58_f32, 9.04_f32, 9.5_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 5.1_f32, 5.85_f32, 6.75_f32, 7.65_f32, 8.55_f32, 9.6_f32, 10.65_f32,
+            11.25_f32, 11.85_f32, 12.45_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 6.47_f32, 7.42_f32, 8.57_f32, 9.71_f32, 10.85_f32, 12.18_f32, 13.51_f32,
+            14.28_f32, 15.04_f32, 15.8_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "67e1de28-c9e1-44cc-bad8-338b912ce352",
         logic: "BlockReductionBashingPropertyLogic",
-        tiers: &[2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32],
+        tiers: &[
+            2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32,
+            2.0_f32, 2.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "73e3dc29-0f39-4874-9761-b36ca07c4e59",
         logic: "BlockReductionPoisonPropertyLogic",
-        tiers: &[2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32],
+        tiers: &[
+            2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32,
+            2.667_f32, 2.667_f32, 2.667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "750d57aa-3616-4f1f-9461-3d3bd84466ed",
         logic: "ConvertDamageShockPropertyLogic",
-        tiers: &[0.0_f32, 8.45_f32, 10.15_f32, 11.84_f32, 13.53_f32, 15.22_f32, 16.91_f32, 18.6_f32, 20.29_f32, 21.98_f32, 23.67_f32],
+        tiers: &[
+            0.0_f32, 8.45_f32, 10.15_f32, 11.84_f32, 13.53_f32, 15.22_f32, 16.91_f32, 18.6_f32,
+            20.29_f32, 21.98_f32, 23.67_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "7b8a958f-9a84-4802-8a8c-3fdf82481fbb",
         logic: "BlockSpellRevengeFirePropertyLogic",
-        tiers: &[0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32, 37.44_f32, 40.56_f32, 43.68_f32],
+        tiers: &[
+            0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32,
+            37.44_f32, 40.56_f32, 43.68_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "7cdb7179-4cd4-466e-8b77-4caf2fddb268",
         logic: "WeaponRavageMagickaPropertyLogic",
-        tiers: &[0.0_f32, 12.97_f32, 14.88_f32, 17.17_f32, 19.46_f32, 21.75_f32, 24.42_f32, 27.09_f32, 28.61_f32, 30.14_f32, 31.66_f32],
-        balanced: Some(&[0.0_f32, 17.0_f32, 19.5_f32, 22.5_f32, 25.5_f32, 28.5_f32, 32.0_f32, 35.5_f32, 37.5_f32, 39.5_f32, 42.0_f32]),
-        heavy: Some(&[0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32, 47.59_f32, 50.13_f32, 52.66_f32]),
+        tiers: &[
+            0.0_f32, 12.97_f32, 14.88_f32, 17.17_f32, 19.46_f32, 21.75_f32, 24.42_f32, 27.09_f32,
+            28.61_f32, 30.14_f32, 31.66_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 17.0_f32, 19.5_f32, 22.5_f32, 25.5_f32, 28.5_f32, 32.0_f32, 35.5_f32,
+            37.5_f32, 39.5_f32, 42.0_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32,
+            47.59_f32, 50.13_f32, 52.66_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "7ea448a6-0415-461f-8ef8-2cec9f5004f9",
         logic: "SpellRevengeShockPropertyLogic",
-        tiers: &[0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32, 31.59_f32, 34.22_f32, 36.86_f32],
+        tiers: &[
+            0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32,
+            31.59_f32, 34.22_f32, 36.86_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "80980773-a388-4f71-9ba5-ac69a7e307be",
         logic: "FortifyHealthRegenerationPropertyLogic",
-        tiers: &[0.0_f32, 1.0_f32, 1.45_f32, 1.9_f32, 2.35_f32, 2.8_f32, 3.25_f32, 3.7_f32, 4.15_f32, 4.6_f32, 5.05_f32],
+        tiers: &[
+            0.0_f32, 1.0_f32, 1.45_f32, 1.9_f32, 2.35_f32, 2.8_f32, 3.25_f32, 3.7_f32, 4.15_f32,
+            4.6_f32, 5.05_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "82f79c45-cf51-4287-9215-f53a75a19757",
         logic: "FortifyStaminaRegenerationMaterialPropertyLogic",
-        tiers: &[0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32],
+        tiers: &[
+            0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32, 0.035_f32,
+            0.035_f32, 0.035_f32, 0.035_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "848e02b4-32ae-4e1b-809c-83bca039542a",
         logic: "FortifyShockPropertyLogic",
-        tiers: &[0.0_f32, 3.45_f32, 4.14_f32, 4.83_f32, 5.52_f32, 6.21_f32, 6.9_f32, 7.59_f32, 8.28_f32, 8.97_f32, 9.66_f32],
+        tiers: &[
+            0.0_f32, 3.45_f32, 4.14_f32, 4.83_f32, 5.52_f32, 6.21_f32, 6.9_f32, 7.59_f32, 8.28_f32,
+            8.97_f32, 9.66_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969",
         logic: "HastePropertyLogic",
-        tiers: &[0.0_f32, 0.88_f32, 0.86_f32, 0.84_f32, 0.82_f32, 0.8_f32, 0.78_f32, 0.76_f32, 0.74_f32, 0.72_f32, 0.7_f32],
+        tiers: &[
+            0.0_f32, 0.88_f32, 0.86_f32, 0.84_f32, 0.82_f32, 0.8_f32, 0.78_f32, 0.76_f32, 0.74_f32,
+            0.72_f32, 0.7_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "8a107a03-26ed-4ea9-97ac-e7f44c2bb5d3",
         logic: "SpellRevengeFirePropertyLogic",
-        tiers: &[0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32, 37.44_f32, 40.56_f32, 43.68_f32],
+        tiers: &[
+            0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32,
+            37.44_f32, 40.56_f32, 43.68_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "8f372d6d-2620-42ab-809b-edb4d5d1e528",
         logic: "FortifyPoisonedPropertyLogic",
-        tiers: &[0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32, 15.6_f32, 16.8_f32],
+        tiers: &[
+            0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32,
+            15.6_f32, 16.8_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "8fd72d41-3e82-4865-b49e-b576b8384aa9",
         logic: "AdrenalinePhysicalPropertyLogic",
-        tiers: &[0.0_f32, 9.0_f32, 10.8_f32, 12.6_f32, 14.4_f32, 16.2_f32, 18.0_f32, 19.8_f32, 21.6_f32, 23.4_f32, 25.2_f32],
+        tiers: &[
+            0.0_f32, 9.0_f32, 10.8_f32, 12.6_f32, 14.4_f32, 16.2_f32, 18.0_f32, 19.8_f32, 21.6_f32,
+            23.4_f32, 25.2_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "93f65e60-b27b-42b4-b0da-44fd6314f1d3",
         logic: "ResistCleavingMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "94aa3774-cd7e-400c-9d17-a4652fb88a93",
         logic: "AbsorbMagickaPropertyLogic",
-        tiers: &[0.0_f32, 3.89_f32, 4.46_f32, 5.15_f32, 5.84_f32, 6.52_f32, 7.32_f32, 8.13_f32, 8.58_f32, 9.04_f32, 9.5_f32],
-        balanced: Some(&[0.0_f32, 5.1_f32, 5.85_f32, 6.75_f32, 7.65_f32, 8.55_f32, 9.6_f32, 10.65_f32, 11.25_f32, 11.85_f32, 12.45_f32]),
-        heavy: Some(&[0.0_f32, 6.47_f32, 7.42_f32, 8.57_f32, 9.71_f32, 10.85_f32, 12.18_f32, 13.51_f32, 14.28_f32, 15.04_f32, 15.8_f32]),
+        tiers: &[
+            0.0_f32, 3.89_f32, 4.46_f32, 5.15_f32, 5.84_f32, 6.52_f32, 7.32_f32, 8.13_f32,
+            8.58_f32, 9.04_f32, 9.5_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 5.1_f32, 5.85_f32, 6.75_f32, 7.65_f32, 8.55_f32, 9.6_f32, 10.65_f32,
+            11.25_f32, 11.85_f32, 12.45_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 6.47_f32, 7.42_f32, 8.57_f32, 9.71_f32, 10.85_f32, 12.18_f32, 13.51_f32,
+            14.28_f32, 15.04_f32, 15.8_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "9701ded5-e1d1-4436-8b14-d5d726ff4434",
         logic: "ShieldRavageStaminaPropertyLogic",
-        tiers: &[0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32, 47.59_f32, 50.13_f32, 52.66_f32],
+        tiers: &[
+            0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32,
+            47.59_f32, 50.13_f32, 52.66_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "98757a01-33b8-40ea-bb45-6acd89811ae3",
         logic: "ResistancePiercingElementalPropertyLogic",
-        tiers: &[0.0_f32, 1.8_f32, 2.16_f32, 2.52_f32, 2.88_f32, 3.24_f32, 3.6_f32, 3.96_f32, 4.32_f32, 4.68_f32, 5.04_f32],
+        tiers: &[
+            0.0_f32, 1.8_f32, 2.16_f32, 2.52_f32, 2.88_f32, 3.24_f32, 3.6_f32, 3.96_f32, 4.32_f32,
+            4.68_f32, 5.04_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07",
         logic: "WeaponRavageStaminaPropertyLogic",
-        tiers: &[0.0_f32, 12.97_f32, 14.88_f32, 17.17_f32, 19.46_f32, 21.75_f32, 24.42_f32, 27.09_f32, 28.61_f32, 30.14_f32, 31.66_f32],
-        balanced: Some(&[0.0_f32, 17.0_f32, 19.5_f32, 22.5_f32, 25.5_f32, 28.5_f32, 32.0_f32, 35.5_f32, 37.5_f32, 39.5_f32, 42.0_f32]),
-        heavy: Some(&[0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32, 47.59_f32, 50.13_f32, 52.66_f32]),
+        tiers: &[
+            0.0_f32, 12.97_f32, 14.88_f32, 17.17_f32, 19.46_f32, 21.75_f32, 24.42_f32, 27.09_f32,
+            28.61_f32, 30.14_f32, 31.66_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 17.0_f32, 19.5_f32, 22.5_f32, 25.5_f32, 28.5_f32, 32.0_f32, 35.5_f32,
+            37.5_f32, 39.5_f32, 42.0_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32,
+            47.59_f32, 50.13_f32, 52.66_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "9dd3a8d4-3c48-46f8-a392-79bf8871cdc5",
         logic: "BlockSpellRevengeFrostPropertyLogic",
-        tiers: &[0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32, 31.59_f32, 34.22_f32, 36.86_f32],
+        tiers: &[
+            0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32,
+            31.59_f32, 34.22_f32, 36.86_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "9fa6ea46-be39-4c0a-8a7f-1180b2d20afb",
         logic: "BlockSpellRevengePoisonPropertyLogic",
-        tiers: &[0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32, 37.44_f32, 40.56_f32, 43.68_f32],
+        tiers: &[
+            0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32,
+            37.44_f32, 40.56_f32, 43.68_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "9fdbb542-ff37-4199-93a3-d9444cca9090",
         logic: "WeaponDamageStaminaPropertyLogic",
-        tiers: &[0.0_f32, 54.94_f32, 65.92_f32, 76.91_f32, 87.9_f32, 98.88_f32, 109.87_f32, 120.86_f32, 131.85_f32, 142.83_f32, 153.82_f32],
-        balanced: Some(&[0.0_f32, 72.0_f32, 86.4_f32, 100.8_f32, 115.2_f32, 129.6_f32, 144.0_f32, 158.4_f32, 172.8_f32, 187.2_f32, 201.6_f32]),
-        heavy: Some(&[0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32, 201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32]),
+        tiers: &[
+            0.0_f32, 54.94_f32, 65.92_f32, 76.91_f32, 87.9_f32, 98.88_f32, 109.87_f32, 120.86_f32,
+            131.85_f32, 142.83_f32, 153.82_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 72.0_f32, 86.4_f32, 100.8_f32, 115.2_f32, 129.6_f32, 144.0_f32, 158.4_f32,
+            172.8_f32, 187.2_f32, 201.6_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 91.37_f32, 109.64_f32, 127.92_f32, 146.19_f32, 164.46_f32, 182.74_f32,
+            201.01_f32, 219.28_f32, 237.56_f32, 255.83_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "a869f868-c23f-45bb-9159-d62b42236a4a",
         logic: "FortifyFrozenPropertyLogic",
-        tiers: &[0.0_f32, 5.06_f32, 6.08_f32, 7.09_f32, 8.1_f32, 9.11_f32, 10.13_f32, 11.14_f32, 12.15_f32, 13.16_f32, 14.18_f32],
+        tiers: &[
+            0.0_f32, 5.06_f32, 6.08_f32, 7.09_f32, 8.1_f32, 9.11_f32, 10.13_f32, 11.14_f32,
+            12.15_f32, 13.16_f32, 14.18_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "a9713cb3-fe76-4291-a976-2a1e70edc0e9",
         logic: "BlockSpellRevengeShockPropertyLogic",
-        tiers: &[0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32, 31.59_f32, 34.22_f32, 36.86_f32],
+        tiers: &[
+            0.0_f32, 13.16_f32, 15.8_f32, 18.43_f32, 21.06_f32, 23.69_f32, 26.33_f32, 28.96_f32,
+            31.59_f32, 34.22_f32, 36.86_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "a99ab22b-9d16-46cd-9616-eb1ed40a135d",
         logic: "BlockReductionCleavingPropertyLogic",
-        tiers: &[2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32],
+        tiers: &[
+            2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32,
+            2.0_f32, 2.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
         logic: "FortifyComboDamagePropertyLogic",
-        tiers: &[0.0_f32, 18.41_f32, 22.09_f32, 25.77_f32, 29.45_f32, 33.13_f32, 36.81_f32, 40.49_f32, 44.17_f32, 47.84_f32, 51.53_f32],
+        tiers: &[
+            0.0_f32, 18.41_f32, 22.09_f32, 25.77_f32, 29.45_f32, 33.13_f32, 36.81_f32, 40.49_f32,
+            44.17_f32, 47.84_f32, 51.53_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "af1e56bf-1974-452c-aa70-36b2140cbb07",
         logic: "ExtraDamageOnBlockingEnemyPropertyLogic",
-        tiers: &[0.0_f32, 56.06_f32, 67.28_f32, 78.48_f32, 89.7_f32, 100.92_f32, 112.12_f32, 123.34_f32, 134.56_f32, 145.76_f32, 156.98_f32],
+        tiers: &[
+            0.0_f32, 56.06_f32, 67.28_f32, 78.48_f32, 89.7_f32, 100.92_f32, 112.12_f32, 123.34_f32,
+            134.56_f32, 145.76_f32, 156.98_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "b1f4ffe8-141a-4c69-92a4-238f8359438f",
         logic: "ResistPoisonMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "b4de8d1b-d8a1-4575-8517-c1e5800a7525",
         logic: "FortifyHealthPropertyLogic",
-        tiers: &[0.0_f32, 45.32_f32, 51.99_f32, 59.99_f32, 67.98_f32, 75.98_f32, 85.31_f32, 94.64_f32, 99.98_f32, 105.31_f32, 110.64_f32],
+        tiers: &[
+            0.0_f32, 45.32_f32, 51.99_f32, 59.99_f32, 67.98_f32, 75.98_f32, 85.31_f32, 94.64_f32,
+            99.98_f32, 105.31_f32, 110.64_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "b64fa9d4-4f13-4bb4-9129-16df08e84757",
         logic: "ShieldFireDamagePropertyLogic",
-        tiers: &[0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32, 67.28_f32, 72.88_f32, 78.49_f32],
+        tiers: &[
+            0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32,
+            67.28_f32, 72.88_f32, 78.49_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "b7b54fee-8a87-4418-86d7-051b7d4aa58d",
         logic: "ResistHazardsPropertyLogic",
-        tiers: &[0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32],
+        tiers: &[
+            0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32,
+            0.0_f32, 0.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "b989c011-48de-492d-aca7-a2644fb3ca1b",
         logic: "ResistSlashingMaterialPropertyLogic",
-        tiers: &[0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32],
+        tiers: &[
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+            0.0667_f32, 0.0667_f32, 0.0667_f32, 0.0667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "be17fe64-c8f9-47e1-8803-49227119c2b3",
         logic: "ExtendElementalStatusesPropertyLogic",
-        tiers: &[0.0_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32],
+        tiers: &[
+            0.0_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32, 0.15_f32,
+            0.15_f32, 0.15_f32, 0.15_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "bf107d7d-8777-4411-b07a-56819a58a709",
         logic: "FortifyBurningPropertyLogic",
-        tiers: &[0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32, 15.6_f32, 16.8_f32],
+        tiers: &[
+            0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32,
+            15.6_f32, 16.8_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
         logic: "FortifyHealingPropertyLogic",
-        tiers: &[0.0_f32, 6.8_f32, 7.8_f32, 9.0_f32, 10.2_f32, 11.4_f32, 12.8_f32, 14.2_f32, 15.0_f32, 15.8_f32, 16.6_f32],
+        tiers: &[
+            0.0_f32, 6.8_f32, 7.8_f32, 9.0_f32, 10.2_f32, 11.4_f32, 12.8_f32, 14.2_f32, 15.0_f32,
+            15.8_f32, 16.6_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "c40ed851-8777-4d09-b169-0223dae8f67d",
         logic: "WeaponDamageFirePropertyLogic",
-        tiers: &[0.0_f32, 20.45_f32, 24.54_f32, 28.63_f32, 32.72_f32, 36.81_f32, 40.9_f32, 44.99_f32, 49.08_f32, 53.16_f32, 57.25_f32],
-        balanced: Some(&[0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32, 57.6_f32, 62.4_f32, 67.2_f32]),
-        heavy: Some(&[0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32, 67.28_f32, 72.88_f32, 78.49_f32]),
+        tiers: &[
+            0.0_f32, 20.45_f32, 24.54_f32, 28.63_f32, 32.72_f32, 36.81_f32, 40.9_f32, 44.99_f32,
+            49.08_f32, 53.16_f32, 57.25_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32,
+            57.6_f32, 62.4_f32, 67.2_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 28.03_f32, 33.64_f32, 39.24_f32, 44.85_f32, 50.46_f32, 56.06_f32, 61.67_f32,
+            67.28_f32, 72.88_f32, 78.49_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "cc432e27-813c-4afa-a3df-d587cfd550d2",
         logic: "AbsorbHealthPropertyLogic",
-        tiers: &[0.0_f32, 1.3_f32, 1.49_f32, 1.72_f32, 1.95_f32, 2.17_f32, 2.44_f32, 2.71_f32, 2.86_f32, 3.01_f32, 3.17_f32],
-        balanced: Some(&[0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32, 3.95_f32, 4.15_f32]),
-        heavy: Some(&[0.0_f32, 2.16_f32, 2.47_f32, 2.86_f32, 3.24_f32, 3.62_f32, 4.06_f32, 4.5_f32, 4.76_f32, 5.01_f32, 5.27_f32]),
+        tiers: &[
+            0.0_f32, 1.3_f32, 1.49_f32, 1.72_f32, 1.95_f32, 2.17_f32, 2.44_f32, 2.71_f32, 2.86_f32,
+            3.01_f32, 3.17_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 1.7_f32, 1.95_f32, 2.25_f32, 2.55_f32, 2.85_f32, 3.2_f32, 3.55_f32, 3.75_f32,
+            3.95_f32, 4.15_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 2.16_f32, 2.47_f32, 2.86_f32, 3.24_f32, 3.62_f32, 4.06_f32, 4.5_f32, 4.76_f32,
+            5.01_f32, 5.27_f32,
+        ]),
     },
     EnchantMagnitude {
         family_uuid: "d12b80eb-1c2e-42a3-b939-b92e308f1b22",
         logic: "ResistSlashingPropertyLogic",
-        tiers: &[0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32, 15.6_f32, 16.8_f32],
+        tiers: &[
+            0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32,
+            15.6_f32, 16.8_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "d1e286a7-7c90-4e1b-aaaa-fa04b607e698",
         logic: "RevengeFirePropertyLogic",
-        tiers: &[0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32, 37.44_f32, 40.56_f32, 43.68_f32],
+        tiers: &[
+            0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32,
+            37.44_f32, 40.56_f32, 43.68_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "d2f7ca93-7234-4890-886d-60820350716b",
         logic: "BlockReductionSlashingPropertyLogic",
-        tiers: &[2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32],
+        tiers: &[
+            2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32, 2.0_f32,
+            2.0_f32, 2.0_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "d8638848-d706-4ddd-b096-2a56e7696436",
         logic: "MercyElementalPropertyLogic",
-        tiers: &[0.0_f32, 3.6_f32, 4.32_f32, 5.04_f32, 5.76_f32, 6.48_f32, 7.2_f32, 7.92_f32, 8.64_f32, 9.36_f32, 10.08_f32],
+        tiers: &[
+            0.0_f32, 3.6_f32, 4.32_f32, 5.04_f32, 5.76_f32, 6.48_f32, 7.2_f32, 7.92_f32, 8.64_f32,
+            9.36_f32, 10.08_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "da0ebf22-6d7b-4504-bfc1-b78b674c7c5c",
         logic: "FortifyMagickaPropertyLogic",
-        tiers: &[0.0_f32, 56.67_f32, 65.0_f32, 75.0_f32, 85.0_f32, 95.0_f32, 106.67_f32, 118.33_f32, 125.0_f32, 131.67_f32, 138.33_f32],
+        tiers: &[
+            0.0_f32, 56.67_f32, 65.0_f32, 75.0_f32, 85.0_f32, 95.0_f32, 106.67_f32, 118.33_f32,
+            125.0_f32, 131.67_f32, 138.33_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "dbc82d4d-3be1-4735-af21-316c54cfae55",
         logic: "ResistPoisonPropertyLogic",
-        tiers: &[0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32, 57.6_f32, 62.4_f32, 67.2_f32],
+        tiers: &[
+            0.0_f32, 24.0_f32, 28.8_f32, 33.6_f32, 38.4_f32, 43.2_f32, 48.0_f32, 52.8_f32,
+            57.6_f32, 62.4_f32, 67.2_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "e4d9f320-6a0d-4dd3-947a-9ab887e2a866",
         logic: "ResistFrostPropertyLogic",
-        tiers: &[0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32, 48.6_f32, 52.65_f32, 56.7_f32],
+        tiers: &[
+            0.0_f32, 20.25_f32, 24.3_f32, 28.35_f32, 32.4_f32, 36.45_f32, 40.5_f32, 44.55_f32,
+            48.6_f32, 52.65_f32, 56.7_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "e8e0bb26-2751-4cac-bd20-effdec8dea4d",
         logic: "ResistBashingPropertyLogic",
-        tiers: &[0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32, 15.6_f32, 16.8_f32],
+        tiers: &[
+            0.0_f32, 6.0_f32, 7.2_f32, 8.4_f32, 9.6_f32, 10.8_f32, 12.0_f32, 13.2_f32, 14.4_f32,
+            15.6_f32, 16.8_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4",
         logic: "RevengePoisonPropertyLogic",
-        tiers: &[0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32, 37.44_f32, 40.56_f32, 43.68_f32],
+        tiers: &[
+            0.0_f32, 15.6_f32, 18.72_f32, 21.84_f32, 24.96_f32, 28.08_f32, 31.2_f32, 34.32_f32,
+            37.44_f32, 40.56_f32, 43.68_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "f5cba266-96df-45c2-b8c6-60bf37de2849",
         logic: "BlockReductionFirePropertyLogic",
-        tiers: &[2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32],
+        tiers: &[
+            2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32, 2.667_f32,
+            2.667_f32, 2.667_f32, 2.667_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "f8e9dec5-c6e7-4976-b24b-2155f1921692",
         logic: "PowerfulBlockPropertyLogic",
-        tiers: &[0.0_f32, 18.0_f32, 21.6_f32, 25.2_f32, 28.8_f32, 32.4_f32, 36.0_f32, 39.6_f32, 43.2_f32, 46.8_f32, 50.4_f32],
+        tiers: &[
+            0.0_f32, 18.0_f32, 21.6_f32, 25.2_f32, 28.8_f32, 32.4_f32, 36.0_f32, 39.6_f32,
+            43.2_f32, 46.8_f32, 50.4_f32,
+        ],
         balanced: None,
         heavy: None,
     },
     EnchantMagnitude {
         family_uuid: "fea58213-6a41-4500-9f09-cd9c745bcc1e",
         logic: "WeaponRavageHealthPropertyLogic",
-        tiers: &[0.0_f32, 12.97_f32, 14.88_f32, 17.17_f32, 19.46_f32, 21.75_f32, 24.42_f32, 27.09_f32, 28.61_f32, 30.14_f32, 31.66_f32],
-        balanced: Some(&[0.0_f32, 17.0_f32, 19.5_f32, 22.5_f32, 25.5_f32, 28.5_f32, 32.0_f32, 35.5_f32, 37.5_f32, 39.5_f32, 41.5_f32]),
-        heavy: Some(&[0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32, 47.59_f32, 50.13_f32, 52.66_f32]),
+        tiers: &[
+            0.0_f32, 12.97_f32, 14.88_f32, 17.17_f32, 19.46_f32, 21.75_f32, 24.42_f32, 27.09_f32,
+            28.61_f32, 30.14_f32, 31.66_f32,
+        ],
+        balanced: Some(&[
+            0.0_f32, 17.0_f32, 19.5_f32, 22.5_f32, 25.5_f32, 28.5_f32, 32.0_f32, 35.5_f32,
+            37.5_f32, 39.5_f32, 41.5_f32,
+        ]),
+        heavy: Some(&[
+            0.0_f32, 21.57_f32, 24.75_f32, 28.55_f32, 32.36_f32, 36.17_f32, 40.61_f32, 45.05_f32,
+            47.59_f32, 50.13_f32, 52.66_f32,
+        ]),
     },
 ];
 
@@ -45272,7 +45740,9 @@ pub fn enchant_magnitude_for_weight(
     weight: crate::arena::combat::tables::Weight,
 ) -> Option<f32> {
     use crate::arena::combat::tables::Weight;
-    let e = ENCHANT_MAGNITUDES.iter().find(|e| e.family_uuid == family_uuid)?;
+    let e = ENCHANT_MAGNITUDES
+        .iter()
+        .find(|e| e.family_uuid == family_uuid)?;
     let table = match weight {
         Weight::Light => e.tiers,
         Weight::Versatile => e.balanced.unwrap_or(e.tiers),
@@ -45282,6 +45752,8 @@ pub fn enchant_magnitude_for_weight(
 }
 
 pub fn enchant_magnitude(family_uuid: &str, tier: u8) -> Option<f32> {
-    let e = ENCHANT_MAGNITUDES.iter().find(|e| e.family_uuid == family_uuid)?;
+    let e = ENCHANT_MAGNITUDES
+        .iter()
+        .find(|e| e.family_uuid == family_uuid)?;
     e.tiers.get((tier as usize).min(10)).copied()
 }

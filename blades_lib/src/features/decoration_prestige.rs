@@ -69,7 +69,10 @@ mod tests {
             assert!(e.town_xp > 0, "{recipe} pays nothing");
             let out = crate::features::recipe_outputs::output_for(recipe)
                 .unwrap_or_else(|| panic!("{recipe} has no APK output"));
-            assert_eq!(out.output_item_template_id, e.output_item_template_id, "{recipe}");
+            assert_eq!(
+                out.output_item_template_id, e.output_item_template_id,
+                "{recipe}"
+            );
         }
     }
 

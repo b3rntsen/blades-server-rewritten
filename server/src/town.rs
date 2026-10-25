@@ -102,19 +102,18 @@ pub async fn get_town(
     // error"). Handle each failure as a 500 so the worker survives and logs why.
     let path = app_state.static_data_path.join("default_town.json");
 
-    let mut file = File::open(&path).await.map_err(|_e| {
-        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
-    })?;
+    let mut file = File::open(&path)
+        .await
+        .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
 
     let mut content = String::new();
 
-    file.read_to_string(&mut content).await.map_err(|_e| {
-        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
-    })?;
+    file.read_to_string(&mut content)
+        .await
+        .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
 
-    let town = serde_json::from_str(&content).map_err(|_e| {
-        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
-    })?;
+    let town = serde_json::from_str(&content)
+        .map_err(|_e| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 3, 0))?;
 
     Ok(Json(GetTownResponse { town }))
 }
@@ -232,7 +231,10 @@ fn mark_named_town_validated(town: &mut Value) -> bool {
     if !named {
         return false;
     }
-    let flags = town.get("validationFlags").and_then(Value::as_u64).unwrap_or(0);
+    let flags = town
+        .get("validationFlags")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if flags & NAME_VALIDATED != 0 {
         return false;
     }
@@ -296,7 +298,10 @@ fn assign_generic_shop_npcs(town: &mut Value) -> bool {
             let ty = b.get("typeId").and_then(Value::as_str)?;
             let ty = *SHOP_TYPES.iter().find(|t| **t == ty)?;
             Some(Shop {
-                id: b.get("id").and_then(Value::as_str).and_then(|s| Uuid::parse_str(s).ok())?,
+                id: b
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|s| Uuid::parse_str(s).ok())?,
                 ty,
                 level: b.get("level").and_then(Value::as_u64).unwrap_or(0),
                 npc: b.get("npcIndex").and_then(Value::as_u64),
@@ -377,9 +382,7 @@ impl CostError {
                 BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1)
             }
             // 409: the request conflicts with the building's current state.
-            CostError::AtMaxLevel => {
-                BladeApiError::new(StatusCode::CONFLICT, TOWN_SERVICE_ID, 2)
-            }
+            CostError::AtMaxLevel => BladeApiError::new(StatusCode::CONFLICT, TOWN_SERVICE_ID, 2),
             CostError::TownLevelTooLow { .. } => {
                 BladeApiError::new(StatusCode::CONFLICT, TOWN_SERVICE_ID, 3)
             }
@@ -458,12 +461,13 @@ fn lookup_level_cost(
             }
         }
     }
-    
+
     // Per-style extra inputs. Only the chosen style's row is charged; an unknown /
     // absent style just adds nothing.
-    if let (Some(style), Some(style_inputs)) =
-        (style_id, level.get("styleInputs").and_then(Value::as_object))
-    {
+    if let (Some(style), Some(style_inputs)) = (
+        style_id,
+        level.get("styleInputs").and_then(Value::as_object),
+    ) {
         // Get the style data
         if let Some(style_data) = style_inputs.get(&style.to_string()) {
             // A style row is a *surcharge* on top of the level, not a replacement for
@@ -482,11 +486,13 @@ fn lookup_level_cost(
             // the three ways to read this table, the max agrees with the APK
             // most often (173 of 218 rows; the style row alone 90, the level
             // row alone 132) and never gates lower than either row.
-            if let Some(style_require) = style_data.get("requireTownLevel").and_then(Value::as_u64) {
+            if let Some(style_require) = style_data.get("requireTownLevel").and_then(Value::as_u64)
+            {
                 require_town_level = std::cmp::max(require_town_level, style_require);
             }
 
-            if let Some(style_prestige) = style_data.get("prestigeForLevel").and_then(Value::as_u64) {
+            if let Some(style_prestige) = style_data.get("prestigeForLevel").and_then(Value::as_u64)
+            {
                 prestige = prestige.saturating_add(style_prestige);
             }
 
@@ -851,9 +857,8 @@ pub async fn upgrade_building(
             // Apply the pending upgrade: the building enters UPGRADING with the timer
             // running and the target level set (retail shows the new level while under
             // construction; `complete` just clears the timer/state).
-            let building = find_building_mut(&mut town, building_id).ok_or_else(|| {
-                BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1)
-            })?;
+            let building = find_building_mut(&mut town, building_id)
+                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1))?;
             apply_upgrade_transition(building, target_level, cost.construction_time_ms, now_ms());
 
             // No prestige here: retail pays it when the build FINISHES, not when it
@@ -965,7 +970,11 @@ pub async fn complete_building(
             // gems. (`find_building` is the read-only pre-scan; the mutation borrows
             // separately below.)
             if find_building(&town, building_id).is_none() {
-                return Err(BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1));
+                return Err(BladeApiError::new(
+                    StatusCode::NOT_FOUND,
+                    TOWN_SERVICE_ID,
+                    1,
+                ));
             }
 
             // Bill the speed-up BEFORE clearing the timer — the price is a function
@@ -990,9 +999,8 @@ pub async fn complete_building(
             // `townLevel` key at all.
             let prestige = prestige_on_complete(&globals.building_upgrades, &mut town, building_id);
 
-            let building = find_building_mut(&mut town, building_id).ok_or_else(|| {
-                BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1)
-            })?;
+            let building = find_building_mut(&mut town, building_id)
+                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1))?;
             apply_complete_transition(building);
 
             if prestige > 0 {
@@ -1258,9 +1266,7 @@ struct PlaceRequest {
     gems_payment: bool,
 }
 
-#[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/towns/current/buildings"
-)]
+#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/towns/current/buildings")]
 pub async fn place_building(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1434,7 +1440,10 @@ pub async fn destroy_building(
                 // the client drops the building from its view.
                 let mut town_resp = town_col;
                 if let Some(obj) = town_resp.as_object_mut() {
-                    obj.insert("removedBuilding".to_string(), json!(building_id.to_string()));
+                    obj.insert(
+                        "removedBuilding".to_string(),
+                        json!(building_id.to_string()),
+                    );
                 }
                 Ok::<_, BladeApiError>(Json(json!({
                     "wallet": wallet,
@@ -1494,7 +1503,11 @@ pub async fn set_building_style(
             // would tell the client a style was applied that the town does not
             // carry, and it would snap back on the next load.
             if !apply_building_style(&mut town, building_id, style_id) {
-                return Err(BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1));
+                return Err(BladeApiError::new(
+                    StatusCode::NOT_FOUND,
+                    TOWN_SERVICE_ID,
+                    1,
+                ));
             }
 
             // Retail pays for a restyle. See `prestige_on_style_change`.
@@ -1693,7 +1706,7 @@ pub async fn remove_town_props(
 ) -> Result<Json<RemovePropsResponse>, BladeApiError> {
     use crate::schema::characters;
     use diesel::update;
-    
+
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
@@ -1801,7 +1814,17 @@ fn remove_props_from_town(
 
     let districts = match town.get_mut("districts").and_then(Value::as_array_mut) {
         Some(d) => d,
-        None => return (0, props_to_remove.iter().map(|p| p.prop_id.to_string()).collect(), vec![], vec![]),
+        None => {
+            return (
+                0,
+                props_to_remove
+                    .iter()
+                    .map(|p| p.prop_id.to_string())
+                    .collect(),
+                vec![],
+                vec![],
+            );
+        }
     };
 
     for deleted_prop in props_to_remove {
@@ -1850,15 +1873,12 @@ fn remove_props_from_town(
                                 "prop {target_prop_id} stores a non-uuid propId; refunding nothing"
                             ),
                         },
-                        None => log::warn!(
-                            "prop {target_prop_id} stores no propId; refunding nothing"
-                        ),
+                        None => {
+                            log::warn!("prop {target_prop_id} stores no propId; refunding nothing")
+                        }
                     }
                     // Track the actual prop ID (id field) - this is what the client sent
-                    if let Some(prop_id) = prop_obj
-                        .get("id")
-                        .and_then(Value::as_str)
-                    {
+                    if let Some(prop_id) = prop_obj.get("id").and_then(Value::as_str) {
                         removed_prop_ids.push(prop_id.to_string());
                     }
                 }
@@ -1875,7 +1895,12 @@ fn remove_props_from_town(
         }
     }
 
-    (removed_count, failed_props, removed_decoration_ids, removed_prop_ids)
+    (
+        removed_count,
+        failed_props,
+        removed_decoration_ids,
+        removed_prop_ids,
+    )
 }
 
 /// Debit one of every decoration the client just placed.
@@ -1906,7 +1931,9 @@ fn debit_placed_decorations(
     // Phase 1: verify ownership (no mutation) so we fail cleanly.
     for (decoration_id, want) in &needed {
         if inventory.backpack.stackable_items.count(*decoration_id) < *want {
-            log::warn!("decoration {decoration_id} not owned in sufficient quantity; refusing placement");
+            log::warn!(
+                "decoration {decoration_id} not owned in sufficient quantity; refusing placement"
+            );
             return Err(BladeApiError::new(
                 StatusCode::BAD_REQUEST,
                 PROPS_SERVICE_ID,
@@ -1921,9 +1948,7 @@ fn debit_placed_decorations(
             .backpack
             .stackable_items
             .remove(*decoration_id, *want)
-            .map_err(|_have| {
-                BladeApiError::new(StatusCode::BAD_REQUEST, PROPS_SERVICE_ID, 4)
-            })?;
+            .map_err(|_have| BladeApiError::new(StatusCode::BAD_REQUEST, PROPS_SERVICE_ID, 4))?;
         tracker
             .modified_backpack
             .stackable_items
@@ -1955,9 +1980,7 @@ fn credit_removed_decorations(
     inventory.backpack_version += 1;
 }
 
-#[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/towns/current/props"
-)]
+#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/towns/current/props")]
 pub async fn place_town_props(
     session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
@@ -1966,7 +1989,7 @@ pub async fn place_town_props(
 ) -> Result<Json<PlacePropsResponse>, BladeApiError> {
     use crate::schema::characters;
     use diesel::update;
-    
+
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
@@ -1995,11 +2018,7 @@ pub async fn place_town_props(
             // Fails closed: if the player doesn't own them, the `?` aborts the
             // transaction and neither the town nor the inventory is written.
             let mut tracker = InventoryChangeTracker::default();
-            debit_placed_decorations(
-                &mut entry.inventory.0,
-                &placed_decoration_ids,
-                &mut tracker,
-            )?;
+            debit_placed_decorations(&mut entry.inventory.0, &placed_decoration_ids, &mut tracker)?;
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
             let wallet = entry.wallet.0.clone();
@@ -2021,10 +2040,7 @@ pub async fn place_town_props(
                 placed_count,
                 failed_props,
                 // Send back what was placed
-                placed_props: placed_decoration_ids
-                    .iter()
-                    .map(Uuid::to_string)
-                    .collect(),
+                placed_props: placed_decoration_ids.iter().map(Uuid::to_string).collect(),
             }))
         }
         .scope_boxed()
@@ -2033,9 +2049,9 @@ pub async fn place_town_props(
 }
 
 /// Place props into the town JSON structure.
-/// 
+///
 /// Returns (placed_count, failed_prop_anchor_ids_as_strings, placed_decoration_ids)
-/// 
+///
 /// Props are stored in `town.districts[].props` as an object/dictionary.
 fn place_props_in_town(
     town: &mut Value,
@@ -2047,7 +2063,16 @@ fn place_props_in_town(
 
     let districts = match town.get_mut("districts").and_then(Value::as_array_mut) {
         Some(d) => d,
-        None => return (0, props_to_place.iter().map(|p| p.anchor_id.to_string()).collect(), vec![]),
+        None => {
+            return (
+                0,
+                props_to_place
+                    .iter()
+                    .map(|p| p.anchor_id.to_string())
+                    .collect(),
+                vec![],
+            );
+        }
     };
 
     for placed_prop in props_to_place {
@@ -2074,18 +2099,23 @@ fn place_props_in_town(
                 Some(Value::Object(obj)) => obj,
                 _ => {
                     let new_props = serde_json::Map::new();
-                    district.as_object_mut()
+                    district
+                        .as_object_mut()
                         .expect("district must be an object")
                         .insert("props".to_string(), Value::Object(new_props));
-                    
-                    district.get_mut("props")
+
+                    district
+                        .get_mut("props")
                         .and_then(Value::as_object_mut)
                         .expect("props should exist now")
                 }
             };
 
             if props.contains_key(&anchor_id_str) {
-                log::warn!("Prop with anchor_id {} already exists, overwriting", anchor_id_str);
+                log::warn!(
+                    "Prop with anchor_id {} already exists, overwriting",
+                    anchor_id_str
+                );
             }
 
             let prop_id = Uuid::new_v4();
@@ -2205,16 +2235,17 @@ mod prop_tests {
         let mut town = sample_town_with_props();
         let prop_id = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
         let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
-        
-        let props_to_remove = vec![
-            DeletedProp { prop_id, district_id }
-        ];
+
+        let props_to_remove = vec![DeletedProp {
+            prop_id,
+            district_id,
+        }];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 1);
         assert!(failed.is_empty());
-        
+
         // Verify the prop was removed
         let district = &town["districts"][0];
         let props = district["props"].as_object().unwrap();
@@ -2228,17 +2259,23 @@ mod prop_tests {
         let prop1 = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
         let prop2 = Uuid::parse_str("f1234567-89ab-cdef-0123-456789abcdef").unwrap();
         let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
-        
+
         let props_to_remove = vec![
-            DeletedProp { prop_id: prop1, district_id },
-            DeletedProp { prop_id: prop2, district_id },
+            DeletedProp {
+                prop_id: prop1,
+                district_id,
+            },
+            DeletedProp {
+                prop_id: prop2,
+                district_id,
+            },
         ];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 2);
         assert!(failed.is_empty());
-        
+
         // Verify all props were removed from the district
         let district = &town["districts"][0];
         let props = district["props"].as_object().unwrap();
@@ -2251,18 +2288,24 @@ mod prop_tests {
         let existing_prop = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
         let non_existing_prop = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
         let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
-        
+
         let props_to_remove = vec![
-            DeletedProp { prop_id: existing_prop, district_id },
-            DeletedProp { prop_id: non_existing_prop, district_id },
+            DeletedProp {
+                prop_id: existing_prop,
+                district_id,
+            },
+            DeletedProp {
+                prop_id: non_existing_prop,
+                district_id,
+            },
         ];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 1);
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0], "00000000-0000-0000-0000-000000000000");
-        
+
         // Verify the existing prop was removed
         let district = &town["districts"][0];
         let props = district["props"].as_object().unwrap();
@@ -2283,13 +2326,14 @@ mod prop_tests {
 
         let prop_id = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
         let district_id = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
-        
-        let props_to_remove = vec![
-            DeletedProp { prop_id, district_id }
-        ];
+
+        let props_to_remove = vec![DeletedProp {
+            prop_id,
+            district_id,
+        }];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 0);
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0], "e915e0f4-3f86-41cb-b9e2-1ead10025c06");
@@ -2300,17 +2344,18 @@ mod prop_tests {
         let mut town = sample_town_with_props();
         let prop_id = Uuid::parse_str("e915e0f4-3f86-41cb-b9e2-1ead10025c06").unwrap();
         let wrong_district_id = Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap();
-        
-        let props_to_remove = vec![
-            DeletedProp { prop_id, district_id: wrong_district_id }
-        ];
+
+        let props_to_remove = vec![DeletedProp {
+            prop_id,
+            district_id: wrong_district_id,
+        }];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 0);
         assert_eq!(failed.len(), 1);
         assert_eq!(failed[0], "e915e0f4-3f86-41cb-b9e2-1ead10025c06");
-        
+
         // Verify the prop is still there (unchanged)
         let district = &town["districts"][0];
         let props = district["props"].as_object().unwrap();
@@ -2323,10 +2368,10 @@ mod prop_tests {
         let props_to_remove: Vec<DeletedProp> = vec![];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 0);
         assert!(failed.is_empty());
-        
+
         // Town should be unchanged
         let district = &town["districts"][0];
         let props = district["props"].as_object().unwrap();
@@ -2340,23 +2385,29 @@ mod prop_tests {
         let district1 = Uuid::parse_str("9a12c0d3-218c-4ef2-b78c-b6e3bca60719").unwrap();
         let prop2 = Uuid::parse_str("a9876543-21ab-4def-8123-456789abcdef").unwrap();
         let district2 = Uuid::parse_str("b2c3d4e5-6789-4abc-8def-0123456789ab").unwrap();
-        
+
         let props_to_remove = vec![
-            DeletedProp { prop_id: prop1, district_id: district1 },
-            DeletedProp { prop_id: prop2, district_id: district2 },
+            DeletedProp {
+                prop_id: prop1,
+                district_id: district1,
+            },
+            DeletedProp {
+                prop_id: prop2,
+                district_id: district2,
+            },
         ];
 
         let (removed_count, failed, ..) = remove_props_from_town(&mut town, &props_to_remove);
-        
+
         assert_eq!(removed_count, 2);
         assert!(failed.is_empty());
-        
+
         // Verify first district props
         let district = &town["districts"][0];
         let props = district["props"].as_object().unwrap();
         assert_eq!(props.len(), 1); // Only prop2 remains
         assert_eq!(props["key2"]["id"], "f1234567-89ab-cdef-0123-456789abcdef");
-        
+
         // Verify second district props
         let district2 = &town["districts"][1];
         let props2 = district2["props"].as_object().unwrap();
@@ -2514,7 +2565,10 @@ mod prop_tests {
 
         assert_eq!(removed_count, 0);
         assert_eq!(failed, vec![DECORATION_B.to_string()]);
-        assert!(refunds.is_empty(), "a template id must not name a placement");
+        assert!(
+            refunds.is_empty(),
+            "a template id must not name a placement"
+        );
         assert!(removed_prop_ids.is_empty());
         // And nothing left the town.
         assert_eq!(town["districts"][0]["props"].as_object().unwrap().len(), 2);
@@ -2943,47 +2997,41 @@ fn repair_town_on_load(
 }
 
 /// Apply prestige and check for town level up
-fn apply_prestige_and_level_up(
-    town: &mut Value,
-    prestige_to_add: u64,
-) -> u64 {
+fn apply_prestige_and_level_up(town: &mut Value, prestige_to_add: u64) -> u64 {
     // Get or initialize levelInfo
-    let level_info_exists = town
-        .get("levelInfo")
-        .and_then(Value::as_object)
-        .is_some();
-    
+    let level_info_exists = town.get("levelInfo").and_then(Value::as_object).is_some();
+
     if !level_info_exists {
         // Create levelInfo if it doesn't exist
         if let Some(obj) = town.as_object_mut() {
-            obj.insert("levelInfo".to_string(), json!({
-                "level": 0,
-                "experiencePoints": 0
-            }));
+            obj.insert(
+                "levelInfo".to_string(),
+                json!({
+                    "level": 0,
+                    "experiencePoints": 0
+                }),
+            );
         }
     }
-    
+
     // Now get mutable access to levelInfo
     let level_info = town
         .get_mut("levelInfo")
         .and_then(Value::as_object_mut)
         .unwrap();
-    
+
     let current_xp = level_info
         .get("experiencePoints")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    
+
     let new_xp = current_xp + prestige_to_add;
     level_info.insert("experiencePoints".to_string(), json!(new_xp));
-    
+
     // Get current level and calculate new level
-    let current_level = level_info
-        .get("level")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let current_level = level_info.get("level").and_then(Value::as_u64).unwrap_or(0);
     let new_level = calculate_town_level(new_xp);
-    
+
     // Update level if it changed
     if new_level > current_level {
         level_info.insert("level".to_string(), json!(new_level));
@@ -2994,17 +3042,17 @@ fn apply_prestige_and_level_up(
 
 /// Prestige thresholds for town levels
 const PRESTIGE_THRESHOLDS: &[u64] = &[
-    0,      // Level 0
-    500,    // Level 1
-    2500,   // Level 2
-    5000,   // Level 3
-    8500,   // Level 4
-    13000,  // Level 5
-    19000,  // Level 6
-    26500,  // Level 7
-    35500,  // Level 8
-    46000,  // Level 9
-    69500,  // Level 10
+    0,     // Level 0
+    500,   // Level 1
+    2500,  // Level 2
+    5000,  // Level 3
+    8500,  // Level 4
+    13000, // Level 5
+    19000, // Level 6
+    26500, // Level 7
+    35500, // Level 8
+    46000, // Level 9
+    69500, // Level 10
 ];
 
 /// Get the maximum town level based on current prestige
@@ -3110,8 +3158,14 @@ mod tests {
         // base 43 lumber + style 5 bronze
         let lumber = Uuid::parse_str(LUMBER).unwrap();
         let bronze = Uuid::parse_str(BRONZE).unwrap();
-        assert_eq!(cost.materials.iter().find(|(m, _)| *m == lumber).unwrap().1, 43);
-        assert_eq!(cost.materials.iter().find(|(m, _)| *m == bronze).unwrap().1, 5);
+        assert_eq!(
+            cost.materials.iter().find(|(m, _)| *m == lumber).unwrap().1,
+            43
+        );
+        assert_eq!(
+            cost.materials.iter().find(|(m, _)| *m == bronze).unwrap().1,
+            5
+        );
     }
 
     /// A style row is a surcharge on top of the level, not a replacement for it.
@@ -3162,14 +3216,26 @@ mod tests {
         .unwrap();
 
         // 412,190 + 100 == the 412,290 the captures show, not the bare 100.
-        assert_eq!(cost.gold, 412_290, "style gold must add to the level's gold");
-        assert_eq!(cost.prestige, 368, "style prestige must add to the level's prestige");
+        assert_eq!(
+            cost.gold, 412_290,
+            "style gold must add to the level's gold"
+        );
+        assert_eq!(
+            cost.prestige, 368,
+            "style prestige must add to the level's prestige"
+        );
     }
 
     #[test]
     fn a_level_with_no_style_chosen_charges_neither_surcharge() {
-        let cost =
-            lookup_level_cost(&styled_upgrades(), Uuid::parse_str(FORGE).unwrap(), 9, None, true).unwrap();
+        let cost = lookup_level_cost(
+            &styled_upgrades(),
+            Uuid::parse_str(FORGE).unwrap(),
+            9,
+            None,
+            true,
+        )
+        .unwrap();
         assert_eq!(cost.gold, 412_190);
         assert_eq!(cost.prestige, 300);
     }
@@ -3214,10 +3280,18 @@ mod tests {
             style.parse().unwrap()
         ));
 
-        let b = &town["districts"][0]["segments"]["71c4b321-825a-4fde-bdcc-c584f1d2db83"]
-            ["buildings"][bid];
-        assert_eq!(b["styleId"], serde_json::json!(style), "the style must be applied");
-        assert_eq!(b["customized"], serde_json::json!(true), "retail also sets customized");
+        let b = &town["districts"][0]["segments"]["71c4b321-825a-4fde-bdcc-c584f1d2db83"]["buildings"]
+            [bid];
+        assert_eq!(
+            b["styleId"],
+            serde_json::json!(style),
+            "the style must be applied"
+        );
+        assert_eq!(
+            b["customized"],
+            serde_json::json!(true),
+            "retail also sets customized"
+        );
         // Untouched fields survive — this rewrites two keys, not the building.
         assert_eq!(b["level"], serde_json::json!(0));
         assert_eq!(b["state"], serde_json::json!("NORMAL"));
@@ -3268,7 +3342,10 @@ mod tests {
             "an upgrade's materials must not depend on the style worn"
         );
         assert!(
-            !styled.materials.iter().any(|(id, _)| *id == Uuid::parse_str(BRONZE).unwrap()),
+            !styled
+                .materials
+                .iter()
+                .any(|(id, _)| *id == Uuid::parse_str(BRONZE).unwrap()),
             "the style-only material must not be charged on an upgrade"
         );
     }
@@ -3289,7 +3366,10 @@ mod tests {
         )
         .unwrap();
         assert!(
-            placed.materials.iter().any(|(id, _)| *id == Uuid::parse_str(BRONZE).unwrap()),
+            placed
+                .materials
+                .iter()
+                .any(|(id, _)| *id == Uuid::parse_str(BRONZE).unwrap()),
             "choosing a style must still charge its materials"
         );
     }
@@ -3318,7 +3398,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(on.gold, off.gold, "style gold is unchanged by the gate");
-        assert_eq!(on.prestige, off.prestige, "style prestige is unchanged by the gate");
+        assert_eq!(
+            on.prestige, off.prestige,
+            "style prestige is unchanged by the gate"
+        );
         assert_eq!(
             on.require_town_level, off.require_town_level,
             "the town-level gate is unchanged"
@@ -3344,7 +3427,8 @@ mod tests {
     #[test]
     fn cost_lookup_rejects_beyond_max_level() {
         let up = sample_upgrades();
-        let err = lookup_level_cost(&up, Uuid::parse_str(FORGE).unwrap(), 10, None, true).unwrap_err();
+        let err =
+            lookup_level_cost(&up, Uuid::parse_str(FORGE).unwrap(), 10, None, true).unwrap_err();
         assert_eq!(err, CostError::AtMaxLevel);
     }
 
@@ -3896,7 +3980,10 @@ mod tests {
         shops.insert(forge, drained_live_window(now));
 
         assert!(restock_finished_vendor(&town, &mut shops, house, now).is_none());
-        assert!(shops[&forge].is_live(now), "another shop's window is untouched");
+        assert!(
+            shops[&forge].is_live(now),
+            "another shop's window is untouched"
+        );
     }
 
     /// Restocking one vendor touches that vendor only.
@@ -3955,7 +4042,6 @@ mod tests {
     }
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // When the town is paid — replayed against Yumeko's captured town mutations.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3984,7 +4070,11 @@ mod when_the_town_is_paid {
         let raw = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
         let json: Value = serde_json::from_str(&raw).expect("valid town_ops.json");
         let obs = json["observations"].as_array().cloned().unwrap_or_default();
-        assert!(obs.len() > 300, "only {} town ops in the fixture", obs.len());
+        assert!(
+            obs.len() > 300,
+            "only {} town ops in the fixture",
+            obs.len()
+        );
         obs
     }
 
@@ -4030,7 +4120,11 @@ mod when_the_town_is_paid {
             let Some(delta) = clean(&o) else { continue };
             match o["op"].as_str().unwrap() {
                 "complete" => {
-                    assert!(delta > 0, "capture {} completed and paid {delta}", o["captureId"]);
+                    assert!(
+                        delta > 0,
+                        "capture {} completed and paid {delta}",
+                        o["captureId"]
+                    );
                     paid += 1;
                 }
                 // Restyling pays too — see the restyle tests below.
@@ -4087,7 +4181,13 @@ mod when_the_town_is_paid {
             if ours as i64 == delta {
                 agreed += 1;
             } else {
-                disagreed.push((o["captureId"].clone(), type_id.to_string(), level, delta, ours));
+                disagreed.push((
+                    o["captureId"].clone(),
+                    type_id.to_string(),
+                    level,
+                    delta,
+                    ours,
+                ));
             }
         }
         assert!(
@@ -4114,7 +4214,11 @@ mod when_the_town_is_paid {
         assert!(ops.len() >= 120, "only {} restyles captured", ops.len());
         for o in &ops {
             let Some(delta) = clean(o) else { continue };
-            assert!(delta > 0, "capture {} restyled and paid {delta}", o["captureId"]);
+            assert!(
+                delta > 0,
+                "capture {} restyled and paid {delta}",
+                o["captureId"]
+            );
         }
     }
 
@@ -4203,11 +4307,31 @@ mod when_the_town_is_paid {
         const STONE: &str = "1d6696b3-963b-48d4-8924-d43505cb2807";
         const HALF_TIMBER: &str = "aa133662-053d-434e-8779-3f2a41d1271e";
         let walls = [
-            ("Wall_D00_W00", "52291bce-3585-49e5-85e4-afbdfa5ba422", [104, 82, 72]),
-            ("Wall_D00_W01", "488f91a9-7a3b-421e-82a9-e2571915beff", [104, 82, 72]),
-            ("Wall_D00_W02", "8c6f4962-6522-42fb-bfcb-f653da832d04", [104, 82, 72]),
-            ("Wall_D00_W03", "84bd568d-4009-4aa7-8984-22327a383277", [104, 82, 72]),
-            ("MainGate", "ce2b1c43-3391-499a-80cf-fc4fa6b92718", [184, 144, 127]),
+            (
+                "Wall_D00_W00",
+                "52291bce-3585-49e5-85e4-afbdfa5ba422",
+                [104, 82, 72],
+            ),
+            (
+                "Wall_D00_W01",
+                "488f91a9-7a3b-421e-82a9-e2571915beff",
+                [104, 82, 72],
+            ),
+            (
+                "Wall_D00_W02",
+                "8c6f4962-6522-42fb-bfcb-f653da832d04",
+                [104, 82, 72],
+            ),
+            (
+                "Wall_D00_W03",
+                "84bd568d-4009-4aa7-8984-22327a383277",
+                [104, 82, 72],
+            ),
+            (
+                "MainGate",
+                "ce2b1c43-3391-499a-80cf-fc4fa6b92718",
+                [184, 144, 127],
+            ),
         ];
         let table = upgrades();
         let measured = measured_styles();
@@ -4216,9 +4340,18 @@ mod when_the_town_is_paid {
             // Default (e3470241) is what an un-renovated wall wears.
             let town = town_with(type_id, Some("e3470241-04e6-4962-bc69-6a57f731b876"), 0);
             let paid = [CASTLE, STONE, HALF_TIMBER].map(|style| {
-                prestige_on_style_change(&table, &measured, &town, id, Uuid::parse_str(style).unwrap())
+                prestige_on_style_change(
+                    &table,
+                    &measured,
+                    &town,
+                    id,
+                    Uuid::parse_str(style).unwrap(),
+                )
             });
-            assert_eq!(paid, want, "{name}: Castle/Stone/HalfTimber restyle paid {paid:?}");
+            assert_eq!(
+                paid, want,
+                "{name}: Castle/Stone/HalfTimber restyle paid {paid:?}"
+            );
         }
     }
 
@@ -4327,7 +4460,10 @@ mod when_the_town_is_paid {
         callers.sort();
         assert_eq!(
             callers,
-            vec!["complete_building".to_string(), "set_building_style".to_string()],
+            vec![
+                "complete_building".to_string(),
+                "set_building_style".to_string()
+            ],
             "town experience may only be granted where retail granted it — \
              `complete` and `styles/<id>`, never `place`, `upgrade` or `destroy`"
         );
@@ -4360,7 +4496,10 @@ mod when_the_town_is_paid {
                 _ => {}
             }
         }
-        assert!(place >= 30 && upgrade >= 70, "{place} places, {upgrade} upgrades");
+        assert!(
+            place >= 30 && upgrade >= 70,
+            "{place} places, {upgrade} upgrades"
+        );
 
         // And our two writers agree with that.
         let mut b = json!({ "id": "x", "level": 2, "state": "NORMAL" });
@@ -4373,16 +4512,24 @@ mod when_the_town_is_paid {
             "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }]
         });
         let placed = Uuid::from_u128(6);
-        insert_building(&mut town, seg, placed, Uuid::from_u128(7), Uuid::from_u128(8), 0, 0, 900, 0)
-            .expect("the segment exists");
+        insert_building(
+            &mut town,
+            seg,
+            placed,
+            Uuid::from_u128(7),
+            Uuid::from_u128(8),
+            0,
+            0,
+            900,
+            0,
+        )
+        .expect("the segment exists");
         assert_eq!(
-            town["districts"][0]["segments"][seg.to_string()]["buildings"]
-                [placed.to_string()]["state"],
+            town["districts"][0]["segments"][seg.to_string()]["buildings"][placed.to_string()]["state"],
             "BUILDING",
             "a placement is a build, not an upgrade"
         );
     }
-
 }
 
 /// Tracker #287: what placing, upgrading, finishing and destroying a building
@@ -4876,7 +5023,8 @@ mod style_town_level {
             } else {
                 upgrade_cost(bu, t, l, Some(s))
             };
-            cost.unwrap_or_else(|e| panic!("{t}/{s}/{l}: {e:?}")).require_town_level
+            cost.unwrap_or_else(|e| panic!("{t}/{s}/{l}: {e:?}"))
+                .require_town_level
         }
     }
 
@@ -4934,13 +5082,19 @@ mod style_town_level {
         }
         // Level 3 is town level 4 in Timber/Stone, 5 in Castle.
         assert_eq!(
-            upgrade_cost(&bu, u(WORKSHOP), 3, Some(u(STONE))).unwrap().require_town_level,
+            upgrade_cost(&bu, u(WORKSHOP), 3, Some(u(STONE)))
+                .unwrap()
+                .require_town_level,
             4
         );
         // A building with no style on record keeps the table's level value.
         assert_eq!(
-            upgrade_cost(&bu, u(WORKSHOP), 1, None).unwrap().require_town_level,
-            bu["buildings"][WORKSHOP]["levels"]["1"]["requireTownLevel"].as_u64().unwrap()
+            upgrade_cost(&bu, u(WORKSHOP), 1, None)
+                .unwrap()
+                .require_town_level,
+            bu["buildings"][WORKSHOP]["levels"]["1"]["requireTownLevel"]
+                .as_u64()
+                .unwrap()
         );
     }
 
@@ -4971,7 +5125,9 @@ mod style_town_level {
 
         let w = apk.building(u(WORKSHOP)).unwrap();
         for (style, want) in [(CASTLE, [5, 5, 5]), (TIMBER, [3, 3, 3]), (STONE, [3, 3, 3])] {
-            let got: Vec<u64> = (0..3).map(|l| w.require_town_level(u(style), l).unwrap()).collect();
+            let got: Vec<u64> = (0..3)
+                .map(|l| w.require_town_level(u(style), l).unwrap())
+                .collect();
             assert_eq!(got, want, "Workshop {style}");
         }
     }
@@ -5028,8 +5184,18 @@ mod fresh_level1_town {
         let cost = placement_cost(bu, town, u(ty), u(TIMBER)).unwrap();
         check_town_level(&cost, town).expect("placement allowed at this town level");
         let id = Uuid::new_v4();
-        insert_building(town, u(segment), id, u(ty), u(TIMBER), 0, 0, cost.construction_time_ms, 0)
-            .expect("the segment exists in the default town");
+        insert_building(
+            town,
+            u(segment),
+            id,
+            u(ty),
+            u(TIMBER),
+            0,
+            0,
+            cost.construction_time_ms,
+            0,
+        )
+        .expect("the segment exists in the default town");
         let prestige = prestige_on_complete(bu, town, id);
         apply_complete_transition(find_building_mut(town, id).unwrap());
         apply_prestige_and_level_up(town, prestige);
@@ -5040,7 +5206,11 @@ mod fresh_level1_town {
     fn a_fresh_town_reaches_the_forge_through_the_town_hall() {
         let bu = shipped_upgrades();
         let mut town = default_town();
-        assert_eq!(town_level(&town), 0, "a fresh character's town starts at level 0");
+        assert_eq!(
+            town_level(&town),
+            0,
+            "a fresh character's town starts at level 0"
+        );
 
         // #285 as reported: the Forge is refused at level 0.
         let forge = placement_cost(&bu, &town, u(FORGE), u(TIMBER)).unwrap();
@@ -5088,7 +5258,10 @@ mod fresh_level1_town {
 
         let mut state = blades_lib::server_state::ServerState::default();
         assert_eq!(backfill_town_sites_once(&mut state, &mut town, &bu), 125);
-        assert_eq!(town["levelInfo"], json!({ "level": 1, "experiencePoints": 525 }));
+        assert_eq!(
+            town["levelInfo"],
+            json!({ "level": 1, "experiencePoints": 525 })
+        );
         let forge = placement_cost(&bu, &town, u(FORGE), u(TIMBER)).unwrap();
         check_town_level(&forge, &town).expect("the Forge is unlocked");
     }
@@ -5310,7 +5483,10 @@ mod town_name_validation {
         // Retail served 0 on all 6 unnamed-town responses in the snapshot; this
         // is the state a fresh character starts in, and it does not block.
         let town = default_town();
-        assert!(town["name"].as_str().is_none_or(str::is_empty), "the default town is unnamed");
+        assert!(
+            town["name"].as_str().is_none_or(str::is_empty),
+            "the default town is unnamed"
+        );
         assert_eq!(flags(&town), 0);
         assert!(!client_blocks_arena_and_guilds(&town));
     }
@@ -5337,7 +5513,10 @@ mod town_name_validation {
         town["name"] = json!("moonbase");
         let mut state = blades_lib::server_state::ServerState::default();
         state.town_sites_backfilled = true;
-        assert!(client_blocks_arena_and_guilds(&town), "precondition: the #320 shape");
+        assert!(
+            client_blocks_arena_and_guilds(&town),
+            "precondition: the #320 shape"
+        );
 
         assert!(
             repair_town_on_load(&mut state, &mut town, &shipped_upgrades(), |_| 0),
@@ -5347,7 +5526,12 @@ mod town_name_validation {
         assert!(!client_blocks_arena_and_guilds(&town));
 
         // Idempotent: the next load writes nothing.
-        assert!(!repair_town_on_load(&mut state, &mut town, &shipped_upgrades(), |_| 0));
+        assert!(!repair_town_on_load(
+            &mut state,
+            &mut town,
+            &shipped_upgrades(),
+            |_| 0
+        ));
     }
 
     #[test]
@@ -5369,7 +5553,9 @@ mod town_name_validation {
         // heal it, the next build would push the stale 0 back to the client.
         let src = include_str!("town.rs");
         // `take_town` delegates to `take_town_with`, which holds the repairs.
-        let start = src.find("fn take_town_with(").expect("take_town_with exists");
+        let start = src
+            .find("fn take_town_with(")
+            .expect("take_town_with exists");
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
         assert!(body.contains("mark_named_town_validated(&mut town)"));
     }
@@ -5432,7 +5618,11 @@ mod shop_npcs {
         let mut out = vec![];
         for d in town["districts"].as_array().unwrap() {
             for s in d["segments"].as_object().unwrap().values() {
-                for b in s["buildings"].as_object().into_iter().flat_map(|b| b.values()) {
+                for b in s["buildings"]
+                    .as_object()
+                    .into_iter()
+                    .flat_map(|b| b.values())
+                {
                     let ty = b["typeId"].as_str().unwrap().to_string();
                     if [FORGE, ENCHANTER, ALCHEMIST, WORKSHOP].contains(&ty.as_str()) {
                         out.push((ty, b.get("npcIndex").and_then(Value::as_u64)));
@@ -5459,7 +5649,12 @@ mod shop_npcs {
             .filter(|(_, n)| *n > 1)
             .map(|(ty, n)| format!("{n} named keepers of {ty}"))
             .collect();
-        dups.extend(generic.into_iter().filter(|(_, n)| *n > 1).map(|(g, n)| format!("{n} shops share generic {g}")));
+        dups.extend(
+            generic
+                .into_iter()
+                .filter(|(_, n)| *n > 1)
+                .map(|(g, n)| format!("{n} shops share generic {g}")),
+        );
         dups
     }
 
@@ -5490,7 +5685,8 @@ mod shop_npcs {
         }))
         .unwrap();
         let seg = req.segment_group_id;
-        let mut town = json!({ "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }] });
+        let mut town =
+            json!({ "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }] });
         let id = Uuid::from_u128(42);
         insert_building(
             &mut town,
@@ -5505,7 +5701,11 @@ mod shop_npcs {
         )
         .unwrap();
         let b = &town["districts"][0]["segments"][seg.to_string()]["buildings"][id.to_string()];
-        assert_eq!(b["npcIndex"], json!(10), "retail echoes the client's npcIndex");
+        assert_eq!(
+            b["npcIndex"],
+            json!(10),
+            "retail echoes the client's npcIndex"
+        );
     }
 
     #[test]
@@ -5513,26 +5713,62 @@ mod shop_npcs {
         // 44 of the 50 retail placements sent 0 and got 0 back: the key is
         // present, not left for the client to default.
         let seg = Uuid::from_u128(5);
-        let mut town = json!({ "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }] });
-        insert_building(&mut town, seg, Uuid::from_u128(6), u(FORGE), u(TIMBER), 0, 0, 900, 0).unwrap();
+        let mut town =
+            json!({ "districts": [{ "segments": { seg.to_string(): {"id": seg.to_string()} } }] });
+        insert_building(
+            &mut town,
+            seg,
+            Uuid::from_u128(6),
+            u(FORGE),
+            u(TIMBER),
+            0,
+            0,
+            900,
+            0,
+        )
+        .unwrap();
         assert_eq!(shop_npcs(&town), vec![(FORGE.to_string(), Some(0))]);
     }
 
     #[test]
     fn newmunks_town_gets_one_named_keeper_per_shop_type_on_load() {
         let mut town = newmunk_town();
-        assert_eq!(duplicate_keepers(&town).len(), 4, "precondition: two Londs and three more pairs");
+        assert_eq!(
+            duplicate_keepers(&town).len(),
+            4,
+            "precondition: two Londs and three more pairs"
+        );
 
-        assert!(assign_generic_shop_npcs(&mut town), "the repaired town must be written back");
-        assert!(duplicate_keepers(&town).is_empty(), "{:?}", duplicate_keepers(&town));
+        assert!(
+            assign_generic_shop_npcs(&mut town),
+            "the repaired town must be written back"
+        );
+        assert!(
+            duplicate_keepers(&town).is_empty(),
+            "{:?}",
+            duplicate_keepers(&town)
+        );
 
         let npcs = shop_npcs(&town);
-        assert!(npcs.iter().all(|(_, n)| n.is_some()), "every shop carries the key, as on retail");
+        assert!(
+            npcs.iter().all(|(_, n)| n.is_some()),
+            "every shop carries the key, as on retail"
+        );
         for ty in [FORGE, ENCHANTER, ALCHEMIST, WORKSHOP] {
-            let mine: Vec<u64> = npcs.iter().filter(|(t, _)| t == ty).map(|(_, n)| n.unwrap()).collect();
-            assert_eq!(mine.iter().filter(|n| **n == 0).count(), 1, "{ty}: one named keeper");
+            let mine: Vec<u64> = npcs
+                .iter()
+                .filter(|(t, _)| t == ty)
+                .map(|(_, n)| n.unwrap())
+                .collect();
+            assert_eq!(
+                mine.iter().filter(|n| **n == 0).count(),
+                1,
+                "{ty}: one named keeper"
+            );
             assert!(
-                mine.iter().filter(|n| **n != 0).all(|n| GENERIC_SHOP_NPCS.contains(n)),
+                mine.iter()
+                    .filter(|n| **n != 0)
+                    .all(|n| GENERIC_SHOP_NPCS.contains(n)),
                 "{ty}: the second keeper is from retail's generic range: {mine:?}"
             );
         }
@@ -5552,7 +5788,10 @@ mod shop_npcs {
         assert_eq!(npc_of(&town, 1), json!(0));
         assert_ne!(npc_of(&town, 2), json!(0));
         // A shop already stored with an explicit 0 keeps it over a keyless twin.
-        let mut mixed = town_of(vec![building(1, FORGE, 9, None), building(2, FORGE, 0, Some(0))]);
+        let mut mixed = town_of(vec![
+            building(1, FORGE, 9, None),
+            building(2, FORGE, 0, Some(0)),
+        ]);
         assign_generic_shop_npcs(&mut mixed);
         assert_eq!(npc_of(&mixed, 2), json!(0));
         assert_ne!(npc_of(&mixed, 1), json!(0));
@@ -5592,7 +5831,11 @@ mod shop_npcs {
         let mut town = town_of(shops);
         assert!(assign_generic_shop_npcs(&mut town));
         assert_eq!(npc_of(&town, 2), json!(20));
-        assert!(duplicate_keepers(&town).is_empty(), "{:?}", duplicate_keepers(&town));
+        assert!(
+            duplicate_keepers(&town).is_empty(),
+            "{:?}",
+            duplicate_keepers(&town)
+        );
     }
 
     #[test]
@@ -5601,11 +5844,17 @@ mod shop_npcs {
         for f in ["fn take_town_with(", "fn repair_town_on_load("] {
             let start = src.find(f).expect("exists");
             let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
-            assert!(body.contains("assign_generic_shop_npcs("), "{f} must run the #330 repair");
+            assert!(
+                body.contains("assign_generic_shop_npcs("),
+                "{f} must run the #330 repair"
+            );
         }
         let start = src.find("pub async fn get_town(").unwrap();
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
-        assert!(body.contains("assign_generic_shop_npcs(&mut town)"), "the served copy is repaired too");
+        assert!(
+            body.contains("assign_generic_shop_npcs(&mut town)"),
+            "the served copy is repaired too"
+        );
     }
 }
 
@@ -5644,18 +5893,32 @@ mod report353_decoration_prestige {
     #[test]
     fn past_store_purchases_are_paid_once_on_load() {
         let mut state = blades_lib::server_state::ServerState::default();
-        state.global_shop_purchases.insert(Uuid::from_u128(TROPHY), 3);
+        state
+            .global_shop_purchases
+            .insert(Uuid::from_u128(TROPHY), 3);
         state.global_shop_purchases.insert(Uuid::from_u128(LAMP), 2);
-        state.global_shop_purchases.insert(Uuid::from_u128(UNPAID), 9);
+        state
+            .global_shop_purchases
+            .insert(Uuid::from_u128(UNPAID), 9);
         state.town_sites_backfilled = true;
         let mut town = town_at(72_667, 10);
 
-        assert!(repair_town_on_load(&mut state, &mut town, &json!({}), xp_of));
+        assert!(repair_town_on_load(
+            &mut state,
+            &mut town,
+            &json!({}),
+            xp_of
+        ));
         assert_eq!(experience(&town), 72_667 + 3 * 80 + 2 * 12);
         assert!(state.store_town_xp_backfilled);
 
         // Idempotent: the next load pays nothing and writes nothing.
-        assert!(!repair_town_on_load(&mut state, &mut town, &json!({}), xp_of));
+        assert!(!repair_town_on_load(
+            &mut state,
+            &mut town,
+            &json!({}),
+            xp_of
+        ));
         assert_eq!(experience(&town), 72_667 + 264);
     }
 
@@ -5674,10 +5937,18 @@ mod report353_decoration_prestige {
     #[test]
     fn the_backfill_levels_the_town_up() {
         let mut state = blades_lib::server_state::ServerState::default();
-        state.global_shop_purchases.insert(Uuid::from_u128(TROPHY), 1);
+        state
+            .global_shop_purchases
+            .insert(Uuid::from_u128(TROPHY), 1);
         let mut town = town_at(450, 0);
-        assert_eq!(backfill_store_town_xp_once(&mut state, &mut town, xp_of), 80);
-        assert_eq!(town["levelInfo"]["level"], 1, "530 crosses the 500 threshold");
+        assert_eq!(
+            backfill_store_town_xp_once(&mut state, &mut town, xp_of),
+            80
+        );
+        assert_eq!(
+            town["levelInfo"]["level"], 1,
+            "530 crosses the 500 threshold"
+        );
     }
 
     /// The purchase sequence: take the town (backfilling history), pay this
@@ -5686,17 +5957,27 @@ mod report353_decoration_prestige {
     #[test]
     fn a_new_purchase_is_paid_exactly_once_alongside_the_backfill() {
         let mut state = blades_lib::server_state::ServerState::default();
-        state.global_shop_purchases.insert(Uuid::from_u128(TROPHY), 3);
+        state
+            .global_shop_purchases
+            .insert(Uuid::from_u128(TROPHY), 3);
         state.town_sites_backfilled = true;
         let mut town = town_at(1_000, 1);
 
         // `take_town` → backfill; `credit_town_xp` → this purchase; then the count.
         backfill_store_town_xp_once(&mut state, &mut town, xp_of);
         apply_prestige_and_level_up(&mut town, 80);
-        *state.global_shop_purchases.get_mut(&Uuid::from_u128(TROPHY)).unwrap() += 1;
+        *state
+            .global_shop_purchases
+            .get_mut(&Uuid::from_u128(TROPHY))
+            .unwrap() += 1;
         assert_eq!(experience(&town), 1_000 + 4 * 80);
 
-        assert!(!repair_town_on_load(&mut state, &mut town, &json!({}), xp_of));
+        assert!(!repair_town_on_load(
+            &mut state,
+            &mut town,
+            &json!({}),
+            xp_of
+        ));
         assert_eq!(experience(&town), 1_000 + 4 * 80);
     }
 
@@ -5715,7 +5996,9 @@ mod report353_decoration_prestige {
     }
 
     fn body_of<'a>(src: &'a str, signature: &str) -> &'a str {
-        let start = src.find(signature).unwrap_or_else(|| panic!("{signature} exists"));
+        let start = src
+            .find(signature)
+            .unwrap_or_else(|| panic!("{signature} exists"));
         &src[start..start + src[start..].find("\n}\n").unwrap()]
     }
 
@@ -5725,7 +6008,10 @@ mod report353_decoration_prestige {
     fn every_load_and_every_mutation_runs_the_store_backfill() {
         let src = include_str!("town.rs");
         for f in ["fn take_town_with(", "fn repair_town_on_load("] {
-            assert!(body_of(src, f).contains("backfill_store_town_xp_once("), "{f}");
+            assert!(
+                body_of(src, f).contains("backfill_store_town_xp_once("),
+                "{f}"
+            );
         }
     }
 
@@ -5733,12 +6019,21 @@ mod report353_decoration_prestige {
     #[test]
     fn every_acquisition_path_pays_the_town() {
         for (src, f) in [
-            (include_str!("global_shop.rs"), "pub async fn purchase_global_shop("),
+            (
+                include_str!("global_shop.rs"),
+                "pub async fn purchase_global_shop(",
+            ),
             (include_str!("shop.rs"), "pub async fn buy_from_shop("),
-            (include_str!("shop.rs"), "pub async fn buy_from_social_shop("),
+            (
+                include_str!("shop.rs"),
+                "pub async fn buy_from_social_shop(",
+            ),
             (include_str!("craft.rs"), "pub async fn finish_craft("),
         ] {
-            assert!(body_of(src, f).contains("crate::town::credit_town_xp("), "{f} must pay the town");
+            assert!(
+                body_of(src, f).contains("crate::town::credit_town_xp("),
+                "{f} must pay the town"
+            );
         }
     }
 

@@ -234,7 +234,13 @@ fn classify(frame: &[u8]) -> Option<Kind> {
 /// frame, e.g. `…BackendMatchCreated`). Matches the engine's own
 /// `payload.ends_with(b"…")` convention.
 fn flow_name(frame: &[u8]) -> Option<String> {
-    for name in ["BackendMatchCreated", "StateTimeout", "NextState", "RoundEnd", "Connecting"] {
+    for name in [
+        "BackendMatchCreated",
+        "StateTimeout",
+        "NextState",
+        "RoundEnd",
+        "Connecting",
+    ] {
         if frame.ends_with(name.as_bytes()) {
             return Some(name.to_string());
         }
@@ -261,38 +267,50 @@ struct C2s {
 fn s506_c2s() -> Vec<C2s> {
     vec![
         // t+0 op58 clock echo
-        C2s { rel_sec: 0, bytes: &[
-            0x70, 0x00, 0xb6, 0x26, 0x86, 0x00, 0x00, 0x02, 0x00, 0x15,
-            0xbe, 0x3a, 0x01, 0x03, 0x33, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x98, 0x1e, 0xdd, 0x11, 0x2e, 0xcc, 0xde, 0x08,
-        ] },
+        C2s {
+            rel_sec: 0,
+            bytes: &[
+                0x70, 0x00, 0xb6, 0x26, 0x86, 0x00, 0x00, 0x02, 0x00, 0x15, 0xbe, 0x3a, 0x01, 0x03,
+                0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x98, 0x1e, 0xdd, 0x11, 0x2e,
+                0xcc, 0xde, 0x08,
+            ],
+        },
         // t+0 op55 combat-screen (Player, role 3)
-        C2s { rel_sec: 0, bytes: &[
-            0x70, 0x00, 0xb6, 0x26, 0x86, 0x00, 0x00, 0x03, 0x00, 0x0c,
-            0xbe, 0x37, 0x02, 0x07, 0x70, 0x07, 0x77, 0x00, 0x00, 0x00, 0x39, 0x03,
-        ] },
+        C2s {
+            rel_sec: 0,
+            bytes: &[
+                0x70, 0x00, 0xb6, 0x26, 0x86, 0x00, 0x00, 0x03, 0x00, 0x0c, 0xbe, 0x37, 0x02, 0x07,
+                0x70, 0x07, 0x77, 0x00, 0x00, 0x00, 0x39, 0x03,
+            ],
+        },
         // t+0 op54 stat echo (small)
-        C2s { rel_sec: 0, bytes: &[
-            0x70, 0x00, 0xb7, 0xf7, 0x86, 0x00, 0x00, 0x07, 0x00, 0x0d,
-            0xbe, 0x36, 0x03, 0x0f, 0x70, 0x77, 0x78, 0x00, 0x00, 0x00, 0x37, 0x03,
-            0x16, 0x86, 0x00, 0x00, 0x08, 0x00, 0x0c, 0xbe, 0x37, 0x02, 0x07,
-            0x70, 0x07, 0x7b, 0x00, 0x00, 0x00, 0x36, 0x02,
-        ] },
+        C2s {
+            rel_sec: 0,
+            bytes: &[
+                0x70, 0x00, 0xb7, 0xf7, 0x86, 0x00, 0x00, 0x07, 0x00, 0x0d, 0xbe, 0x36, 0x03, 0x0f,
+                0x70, 0x77, 0x78, 0x00, 0x00, 0x00, 0x37, 0x03, 0x16, 0x86, 0x00, 0x00, 0x08, 0x00,
+                0x0c, 0xbe, 0x37, 0x02, 0x07, 0x70, 0x07, 0x7b, 0x00, 0x00, 0x00, 0x36, 0x02,
+            ],
+        },
         // t+4 op54 flow echo: BackendMatchCreated (selector 0x50, client→server)
-        C2s { rel_sec: 4, bytes: &[
-            0x70, 0x00, 0xc6, 0xd6, 0x86, 0x00, 0x00, 0x0c, 0x00, 0x23,
-            0xbe, 0x36, 0x04, 0x1f, 0x70, 0x77, 0x0a, 0x77, 0x00, 0x00, 0x00,
-            0x39, 0x03, 0x50, 0x13, 0x00, b'B', b'a', b'c', b'k', b'e', b'n',
-            b'd', b'M', b'a', b't', b'c', b'h', b'C', b'r', b'e', b'a', b't',
-            b'e', b'd',
-        ] },
+        C2s {
+            rel_sec: 4,
+            bytes: &[
+                0x70, 0x00, 0xc6, 0xd6, 0x86, 0x00, 0x00, 0x0c, 0x00, 0x23, 0xbe, 0x36, 0x04, 0x1f,
+                0x70, 0x77, 0x0a, 0x77, 0x00, 0x00, 0x00, 0x39, 0x03, 0x50, 0x13, 0x00, b'B', b'a',
+                b'c', b'k', b'e', b'n', b'd', b'M', b'a', b't', b'c', b'h', b'C', b'r', b'e', b'a',
+                b't', b'e', b'd',
+            ],
+        },
         // t+6 op54 flow echo: StateTimeout (selector 0x50)
-        C2s { rel_sec: 6, bytes: &[
-            0x70, 0x00, 0xcd, 0x84, 0x86, 0x00, 0x00, 0x0d, 0x00, 0x1c,
-            0xbe, 0x36, 0x04, 0x1f, 0x70, 0x77, 0x0a, 0x77, 0x00, 0x00, 0x00,
-            0x39, 0x03, 0x50, 0x0c, 0x00, b'S', b't', b'a', b't', b'e', b'T',
-            b'i', b'm', b'e', b'o', b'u', b't',
-        ] },
+        C2s {
+            rel_sec: 6,
+            bytes: &[
+                0x70, 0x00, 0xcd, 0x84, 0x86, 0x00, 0x00, 0x0d, 0x00, 0x1c, 0xbe, 0x36, 0x04, 0x1f,
+                0x70, 0x77, 0x0a, 0x77, 0x00, 0x00, 0x00, 0x39, 0x03, 0x50, 0x0c, 0x00, b'S', b't',
+                b'a', b't', b'e', b'T', b'i', b'm', b'e', b'o', b'u', b't',
+            ],
+        },
     ]
 }
 
@@ -363,9 +381,8 @@ fn profiled(name: &str, character_uuid: &str, customization: &str) -> Loadout {
         tag: super::state::AbilityTag::Generic,
     });
     l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
-    l.profile_character_json = format!(
-        r#"{{"id":"{character_uuid}","name":"{name}","customization":{customization}}}"#
-    );
+    l.profile_character_json =
+        format!(r#"{{"id":"{character_uuid}","name":"{name}","customization":{customization}}}"#);
     l
 }
 
@@ -438,7 +455,10 @@ fn inner_user_data(frame: &[u8]) -> Vec<u8> {
 
 /// First simulated second at which any emitted frame matches `pred`.
 fn first_sec(log: &[Emitted], pred: impl Fn(&Kind) -> bool) -> Option<u64> {
-    log.iter().filter(|e| pred(&e.kind)).map(|e| e.rel_sec).min()
+    log.iter()
+        .filter(|e| pred(&e.kind))
+        .map(|e| e.rel_sec)
+        .min()
 }
 
 /// The ordered sequence of DISTINCT protocol kinds we emitted (consecutive
@@ -471,7 +491,10 @@ fn round_start_reproduces_s506_sequence_and_stagger() {
     let clock = first_sec(&log, |k| *k == Kind::Clock);
     let spawn = first_sec(&log, |k| *k == Kind::Spawn);
     let profile = first_sec(&log, |k| *k == Kind::Profile);
-    let bmc = first_sec(&log, |k| matches!(k, Kind::Flow(n) if n == "BackendMatchCreated"));
+    let bmc = first_sec(
+        &log,
+        |k| matches!(k, Kind::Flow(n) if n == "BackendMatchCreated"),
+    );
     let stto = first_sec(&log, |k| matches!(k, Kind::Flow(n) if n == "StateTimeout"));
 
     let clock = clock.expect(
@@ -727,12 +750,24 @@ fn drive_identity_burst() -> Vec<(usize, Vec<u8>)> {
 #[test]
 fn identity_burst_is_per_viewer_and_distinct() {
     let fighters = s506_fighters();
-    let uuid: [String; 2] = [fighters[0].character_uuid.clone(), fighters[1].character_uuid.clone()];
-    let name: [String; 2] = [fighters[0].display_name.clone(), fighters[1].display_name.clone()];
-    assert_ne!(uuid[0], uuid[1], "fixture precondition: the two fighters must be tellable apart");
+    let uuid: [String; 2] = [
+        fighters[0].character_uuid.clone(),
+        fighters[1].character_uuid.clone(),
+    ];
+    let name: [String; 2] = [
+        fighters[0].display_name.clone(),
+        fighters[1].display_name.clone(),
+    ];
+    assert_ne!(
+        uuid[0], uuid[1],
+        "fixture precondition: the two fighters must be tellable apart"
+    );
 
     let burst = drive_identity_burst();
-    assert!(!burst.is_empty(), "the round-start burst emitted nothing at all");
+    assert!(
+        !burst.is_empty(),
+        "the round-start burst emitted nothing at all"
+    );
 
     let mut delivered_profiles: Vec<String> = Vec::new();
 
@@ -793,13 +828,17 @@ fn identity_burst_is_per_viewer_and_distinct() {
             profiles.iter().map(|p| p.len()).collect::<Vec<_>>(),
         );
         let profile = &profiles[0];
-        assert!(!profile.is_empty(), "viewer {viewer}: the delivered profile JSON is empty");
+        assert!(
+            !profile.is_empty(),
+            "viewer {viewer}: the delivered profile JSON is empty"
+        );
         assert!(
             profile.contains(uuid[opp].as_str()) && profile.contains(name[opp].as_str()),
             "IDENTITY BUG — viewer {viewer}: the op54 profile it receives is not the OPPONENT's \
              (slot {opp}, {} / {}). The client builds the opponent actor — appearance, gear — \
              straight from this JSON. Got: {profile}",
-            name[opp], uuid[opp],
+            name[opp],
+            uuid[opp],
         );
         assert!(
             !profile.contains(uuid[viewer].as_str()),
@@ -843,7 +882,11 @@ fn capture_and_emission_classify_identically() {
     // op58 clock + op50 spawn round-trip through classify too.
     assert_eq!(classify(&super::messages::clock(1, 2)), Some(Kind::Clock));
     assert_eq!(
-        classify(&super::messages::spawn_avatar(564, super::state::NetRole::Simulated, "x")),
+        classify(&super::messages::spawn_avatar(
+            564,
+            super::state::NetRole::Simulated,
+            "x"
+        )),
         Some(Kind::Spawn),
     );
 }
@@ -1022,12 +1065,18 @@ fn animation_frames_reach_both_viewers() {
         }
         burst.extend(m.on_tick(2, now));
         for (viewer, f) in burst {
-            if matches!(gmid_of(&f), Some(52) | Some(43) | Some(44) | Some(39) | Some(41)) {
+            if matches!(
+                gmid_of(&f),
+                Some(52) | Some(43) | Some(44) | Some(39) | Some(41)
+            ) {
                 per_viewer[viewer] += 1;
             }
         }
     }
-    assert!(per_viewer[0] > 0, "the acting player must see its own state changes");
+    assert!(
+        per_viewer[0] > 0,
+        "the acting player must see its own state changes"
+    );
     assert!(
         per_viewer[1] > 0,
         "the OPPONENT must see them too — this is the enemy-swing animation"
@@ -1092,7 +1141,11 @@ fn block_zone_press_raises_the_shield_for_both_viewers() {
 
     // The client streams pointer geometry, then presses inside the block zone.
     m.on_c2s(0, &pos_frame(0.077), t);
-    let out = m.on_c2s(0, &act_frame_zone(true, true), t + Duration::from_millis(10));
+    let out = m.on_c2s(
+        0,
+        &act_frame_zone(true, true),
+        t + Duration::from_millis(10),
+    );
 
     let blocking: Vec<usize> = out
         .iter()
@@ -1104,7 +1157,9 @@ fn block_zone_press_raises_the_shield_for_both_viewers() {
         2,
         "gmid 41 must reach BOTH viewers — the opponent has to see the guard go up too; \
          got {:?}",
-        out.iter().map(|(v, f)| (*v, gmid_of(f))).collect::<Vec<_>>()
+        out.iter()
+            .map(|(v, f)| (*v, gmid_of(f)))
+            .collect::<Vec<_>>()
     );
     assert!(blocking.contains(&0) && blocking.contains(&1));
 
@@ -1128,21 +1183,30 @@ fn releasing_the_block_zone_lowers_the_shield_with_gmid_39_idle() {
     let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
     let t = live + Duration::from_millis(100);
     m.on_c2s(0, &pos_frame(0.077), t);
-    m.on_c2s(0, &act_frame_zone(true, true), t + Duration::from_millis(10));
+    m.on_c2s(
+        0,
+        &act_frame_zone(true, true),
+        t + Duration::from_millis(10),
+    );
 
-    let out = m.on_c2s(0, &act_frame_zone(false, true), t + Duration::from_millis(700));
+    let out = m.on_c2s(
+        0,
+        &act_frame_zone(false, true),
+        t + Duration::from_millis(700),
+    );
     let idle: Vec<&(usize, Vec<u8>)> = out
         .iter()
         .filter(|(_, f)| {
-            gmid_of(f) == Some(39)
-                && parse_netdata(user_data(f).unwrap().1).int(6) == Some(0)
+            gmid_of(f) == Some(39) && parse_netdata(user_data(f).unwrap().1).int(6) == Some(0)
         })
         .collect();
     assert_eq!(
         idle.len(),
         2,
         "the guard drops via gmid 39 stateId 0, to both viewers; got {:?}",
-        out.iter().map(|(v, f)| (*v, gmid_of(f))).collect::<Vec<_>>()
+        out.iter()
+            .map(|(v, f)| (*v, gmid_of(f)))
+            .collect::<Vec<_>>()
     );
     assert!(
         !out.iter().any(|(_, f)| gmid_of(f) == Some(41)),
@@ -1157,11 +1221,19 @@ fn attack_press_cancels_a_standing_guard() {
     let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
     let t = live + Duration::from_millis(100);
     m.on_c2s(0, &pos_frame(0.077), t);
-    m.on_c2s(0, &act_frame_zone(true, true), t + Duration::from_millis(10));
+    m.on_c2s(
+        0,
+        &act_frame_zone(true, true),
+        t + Duration::from_millis(10),
+    );
 
     // Pointer moves to the attack side, then presses outside the block zone.
     m.on_c2s(0, &pos_frame(0.769), t + Duration::from_millis(300));
-    let out = m.on_c2s(0, &act_frame_zone(true, false), t + Duration::from_millis(310));
+    let out = m.on_c2s(
+        0,
+        &act_frame_zone(true, false),
+        t + Duration::from_millis(310),
+    );
     assert!(
         out.iter().any(|(_, f)| {
             gmid_of(f) == Some(39) && parse_netdata(user_data(f).unwrap().1).int(6) == Some(0)
@@ -1178,7 +1250,11 @@ fn non_block_zone_press_never_raises_the_shield() {
     let (mut m, _t0, live) = super::engine::tests::live_inst_at(2);
     let t = live + Duration::from_millis(100);
     m.on_c2s(0, &pos_frame(0.769), t);
-    let out = m.on_c2s(0, &act_frame_zone(true, false), t + Duration::from_millis(10));
+    let out = m.on_c2s(
+        0,
+        &act_frame_zone(true, false),
+        t + Duration::from_millis(10),
+    );
     assert!(
         !out.iter().any(|(_, f)| gmid_of(f) == Some(41)),
         "retail never once followed a `held=true, blockZone=false` press with a gmid 41"

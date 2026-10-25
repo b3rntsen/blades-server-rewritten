@@ -759,7 +759,11 @@ mod tests {
             slot("897a600c-91d6-4449-af09-173da88a907e"),
             slot(RING_SLOT_1),
         );
-        let (sword, shield, ring) = (Uuid::from_u128(0x5a), Uuid::from_u128(0x5b), Uuid::from_u128(0x5c));
+        let (sword, shield, ring) = (
+            Uuid::from_u128(0x5a),
+            Uuid::from_u128(0x5b),
+            Uuid::from_u128(0x5c),
+        );
         let (old_cuirass, heavy_cuirass) = (Uuid::from_u128(0xc1), Uuid::from_u128(0xc2));
 
         let mut inv = inv();
@@ -794,7 +798,13 @@ mod tests {
             "only the cuirass that left the backpack is reported removed"
         );
         assert_eq!(
-            update.backpack.items.0.keys().copied().collect::<std::collections::HashSet<_>>(),
+            update
+                .backpack
+                .items
+                .0
+                .keys()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
             std::collections::HashSet::from([old_cuirass]),
             "only the cuirass taken off arrives in the backpack"
         );

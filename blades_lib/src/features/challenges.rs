@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::economy::{RewardGrant, GEMS, GOLD};
+use crate::economy::{GEMS, GOLD, RewardGrant};
 
 /// How many challenges are active at once (matches the captured 4-challenge set).
 pub const ACTIVE_CHALLENGE_COUNT: usize = 4;
@@ -56,7 +56,8 @@ pub fn gems_only_reward(retail: &RewardGrant) -> RewardGrant {
     let mut out = retail.clone();
     let mut gems = out.currencies.remove(&GEMS).unwrap_or(0);
     if let Some(gold) = out.currencies.remove(&GOLD).filter(|g| *g > 0) {
-        gems += ((gold + CHALLENGE_GOLD_PER_GEM / 2) / CHALLENGE_GOLD_PER_GEM).max(CHALLENGE_MIN_CONVERTED_GEMS);
+        gems += ((gold + CHALLENGE_GOLD_PER_GEM / 2) / CHALLENGE_GOLD_PER_GEM)
+            .max(CHALLENGE_MIN_CONVERTED_GEMS);
     }
     if gems > 0 {
         out.currencies.insert(GEMS, gems * CHALLENGE_GEM_MULTIPLIER);
@@ -365,8 +366,14 @@ mod tests {
     /// doubled, converted at 250 gold a gem with a floor of 2.
     #[test]
     fn challenges_pay_doubled_gems_and_no_gold() {
-        let gold = |n| RewardGrant { currencies: HashMap::from([(GOLD, n)]), ..Default::default() };
-        let gems = |n| RewardGrant { currencies: HashMap::from([(GEMS, n)]), ..Default::default() };
+        let gold = |n| RewardGrant {
+            currencies: HashMap::from([(GOLD, n)]),
+            ..Default::default()
+        };
+        let gems = |n| RewardGrant {
+            currencies: HashMap::from([(GEMS, n)]),
+            ..Default::default()
+        };
         for (retail, want) in [
             (gold(200), 4),
             (gold(300), 4),
@@ -378,30 +385,62 @@ mod tests {
             (gems(2), 4),
             (gems(10), 20),
         ] {
-            assert_eq!(gems_only_reward(&retail), gems(want), "{:?}", retail.currencies);
+            assert_eq!(
+                gems_only_reward(&retail),
+                gems(want),
+                "{:?}",
+                retail.currencies
+            );
         }
-        let inst = ChallengeInstance::from_template(&template(9.0), Uuid::from_u128(1), Uuid::from_u128(2), 0, 0);
-        assert_eq!(inst.reward.currencies, HashMap::from([(GEMS, 4)]), "300 gold is 2 gems, doubled");
+        let inst = ChallengeInstance::from_template(
+            &template(9.0),
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            0,
+            0,
+        );
+        assert_eq!(
+            inst.reward.currencies,
+            HashMap::from([(GEMS, 4)]),
+            "300 gold is 2 gems, doubled"
+        );
     }
 
     /// Every shipped challenge pays gems only.
     #[test]
     fn every_shipped_challenge_pays_gems_only() {
-        let raw = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/challenges.json")).unwrap();
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/challenges.json"
+        ))
+        .unwrap();
         let pool: Vec<ChallengeTemplate> = serde_json::from_str(&raw).unwrap();
         assert_eq!(pool.len(), 45);
         let (mut before, mut after) = (0u64, 0u64);
         for t in &pool {
             let paid = gems_only_reward(&t.reward);
-            assert_eq!(paid.currencies.keys().collect::<Vec<_>>(), vec![&GEMS], "{}", t.template_id);
+            assert_eq!(
+                paid.currencies.keys().collect::<Vec<_>>(),
+                vec![&GEMS],
+                "{}",
+                t.template_id
+            );
             before += t.reward.currencies.get(&GEMS).copied().unwrap_or(0);
             after += paid.currencies[&GEMS];
         }
-        assert_eq!((before, after), (46, 92 + 2 * 167), "pool gems: 46 retail; 92 doubled + 167 from gold, doubled");
+        assert_eq!(
+            (before, after),
+            (46, 92 + 2 * 167),
+            "pool gems: 46 retail; 92 doubled + 167 from gold, doubled"
+        );
     }
 
     fn shipped_pool() -> Vec<ChallengeTemplate> {
-        let raw = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/challenges.json")).unwrap();
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/challenges.json"
+        ))
+        .unwrap();
         serde_json::from_str(&raw).unwrap()
     }
 
@@ -414,8 +453,17 @@ mod tests {
     #[test]
     fn report_406_skeever_hunt_is_offered_only_at_levels_15_to_19() {
         let pool = shipped_pool();
-        let skeever = pool.iter().find(|t| t.template_id == SKEEVER_4).expect("Challenge_DefeatSkeever_4");
-        assert_eq!((skeever.required_player_level, skeever.locked_at_player_level), (15, 20));
+        let skeever = pool
+            .iter()
+            .find(|t| t.template_id == SKEEVER_4)
+            .expect("Challenge_DefeatSkeever_4");
+        assert_eq!(
+            (
+                skeever.required_player_level,
+                skeever.locked_at_player_level
+            ),
+            (15, 20)
+        );
         let offered: Vec<u16> = (1..=100).filter(|&l| skeever.offered_at(l)).collect();
         assert_eq!(offered, (15..=19).collect::<Vec<_>>());
         assert!(!skeever.offered_at(LLOYD_LEVEL));
@@ -436,16 +484,31 @@ mod tests {
         let pool = shipped_pool();
         for level in 1..=100u16 {
             for cursor in 0..pool.len() {
-                let (picked, next) = pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
-                assert_eq!(picked.len(), ACTIVE_CHALLENGE_COUNT, "level {level} cursor {cursor}");
+                let (picked, next) =
+                    pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+                assert_eq!(
+                    picked.len(),
+                    ACTIVE_CHALLENGE_COUNT,
+                    "level {level} cursor {cursor}"
+                );
                 let mut ids: Vec<Uuid> = picked.iter().map(|&i| pool[i].template_id).collect();
-                assert!(picked.iter().all(|&i| pool[i].offered_at(level)), "level {level}");
+                assert!(
+                    picked.iter().all(|&i| pool[i].offered_at(level)),
+                    "level {level}"
+                );
                 ids.sort();
                 ids.dedup();
-                assert_eq!(ids.len(), ACTIVE_CHALLENGE_COUNT, "duplicates at level {level}");
+                assert_eq!(
+                    ids.len(),
+                    ACTIVE_CHALLENGE_COUNT,
+                    "duplicates at level {level}"
+                );
                 assert!(next > cursor, "the cursor advances");
                 if level == LLOYD_LEVEL {
-                    assert!(!ids.contains(&SKEEVER_4), "Skeever hunt offered at level {level}");
+                    assert!(
+                        !ids.contains(&SKEEVER_4),
+                        "Skeever hunt offered at level {level}"
+                    );
                 }
             }
         }
@@ -463,7 +526,11 @@ mod tests {
         c.locked_at_player_level = 20;
         let pool = vec![a, b, c];
         let (picked, next) = pick_templates(&pool, 0, 30, &[Uuid::from_u128(1)], 4);
-        assert_eq!(picked, vec![1], "a is held and c is out of band: the set stays short");
+        assert_eq!(
+            picked,
+            vec![1],
+            "a is held and c is out of band: the set stays short"
+        );
         assert_eq!(next, 2, "resume after the last template taken");
         let (picked, _) = pick_templates(&pool, 2, 17, &[], 4);
         assert_eq!(picked, vec![2, 0, 1]);
@@ -477,19 +544,37 @@ mod tests {
     fn report_406_retires_zero_progress_challenges_outside_the_band() {
         let pool = shipped_pool();
         let held = |tid: u128, progress: f64| {
-            let t = pool.iter().find(|t| t.template_id == Uuid::from_u128(tid)).unwrap();
-            let mut c = ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
+            let t = pool
+                .iter()
+                .find(|t| t.template_id == Uuid::from_u128(tid))
+                .unwrap();
+            let mut c =
+                ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
             c.progress = progress;
             c
         };
         let skeever = held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 0.0);
         assert!(retire_out_of_band(&skeever, &pool, LLOYD_LEVEL));
         assert!(!retire_out_of_band(&skeever, &pool, 17), "in band at 17");
-        assert!(retire_out_of_band(&held(0x8925740e_046b_4e7a_b418_a17bd83e035c, 0.0), &pool, LLOYD_LEVEL));
-        assert!(!retire_out_of_band(&held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 3.0), &pool, LLOYD_LEVEL), "progress is kept");
+        assert!(retire_out_of_band(
+            &held(0x8925740e_046b_4e7a_b418_a17bd83e035c, 0.0),
+            &pool,
+            LLOYD_LEVEL
+        ));
+        assert!(
+            !retire_out_of_band(
+                &held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 3.0),
+                &pool,
+                LLOYD_LEVEL
+            ),
+            "progress is kept"
+        );
         let mut unknown = skeever.clone();
         unknown.template_id = Uuid::from_u128(0xdead);
-        assert!(!retire_out_of_band(&unknown, &pool, LLOYD_LEVEL), "no template, no judgement");
+        assert!(
+            !retire_out_of_band(&unknown, &pool, LLOYD_LEVEL),
+            "no template, no judgement"
+        );
     }
 
     const TUTORIAL_CRAFT_DECORATION: Uuid = Uuid::from_u128(0xbce21d12_8f3b_444b_ad1f_740478f1d0cf);
@@ -499,15 +584,27 @@ mod tests {
     #[test]
     fn report_426_every_tutorial_template_in_the_pool_is_one_time_only() {
         let raw: Vec<serde_json::Value> = serde_json::from_str(
-            &std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/challenges.json")).unwrap(),
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../deploy/static/challenges.json"
+            ))
+            .unwrap(),
         )
         .unwrap();
         let tutorials: Vec<Uuid> = raw
             .iter()
-            .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("Challenge_TUTORIAL_")))
+            .filter(|t| {
+                t["name"]
+                    .as_str()
+                    .is_some_and(|n| n.starts_with("Challenge_TUTORIAL_"))
+            })
             .map(|t| t["templateId"].as_str().unwrap().parse().unwrap())
             .collect();
-        assert_eq!(tutorials, vec![TUTORIAL_CRAFT_DECORATION], "the pool's one tutorial challenge");
+        assert_eq!(
+            tutorials,
+            vec![TUTORIAL_CRAFT_DECORATION],
+            "the pool's one tutorial challenge"
+        );
         assert_eq!(ONE_TIME_ONLY_TEMPLATES.len(), 15);
         for id in &tutorials {
             assert!(ONE_TIME_ONLY_TEMPLATES.contains(id), "{id}");
@@ -524,14 +621,25 @@ mod tests {
     #[test]
     fn report_426_the_tutorial_decoration_challenge_is_never_offered() {
         let pool = shipped_pool();
-        let tutorial = pool.iter().find(|t| t.template_id == TUTORIAL_CRAFT_DECORATION).expect("in the pool");
-        assert_eq!((tutorial.required_player_level, tutorial.locked_at_player_level), (0, 0));
+        let tutorial = pool
+            .iter()
+            .find(|t| t.template_id == TUTORIAL_CRAFT_DECORATION)
+            .expect("in the pool");
+        assert_eq!(
+            (
+                tutorial.required_player_level,
+                tutorial.locked_at_player_level
+            ),
+            (0, 0)
+        );
         for level in 0..=100u16 {
             assert!(!tutorial.offered_at(level), "offered at {level}");
             for cursor in 0..pool.len() {
                 let (picked, _) = pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
                 assert!(
-                    picked.iter().all(|&i| pool[i].template_id != TUTORIAL_CRAFT_DECORATION),
+                    picked
+                        .iter()
+                        .all(|&i| pool[i].template_id != TUTORIAL_CRAFT_DECORATION),
                     "picked at level {level} cursor {cursor}"
                 );
             }
@@ -544,8 +652,12 @@ mod tests {
     #[test]
     fn report_426_a_held_tutorial_challenge_is_retired_unless_it_has_progress() {
         let pool = shipped_pool();
-        let t = pool.iter().find(|t| t.template_id == TUTORIAL_CRAFT_DECORATION).unwrap();
-        let mut held = ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
+        let t = pool
+            .iter()
+            .find(|t| t.template_id == TUTORIAL_CRAFT_DECORATION)
+            .unwrap();
+        let mut held =
+            ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
         assert!(retire_out_of_band(&held, &pool, 77), "Dwalin, level 77");
         assert!(retire_out_of_band(&held, &pool, 1), "and at level 1");
         held.progress = 1.0;

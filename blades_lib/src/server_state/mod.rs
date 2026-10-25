@@ -273,7 +273,10 @@ mod tests {
         state.arena_chests_earned = 41;
         state.arena_last_elder_one_chest_at_secs = 1_725_000_000;
         let value = serde_json::to_value(&state).unwrap();
-        assert_eq!(value["arenaPromotionLootGrants"], serde_json::json!([100, 200]));
+        assert_eq!(
+            value["arenaPromotionLootGrants"],
+            serde_json::json!([100, 200])
+        );
         assert_eq!(
             value["arenaPromotionItemRepairs"],
             serde_json::json!(["season:100:item"])
@@ -294,11 +297,13 @@ mod tests {
     #[test]
     fn current_character_rename_audit_round_trips() {
         let mut state = ServerState::default();
-        state.current_character_renames.push(CharacterRenameAuditEntry {
-            previous_name: "Old Hero".into(),
-            new_name: "New Hero".into(),
-            renamed_at_secs: 1_789_999_999,
-        });
+        state
+            .current_character_renames
+            .push(CharacterRenameAuditEntry {
+                previous_name: "Old Hero".into(),
+                new_name: "New Hero".into(),
+                renamed_at_secs: 1_789_999_999,
+            });
         let value = serde_json::to_value(&state).unwrap();
         assert_eq!(
             value["currentCharacterRenames"][0],
@@ -309,6 +314,9 @@ mod tests {
             })
         );
         let back: ServerState = serde_json::from_value(value).unwrap();
-        assert_eq!(back.current_character_renames, state.current_character_renames);
+        assert_eq!(
+            back.current_character_renames,
+            state.current_character_renames
+        );
     }
 }

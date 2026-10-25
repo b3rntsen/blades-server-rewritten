@@ -6,10 +6,7 @@ use uuid::Uuid;
 use crate::{
     game_data::GameData,
     static_data::QuestLevelScaling,
-    user_data::{
-        DungeonGeneratedData,
-        ObjectiveStatus, Quest, QuestStatus, QuestType,
-    },
+    user_data::{DungeonGeneratedData, ObjectiveStatus, Quest, QuestStatus, QuestType},
 };
 
 #[derive(Error, Debug, Clone)]
@@ -106,10 +103,14 @@ pub fn generate_quest_data(
         loot_shift,
     )
     .ok_or(GenerateQuestDataError::DungeonNotFound(
-                dungeon_info.dungeon_uuid,
-            ))?;
+        dungeon_info.dungeon_uuid,
+    ))?;
     // The three best soul gems at 45-48 (owner-approved deviation, #388).
-    crate::features::beginner_economy::top_dungeon_soul_gems(&mut generated_dungeon_data, player_level, false);
+    crate::features::beginner_economy::top_dungeon_soul_gems(
+        &mut generated_dungeon_data,
+        player_level,
+        false,
+    );
 
     Ok((quest, Some(generated_dungeon_data)))
 }
@@ -138,7 +139,10 @@ pub fn generate_for_quest_dungeon_with_loot_shift(
             game_data,
             id,
             None,
-            crate::util::dungeon::EnemyLevels::Flat { level: enemy_level, given_xp },
+            crate::util::dungeon::EnemyLevels::Flat {
+                level: enemy_level,
+                given_xp,
+            },
             loot_shift,
         )
     })
@@ -162,7 +166,10 @@ const SINGLE_STAGE_EVENT_DUNGEONS: &[Uuid] = &[EQ23_SINGLE_STAGE];
 /// #323), except for an event that retail ran on the named dungeon alone (#329).
 pub fn event_dungeon_stage_ids(game_data: &GameData, dungeon_uuid: &Uuid) -> Option<Vec<Uuid>> {
     if SINGLE_STAGE_EVENT_DUNGEONS.contains(dungeon_uuid) {
-        return game_data.dungeons.contains_key(dungeon_uuid).then(|| vec![*dungeon_uuid]);
+        return game_data
+            .dungeons
+            .contains_key(dungeon_uuid)
+            .then(|| vec![*dungeon_uuid]);
     }
     quest_dungeon_family_ids(game_data, dungeon_uuid)
 }
@@ -260,7 +267,8 @@ pub fn generate_for_event_dungeon_for_character(
     scaling: &QuestLevelScaling,
     character_level: i64,
 ) -> Option<DungeonGeneratedData> {
-    let loot_shift = crate::features::loot_level::dungeon_loot_shift(scaling, character_level, enemy_level);
+    let loot_shift =
+        crate::features::loot_level::dungeon_loot_shift(scaling, character_level, enemy_level);
     let mut data = generate_for_event_dungeon_with_loot_shift(
         game_data,
         dungeon_uuid,
@@ -698,7 +706,11 @@ mod how_retail_scaled_enemies {
         let empty = QuestLevelScaling::default();
         assert_eq!(empty.enemy_level(37), 37, "the player's own level");
         assert_eq!(empty.enemy_level(0), 1, "clamped");
-        assert_eq!(empty.given_xp(50), 5000, "the old formula, only as a last resort");
+        assert_eq!(
+            empty.given_xp(50),
+            5000,
+            "the old formula, only as a last resort"
+        );
     }
 }
 
@@ -728,7 +740,10 @@ mod event_dungeons_as_retail_built_them {
     }
 
     fn shipped() -> QuestLevelScaling {
-        let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/quests_daily.json");
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/quests_daily.json"
+        );
         let json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(p).expect("read")).expect("json");
         serde_json::from_value(json["levelScaling"].clone()).expect("levelScaling")
@@ -760,7 +775,11 @@ mod event_dungeons_as_retail_built_them {
             let data = generate_for_event_dungeon(&gd, &uuid(dungeon), 78, &shipped()).unwrap();
             assert_eq!(
                 piles(&gd, dungeon, &data),
-                vec![(names[0].into(), 7), (names[1].into(), 3), (names[2].into(), 1)],
+                vec![
+                    (names[0].into(), 7),
+                    (names[1].into(), 3),
+                    (names[2].into(), 1)
+                ],
                 "{dungeon}: the 7 / 3 / 1 containers the client places, not 1 / 1 / 1"
             );
             // And every one of them holds a roll for each of its tables.
@@ -839,12 +858,21 @@ mod event_dungeons_as_retail_built_them {
         }
         for (group, spawners) in &a.enemy_generated_data {
             let lv = |s: &Vec<Vec<crate::user_data::DungeonEnemyResult>>| {
-                s.iter().flatten().map(|e| (e.enemy_level, e.given_xp)).collect::<Vec<_>>()
+                s.iter()
+                    .flatten()
+                    .map(|e| (e.enemy_level, e.given_xp))
+                    .collect::<Vec<_>>()
             };
             assert_eq!(lv(spawners), lv(&b.enemy_generated_data[group]));
         }
         // EQ40's boss and its two +5 groups are above the dungeon's level.
-        let max = a.enemy_generated_data.values().flatten().flatten().map(|e| e.enemy_level).max();
+        let max = a
+            .enemy_generated_data
+            .values()
+            .flatten()
+            .flatten()
+            .map(|e| e.enemy_level)
+            .max();
         assert_eq!(max, Some(56));
     }
 
@@ -859,11 +887,13 @@ mod event_dungeons_as_retail_built_them {
             .iter()
             .find(|(_, d)| d.handle == "SA01_DungeonSettings")
             .expect("SA01");
-        assert!(gd.dungeons[id]
-            .spawn_info
-            .enemy_spawn_groups
-            .keys()
-            .any(|g| crate::util::dungeon::spawn_group_level_delta(g, 0) != 0));
+        assert!(
+            gd.dungeons[id]
+                .spawn_info
+                .enemy_spawn_groups
+                .keys()
+                .any(|g| crate::util::dungeon::spawn_group_level_delta(g, 0) != 0)
+        );
         let data = generate_for_quest_dungeon(&gd, id, 40, 123).unwrap();
         for e in data.enemy_generated_data.values().flatten().flatten() {
             assert_eq!((e.enemy_level, e.given_xp), (40, 123));
@@ -877,13 +907,19 @@ mod event_dungeons_as_retail_built_them {
     const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
 
     /// Mean gold and items per container of each size over `runs` seeded runs.
-    fn pay_by_size(gd: &GameData, dungeon: &str, level: i64, runs: u64) -> HashMap<String, (f64, f64)> {
+    fn pay_by_size(
+        gd: &GameData,
+        dungeon: &str,
+        level: i64,
+        runs: u64,
+    ) -> HashMap<String, (f64, f64)> {
         let gold = uuid(GOLD);
         let spawns = &gd.dungeons[&uuid(dungeon)].spawn_info.item;
         let mut sums: HashMap<String, (f64, f64, f64)> = HashMap::new();
         for run in 0..runs {
-            let data = generate_for_event_dungeon_with_seed(gd, &uuid(dungeon), run, level, &shipped())
-                .unwrap();
+            let data =
+                generate_for_event_dungeon_with_seed(gd, &uuid(dungeon), run, level, &shipped())
+                    .unwrap();
             for (spawn, pile) in &data.item_generated_data {
                 let name = spawns[spawn].name.clone().unwrap_or_default();
                 let entry = sums.entry(name).or_default();
@@ -896,7 +932,9 @@ mod event_dungeons_as_retail_built_them {
                 }
             }
         }
-        sums.into_iter().map(|(k, (g, i, n))| (k, (g / n, i / n))).collect()
+        sums.into_iter()
+            .map(|(k, (g, i, n))| (k, (g / n, i / n)))
+            .collect()
     }
 
     /// Tracker #374: in retail a bigger character's medium and large containers
@@ -944,13 +982,21 @@ mod event_dungeons_as_retail_built_them {
         let mut filled = 0;
         for dungeon in [EQ21, EQ25, EQ27, EQ30, EQ40] {
             for level in [1, 7, 20, 45, 49, 78, 100] {
-                let data = generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
+                let data =
+                    generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
                 let spawns = &gd.dungeons[&uuid(dungeon)].spawn_info.item;
                 for (spawn, pile) in &data.item_generated_data {
                     for result in pile {
                         for (table, loot) in &result.loot_table_loot {
-                            let Some(want) = container_stacks(table, spawns[spawn].name.as_deref()) else { continue };
-                            assert_eq!(loot.stackable_items.len(), want, "{dungeon} at {level}: {spawn} {table}");
+                            let Some(want) = container_stacks(table, spawns[spawn].name.as_deref())
+                            else {
+                                continue;
+                            };
+                            assert_eq!(
+                                loot.stackable_items.len(),
+                                want,
+                                "{dungeon} at {level}: {spawn} {table}"
+                            );
                             filled += 1;
                         }
                     }
@@ -968,10 +1014,15 @@ mod event_dungeons_as_retail_built_them {
         let gd = game_data();
         for dungeon in [EQ21, EQ27] {
             for level in [43, 78] {
-                let data = generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
+                let data =
+                    generate_for_event_dungeon(&gd, &uuid(dungeon), level, &shipped()).unwrap();
                 assert_eq!(
                     piles(&gd, dungeon, &data),
-                    vec![("Breakable_T1".into(), 7), ("Breakable_T2".into(), 3), ("Breakable_T3".into(), 1)],
+                    vec![
+                        ("Breakable_T1".into(), 7),
+                        ("Breakable_T2".into(), 3),
+                        ("Breakable_T3".into(), 1)
+                    ],
                     "{dungeon} at {level}"
                 );
             }

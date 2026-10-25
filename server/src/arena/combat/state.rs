@@ -4302,7 +4302,11 @@ impl MatchCombat {
             .map(|slot| {
                 let rtt = self.slot_rtt(slot);
                 let comp = rtt.min(BOT_LATENCY_COMPENSATION_CAP);
-                format!("slot {slot}: rtt={}ms comp={}ms", rtt.as_millis(), comp.as_millis())
+                format!(
+                    "slot {slot}: rtt={}ms comp={}ms",
+                    rtt.as_millis(),
+                    comp.as_millis()
+                )
             })
             .collect();
         log::info!(

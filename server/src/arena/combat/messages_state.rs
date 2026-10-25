@@ -98,7 +98,7 @@
 
 use arena_proto::{GameMessageId, NetDataValue, NetDataWriter};
 
-use super::messages::{frame, MSGTYPE_USERMESSAGE};
+use super::messages::{MSGTYPE_USERMESSAGE, frame};
 use super::state::{ActiveSide, ActorStateType, NetObjectType, NetRole};
 
 /// Everything a `PlayerStateChange`-family frame needs that is the same for all of
@@ -226,7 +226,8 @@ pub fn player_blocking_state_change(
         time_in_previous_state,
     );
     // Int, not Byte — retail's nibble for prop 9 here is 0, and always the value 1.
-    w.int(9, ActiveSide::Middle as i32).bool(10, optimal_block_allowed);
+    w.int(9, ActiveSide::Middle as i32)
+        .bool(10, optimal_block_allowed);
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -560,7 +561,11 @@ mod tests {
             ),
             (
                 43,
-                player_follow_through_state_change(&c, ActiveSide::Right, FOLLOW_THROUGH_TIME_IN_PREV),
+                player_follow_through_state_change(
+                    &c,
+                    ActiveSide::Right,
+                    FOLLOW_THROUGH_TIME_IN_PREV,
+                ),
             ),
             (
                 44,
@@ -573,8 +578,16 @@ mod tests {
         ];
         for (gmid, f) in cases {
             let nd = props(&f);
-            assert_eq!(nd.int(0), Some(398), "gmid {gmid}: prop0 avatar net object id");
-            assert_eq!(nd.int(1), Some(56), "gmid {gmid}: prop1 NetObjectType::Avatar");
+            assert_eq!(
+                nd.int(0),
+                Some(398),
+                "gmid {gmid}: prop0 avatar net object id"
+            );
+            assert_eq!(
+                nd.int(1),
+                Some(56),
+                "gmid {gmid}: prop1 NetObjectType::Avatar"
+            );
             assert_eq!(nd.int(2), Some(1), "gmid {gmid}: prop2 NetRole::Authority");
             assert_eq!(nd.int(3), Some(gmid), "gmid {gmid}: prop3 GameMessageId");
             // ULong, not Long — retail's type nibble is 2 in all 593 decoded frames.
@@ -626,7 +639,10 @@ mod tests {
                 19i64,
                 player_auto_attack_state_change(&c, ActiveSide::Right, (0.0, 0.0), 0.0),
             ),
-            (17, player_follow_through_state_change(&c, ActiveSide::Right, 0.0)),
+            (
+                17,
+                player_follow_through_state_change(&c, ActiveSide::Right, 0.0),
+            ),
             (16, player_recovery_state_change(&c, ActiveSide::Right, 0.0)),
             (14, player_draining_state_change(&c, ActiveSide::Right, 0.0)),
             (1, player_blocking_state_change(&c, 0.0, true)),
@@ -643,7 +659,11 @@ mod tests {
             ActorStateType::Emote,
         ] {
             let f = player_state_change(&c, state, 0.0);
-            assert_eq!(props(&f).int(6), Some(state as i64), "gmid 39 prop6 = {state:?}");
+            assert_eq!(
+                props(&f).int(6),
+                Some(state as i64),
+                "gmid 39 prop6 = {state:?}"
+            );
         }
     }
 
@@ -653,7 +673,10 @@ mod tests {
     fn generic_state_change_has_no_leaf_parameters() {
         let nd = props(&player_state_change(&ctx(), ActorStateType::Idle, 1.5));
         assert_eq!(nd.get(8), Some(&NetDataValue::Float(1.5)));
-        assert!(!nd.props.contains_key(&9), "gmid 39 must NOT carry an ActiveSide");
+        assert!(
+            !nd.props.contains_key(&9),
+            "gmid 39 must NOT carry an ActiveSide"
+        );
     }
 
     /// propId 9's WIDTH is not uniform across the family: Int for 41 and 44, Byte for
@@ -663,7 +686,10 @@ mod tests {
         let c = ctx();
         let as_int = [
             ("41", player_blocking_state_change(&c, 0.0, true)),
-            ("44", player_recovery_state_change(&c, ActiveSide::Right, 0.0)),
+            (
+                "44",
+                player_recovery_state_change(&c, ActiveSide::Right, 0.0),
+            ),
         ];
         for (gmid, f) in as_int {
             assert!(
@@ -672,8 +698,14 @@ mod tests {
             );
         }
         let as_byte = [
-            ("42", player_draining_state_change(&c, ActiveSide::Right, 0.0)),
-            ("43", player_follow_through_state_change(&c, ActiveSide::Right, 0.0)),
+            (
+                "42",
+                player_draining_state_change(&c, ActiveSide::Right, 0.0),
+            ),
+            (
+                "43",
+                player_follow_through_state_change(&c, ActiveSide::Right, 0.0),
+            ),
             (
                 "52",
                 player_auto_attack_state_change(&c, ActiveSide::Right, (0.0, 0.0), 0.0),
@@ -706,7 +738,11 @@ mod tests {
         assert_eq!(props(&f).int(9), Some(ActiveSide::Middle as i64));
         for side in [ActiveSide::Middle, ActiveSide::Left, ActiveSide::Right] {
             let f = player_recovery_state_change(&c, side, 0.0);
-            assert_eq!(props(&f).int(9), Some(side as i64), "{side:?} passes through");
+            assert_eq!(
+                props(&f).int(9),
+                Some(side as i64),
+                "{side:?} passes through"
+            );
         }
     }
 
@@ -741,10 +777,7 @@ mod tests {
             ActiveSide::Right,
             0.15,
         ));
-        for (prop, expected) in [
-            (9, (0.305_514, 0.952_187)),
-            (10, (0.760_250, 0.435_185)),
-        ] {
+        for (prop, expected) in [(9, (0.305_514, 0.952_187)), (10, (0.760_250, 0.435_185))] {
             match nd.get(prop) {
                 Some(NetDataValue::Vector2(v)) => {
                     assert_eq!(f32::from_le_bytes(v[..4].try_into().unwrap()), expected.0);

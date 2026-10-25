@@ -11,9 +11,7 @@ use tokio::{select, sync::mpsc, time::sleep};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::{
-    BladeApiError, ServerGlobal,
-    arena::MatchmakingMessage,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, arena::MatchmakingMessage, session::SessionLookedUpMaybe,
 };
 
 /// Whether an inbound item ends the socket: the client closed it (a Close frame, or
@@ -25,10 +23,11 @@ use crate::{
 /// session's matchmaking slot, so a `MatchmakingSucceeded` was "sent" into it and
 /// lost. Three of the five no-show matches of 2026-10-01..11 paired a player whose
 /// socket had closed 5–11 s earlier (#375).
-fn ends_socket(
-    item: &Option<Result<AggregatedMessage, actix_ws::ProtocolError>>,
-) -> bool {
-    matches!(item, None | Some(Err(_)) | Some(Ok(AggregatedMessage::Close(_))))
+fn ends_socket(item: &Option<Result<AggregatedMessage, actix_ws::ProtocolError>>) -> bool {
+    matches!(
+        item,
+        None | Some(Err(_)) | Some(Ok(AggregatedMessage::Close(_)))
+    )
 }
 
 #[get("/blades.bgs.services/api/rms/v1/public/")]
@@ -178,6 +177,8 @@ mod tests {
         assert!(ends_socket(&Some(Ok(AggregatedMessage::Close(None)))));
         assert!(ends_socket(&Some(Err(actix_ws::ProtocolError::BadOpCode))));
         assert!(!ends_socket(&Some(Ok(AggregatedMessage::Ping("x".into())))));
-        assert!(!ends_socket(&Some(Ok(AggregatedMessage::Text("{}".into())))));
+        assert!(!ends_socket(&Some(Ok(AggregatedMessage::Text(
+            "{}".into()
+        )))));
     }
 }

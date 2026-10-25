@@ -29,7 +29,9 @@ use std::ops::RangeInclusive;
 
 use uuid::Uuid;
 
-use crate::features::beginner_economy::{GLORIOUS_SOUL_GEM, GRAND_SOUL_GEM, SOUL_GEMS, TRANSCENDENT_SOUL_GEM};
+use crate::features::beginner_economy::{
+    GLORIOUS_SOUL_GEM, GRAND_SOUL_GEM, SOUL_GEMS, TRANSCENDENT_SOUL_GEM,
+};
 use crate::features::store_bundles::mix;
 
 /// The opener's character levels the rule applies to (#421, #429).
@@ -45,7 +47,11 @@ pub const ELDER: u64 = 4;
 pub const LEGENDARY: u64 = 5;
 
 /// The soul gem a chest pays, with its weight in percent (#421, #429).
-pub const GRADES: [(Uuid, u64); 3] = [(GRAND_SOUL_GEM, 60), (GLORIOUS_SOUL_GEM, 20), (TRANSCENDENT_SOUL_GEM, 20)];
+pub const GRADES: [(Uuid, u64); 3] = [
+    (GRAND_SOUL_GEM, 60),
+    (GLORIOUS_SOUL_GEM, 20),
+    (TRANSCENDENT_SOUL_GEM, 20),
+];
 
 /// How many soul gems a chest pays under the rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +79,14 @@ fn grade(seed: u64) -> Uuid {
     let mut at = mix(seed) % total;
     GRADES
         .iter()
-        .find(|(_, w)| if at < *w { true } else { at -= w; false })
+        .find(|(_, w)| {
+            if at < *w {
+                true
+            } else {
+                at -= w;
+                false
+            }
+        })
         .map_or(GRAND_SOUL_GEM, |(k, _)| *k)
 }
 
@@ -85,13 +98,17 @@ pub fn pay_chest_soul_gems(stacks: &mut HashMap<Uuid, u64>, tier: u64, level: i6
     if !LEVELS.contains(&level) || !stacks.keys().any(|id| SOUL_GEMS.contains(id)) {
         return;
     }
-    let mut rolled: Vec<(Uuid, u64)> =
-        stacks.iter().filter(|(id, _)| SOUL_GEMS.contains(id)).map(|(id, n)| (*id, *n)).collect();
+    let mut rolled: Vec<(Uuid, u64)> = stacks
+        .iter()
+        .filter(|(id, _)| SOUL_GEMS.contains(id))
+        .map(|(id, n)| (*id, *n))
+        .collect();
     rolled.sort_unstable();
     stacks.retain(|id, _| !SOUL_GEMS.contains(id));
     match counts {
         Counts::OneStack(range) => {
-            let count = range.start() + mix(seed ^ 0x0421_C0E7_5C4E_5701) % (range.end() - range.start() + 1);
+            let count = range.start()
+                + mix(seed ^ 0x0421_C0E7_5C4E_5701) % (range.end() - range.start() + 1);
             stacks.insert(grade(seed ^ 0x0421_6EAD_E5C4_E570), count);
         }
         Counts::AsRolled => {
@@ -127,7 +144,16 @@ mod tests {
 
     #[test]
     fn wooden_chests_and_levels_below_45_are_untouched() {
-        for (tier, level) in [(1, 70), (0, 70), (6, 70), (SILVER, 44), (GOLD, 44), (ELDER, 44), (LEGENDARY, 44), (GOLD, 1)] {
+        for (tier, level) in [
+            (1, 70),
+            (0, 70),
+            (6, 70),
+            (SILVER, 44),
+            (GOLD, 44),
+            (ELDER, 44),
+            (LEGENDARY, 44),
+            (GOLD, 1),
+        ] {
             let mut s = with_gem(SOUL_GEMS[3], 2);
             pay_chest_soul_gems(&mut s, tier, level, 7);
             assert_eq!(s, with_gem(SOUL_GEMS[3], 2), "tier {tier} level {level}");
@@ -137,7 +163,11 @@ mod tests {
     /// Silver and Gold: two kinds in, one kind out, nothing else touched.
     #[test]
     fn several_kinds_become_one_stack_in_silver_and_gold() {
-        let mut s = HashMap::from([(SOUL_GEMS[2], 1u64), (SOUL_GEMS[7], 3), (crate::economy::GOLD, 500)]);
+        let mut s = HashMap::from([
+            (SOUL_GEMS[2], 1u64),
+            (SOUL_GEMS[7], 3),
+            (crate::economy::GOLD, 500),
+        ]);
         pay_chest_soul_gems(&mut s, GOLD, 45, 1);
         assert_eq!(s.keys().filter(|id| SOUL_GEMS.contains(id)).count(), 1);
         assert_eq!(s[&crate::economy::GOLD], 500);
@@ -148,9 +178,17 @@ mod tests {
     fn elder_and_legendary_keep_every_gem() {
         for tier in [ELDER, LEGENDARY] {
             for seed in 0..200 {
-                let mut s = HashMap::from([(SOUL_GEMS[8], 2u64), (SOUL_GEMS[9], 1), (crate::economy::GOLD, 500)]);
+                let mut s = HashMap::from([
+                    (SOUL_GEMS[8], 2u64),
+                    (SOUL_GEMS[9], 1),
+                    (crate::economy::GOLD, 500),
+                ]);
                 pay_chest_soul_gems(&mut s, tier, 70, seed);
-                let gems: u64 = s.iter().filter(|(id, _)| SOUL_GEMS.contains(id)).map(|(_, n)| n).sum();
+                let gems: u64 = s
+                    .iter()
+                    .filter(|(id, _)| SOUL_GEMS.contains(id))
+                    .map(|(_, n)| n)
+                    .sum();
                 assert_eq!(gems, 3);
                 assert!(s.keys().all(|id| !SOUL_GEMS[..7].contains(id)));
                 assert_eq!(s[&crate::economy::GOLD], 500);

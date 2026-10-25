@@ -325,10 +325,7 @@ impl Match {
                  ADMISSION ORDER so the match cannot hang — but if admission order ≠ ticket order \
                  these players' identities are SWAPPED (each sees the opponent wearing its own \
                  appearance). psid_to_slot = {:?}, bound so far = {:?}",
-                self.game_session_id,
-                SLOT_BIND_GRACE,
-                self.psid_to_slot,
-                self.peer_to_slot,
+                self.game_session_id, SLOT_BIND_GRACE, self.psid_to_slot, self.peer_to_slot,
             );
         }
         self.commit_fifo_binding();
@@ -633,8 +630,13 @@ impl MatchRegistry {
         let order = self
             .next_order
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut instance =
-            MatchInstance::new_with_ranking_context(fighters, capacity, loadouts, Instant::now(), ranking);
+        let mut instance = MatchInstance::new_with_ranking_context(
+            fighters,
+            capacity,
+            loadouts,
+            Instant::now(),
+            ranking,
+        );
         // The Match net-object propId9 = gameSessionId (s506 obj 123 carried the
         // match's UUID here). Cosmetic to the binding gate (propId5 MatchState), but
         // sent for fidelity.
@@ -669,7 +671,7 @@ impl MatchRegistry {
                 players: Vec::with_capacity(capacity),
                 instance,
                 created_at: Instant::now(),
-            reached_capacity: false,
+                reached_capacity: false,
                 abandoned: false,
                 _permit: permit,
                 psid_to_slot,
@@ -813,7 +815,11 @@ impl MatchRegistry {
             m.bind_slot(peer, slot, "trusted matchmaking HTTP source IP");
         } else if m.capacity <= 1 {
             let slot = m.psid_to_slot.values().copied().min().unwrap_or(0);
-            m.bind_slot(peer, slot, "single-peer match — only one possible fighter slot");
+            m.bind_slot(
+                peer,
+                slot,
+                "single-peer match — only one possible fighter slot",
+            );
         } else {
             m.bind_by_elimination();
         }
@@ -839,10 +845,11 @@ impl MatchRegistry {
     /// active generation.
     pub fn has_fresh_connection_reservation(&self, peer: SocketAddr) -> bool {
         let current = self.addr_index.lock().unwrap().get(&peer).copied();
-        self.matches.lock().unwrap().values().any(|m| {
-            Some(m.game_session_id) != current
-                && m.accepts_new_connection()
-        })
+        self.matches
+            .lock()
+            .unwrap()
+            .values()
+            .any(|m| Some(m.game_session_id) != current && m.accepts_new_connection())
     }
 
     /// Update the smoothed RTT for a live ENet peer and mirror it onto the peer's
@@ -902,7 +909,9 @@ impl MatchRegistry {
                 }
                 let seq = m.instance.next_seq();
                 let c = &m.players[sender].crypto;
-                replies.push(crate::arena::udp::build_send_reliable(0, seq, c, &user_data));
+                replies.push(crate::arena::udp::build_send_reliable(
+                    0, seq, c, &user_data,
+                ));
             }
         }
         Some(InboundOutcome {
@@ -968,7 +977,11 @@ impl MatchRegistry {
         // carries none — so it is also what releases the held identity burst.
         if !m.peer_to_slot.contains_key(peer) {
             if let Some(slot) = extract_fighter_slot_from_playerinfo(&plain, &m.psid_to_slot) {
-                m.bind_slot(*peer, slot, "playerSessionId in an identity-bearing c2s frame");
+                m.bind_slot(
+                    *peer,
+                    slot,
+                    "playerSessionId in an identity-bearing c2s frame",
+                );
             }
         }
         // Use the authoritative fighter slot if available, else the FIFO index. (An
@@ -1046,9 +1059,7 @@ impl MatchRegistry {
                     continue;
                 }
                 if candidate.is_some() {
-                    warn!(
-                        "match registry: refusing ambiguous encrypted peer rebind for {peer}"
-                    );
+                    warn!("match registry: refusing ambiguous encrypted peer rebind for {peer}");
                     return None;
                 }
                 candidate = Some((*gsid, player_idx, player.addr));
@@ -1056,7 +1067,9 @@ impl MatchRegistry {
         }
 
         let (gsid, player_idx, old_peer) = candidate?;
-        let m = matches.get_mut(&gsid).expect("rebind candidate match exists");
+        let m = matches
+            .get_mut(&gsid)
+            .expect("rebind candidate match exists");
         m.players[player_idx].addr = peer;
         m.players[player_idx].rebind_count = m.players[player_idx].rebind_count.saturating_add(1);
         if let Some(slot) = m.peer_to_slot.remove(&old_peer) {
@@ -1064,9 +1077,7 @@ impl MatchRegistry {
         }
         addr_index.remove(&old_peer);
         addr_index.insert(peer, gsid);
-        info!(
-            "match registry: encrypted peer rebind {old_peer} → {peer} in match {gsid}"
-        );
+        info!("match registry: encrypted peer rebind {old_peer} → {peer} in match {gsid}");
         // A reliable command is reliable only within one ENet peer generation. The
         // replacement PeerID has a new sequence space and cannot receive commands
         // queued on the old peer, so replay the CURRENT numeric MatchState plus its
@@ -1082,7 +1093,10 @@ impl MatchRegistry {
             chacha20_legacy_xor(&mut plaintext, &key, &nonce);
             replay.push((channel, plaintext));
         }
-        Some(EncryptedPeerRebind { old_addr: old_peer, replay })
+        Some(EncryptedPeerRebind {
+            old_addr: old_peer,
+            replay,
+        })
     }
 
     /// Drop a peer from its match (disconnect). When the last player leaves, the
@@ -1141,7 +1155,10 @@ impl MatchRegistry {
         // source that differs from the HTTP one) may well BE this player. Don't guess:
         // a duplicate `Succeeded` to a client that is already connecting is worse than
         // a missed replay, which the sweep still turns into a clean disconnect.
-        if m.players.iter().any(|p| !m.peer_to_slot.contains_key(&p.addr)) {
+        if m.players
+            .iter()
+            .any(|p| !m.peer_to_slot.contains_key(&p.addr))
+        {
             return false;
         }
         match m.psid_to_slot.get(player_session_id) {
@@ -1332,8 +1349,7 @@ impl MatchRegistry {
                     let age = now.saturating_duration_since(m.created_at);
                     (m.players.len() < m.capacity
                         && !m.reached_capacity
-                        && (age > CONNECT_DEADLINE
-                            || (m.abandoned && age > ABANDONED_MIN_AGE)))
+                        && (age > CONNECT_DEADLINE || (m.abandoned && age > ABANDONED_MIN_AGE)))
                         || age > MATCH_MAX_AGE
                 })
                 .map(|m| m.game_session_id)
@@ -1384,7 +1400,11 @@ impl MatchRegistry {
             } else {
                 disconnect_reason::TIMEOUT
             };
-            released.extend(addrs.iter().map(|&addr| ReclaimedPeer { addr, reason: code }));
+            released.extend(
+                addrs
+                    .iter()
+                    .map(|&addr| ReclaimedPeer { addr, reason: code }),
+            );
         }
         released
     }
@@ -1473,7 +1493,10 @@ impl MatchRegistry {
             }
         }
         let dead: std::collections::HashSet<Uuid> = finished.into_iter().collect();
-        self.pending.lock().unwrap().retain(|_, gsid| !dead.contains(gsid));
+        self.pending
+            .lock()
+            .unwrap()
+            .retain(|_, gsid| !dead.contains(gsid));
         addrs
     }
 
@@ -1532,7 +1555,12 @@ impl MatchRegistry {
     /// target currently resolves to (so the caller can 404 an empty match), without
     /// sending yet — the ENet loop owns the encrypt+send (see
     /// [`drain_debug_injections`](Self::drain_debug_injections)). `None` ⇒ no such match.
-    pub fn debug_enqueue(&self, gsid: Uuid, target: DebugTarget, plaintext: Vec<u8>) -> Option<usize> {
+    pub fn debug_enqueue(
+        &self,
+        gsid: Uuid,
+        target: DebugTarget,
+        plaintext: Vec<u8>,
+    ) -> Option<usize> {
         let resolved = {
             let matches = self.matches.lock().unwrap();
             let m = matches.get(&gsid)?;
@@ -1541,11 +1569,14 @@ impl MatchRegistry {
                 DebugTarget::Both => m.players.len(),
             }
         };
-        self.debug_inject_queue.lock().unwrap().push(DebugInjection {
-            gsid,
-            target,
-            plaintext,
-        });
+        self.debug_inject_queue
+            .lock()
+            .unwrap()
+            .push(DebugInjection {
+                gsid,
+                target,
+                plaintext,
+            });
         Some(resolved)
     }
 
@@ -1775,7 +1806,11 @@ mod tests {
         // They leave: the count must fall, or a departed player keeps delaying
         // everyone else forever.
         reg.remove(&peer);
-        assert_eq!(reg.live_human_count(), 0, "the count must fall when they leave");
+        assert_eq!(
+            reg.live_human_count(),
+            0,
+            "the count must fall when they leave"
+        );
     }
 
     #[test]
@@ -1856,7 +1891,10 @@ mod tests {
                 bytes
             })
             .collect();
-        assert_eq!(replay_plain[0][1], 0x35, "first repair is an op55 property update");
+        assert_eq!(
+            replay_plain[0][1], 0x35,
+            "first repair is an op55 property update"
+        );
         assert_eq!(
             arena_proto::parse_netdata(&replay_plain[0][2..]).int(5),
             Some(crate::arena::combat::state::MatchState::InRound as i64),
@@ -1891,7 +1929,8 @@ mod tests {
         let new_peer: SocketAddr = "109.56.118.105:38510".parse().unwrap();
 
         assert!(
-            reg.rebind_encrypted_peer(new_peer, &[0x6b, 0xde, 0, 0, 0, 0]).is_none()
+            reg.rebind_encrypted_peer(new_peer, &[0x6b, 0xde, 0, 0, 0, 0])
+                .is_none()
         );
         assert!(reg.is_active(&old_peer));
         assert!(!reg.is_active(&new_peer));
@@ -1950,7 +1989,8 @@ mod tests {
             old_gsid,
             1,
         ));
-        reg.admit_connection(addr, &[3u8; 32]).expect("old peer admitted");
+        reg.admit_connection(addr, &[3u8; 32])
+            .expect("old peer admitted");
 
         let new_gsid = Uuid::new_v4();
         assert!(reg.allocate_with_bots(
@@ -1965,7 +2005,8 @@ mod tests {
         );
 
         reg.peer_departed(&addr, Instant::now());
-        reg.admit_connection(addr, &[5u8; 32]).expect("re-queued peer admitted");
+        reg.admit_connection(addr, &[5u8; 32])
+            .expect("re-queued peer admitted");
         assert_eq!(reg.active_count(), 1, "the empty stuck match is retired");
         assert_eq!(reg.addr_index.lock().unwrap().get(&addr), Some(&new_gsid));
     }
@@ -1981,8 +2022,10 @@ mod tests {
         ));
         let departed: SocketAddr = "10.99.0.47:41000".parse().unwrap();
         let survivor: SocketAddr = "10.99.0.48:42000".parse().unwrap();
-        reg.admit(departed, "slot-zero", &[3u8; 32]).expect("slot 0 admitted");
-        reg.admit(survivor, "slot-one", &[5u8; 32]).expect("slot 1 admitted");
+        reg.admit(departed, "slot-zero", &[3u8; 32])
+            .expect("slot 0 admitted");
+        reg.admit(survivor, "slot-one", &[5u8; 32])
+            .expect("slot 1 admitted");
         reg.peer_departed(&departed, Instant::now());
 
         let mut matches = reg.matches.lock().unwrap();
@@ -2107,7 +2150,11 @@ mod tests {
         let reg = MatchRegistry::new(4);
         let (_gsid, _a, at) = half_joined(&reg);
         assert!(reg.sweep_expired(at + Duration::from_secs(20)).is_empty());
-        assert_eq!(reg.active_count(), 1, "still inside the window an opponent may dial in");
+        assert_eq!(
+            reg.active_count(),
+            1,
+            "still inside the window an opponent may dial in"
+        );
         assert_eq!(reg.sweep_expired(at + Duration::from_secs(31)).len(), 1);
         assert_eq!(reg.active_count(), 0);
     }
@@ -2143,7 +2190,10 @@ mod tests {
         let b: SocketAddr = "5.91.28.0:31781".parse().unwrap();
         assert!(reg.admit(b, "psess-never", &[8u8; 32]).is_some());
         assert!(!reg.abandon_unfilled(gsid));
-        assert!(reg.sweep_expired(at + ABANDONED_MIN_AGE + Duration::from_secs(1)).is_empty());
+        assert!(
+            reg.sweep_expired(at + ABANDONED_MIN_AGE + Duration::from_secs(1))
+                .is_empty()
+        );
         assert_eq!(reg.active_count(), 1);
     }
 
@@ -2156,10 +2206,16 @@ mod tests {
         assert!(!reg.awaits_player(gsid, "psess-came"), "already connected");
         assert!(reg.awaits_player(gsid, "psess-never"), "still expected");
         assert!(!reg.awaits_player(gsid, "psess-unknown"));
-        assert!(!reg.awaits_player(Uuid::new_v4(), "psess-never"), "no such match");
+        assert!(
+            !reg.awaits_player(Uuid::new_v4(), "psess-never"),
+            "no such match"
+        );
         let b: SocketAddr = "5.91.28.0:31781".parse().unwrap();
         assert!(reg.admit(b, "psess-never", &[8u8; 32]).is_some());
-        assert!(!reg.awaits_player(gsid, "psess-never"), "a full match awaits nobody");
+        assert!(
+            !reg.awaits_player(gsid, "psess-never"),
+            "a full match awaits nobody"
+        );
     }
 
     #[test]
@@ -2261,7 +2317,10 @@ mod tests {
         // Ticket order: psid A → fighter slot 0 (Alpha), psid B → fighter slot 1 (Bravo).
         assert!(reg.allocate(
             &[PSID_A.to_string(), PSID_B.to_string()],
-            vec![ident_loadout("Alpha", UUID_A), ident_loadout("Bravo", UUID_B)],
+            vec![
+                ident_loadout("Alpha", UUID_A),
+                ident_loadout("Bravo", UUID_B)
+            ],
             gsid,
         ));
 
@@ -2312,7 +2371,10 @@ mod tests {
         let crypto: Vec<(SocketAddr, [u8; 32], [u8; 8])> = {
             let matches = reg.matches.lock().unwrap();
             let m = matches.get(&gsid).unwrap();
-            m.players.iter().map(|p| (p.addr, p.crypto.key, p.crypto.nonce)).collect()
+            m.players
+                .iter()
+                .map(|p| (p.addr, p.crypto.key, p.crypto.nonce))
+                .collect()
         };
         let t0 = Instant::now();
         let mut per_peer_profiles: HashMap<SocketAddr, Vec<String>> = HashMap::new();
@@ -2331,7 +2393,10 @@ mod tests {
                     let nd = arena_proto::parse_netdata(&plain[2..]);
                     if nd.int(3) == Some(35) {
                         if let Some(json) = nd.string(5) {
-                            per_peer_profiles.entry(addr).or_default().push(json.to_string());
+                            per_peer_profiles
+                                .entry(addr)
+                                .or_default()
+                                .push(json.to_string());
                         }
                     }
                 }
@@ -2386,7 +2451,10 @@ mod tests {
         let public_ip: IpAddr = "93.165.250.244".parse().unwrap();
         assert!(reg.allocate_with_bots_and_peer_ips(
             &[PSID_A.to_string(), PSID_B.to_string()],
-            vec![ident_loadout("Yaskrava", UUID_A), ident_loadout("Flappety", UUID_B)],
+            vec![
+                ident_loadout("Yaskrava", UUID_A),
+                ident_loadout("Flappety", UUID_B)
+            ],
             gsid,
             0,
             &[Some(vpn_ip), Some(public_ip)],
@@ -2395,15 +2463,31 @@ mod tests {
 
         let public_peer: SocketAddr = "93.165.250.244:33565".parse().unwrap();
         let vpn_peer: SocketAddr = "10.99.0.102:46358".parse().unwrap();
-        reg.admit_connection(public_peer, &[3u8; 32]).expect("public peer admitted");
-        reg.admit_connection(vpn_peer, &[5u8; 32]).expect("VPN peer admitted");
+        reg.admit_connection(public_peer, &[3u8; 32])
+            .expect("public peer admitted");
+        reg.admit_connection(vpn_peer, &[5u8; 32])
+            .expect("VPN peer admitted");
 
         let matches = reg.matches.lock().unwrap();
         let m = matches.get(&gsid).unwrap();
-        assert_eq!(m.peer_to_slot.get(&vpn_peer), Some(&0), "Yaskrava ticket → slot 0");
-        assert_eq!(m.peer_to_slot.get(&public_peer), Some(&1), "Flappety ticket → slot 1");
-        assert!(m.all_slots_bound(), "identity must be known before the profile burst");
-        assert!(!m.fallback_logged, "trusted ingress identity must avoid FIFO entirely");
+        assert_eq!(
+            m.peer_to_slot.get(&vpn_peer),
+            Some(&0),
+            "Yaskrava ticket → slot 0"
+        );
+        assert_eq!(
+            m.peer_to_slot.get(&public_peer),
+            Some(&1),
+            "Flappety ticket → slot 1"
+        );
+        assert!(
+            m.all_slots_bound(),
+            "identity must be known before the profile burst"
+        );
+        assert!(
+            !m.fallback_logged,
+            "trusted ingress identity must avoid FIFO entirely"
+        );
     }
 
     /// Phase 2 — the LIVE ENet path (`admit_connection`), where op-0x38 carries no
@@ -2420,15 +2504,20 @@ mod tests {
         let gsid = Uuid::new_v4();
         assert!(reg.allocate(
             &[PSID_A.to_string(), PSID_B.to_string()],
-            vec![ident_loadout("Alpha", UUID_A), ident_loadout("Bravo", UUID_B)],
+            vec![
+                ident_loadout("Alpha", UUID_A),
+                ident_loadout("Bravo", UUID_B)
+            ],
             gsid,
         ));
 
         let addr_a: SocketAddr = "127.0.0.1:42000".parse().unwrap();
         let addr_b: SocketAddr = "127.0.0.1:42001".parse().unwrap();
         // The real ENet handshake: pubkey only, no psid. Neither peer can be bound.
-        reg.admit_connection(addr_a, &[3u8; 32]).expect("A admitted");
-        reg.admit_connection(addr_b, &[5u8; 32]).expect("B admitted");
+        reg.admit_connection(addr_a, &[3u8; 32])
+            .expect("A admitted");
+        reg.admit_connection(addr_b, &[5u8; 32])
+            .expect("B admitted");
         {
             let matches = reg.matches.lock().unwrap();
             let m = matches.get(&gsid).unwrap();
@@ -2481,9 +2570,21 @@ mod tests {
         );
         // The fallback is committed explicitly, so the rest of the match is at least
         // SELF-CONSISTENT: two peers, two distinct slots, nothing left implicit.
-        assert_eq!(m.peer_to_slot.get(&addr_a), Some(&0), "FIFO: A admitted first → slot 0");
-        assert_eq!(m.peer_to_slot.get(&addr_b), Some(&1), "FIFO: B admitted second → slot 1");
-        assert_ne!(m.instance.state_name(), "Connecting", "the match left the connect gate");
+        assert_eq!(
+            m.peer_to_slot.get(&addr_a),
+            Some(&0),
+            "FIFO: A admitted first → slot 0"
+        );
+        assert_eq!(
+            m.peer_to_slot.get(&addr_b),
+            Some(&1),
+            "FIFO: B admitted second → slot 1"
+        );
+        assert_ne!(
+            m.instance.state_name(),
+            "Connecting",
+            "the match left the connect gate"
+        );
     }
 
     /// A single-peer match (solo / vs-bot) has exactly ONE possible assignment, so it
@@ -2495,7 +2596,10 @@ mod tests {
         let gsid = Uuid::new_v4();
         assert!(reg.allocate_with_bots(
             &[PSID_A.to_string()],
-            vec![ident_loadout("Alpha", UUID_A), ident_loadout("Botty", UUID_B)],
+            vec![
+                ident_loadout("Alpha", UUID_A),
+                ident_loadout("Botty", UUID_B)
+            ],
             gsid,
             1, // one bot fighter, one real peer slot
         ));

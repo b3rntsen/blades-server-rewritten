@@ -62,7 +62,11 @@ pub fn cast_refusal(f: &Fighter, ability_uuid: &str, now: Instant) -> Option<Cas
 
 /// [`cast_refusal`] for a bot that will lower its guard first (a released guard goes
 /// Blocking → Idle), which is what the bot loop does before it casts.
-pub fn cast_refusal_after_guard(f: &Fighter, ability_uuid: &str, now: Instant) -> Option<CastRefusal> {
+pub fn cast_refusal_after_guard(
+    f: &Fighter,
+    ability_uuid: &str,
+    now: Instant,
+) -> Option<CastRefusal> {
     let state = match f.actor_state() {
         ActorStateType::Blocking => ActorStateType::Idle,
         s => s,
@@ -161,22 +165,49 @@ fn controller_type(weapon: Option<WeaponType>) -> ControllerType {
 // ends. The one exception is the 1H/SmallWeapons dodge, which retail ended at
 // 1.234-1.250 s (70 casts) against the clip's 1.713 s; the retail figure is used,
 // because an end that is too late would swallow the player's next inputs.
-const POWER_1H: ManeuverTiming = ManeuverTiming { impacts: &[0.779_136], end: 0.917_049 };
-const POWER_2H: ManeuverTiming = ManeuverTiming { impacts: &[0.751_629], end: 0.904_180 };
-const QUICK_1H: ManeuverTiming = ManeuverTiming { impacts: &[0.195_024, 0.703_207], end: 1.196_565 };
-const QUICK_2H: ManeuverTiming = ManeuverTiming { impacts: &[0.215_827, 0.714_207], end: 1.328_459 };
-const DODGE_1H: ManeuverTiming = ManeuverTiming { impacts: &[1.133_333], end: 1.25 };
-const DODGE_2H: ManeuverTiming = ManeuverTiming { impacts: &[1.137_825], end: 1.187_631 };
-const BASH: ManeuverTiming = ManeuverTiming { impacts: &[0.331_469], end: 1.006_707 };
-const FURY: ManeuverTiming = ManeuverTiming { impacts: &[], end: 0.871_108 };
+const POWER_1H: ManeuverTiming = ManeuverTiming {
+    impacts: &[0.779_136],
+    end: 0.917_049,
+};
+const POWER_2H: ManeuverTiming = ManeuverTiming {
+    impacts: &[0.751_629],
+    end: 0.904_180,
+};
+const QUICK_1H: ManeuverTiming = ManeuverTiming {
+    impacts: &[0.195_024, 0.703_207],
+    end: 1.196_565,
+};
+const QUICK_2H: ManeuverTiming = ManeuverTiming {
+    impacts: &[0.215_827, 0.714_207],
+    end: 1.328_459,
+};
+const DODGE_1H: ManeuverTiming = ManeuverTiming {
+    impacts: &[1.133_333],
+    end: 1.25,
+};
+const DODGE_2H: ManeuverTiming = ManeuverTiming {
+    impacts: &[1.137_825],
+    end: 1.187_631,
+};
+const BASH: ManeuverTiming = ManeuverTiming {
+    impacts: &[0.331_469],
+    end: 1.006_707,
+};
+const FURY: ManeuverTiming = ManeuverTiming {
+    impacts: &[],
+    end: 0.871_108,
+};
 
 /// The weapon type that picks a maneuver's controller. A synthetic weapon with no
 /// template (bots, test fixtures) falls back on its weight: Heavy plays the 2H clips.
 pub fn timing_weapon(f: &Fighter) -> Option<WeaponType> {
     use super::tables::Weight;
-    f.loadout.weapon_template.map(|w| w.weapon_type).or_else(|| {
-        matches!(f.loadout.weapon.weight, Some(Weight::Heavy)).then_some(WeaponType::Greatsword)
-    })
+    f.loadout
+        .weapon_template
+        .map(|w| w.weapon_type)
+        .or_else(|| {
+            matches!(f.loadout.weapon.weight, Some(Weight::Heavy)).then_some(WeaponType::Greatsword)
+        })
 }
 
 /// The authored timing of a player maneuver for the caster's weapon, or `None` for
@@ -195,15 +226,24 @@ pub fn maneuver_timing(
     let two_handed = controller_type(weapon) == ControllerType::TwoHanded;
     let pick = |one: ManeuverTiming, two: ManeuverTiming| if two_handed { two } else { one };
     Some(match a.editor_name {
-        "PowerAttack" | "Skullcrusher" | "Guardbreaker" | "IndomitableSmash" => pick(POWER_1H, POWER_2H),
-        "QuickStrikes" | "PiercingStrikes" | "VenomStrikes" | "RecoveryStrikes" => pick(QUICK_1H, QUICK_2H),
-        "DodgingStrike" | "AdrenalineDodge" | "FocusingDodge" | "RenewingDodge" => pick(DODGE_1H, DODGE_2H),
+        "PowerAttack" | "Skullcrusher" | "Guardbreaker" | "IndomitableSmash" => {
+            pick(POWER_1H, POWER_2H)
+        }
+        "QuickStrikes" | "PiercingStrikes" | "VenomStrikes" | "RecoveryStrikes" => {
+            pick(QUICK_1H, QUICK_2H)
+        }
+        "DodgingStrike" | "AdrenalineDodge" | "FocusingDodge" | "RenewingDodge" => {
+            pick(DODGE_1H, DODGE_2H)
+        }
         "ShieldBash" | "HarryingBash" | "StaggeringBash" | "ReflectingBash" => {
             let guard = gamedata::ability_rank_clamped(ability_uuid, u16::from(level.max(1)))
                 .and_then(|r| r.block_duration())
                 .filter(|v| v.is_finite() && *v > 0.0)
                 .unwrap_or(0.0);
-            ManeuverTiming { end: guard + BASH.end, ..BASH }
+            ManeuverTiming {
+                end: guard + BASH.end,
+                ..BASH
+            }
         }
         "RecklessFury" => FURY,
         _ => return None,
@@ -251,7 +291,9 @@ pub fn cooldown_start_offset(ability_uuid: &str, level: u8, maneuver_end: Option
 /// A channelled spell's channel: `_channelMaxLength` (Frostbite, Consuming Inferno).
 /// Thunderstorm and Poison Cloud's cloud are not channels (06 §1.1, §1.9).
 pub fn channelled_secs(r: &gamedata::AbilityRank) -> f32 {
-    r.get(gamedata::AbilityField::ChannelMaxLength).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0)
+    r.get(gamedata::AbilityField::ChannelMaxLength)
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(0.0)
 }
 
 /// The interruptible phase of a spell: its `AbilityChannel` wind-up
@@ -260,7 +302,11 @@ pub fn channelled_secs(r: &gamedata::AbilityRank) -> f32 {
 /// Wall of Fire; 06 §1.9), which a stagger therefore cannot interrupt.
 pub fn spell_interruptible_secs(ability_uuid: &str, level: u8) -> f32 {
     gamedata::ability_rank_clamped(ability_uuid, u16::from(level.max(1)))
-        .map(|r| r.channel_duration().filter(|v| v.is_finite() && *v > 0.0).unwrap_or_else(|| channelled_secs(r)))
+        .map(|r| {
+            r.channel_duration()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or_else(|| channelled_secs(r))
+        })
         .unwrap_or(0.0)
 }
 
@@ -326,7 +372,11 @@ pub fn process_interrupts(combat: &mut MatchCombat, now: Instant) -> Vec<(usize,
 /// Only spells are touched: a maneuver is not a channel (a bash's own guard, raised at
 /// its cast, is skipped for that reason). The bound is strict, so a spell accepted at
 /// the very instant of the transition has not been left and keeps running.
-pub fn self_interrupt_spells(combat: &mut MatchCombat, slot: usize, at: Instant) -> Vec<(usize, Vec<u8>)> {
+pub fn self_interrupt_spells(
+    combat: &mut MatchCombat,
+    slot: usize,
+    at: Instant,
+) -> Vec<(usize, Vec<u8>)> {
     let hit: Vec<Execution> = {
         let f = &mut combat.fighters[slot];
         let (hit, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut f.executions)
@@ -340,7 +390,11 @@ pub fn self_interrupt_spells(combat: &mut MatchCombat, slot: usize, at: Instant)
 
 /// A maneuver cast while another runs replaces it: `ChangeManeuverInProgress@0x1d55a54`
 /// self-interrupts the old one, so its queued hits are lost (05 §2.8).
-pub fn replace_running_maneuver(combat: &mut MatchCombat, slot: usize, now: Instant) -> Vec<(usize, Vec<u8>)> {
+pub fn replace_running_maneuver(
+    combat: &mut MatchCombat,
+    slot: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
     let hit: Vec<Execution> = {
         let f = &mut combat.fighters[slot];
         let (hit, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut f.executions)
@@ -425,10 +479,19 @@ fn end_executions(
             "combat: slot {slot} {} INTERRUPTED {:.2}s in ({}, {dropped_impacts} impact(s) dropped{})",
             e.ability_uuid,
             at.saturating_duration_since(e.started_at).as_secs_f32(),
-            if self_interrupt { "self-interrupt" } else { "stagger/paralysis" },
-            if stopped_channel { ", channel stopped" } else { "" },
+            if self_interrupt {
+                "self-interrupt"
+            } else {
+                "stagger/paralysis"
+            },
+            if stopped_channel {
+                ", channel stopped"
+            } else {
+                ""
+            },
         );
-        let frame = messages_state::interrupt_ability(f.net_object_id, &e.ability_uuid, self_interrupt);
+        let frame =
+            messages_state::interrupt_ability(f.net_object_id, &e.ability_uuid, self_interrupt);
         for v in 0..viewers {
             out.push((v, frame.clone()));
         }
@@ -515,7 +578,12 @@ mod tests {
         at: Instant,
     ) -> Vec<(usize, Vec<u8>)> {
         let uuid = uuid_of(editor);
-        if !c.fighters[slot].loadout.abilities.iter().any(|a| a.instance_uuid == uuid) {
+        if !c.fighters[slot]
+            .loadout
+            .abilities
+            .iter()
+            .any(|a| a.instance_uuid == uuid)
+        {
             c.fighters[slot].loadout.abilities.push(EquippedAbility {
                 instance_uuid: uuid.to_string(),
                 level: 1,
@@ -532,7 +600,9 @@ mod tests {
     }
 
     fn count(out: &[(usize, Vec<u8>)], gmid: u8) -> usize {
-        out.iter().filter(|(_, f)| messages::user_message_gmid(f) == Some(gmid)).count()
+        out.iter()
+            .filter(|(_, f)| messages::user_message_gmid(f) == Some(gmid))
+            .count()
     }
 
     /// Every op59 as `(dest, ability id, selfInterrupt)`.
@@ -592,13 +662,23 @@ mod tests {
             "Ward",
         ];
         for name in quick_tagged {
-            assert!(is_quick(uuid_of(name)), "{name} is tag-7 in abilities_full.json");
+            assert!(
+                is_quick(uuid_of(name)),
+                "{name} is tag-7 in abilities_full.json"
+            );
         }
         assert_eq!(quick_tagged.len(), 15);
         // Controls: abilities whose shipped tags carry no 7.
         for name in [
-            "Fireball", "LightningBolt", "IceSpike", "QuickStrikes", "PowerAttack",
-            "HarryingBash", "RecklessFury", "ResistElements", "Frostbite",
+            "Fireball",
+            "LightningBolt",
+            "IceSpike",
+            "QuickStrikes",
+            "PowerAttack",
+            "HarryingBash",
+            "RecklessFury",
+            "ResistElements",
+            "Frostbite",
         ] {
             assert!(!is_quick(uuid_of(name)), "{name} carries no tag 7");
         }
@@ -615,19 +695,34 @@ mod tests {
         let mut c = combat(t0, 0);
         let hp = c.fighters[1].health;
         cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0);
-        assert_eq!(c.pending_impacts.len(), 1, "Fireball waits for its 0.9 s channel");
+        assert_eq!(
+            c.pending_impacts.len(),
+            1,
+            "Fireball waits for its 0.9 s channel"
+        );
 
         let hit_at = t0 + secs(0.3);
         assert!(c.fighters[0].apply_stagger_for(hit_at, 1.5));
         let out = drain_state_changes(&mut c, hit_at);
         assert_op59(&out, uuid_of("Fireball"), false);
         // Retail order: op59 before the op39 that enters Staggered (83/83 captured).
-        let first59 = out.iter().position(|(_, f)| messages::user_message_gmid(f) == Some(59));
-        let first39 = out.iter().position(|(_, f)| messages::user_message_gmid(f) == Some(39));
-        assert!(first39.is_some() && first59 < first39, "op59 must precede the Staggered op39");
+        let first59 = out
+            .iter()
+            .position(|(_, f)| messages::user_message_gmid(f) == Some(59));
+        let first39 = out
+            .iter()
+            .position(|(_, f)| messages::user_message_gmid(f) == Some(39));
+        assert!(
+            first39.is_some() && first59 < first39,
+            "op59 must precede the Staggered op39"
+        );
 
         let late = resolve::land_due_impacts(&mut c, t0 + secs(1.5));
-        assert_eq!(count(&late, 50), 0, "an interrupted Fireball deals no damage");
+        assert_eq!(
+            count(&late, 50),
+            0,
+            "an interrupted Fireball deals no damage"
+        );
         assert_eq!(c.fighters[1].health, hp);
         assert_eq!(
             c.fighters[0].cooldowns.get(uuid_of("Fireball")).copied(),
@@ -642,9 +737,16 @@ mod tests {
         let t0 = Instant::now();
         let mut c = combat(t0, 0);
         cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0);
-        assert_eq!(count(&resolve::land_due_impacts(&mut c, t0 + secs(0.89)), 50), 0);
+        assert_eq!(
+            count(&resolve::land_due_impacts(&mut c, t0 + secs(0.89)), 50),
+            0
+        );
         let out = resolve::land_due_impacts(&mut c, t0 + secs(0.91));
-        assert_eq!(hits_on(&c, &out, 1), 1, "Fireball lands after its 0.9 s channel");
+        assert_eq!(
+            hits_on(&c, &out, 1),
+            1,
+            "Fireball lands after its 0.9 s channel"
+        );
         assert!(op59s(&out).is_empty());
     }
 
@@ -688,7 +790,10 @@ mod tests {
         c.fighters[0].apply_stagger_for(t0 + secs(0.5), 1.5);
         let out = drain_state_changes(&mut c, t0 + secs(0.5));
         assert_op59(&out, uuid_of("DelayedLightningBolt"), false);
-        assert_eq!(count(&resolve::land_due_impacts(&mut c, t0 + secs(5.4)), 50), 0);
+        assert_eq!(
+            count(&resolve::land_due_impacts(&mut c, t0 + secs(5.4)), 50),
+            0
+        );
 
         // Staggered in the delay: the bolt still lands at 1.3 + 4.0 s.
         let mut c = combat(t0, 0);
@@ -703,7 +808,10 @@ mod tests {
         let mut c = combat(t0, 0);
         cast(&mut c, 0, "DelayedLightningBolt", AbilityTag::Damage, t0);
         c.fighters[0].health = 0;
-        assert_eq!(count(&resolve::land_due_impacts(&mut c, t0 + secs(5.4)), 50), 0);
+        assert_eq!(
+            count(&resolve::land_due_impacts(&mut c, t0 + secs(5.4)), 50),
+            0
+        );
     }
 
     /// Frostbite channels for `_channelMaxLength` 3 s at 0.2 s ticks. Staggered at
@@ -736,14 +844,23 @@ mod tests {
         let (full, none, resist_full) = run(false);
         assert!(none.is_empty());
         assert!(full >= 15, "the control channel runs its 3 s ({full} hits)");
-        assert!(resist_full > 0, "Frostbite grants its resistance for the channel");
+        assert!(
+            resist_full > 0,
+            "Frostbite grants its resistance for the channel"
+        );
 
         let (cut, op59, resist_cut) = run(true);
         assert_eq!(op59.len(), 2, "one op59 per viewer");
-        assert!(op59.iter().all(|(_, id, flag)| id == uuid_of("Frostbite") && !flag));
+        assert!(
+            op59.iter()
+                .all(|(_, id, flag)| id == uuid_of("Frostbite") && !flag)
+        );
         // Tick 1 at the cast, then one every 0.2 s up to the stagger at 1.0 s.
         assert!(cut <= 6, "no tick after the stagger ({cut} hits)");
-        assert_eq!(resist_cut, 0, "the interrupted channel's resistance ends with it");
+        assert_eq!(
+            resist_cut, 0,
+            "the interrupted channel's resistance ends with it"
+        );
     }
 
     /// Thunderstorm never enters `Channeling` (06 §1.9), so a stagger does not stop it.
@@ -788,14 +905,20 @@ mod tests {
     }
 
     /// What the engine sends for one human input: the resolution, then the drain.
-    fn human_input(c: &mut MatchCombat, slot: usize, frame: &[u8], at: Instant) -> Vec<(usize, Vec<u8>)> {
+    fn human_input(
+        c: &mut MatchCombat,
+        slot: usize,
+        frame: &[u8],
+        at: Instant,
+    ) -> Vec<(usize, Vec<u8>)> {
         let mut out = on_c2s_input(c, slot, frame, at);
         out.extend(drain_state_changes(c, at));
         out
     }
 
     fn first(out: &[(usize, Vec<u8>)], gmid: u8) -> Option<usize> {
-        out.iter().position(|(_, f)| messages::user_message_gmid(f) == Some(gmid))
+        out.iter()
+            .position(|(_, f)| messages::user_message_gmid(f) == Some(gmid))
     }
 
     /// Ice Spike's 1.12 s wind-up (`_channelDuration`, every rank).
@@ -813,18 +936,31 @@ mod tests {
         let hp = c.fighters[1].health;
         cast(&mut c, 0, "IceSpike", AbilityTag::Damage, t0);
         let magicka_after_cast = c.fighters[0].magicka;
-        assert!(magicka_after_cast < 5_000, "non-vacuous: Ice Spike costs magicka");
+        assert!(
+            magicka_after_cast < 5_000,
+            "non-vacuous: Ice Spike costs magicka"
+        );
 
         let at = t0 + secs(0.448);
         let out = human_input(&mut c, 0, &activate(true, false), at);
         assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
         assert_op59(&out, uuid_of("IceSpike"), true);
-        assert!(first(&out, 59) < first(&out, 45), "op59 goes out before the 45");
+        assert!(
+            first(&out, 59) < first(&out, 45),
+            "op59 goes out before the 45"
+        );
 
         let late = resolve::land_due_impacts(&mut c, t0 + secs(2.0));
-        assert_eq!(hits_on(&c, &late, 1), 0, "a self-interrupted Ice Spike deals no damage");
+        assert_eq!(
+            hits_on(&c, &late, 1),
+            0,
+            "a self-interrupted Ice Spike deals no damage"
+        );
         assert_eq!(c.fighters[1].health, hp);
-        assert_eq!(c.fighters[0].magicka, magicka_after_cast, "the cost is not refunded");
+        assert_eq!(
+            c.fighters[0].magicka, magicka_after_cast,
+            "the cost is not refunded"
+        );
         assert_eq!(
             c.fighters[0].cooldowns.get(uuid_of("IceSpike")).copied(),
             Some(at + secs(5.23)),
@@ -842,9 +978,16 @@ mod tests {
         let out = human_input(&mut c, 0, &activate(true, true), at);
         assert_eq!(c.fighters[0].actor_state(), ActorStateType::Blocking);
         assert_op59(&out, uuid_of("IceSpike"), true);
-        assert!(first(&out, 59) < first(&out, 41), "op59 goes out before the 41");
+        assert!(
+            first(&out, 59) < first(&out, 41),
+            "op59 goes out before the 41"
+        );
         let late = resolve::land_due_impacts(&mut c, t0 + secs(2.0));
-        assert_eq!(hits_on(&c, &late, 1), 0, "a self-interrupted Ice Spike deals no damage");
+        assert_eq!(
+            hits_on(&c, &late, 1),
+            0,
+            "a self-interrupted Ice Spike deals no damage"
+        );
     }
 
     /// s503 f3504269-71: a Power Attack cast 1.0 s into Ice Spike. op38 → op59 → the
@@ -876,9 +1019,16 @@ mod tests {
             cast(&mut c, 0, "IceSpike", AbilityTag::Damage, t0);
             let at = t0 + secs(ICE_SPIKE_WIND_UP + 0.01);
             let out = human_input(&mut c, 0, &activate(true, block_zone), at);
-            assert!(op59s(&out).is_empty(), "nothing to interrupt after the wind-up");
+            assert!(
+                op59s(&out).is_empty(),
+                "nothing to interrupt after the wind-up"
+            );
             let out = resolve::land_due_impacts(&mut c, at);
-            assert_eq!(hits_on(&c, &out, 1), 1, "the spike lands (blockZone {block_zone})");
+            assert_eq!(
+                hits_on(&c, &out, 1),
+                1,
+                "the spike lands (blockZone {block_zone})"
+            );
         }
     }
 
@@ -902,7 +1052,10 @@ mod tests {
             out.extend(drain_state_changes(&mut c, t));
         }
         assert_eq!(op59.len(), 2, "one op59 per viewer");
-        assert!(op59.iter().all(|(_, id, flag)| id == uuid_of("Frostbite") && *flag));
+        assert!(
+            op59.iter()
+                .all(|(_, id, flag)| id == uuid_of("Frostbite") && *flag)
+        );
         let ticks = hits_on(&c, &out, 1);
         assert!(ticks <= 6, "no tick after the guard ({ticks} hits)");
     }
@@ -930,7 +1083,10 @@ mod tests {
         let out = cast(&mut c, 0, "PowerAttack", AbilityTag::Maneuver, t0);
         assert_eq!(count(&out, 38), 2);
         assert_eq!(count(&out, 50), 0, "no damage at the cast");
-        assert_eq!(count(&resolve::land_due_impacts(&mut c, t0 + secs(0.77)), 50), 0);
+        assert_eq!(
+            count(&resolve::land_due_impacts(&mut c, t0 + secs(0.77)), 50),
+            0
+        );
         let out = resolve::land_due_impacts(&mut c, t0 + secs(0.79));
         assert_eq!(hits_on(&c, &out, 1), 1);
     }
@@ -946,9 +1102,15 @@ mod tests {
         c.fighters[0].apply_stagger_for(at, 1.5);
         let out = drain_state_changes(&mut c, at);
         assert_op59(&out, uuid_of("PowerAttack"), false);
-        assert_eq!(count(&resolve::land_due_impacts(&mut c, t0 + secs(1.0)), 50), 0);
+        assert_eq!(
+            count(&resolve::land_due_impacts(&mut c, t0 + secs(1.0)), 50),
+            0
+        );
         assert_eq!(c.fighters[1].health, hp);
-        assert!(!c.fighters[0].maneuver_active(at), "the interrupt ends the maneuver");
+        assert!(
+            !c.fighters[0].maneuver_active(at),
+            "the interrupt ends the maneuver"
+        );
         // PowerAttackRank1._cooldown 8.09 s, from the interrupt.
         assert_eq!(
             c.fighters[0].cooldowns.get(uuid_of("PowerAttack")).copied(),
@@ -978,7 +1140,11 @@ mod tests {
         cast(&mut c, 0, "PowerAttack", AbilityTag::Maneuver, t0);
         let obj = c.fighters[0].net_object_id;
         on_c2s_input(&mut c, 0, &block_press(obj), t0 + secs(0.3));
-        assert_ne!(c.fighters[0].actor_state(), ActorStateType::Blocking, "no guard mid-maneuver");
+        assert_ne!(
+            c.fighters[0].actor_state(),
+            ActorStateType::Blocking,
+            "no guard mid-maneuver"
+        );
         // A plain swing body is dropped as well.
         assert!(on_c2s_input(&mut c, 0, &[0xBE, 0x36], t0 + secs(0.4)).is_empty());
 
@@ -1000,7 +1166,13 @@ mod tests {
         f.set_actor_state(ActorStateType::Blocking, t0);
         f.blocking_until = Some(t0 + secs(8.0));
         f.block_raised_at = Some(t0);
-        cast(&mut c, 0, "DodgingStrike", AbilityTag::Maneuver, t0 + secs(0.1));
+        cast(
+            &mut c,
+            0,
+            "DodgingStrike",
+            AbilityTag::Maneuver,
+            t0 + secs(0.1),
+        );
         assert_ne!(c.fighters[0].actor_state(), ActorStateType::Blocking);
         assert!(c.fighters[0].blocking_until.is_none());
     }
@@ -1012,13 +1184,22 @@ mod tests {
         let mut c = combat(t0, 0);
         c.fighters[0].loadout.has_shield = true;
         cast(&mut c, 0, "ReflectingBash", AbilityTag::Maneuver, t0);
-        assert!(c.fighters[0].reflect_until.is_some_and(|t| t > t0 + secs(0.2)));
+        assert!(
+            c.fighters[0]
+                .reflect_until
+                .is_some_and(|t| t > t0 + secs(0.2))
+        );
         let at = t0 + secs(0.2);
         c.fighters[0].apply_stagger_for(at, 1.5);
         let out = drain_state_changes(&mut c, at);
         assert_op59(&out, uuid_of("ReflectingBash"), false);
         assert!(c.fighters[0].reflect_until.is_some_and(|t| t <= at));
-        assert!(c.fighters[0].transient_resistances.iter().all(|(_, _, until)| *until <= at));
+        assert!(
+            c.fighters[0]
+                .transient_resistances
+                .iter()
+                .all(|(_, _, until)| *until <= at)
+        );
     }
 
     /// A bot skips an ability that is still cooling down and casts a ready one.
@@ -1026,14 +1207,19 @@ mod tests {
     fn a_bot_casts_a_ready_ability_rather_than_waiting_on_one() {
         let t0 = Instant::now();
         let mut c = combat(t0, 1);
-        for (name, tag) in [("MagickaSurge", AbilityTag::Generic), ("Fireball", AbilityTag::Damage)] {
+        for (name, tag) in [
+            ("MagickaSurge", AbilityTag::Generic),
+            ("Fireball", AbilityTag::Damage),
+        ] {
             c.fighters[1].loadout.abilities.push(EquippedAbility {
                 instance_uuid: uuid_of(name).to_string(),
                 level: 1,
                 tag,
             });
         }
-        c.fighters[1].cooldowns.insert(uuid_of("MagickaSurge").into(), t0 + secs(15.0));
+        c.fighters[1]
+            .cooldowns
+            .insert(uuid_of("MagickaSurge").into(), t0 + secs(15.0));
         let snapshot = BotOpponentSnapshot {
             state: BotObservedState::Idle,
             ability_uuid: None,
@@ -1063,7 +1249,10 @@ mod tests {
         let at = t0 + secs(0.3);
         let out = cast(&mut c, 0, "DodgingStrike", AbilityTag::Maneuver, at);
         assert_op59(&out, uuid_of("PowerAttack"), true);
-        assert_eq!(count(&resolve::land_due_impacts(&mut c, t0 + secs(1.0)), 50), 0);
+        assert_eq!(
+            count(&resolve::land_due_impacts(&mut c, t0 + secs(1.0)), 50),
+            0
+        );
         let out = resolve::land_due_impacts(&mut c, at + secs(1.14));
         assert_eq!(hits_on(&c, &out, 1), 1, "the dodge's own hit lands");
     }
@@ -1093,14 +1282,19 @@ mod tests {
     fn maneuver_timing_follows_the_controller_type() {
         use gamedata::WeaponType::*;
         let qs = uuid_of("QuickStrikes");
-        assert_eq!(maneuver_timing(qs, 1, Some(Dagger)).unwrap().impacts, &[0.195_024, 0.703_207]);
+        assert_eq!(
+            maneuver_timing(qs, 1, Some(Dagger)).unwrap().impacts,
+            &[0.195_024, 0.703_207]
+        );
         assert_eq!(
             maneuver_timing(qs, 1, Some(Greatsword)).unwrap().impacts,
             &[0.215_827, 0.714_207]
         );
         assert_eq!(maneuver_timing(qs, 1, None).unwrap().end, 1.196_565);
         // A bash's clip follows its 0.5 s guard: retail ended bashes at 1.500 s.
-        let end = maneuver_timing(uuid_of("HarryingBash"), 1, None).unwrap().end;
+        let end = maneuver_timing(uuid_of("HarryingBash"), 1, None)
+            .unwrap()
+            .end;
         assert!((end - 1.506_707).abs() < 1e-4, "{end}");
         assert!(maneuver_timing(uuid_of("Fireball"), 1, None).is_none());
     }
@@ -1133,11 +1327,20 @@ mod tests {
         // A Quick ability is refused too: Fury is checked before the state gate.
         assert!(cast(&mut c, 1, "Ward", AbilityTag::Ward, t0 + secs(1.0)).is_empty());
         // After the Fury: the cast goes through.
-        assert_eq!(count(&cast(&mut c, 1, "Fireball", AbilityTag::Damage, t0 + secs(5.1)), 38), 2);
+        assert_eq!(
+            count(
+                &cast(&mut c, 1, "Fireball", AbilityTag::Damage, t0 + secs(5.1)),
+                38
+            ),
+            2
+        );
 
         let mut c = combat(t0, 1);
         c.fighters[1].health = 0;
-        assert_eq!(cast_refusal(&c.fighters[1], uuid_of("Ward"), t0), Some(CastRefusal::Dead));
+        assert_eq!(
+            cast_refusal(&c.fighters[1], uuid_of("Ward"), t0),
+            Some(CastRefusal::Dead)
+        );
     }
 
     /// A human is state-gated by the same retail `Actor.CanCast` rule as a bot.
@@ -1163,13 +1366,22 @@ mod tests {
         );
 
         let mut c = combat(t0, 1);
-        assert_eq!(count(&cast(&mut c, 0, "PowerAttack", AbilityTag::Maneuver, t0), 38), 2);
+        assert_eq!(
+            count(
+                &cast(&mut c, 0, "PowerAttack", AbilityTag::Maneuver, t0),
+                38
+            ),
+            2
+        );
         assert!(
             cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(0.3)).is_empty(),
             "a non-Quick spell is refused while the maneuver is still active"
         );
         assert_eq!(
-            count(&cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(0.95)), 38),
+            count(
+                &cast(&mut c, 0, "Fireball", AbilityTag::Damage, t0 + secs(0.95)),
+                38
+            ),
             2,
             "control: after OnManeuverEnded the same spell is accepted"
         );
@@ -1180,12 +1392,24 @@ mod tests {
     fn a_bot_mid_maneuver_casts_only_quick_abilities() {
         let t0 = Instant::now();
         let mut c = combat(t0, 1);
-        assert_eq!(count(&cast(&mut c, 1, "PowerAttack", AbilityTag::Maneuver, t0), 38), 2);
+        assert_eq!(
+            count(
+                &cast(&mut c, 1, "PowerAttack", AbilityTag::Maneuver, t0),
+                38
+            ),
+            2
+        );
         let at = t0 + secs(0.3);
         assert!(cast(&mut c, 1, "Fireball", AbilityTag::Damage, at).is_empty());
         assert_eq!(count(&cast(&mut c, 1, "Ward", AbilityTag::Ward, at), 38), 2);
         // After OnManeuverEnded (0.917 s) the non-Quick cast is fine.
-        assert_eq!(count(&cast(&mut c, 1, "Fireball", AbilityTag::Damage, t0 + secs(0.95)), 38), 2);
+        assert_eq!(
+            count(
+                &cast(&mut c, 1, "Fireball", AbilityTag::Damage, t0 + secs(0.95)),
+                38
+            ),
+            2
+        );
     }
 
     /// In a swing's recovery the cast waits for the combo point
@@ -1202,7 +1426,10 @@ mod tests {
             cast_refusal(&c.fighters[1], fb, t0 + secs(combo * 0.5)),
             Some(CastRefusal::NotAvailable)
         );
-        assert_eq!(cast_refusal(&c.fighters[1], fb, t0 + secs(combo + 0.01)), None);
+        assert_eq!(
+            cast_refusal(&c.fighters[1], fb, t0 + secs(combo + 0.01)),
+            None
+        );
         for state in [
             ActorStateType::Charging,
             ActorStateType::Blocking,
@@ -1214,7 +1441,11 @@ mod tests {
                 Some(CastRefusal::NotAvailable),
                 "{state:?}"
             );
-            assert_eq!(cast_refusal(&c.fighters[1], uuid_of("Ward"), t0), None, "Quick passes {state:?}");
+            assert_eq!(
+                cast_refusal(&c.fighters[1], uuid_of("Ward"), t0),
+                None,
+                "Quick passes {state:?}"
+            );
         }
         c.fighters[1].set_actor_state(ActorStateType::Idle, t0);
         assert_eq!(cast_refusal(&c.fighters[1], fb, t0), None);

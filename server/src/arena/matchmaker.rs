@@ -132,9 +132,8 @@ pub const RMS_RECONNECT_GRACE: Duration = Duration::from_secs(30);
 /// that covers the client's dial: a replay that lands just before the sweep would
 /// produce a connect just after it, into a match that no longer exists — and
 /// `admit_connection` would then seat it in whatever other match is open.
-pub const REPLAY_CUTOFF: Duration = Duration::from_secs(
-    crate::arena::match_registry::CONNECT_DEADLINE.as_secs() - 8,
-);
+pub const REPLAY_CUTOFF: Duration =
+    Duration::from_secs(crate::arena::match_registry::CONNECT_DEADLINE.as_secs() - 8);
 
 /// Whether a remembered `MatchmakingSucceeded` is still worth sending again: its
 /// match is still waiting for this very player, and it is young enough that the
@@ -1113,7 +1112,11 @@ fn pick_bot_index(
         Some(c) => (
             0u8,
             (h.level - c.level).abs(),
-            if candidates[i].3 { (h.trophies - c.trophies).abs() } else { 0 },
+            if candidates[i].3 {
+                (h.trophies - c.trophies).abs()
+            } else {
+                0
+            },
         ),
         None => (1u8, i32::MAX, i64::MAX),
     });
@@ -2368,7 +2371,10 @@ mod bot_pick_tests {
             })
             .collect();
         let candidates: Vec<BotCandidate> = rows.iter().map(candidate_of_row).collect();
-        let human = Some(Skill { level: 6, trophies: 32 });
+        let human = Some(Skill {
+            level: 6,
+            trophies: 32,
+        });
         let mut drawn = std::collections::BTreeSet::new();
         for b in 0..=255u8 {
             let mut bytes = [0u8; 16];
@@ -2378,7 +2384,11 @@ mod bot_pick_tests {
             assert!(d.step.is_none(), "nobody is inside a bracket step");
             drawn.insert(levels[d.index]);
         }
-        assert_eq!(drawn, [28u16, 40, 43].into_iter().collect(), "only the three nearest");
+        assert_eq!(
+            drawn,
+            [28u16, 40, 43].into_iter().collect(),
+            "only the three nearest"
+        );
     }
 
     /// A bot opponent must be identifiable as one, in BOTH places the client
@@ -6711,7 +6721,11 @@ mod no_show_375 {
         s: &Session,
         registry: &MatchRegistry,
         now: Instant,
-    ) -> (UnboundedSender<MatchmakingMessage>, tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>, bool) {
+    ) -> (
+        UnboundedSender<MatchmakingMessage>,
+        tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+        bool,
+    ) {
         let (tx, rx) = unbounded_channel();
         let replayed = s
             .replay_pending_match(Some(tx.clone()), |p| match_still_wants(p, registry, now))
@@ -6741,7 +6755,10 @@ mod no_show_375 {
 
         // What `resolve` does for every ticket.
         assert!(
-            handle.send_succeeded(succeeded(ticket, gsid, "psess-eugene")).await.is_err(),
+            handle
+                .send_succeeded(succeeded(ticket, gsid, "psess-eugene"))
+                .await
+                .is_err(),
             "no socket: the live send is lost"
         );
 
@@ -6759,7 +6776,10 @@ mod no_show_375 {
         assert!(registry.admit(peer, "psess-eugene", &[9u8; 32]).is_some());
         let (_tx, _rx, replayed) = open_socket(&eugene, &registry, Instant::now()).await;
         assert!(!replayed);
-        assert!(eugene.pending_match().is_none(), "a spent replay is forgotten");
+        assert!(
+            eugene.pending_match().is_none(),
+            "a spent replay is forgotten"
+        );
     }
 
     /// Review follow-up 1: a socket never gets the same `Succeeded` twice — not the
@@ -6772,10 +6792,12 @@ mod no_show_375 {
         let (live, mut rx) = unbounded_channel();
         s.set_matchmaking_ws(live).await;
         let ticket = Uuid::new_v4();
-        assert!(RmsHandle::Session(s.clone())
-            .send_succeeded(succeeded(ticket, gsid, "psess-eugene"))
-            .await
-            .is_ok());
+        assert!(
+            RmsHandle::Session(s.clone())
+                .send_succeeded(succeeded(ticket, gsid, "psess-eugene"))
+                .await
+                .is_ok()
+        );
         assert!(rx.try_recv().is_ok(), "delivered live");
 
         // A repeated create on the same socket: it already has this frame.
@@ -6785,13 +6807,19 @@ mod no_show_375 {
                 && match_still_wants(p, &registry, now))
                 .await
         );
-        assert!(rx.try_recv().is_err(), "no second copy on the socket that had it");
+        assert!(
+            rx.try_recv().is_err(),
+            "no second copy on the socket that had it"
+        );
 
         // A new socket gets it once, and only once.
         let (new_tx, mut new_rx, replayed) = open_socket(&s, &registry, now).await;
         assert!(replayed);
         assert!(new_rx.try_recv().is_ok());
-        assert!(!s.replay_pending_match(None, |p| match_still_wants(p, &registry, now)).await);
+        assert!(
+            !s.replay_pending_match(None, |p| match_still_wants(p, &registry, now))
+                .await
+        );
         assert!(new_rx.try_recv().is_err());
         drop(new_tx);
     }
@@ -6810,7 +6838,10 @@ mod no_show_375 {
         let peer: std::net::SocketAddr = "93.165.250.244:50976".parse().unwrap();
         assert!(registry.admit_connection(peer, &[3u8; 32]).is_some());
         let (_tx, _rx, replayed) = open_socket(&s, &registry, Instant::now()).await;
-        assert!(!replayed, "that peer may be Eugene himself, already connecting");
+        assert!(
+            !replayed,
+            "that peer may be Eugene himself, already connecting"
+        );
     }
 
     /// Review follow-up 2: never replay so late that the dial lands after the sweep.
@@ -6824,7 +6855,10 @@ mod no_show_375 {
             .await;
         let near_deadline = Instant::now() + CONNECT_DEADLINE - StdDuration::from_secs(5);
         let (_tx, _rx, replayed) = open_socket(&s, &registry, near_deadline).await;
-        assert!(!replayed, "5 s before the sweep is too late to start a dial");
+        assert!(
+            !replayed,
+            "5 s before the sweep is too late to start a dial"
+        );
         assert!(s.pending_match().is_none());
     }
 
@@ -6861,16 +6895,31 @@ mod no_show_375 {
         let s = between_sockets().await;
         let h = RmsHandle::Session(s.clone());
         let mine = Uuid::new_v4();
-        let _ = h.send_succeeded(succeeded(mine, Uuid::new_v4(), "psess-x")).await;
+        let _ = h
+            .send_succeeded(succeeded(mine, Uuid::new_v4(), "psess-x"))
+            .await;
         s.clear_pending_match(Some(Uuid::new_v4()));
-        assert!(s.pending_match().is_some(), "another ticket's cancel leaves it");
+        assert!(
+            s.pending_match().is_some(),
+            "another ticket's cancel leaves it"
+        );
         s.clear_pending_match(Some(mine));
         assert!(s.pending_match().is_none());
-        let _ = h.send_succeeded(succeeded(mine, Uuid::new_v4(), "psess-x")).await;
+        let _ = h
+            .send_succeeded(succeeded(mine, Uuid::new_v4(), "psess-x"))
+            .await;
         s.clear_pending_match(None);
-        assert!(s.pending_match().is_none(), "a new search forgets everything");
-        let _ = s.send_matchmaking(MatchmakingMessage::Searching { ticket_id: mine }).await;
-        assert!(s.pending_match().is_none(), "only Succeeded is worth replaying");
+        assert!(
+            s.pending_match().is_none(),
+            "a new search forgets everything"
+        );
+        let _ = s
+            .send_matchmaking(MatchmakingMessage::Searching { ticket_id: mine })
+            .await;
+        assert!(
+            s.pending_match().is_none(),
+            "only Succeeded is worth replaying"
+        );
     }
 
     /// Review follow-up 4: cancelling a matched ticket whose match never filled frees
@@ -6908,8 +6957,14 @@ mod no_show_375 {
         let (user, ticket) = (Uuid::new_v4(), Uuid::new_v4());
         active.reserve_or_existing(user, ticket, &registry);
         active.mark_matched(user, ticket, gsid);
-        assert_eq!(abandon_matched_ticket(&active, &registry, user, ticket), None);
-        assert_eq!(active.reserve_or_existing(user, Uuid::new_v4(), &registry), ticket);
+        assert_eq!(
+            abandon_matched_ticket(&active, &registry, user, ticket),
+            None
+        );
+        assert_eq!(
+            active.reserve_or_existing(user, Uuid::new_v4(), &registry),
+            ticket
+        );
     }
 
     /// The cancel handler finds the match a cancelled ticket was resolved into.
@@ -6920,7 +6975,11 @@ mod no_show_375 {
         let (user, ticket, gsid) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         assert!(registry.allocate(&["p0".into(), "p1".into()], Vec::new(), gsid));
         active.reserve_or_existing(user, ticket, &registry);
-        assert_eq!(active.matched_game_session(user, ticket), None, "still queued");
+        assert_eq!(
+            active.matched_game_session(user, ticket),
+            None,
+            "still queued"
+        );
         active.mark_matched(user, ticket, gsid);
         assert_eq!(active.matched_game_session(user, ticket), Some(gsid));
         assert_eq!(active.matched_game_session(user, Uuid::new_v4()), None);

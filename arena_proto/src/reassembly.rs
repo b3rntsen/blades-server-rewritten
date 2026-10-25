@@ -48,7 +48,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::crypto::{chacha20_legacy, chacha20_legacy_xor};
-use crate::enet::{walk_fragments, STREAM_PLAINTEXT_LEADS};
+use crate::enet::{STREAM_PLAINTEXT_LEADS, walk_fragments};
 
 /// A stream key candidate (decoded from `arena_session_keys`).
 #[derive(Debug, Clone)]
@@ -379,7 +379,10 @@ fn resolve_endpoint_groups(buffers: &[&[u8]], keys: &[KeyCandidate]) -> Vec<(usi
                 .enumerate()
                 .map(|(ci, slice)| s.spawn(move || scan_chunk(slice, ci * chunk, buffers)))
                 .collect();
-            handles.into_iter().map(|h| h.join().expect("scan")).collect()
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("scan"))
+                .collect()
         })
     };
 
@@ -612,7 +615,7 @@ pub fn resolve_fragment(
 mod tests {
     use super::*;
     use crate::crypto::chacha20_legacy;
-    use crate::enet::{reconstruct_plaintext, ENET_CMD_SEND_FRAGMENT};
+    use crate::enet::{ENET_CMD_SEND_FRAGMENT, reconstruct_plaintext};
 
     const KEY: [u8; 32] = [9u8; 32];
     const NONCE: [u8; 8] = [8, 7, 6, 5, 4, 3, 2, 1];
@@ -628,9 +631,7 @@ mod tests {
         for i in 0..n_uuids {
             m.extend_from_slice(b"Player");
             m.push(b'0' + (i % 10) as u8);
-            m.extend_from_slice(
-                format!("0badf00d-dead-beef-cafe-{:012x}", i).as_bytes(),
-            );
+            m.extend_from_slice(format!("0badf00d-dead-beef-cafe-{:012x}", i).as_bytes());
         }
         m
     }
@@ -638,8 +639,16 @@ mod tests {
     fn keys() -> Vec<KeyCandidate> {
         vec![
             // Wrong key FIRST: a 1-byte byte-0 gate would be free to pick it.
-            KeyCandidate { id: 1, key: OTHER_KEY, nonce: OTHER_NONCE },
-            KeyCandidate { id: 42, key: KEY, nonce: NONCE },
+            KeyCandidate {
+                id: 1,
+                key: OTHER_KEY,
+                nonce: OTHER_NONCE,
+            },
+            KeyCandidate {
+                id: 42,
+                key: KEY,
+                nonce: NONCE,
+            },
         ]
     }
 
@@ -763,7 +772,10 @@ mod tests {
         let reassembly = reassemble_session(&frames, &keys());
         assert_eq!(reassembly.len(), 1, "one complete group");
         let got = reassembly.values().next().unwrap();
-        assert_eq!(got, &message, "assembled plaintext must be the whole message");
+        assert_eq!(
+            got, &message,
+            "assembled plaintext must be the whole message"
+        );
 
         // Reconstructing frame 0 via the resolver yields its plaintext slice
         // spliced into the ENet wrapper.
@@ -771,11 +783,21 @@ mod tests {
         let (peer_ip, peer_port) = frames[0].peer();
         let resolver = |ch: u8, ss: u16, fo: u32, dl: usize| {
             resolve_fragment(
-                &reassembly, "s2c", &gl_ip, gl_port, &peer_ip, peer_port, ch, ss, fo, dl,
+                &reassembly,
+                "s2c",
+                &gl_ip,
+                gl_port,
+                &peer_ip,
+                peer_port,
+                ch,
+                ss,
+                fo,
+                dl,
             )
         };
-        let out = reconstruct_plaintext(&frames[0].ciphertext, &KEY, &NONCE, Some(&resolver), false)
-            .expect("decode frag0");
+        let out =
+            reconstruct_plaintext(&frames[0].ciphertext, &KEY, &NONCE, Some(&resolver), false)
+                .expect("decode frag0");
         assert_eq!(&out[out.len() - chunk..], &message[..chunk]);
     }
 
@@ -796,12 +818,23 @@ mod tests {
             let k = [seed; 32];
             let pt = chacha20_legacy(&full_ct, &k, &OTHER_NONCE);
             if STREAM_PLAINTEXT_LEADS.contains(&pt[0]) {
-                decoy = Some(KeyCandidate { id: 900 + seed as i64, key: k, nonce: OTHER_NONCE });
+                decoy = Some(KeyCandidate {
+                    id: 900 + seed as i64,
+                    key: k,
+                    nonce: OTHER_NONCE,
+                });
                 break;
             }
         }
         let decoy = decoy.expect("a byte-0 false positive exists among 256 seeds");
-        let keys = vec![decoy.clone(), KeyCandidate { id: 42, key: KEY, nonce: NONCE }];
+        let keys = vec![
+            decoy.clone(),
+            KeyCandidate {
+                id: 42,
+                key: KEY,
+                nonce: NONCE,
+            },
+        ];
 
         // try_assembled (the dead-code 1-byte gate) really is fooled...
         let (bad_pt, bad_id) = try_assembled(&full_ct, &keys).expect("byte-0 gate accepts");
@@ -826,7 +859,11 @@ mod tests {
         frames.push(s2c_frame(99, 5099, vec![0x30, 0x00, 5, 0]));
 
         let reassembly = reassemble_session(&frames, &keys());
-        assert_eq!(reassembly.len(), 1, "duplicates must not create a second group");
+        assert_eq!(
+            reassembly.len(),
+            1,
+            "duplicates must not create a second group"
+        );
         assert_eq!(reassembly.values().next().unwrap(), &message);
     }
 
@@ -866,7 +903,10 @@ mod tests {
         let n_a = frames.len();
         // Same start_seq 10, same endpoint, different client port + totalLength.
         const PEER_B: i64 = 47209;
-        for (i, f) in fragment_frames(&ct_b, 10, 64, &[0, 1, 2]).into_iter().enumerate() {
+        for (i, f) in fragment_frames(&ct_b, 10, 64, &[0, 1, 2])
+            .into_iter()
+            .enumerate()
+        {
             let mut f = f;
             f.id = (n_a + i) as i64 + 100;
             f.dst_port = Some(PEER_B); // a DIFFERENT client flow
@@ -893,19 +933,40 @@ mod tests {
                 10u16,
             ))
         };
-        assert_eq!(by_peer(CLIENT_PORT), Some(&msg_a), "flow A keeps its message");
-        assert_eq!(by_peer(PEER_B), Some(&msg_b), "flow B is no longer contaminated");
+        assert_eq!(
+            by_peer(CLIENT_PORT),
+            Some(&msg_a),
+            "flow A keeps its message"
+        );
+        assert_eq!(
+            by_peer(PEER_B),
+            Some(&msg_b),
+            "flow B is no longer contaminated"
+        );
 
         // And the resolver hands each flow's frames the right bytes: flow B's
         // fragment 0 must be a prefix of msg_b, which under the old key resolved
         // out of msg_a.
         let resolver_b = |ch: u8, ss: u16, fo: u32, dl: usize| {
             resolve_fragment(
-                &reassembly, "s2c", &gl_ip, gl_port, "10.99.0.10", PEER_B, ch, ss, fo, dl,
+                &reassembly,
+                "s2c",
+                &gl_ip,
+                gl_port,
+                "10.99.0.10",
+                PEER_B,
+                ch,
+                ss,
+                fo,
+                dl,
             )
         };
         assert_eq!(resolver_b(0, 10, 0, 64).unwrap(), msg_b[..64].to_vec());
-        assert_ne!(msg_a[..64], msg_b[..64], "test bug: the two prefixes must differ");
+        assert_ne!(
+            msg_a[..64],
+            msg_b[..64],
+            "test bug: the two prefixes must differ"
+        );
     }
 
     /// No candidate key decodes the endpoint ⇒ honest no-key, nothing emitted.
@@ -914,7 +975,11 @@ mod tests {
         let message = uuid_message(6);
         let full_ct = chacha20_legacy(&message, &KEY, &NONCE);
         let frames = fragment_frames(&full_ct, 5, 96, &[0, 1, 2]);
-        let wrong = vec![KeyCandidate { id: 1, key: OTHER_KEY, nonce: OTHER_NONCE }];
+        let wrong = vec![KeyCandidate {
+            id: 1,
+            key: OTHER_KEY,
+            nonce: OTHER_NONCE,
+        }];
         assert!(reassemble_session(&frames, &wrong).is_empty());
     }
 
@@ -928,11 +993,23 @@ mod tests {
         let frames = fragment_frames(&full_ct, 5, 96, &[0, 1, 2, 3]);
         // Neither row is the right (key, nonce) on its own.
         let mispaired = vec![
-            KeyCandidate { id: 111, key: KEY, nonce: OTHER_NONCE },
-            KeyCandidate { id: 113, key: OTHER_KEY, nonce: NONCE },
+            KeyCandidate {
+                id: 111,
+                key: KEY,
+                nonce: OTHER_NONCE,
+            },
+            KeyCandidate {
+                id: 113,
+                key: OTHER_KEY,
+                nonce: NONCE,
+            },
         ];
         let reassembly = reassemble_session(&frames, &mispaired);
-        assert_eq!(reassembly.len(), 1, "cross product must find key111 × nonce113");
+        assert_eq!(
+            reassembly.len(),
+            1,
+            "cross product must find key111 × nonce113"
+        );
         assert_eq!(reassembly.values().next().unwrap(), &message);
     }
 
@@ -957,11 +1034,23 @@ mod tests {
             frames.push(f);
         }
         let ks = vec![
-            KeyCandidate { id: 35, key: KEY, nonce: NONCE },
-            KeyCandidate { id: 47, key: OTHER_KEY, nonce: OTHER_NONCE },
+            KeyCandidate {
+                id: 35,
+                key: KEY,
+                nonce: NONCE,
+            },
+            KeyCandidate {
+                id: 47,
+                key: OTHER_KEY,
+                nonce: OTHER_NONCE,
+            },
         ];
         let reassembly = reassemble_session(&frames, &ks);
-        assert_eq!(reassembly.len(), 2, "both keys must be used at one endpoint");
+        assert_eq!(
+            reassembly.len(),
+            2,
+            "both keys must be used at one endpoint"
+        );
         let mut got: Vec<&Vec<u8>> = reassembly.values().collect();
         got.sort();
         let mut want = vec![&msg_a, &msg_b];
@@ -983,7 +1072,11 @@ mod tests {
         let msg = uuid_message(8);
         let ct = chacha20_legacy(&msg, &KEY, &NONCE);
         let buffers: Vec<&[u8]> = vec![&ct];
-        let wrong = vec![KeyCandidate { id: 1, key: OTHER_KEY, nonce: OTHER_NONCE }];
+        let wrong = vec![KeyCandidate {
+            id: 1,
+            key: OTHER_KEY,
+            nonce: OTHER_NONCE,
+        }];
         assert!(select_endpoint_key(&buffers, &wrong).is_none());
         assert!(select_endpoint_key(&[], &wrong).is_none());
     }
@@ -1007,7 +1100,11 @@ mod tests {
             frames.push(f);
         }
         // Only the good key is a candidate.
-        let ks = vec![KeyCandidate { id: 42, key: KEY, nonce: NONCE }];
+        let ks = vec![KeyCandidate {
+            id: 42,
+            key: KEY,
+            nonce: NONCE,
+        }];
         let reassembly = reassemble_session(&frames, &ks);
         assert_eq!(reassembly.len(), 1, "only the decodable group survives");
         assert_eq!(reassembly.values().next().unwrap(), &good);

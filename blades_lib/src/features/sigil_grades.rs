@@ -140,14 +140,20 @@ mod tests {
         assert_eq!(observations_for(2), 235, "arcane tier 2 grants");
         assert_eq!(observations_for(1), 8, "arcane tier 1 grants");
         assert!(can_roll(1) && can_roll(2));
-        assert!(!can_roll(9), "a tier retail never showed must not be rollable");
+        assert!(
+            !can_roll(9),
+            "a tier retail never showed must not be rollable"
+        );
     }
 
     /// THE BUG: these offers could not be bought at all.
     #[test]
     fn an_arcane_item_can_now_be_graded() {
         assert!(roll_grading(2, 1).is_some(), "arcane tier 2 must roll");
-        assert!(roll_grading(9, 1).is_none(), "an unknown tier must stay ungrantable");
+        assert!(
+            roll_grading(9, 1).is_none(),
+            "an unknown tier must stay ungrantable"
+        );
     }
 
     /// Ungraded is a real outcome — 111 of the 235 tier-2 grants carried no
@@ -163,7 +169,10 @@ mod tests {
                 _ => graded += 1,
             }
         }
-        assert!(ungraded > 0, "no purchase came out ungraded; retail's mostly did");
+        assert!(
+            ungraded > 0,
+            "no purchase came out ungraded; retail's mostly did"
+        );
         assert!(graded > 0, "no purchase came out graded at all");
         // retail: 111 of 235 ungraded, 47%
         let share = ungraded as f64 / (ungraded + graded) as f64;
@@ -185,7 +194,11 @@ mod tests {
             key.sort();
             seen.insert(format!("{key:?}"));
         }
-        assert!(seen.len() > 5, "200 purchases produced only {} outcomes", seen.len());
+        assert!(
+            seen.len() > 5,
+            "200 purchases produced only {} outcomes",
+            seen.len()
+        );
     }
 
     /// Every property must name a real definition id and a sane tier. An
@@ -196,7 +209,11 @@ mod tests {
         for nonce in 0..300u64 {
             for p in roll_grading(2, nonce).unwrap() {
                 assert!(!p.id.is_nil(), "a grading property with a nil id");
-                assert!((1..=5).contains(&p.tier), "implausible grading tier {}", p.tier);
+                assert!(
+                    (1..=5).contains(&p.tier),
+                    "implausible grading tier {}",
+                    p.tier
+                );
                 checked += 1;
             }
         }

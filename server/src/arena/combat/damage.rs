@@ -111,12 +111,18 @@ pub fn is_health_type(t: DamageType) -> bool {
 /// **Correction 3:** `1 = Slashing, 2 = Cleaving, 3 = Bashing` are three *swing
 /// shapes*, not a physical/elemental split.
 pub fn is_physical(t: DamageType) -> bool {
-    matches!(t, DamageType::Slashing | DamageType::Cleaving | DamageType::Bashing)
+    matches!(
+        t,
+        DamageType::Slashing | DamageType::Cleaving | DamageType::Bashing
+    )
 }
 
 /// Elemental damage types (Fire/Frost/Shock/Poison).
 pub fn is_elemental(t: DamageType) -> bool {
-    matches!(t, DamageType::Fire | DamageType::Frost | DamageType::Shock | DamageType::Poison)
+    matches!(
+        t,
+        DamageType::Fire | DamageType::Frost | DamageType::Shock | DamageType::Poison
+    )
 }
 
 /// The **secondary stat drain** an elemental damage track mirrors into, from the
@@ -133,8 +139,14 @@ pub fn is_elemental(t: DamageType) -> bool {
 /// pair; nothing in the capture pairs Fire or Poison with a drain.
 pub fn mirrored_drain(ty: DamageType) -> Option<(DamageType, f32)> {
     match ty {
-        DamageType::Frost => Some((DamageType::Stamina, combat_params::FROST_DAMAGE_TO_STAMINA_DAMAGE)),
-        DamageType::Shock => Some((DamageType::Magicka, combat_params::SHOCK_DAMAGE_TO_MAGICKA_DAMAGE)),
+        DamageType::Frost => Some((
+            DamageType::Stamina,
+            combat_params::FROST_DAMAGE_TO_STAMINA_DAMAGE,
+        )),
+        DamageType::Shock => Some((
+            DamageType::Magicka,
+            combat_params::SHOCK_DAMAGE_TO_MAGICKA_DAMAGE,
+        )),
         _ => None,
     }
 }
@@ -160,7 +172,11 @@ pub fn attack_type_multiplier(
     combo_count: u32,
     swing_factor: f32,
 ) -> f32 {
-    let combo = if combo_count >= 1 { combo_damage_factor } else { 0.0 };
+    let combo = if combo_count >= 1 {
+        combo_damage_factor
+    } else {
+        0.0
+    };
     match source {
         DamageSource::Attack => 1.0 + combo + (swing_factor - 1.0),
         DamageSource::WeaponManeuver => 1.0 + combo,
@@ -284,7 +300,10 @@ impl BlockOutcome {
             return;
         }
         let total = |pick: fn(DamageType) -> bool, cs: &[(DamageType, f32)]| -> f32 {
-            cs.iter().filter(|(t, v)| pick(*t) && *v > 0.0).map(|(_, v)| *v).sum()
+            cs.iter()
+                .filter(|(t, v)| pick(*t) && *v > 0.0)
+                .map(|(_, v)| *v)
+                .sum()
         };
         let phys_total = total(is_physical, components);
         let elem_total = total(is_elemental, components);
@@ -299,11 +318,21 @@ impl BlockOutcome {
                 DamageType::Stamina | DamageType::Magicka => 0.0,
                 t if is_physical(t) => {
                     let phys_r = self.rating_for_type(t) * scale;
-                    tables::block_cut(*v, phys_total, phys_r, tables::pvp_block_rating_factor(true))
+                    tables::block_cut(
+                        *v,
+                        phys_total,
+                        phys_r,
+                        tables::pvp_block_rating_factor(true),
+                    )
                 }
                 t if is_elemental(t) => {
                     let elem_r = self.rating_for_type(t) * scale;
-                    tables::block_cut(*v, elem_total, elem_r, tables::pvp_block_rating_factor(false))
+                    tables::block_cut(
+                        *v,
+                        elem_total,
+                        elem_r,
+                        tables::pvp_block_rating_factor(false),
+                    )
                 }
                 // Raw Health / None: not a category the block budget covers.
                 _ => *v,
@@ -369,13 +398,37 @@ pub fn block_outcome(
 
 fn typed_block_bonuses(target: &Fighter, optimal: bool) -> [(DamageType, f32); 7] {
     [
-        (DamageType::Slashing, target.block_rating_against(optimal, DamageType::Slashing) - target.block_rating(optimal)),
-        (DamageType::Cleaving, target.block_rating_against(optimal, DamageType::Cleaving) - target.block_rating(optimal)),
-        (DamageType::Bashing, target.block_rating_against(optimal, DamageType::Bashing) - target.block_rating(optimal)),
-        (DamageType::Fire, target.block_rating_against(optimal, DamageType::Fire) - target.block_rating(optimal)),
-        (DamageType::Frost, target.block_rating_against(optimal, DamageType::Frost) - target.block_rating(optimal)),
-        (DamageType::Shock, target.block_rating_against(optimal, DamageType::Shock) - target.block_rating(optimal)),
-        (DamageType::Poison, target.block_rating_against(optimal, DamageType::Poison) - target.block_rating(optimal)),
+        (
+            DamageType::Slashing,
+            target.block_rating_against(optimal, DamageType::Slashing)
+                - target.block_rating(optimal),
+        ),
+        (
+            DamageType::Cleaving,
+            target.block_rating_against(optimal, DamageType::Cleaving)
+                - target.block_rating(optimal),
+        ),
+        (
+            DamageType::Bashing,
+            target.block_rating_against(optimal, DamageType::Bashing)
+                - target.block_rating(optimal),
+        ),
+        (
+            DamageType::Fire,
+            target.block_rating_against(optimal, DamageType::Fire) - target.block_rating(optimal),
+        ),
+        (
+            DamageType::Frost,
+            target.block_rating_against(optimal, DamageType::Frost) - target.block_rating(optimal),
+        ),
+        (
+            DamageType::Shock,
+            target.block_rating_against(optimal, DamageType::Shock) - target.block_rating(optimal),
+        ),
+        (
+            DamageType::Poison,
+            target.block_rating_against(optimal, DamageType::Poison) - target.block_rating(optimal),
+        ),
     ]
 }
 
@@ -451,7 +504,15 @@ impl RetailDamageModel {
         now: Instant,
     ) -> ResolvedDamage {
         let mut components = vec![(damage_type, amount.max(0.0))];
-        finish_resolved(attacker, target, source, active_side, &mut components, now, 1.0)
+        finish_resolved(
+            attacker,
+            target,
+            source,
+            active_side,
+            &mut components,
+            now,
+            1.0,
+        )
     }
 
     /// The attacker's per-type PHYSICAL base before the swing/combo factor.
@@ -508,8 +569,11 @@ impl RetailDamageModel {
         // `ManeuverParameters$$DistributeBonusDamage@0x1a21844` folds every physical
         // type into one Bashing entry plus the bonus (combat-spec 03 §5.1, 05 §2.5).
         let shield_base = [(DamageType::Bashing, attacker.shield_damage.max(0.0))];
-        let base_list: &[(DamageType, f32)] =
-            if bash { &shield_base } else { &attacker.weapon.base_by_type };
+        let base_list: &[(DamageType, f32)] = if bash {
+            &shield_base
+        } else {
+            &attacker.weapon.base_by_type
+        };
 
         base_list
             .iter()
@@ -611,12 +675,9 @@ impl RetailDamageModel {
             // It is also a BINARY gate, not a scaling one — two copies and five copies
             // both give `1 + bonusValue`.
             let stacked = synergy > 0.0
-                && attacker
-                    .enchant_property_ids
-                    .get(idx)
-                    .is_some_and(|id| {
-                        attacker.property_ids.iter().filter(|p| *p == id).count() > 1
-                    });
+                && attacker.enchant_property_ids.get(idx).is_some_and(|id| {
+                    attacker.property_ids.iter().filter(|p| *p == id).count() > 1
+                });
             let synergy_mult = if stacked { 1.0 + synergy } else { 1.0 };
             let mut v = magnitude * amp * synergy_mult;
             // Once per swing, on the first elemental track, mirroring PDOC.
@@ -643,7 +704,12 @@ fn enchant_tracks(attacker: &Loadout) -> Vec<(DamageType, f32)> {
     attacker
         .enchants
         .iter()
-        .map(|(ty, tier)| (*ty, weapon_damage_family_value_for_weight(*ty, *tier, weight)))
+        .map(|(ty, tier)| {
+            (
+                *ty,
+                weapon_damage_family_value_for_weight(*ty, *tier, weight),
+            )
+        })
         .collect()
 }
 
@@ -691,7 +757,11 @@ pub fn weapon_damage_family_value(ty: DamageType, tier: u8) -> f32 {
     weapon_damage_family_value_for_weight(ty, tier, tables::Weight::Light)
 }
 
-pub fn weapon_damage_family_value_for_weight(ty: DamageType, tier: u8, weight: tables::Weight) -> f32 {
+pub fn weapon_damage_family_value_for_weight(
+    ty: DamageType,
+    tier: u8,
+    weight: tables::Weight,
+) -> f32 {
     let family = match ty {
         DamageType::Fire => "c40ed851-8777-4d09-b169-0223dae8f67d",
         DamageType::Frost => "63b6c73a-af1a-4f95-8ffe-9434b8e68d56",
@@ -726,7 +796,15 @@ impl DamageModel for RetailDamageModel {
     ) -> ResolvedDamage {
         let mut components =
             Self::swing_components(attacker, target, source, swing_factor, combo_count, now);
-        finish_resolved(attacker, target, source, active_side, &mut components, now, 1.0)
+        finish_resolved(
+            attacker,
+            target,
+            source,
+            active_side,
+            &mut components,
+            now,
+            1.0,
+        )
     }
 
     fn resolve_ability(
@@ -763,8 +841,12 @@ impl DamageModel for RetailDamageModel {
                 // block and resistance are re-read as the channel runs. The total over
                 // a full channel is still `dps × channelMaxLength` — see
                 // [`channel_ticks`] for the count and the capture behind the interval.
-                let dmg = tables::ability_damage(ability_uuid, ability_level).unwrap_or_else(|| {
-                    super::gamedata::ability_rank_clamped(ability_uuid, ability_level.max(1) as u16)
+                let dmg =
+                    tables::ability_damage(ability_uuid, ability_level).unwrap_or_else(|| {
+                        super::gamedata::ability_rank_clamped(
+                            ability_uuid,
+                            ability_level.max(1) as u16,
+                        )
                         .and_then(|r| r.damage_per_second())
                         .map(|dps| {
                             // A CHANNELLED spell is `ContinuousSpell` on the wire, not
@@ -775,7 +857,7 @@ impl DamageModel for RetailDamageModel {
                             dps * CHANNEL_TICK_INTERVAL_SECS
                         })
                         .unwrap_or(0.0)
-                });
+                    });
                 let ty = a
                     .damage_type
                     .map(super::loadout::map_damage_type)
@@ -785,7 +867,8 @@ impl DamageModel for RetailDamageModel {
             // Unknown ability: Fireball's per-rank curve is the representative spell.
             None => (
                 DamageType::Fire,
-                tables::ability_damage(super::gamedata::ids::FIREBALL, ability_level).unwrap_or(0.0),
+                tables::ability_damage(super::gamedata::ids::FIREBALL, ability_level)
+                    .unwrap_or(0.0),
             ),
         };
         // MAXIMUM POWER / METTLE — the two magnitude perks. Maximum Power is
@@ -818,8 +901,9 @@ impl DamageModel for RetailDamageModel {
         caster_loadout.elem_resist_piercing_rating = caster.elem_resist_piercing_rating;
         // The ABILITY's own `_elementalResistancePiercing`, the same field the weapon
         // path adds in `resolve.rs`. A spell that ships one was ignoring it too.
-        if let Some(erp) = super::gamedata::ability_rank_clamped(ability_uuid, ability_level.max(1) as u16)
-            .and_then(|r| r.elemental_resistance_piercing())
+        if let Some(erp) =
+            super::gamedata::ability_rank_clamped(ability_uuid, ability_level.max(1) as u16)
+                .and_then(|r| r.elemental_resistance_piercing())
         {
             caster_loadout.elem_resist_piercing_rating += erp;
         }
@@ -871,7 +955,8 @@ impl DamageModel for RetailDamageModel {
 ///
 /// 0.2 s is therefore the only candidate consistent with both the tick count and the
 /// magnitudes, and it is a shipped constant rather than a fitted one.
-pub const CHANNEL_TICK_INTERVAL_SECS: f32 = super::gamedata::combat_params::GLOBAL_PVP_TICK_INTERVAL;
+pub const CHANNEL_TICK_INTERVAL_SECS: f32 =
+    super::gamedata::combat_params::GLOBAL_PVP_TICK_INTERVAL;
 
 /// The interval between ticks of continuous gear damage (Ebony Mail, Rimelink).
 ///
@@ -996,7 +1081,10 @@ fn dot_span_secs(r: &super::gamedata::AbilityRank) -> f32 {
 /// (block factor 1.0) byte-identical. Pinned by
 /// `roundtrip_s506_damage::mirrored_drain_is_byte_identical_without_a_block`.
 fn append_mirrored_drains(components: &mut Vec<(DamageType, f32)>) {
-    if !components.iter().any(|(ty, _)| mirrored_drain(*ty).is_some()) {
+    if !components
+        .iter()
+        .any(|(ty, _)| mirrored_drain(*ty).is_some())
+    {
         return;
     }
     let mut out: Vec<(DamageType, f32)> = Vec::with_capacity(components.len() + 1);
@@ -1067,7 +1155,11 @@ fn finish_resolved(
     // would give. Paying ZERO, which is what we did, was also wrong.
     const PERIODIC_FORTIFY_SCALE: f32 = combat_params::CONTINUOUS_DAMAGE_FORTIFY_EFFECTIVENESS
         * combat_params::GLOBAL_TICK_INTERVAL;
-    let fortify_scale = if continuous { PERIODIC_FORTIFY_SCALE } else { 1.0 };
+    let fortify_scale = if continuous {
+        PERIODIC_FORTIFY_SCALE
+    } else {
+        1.0
+    };
     // Kept only to preserve the existing name at the use site below.
     let single_impact = true;
     // `Fortify <Element> Damage` gear joins the Augmented* perks here. Same shipped
@@ -1177,7 +1269,10 @@ pub fn mitigate_components(
         .sum();
     block.apply(
         components,
-        matches!(source, DamageSource::ContinuousSpell | DamageSource::ContinuousAttack),
+        matches!(
+            source,
+            DamageSource::ContinuousSpell | DamageSource::ContinuousAttack
+        ),
     );
     // Kept for effects that ride the SWING rather than a component (Ravage): the
     // share of the physical track the block let through.
@@ -1201,7 +1296,8 @@ pub fn mitigate_components(
         .filter(|(t, v)| is_physical(*t) && *v > 0.0)
         .map(|(_, v)| *v)
         .sum();
-    let armor_rating = (target.loadout.armor_rating_with_innates() - attacker.armor_piercing_rating).max(0.0);
+    let armor_rating =
+        (target.loadout.armor_rating_with_innates() - attacker.armor_piercing_rating).max(0.0);
     if phys_total > 0.0 && armor_rating > 0.0 {
         for (ty, v) in components.iter_mut() {
             if is_physical(*ty) && *v > 0.0 {
@@ -1220,7 +1316,9 @@ pub fn mitigate_components(
         if matches!(*ty, DamageType::Stamina | DamageType::Magicka) {
             continue;
         }
-        *v *= target.loadout.innate_base_resistance_multiplier(*ty, source);
+        *v *= target
+            .loadout
+            .innate_base_resistance_multiplier(*ty, source);
         let before = *v;
         if before <= 0.0 {
             continue;
@@ -1242,8 +1340,13 @@ pub fn mitigate_components(
         } else {
             resistance_scale
         };
-        let mitigated =
-            tables::apply_resistance_and_weakness(before, rating, weakness, effectiveness_scale, piercing);
+        let mitigated = tables::apply_resistance_and_weakness(
+            before,
+            rating,
+            weakness,
+            effectiveness_scale,
+            piercing,
+        );
         let resisted = (before - mitigated).max(0.0);
         *v = mitigated;
         if resisted > 0.0 && is_elemental(*ty) {
@@ -1351,9 +1454,16 @@ mod report31_span_tests {
         const CONSUMING_INFERNO: &str = "e07f9b1a-64db-44ef-ba25-0e4378789ddc";
         const POISON_CLOUD: &str = "66bdc017-30c5-4b5e-9753-215c45056f6a";
 
-        for (uuid, want) in [(FROSTBITE, 3.0), (CONSUMING_INFERNO, 3.0), (POISON_CLOUD, 5.0)] {
+        for (uuid, want) in [
+            (FROSTBITE, 3.0),
+            (CONSUMING_INFERNO, 3.0),
+            (POISON_CLOUD, 5.0),
+        ] {
             let r = gamedata::ability_rank_clamped(uuid, 1).expect("shipped rank 1");
-            assert!(r.damage_per_second().is_some(), "{uuid} ships damagePerSecond");
+            assert!(
+                r.damage_per_second().is_some(),
+                "{uuid} ships damagePerSecond"
+            );
             assert!(r.damage().is_none(), "{uuid} ships no flat _damage");
             assert_eq!(dot_span_secs(&r), want, "{uuid} span");
         }
@@ -1362,7 +1472,10 @@ mod report31_span_tests {
         // duration — the two were conflated.
         let fb = gamedata::ability_rank_clamped(FROSTBITE, 4).unwrap();
         assert_eq!(fb.get(AbilityField::ChannelMaxLength), Some(3.0));
-        assert_ne!(dot_span_secs(&fb), gamedata::combat_params::ELEMENTAL_STATUS_DURATION);
+        assert_ne!(
+            dot_span_secs(&fb),
+            gamedata::combat_params::ELEMENTAL_STATUS_DURATION
+        );
         // Rank 4 is the reporter's rank (magickaCost 235, logged by arena-server on
         // 2026-08-18 05:46:47): 95.80 dps × 3 s = 287.4, not the 479.0 prod emitted.
         assert!((fb.damage_per_second().unwrap() * dot_span_secs(&fb) - 287.4).abs() < 0.1);
@@ -1408,11 +1521,21 @@ mod tests {
     #[test]
     fn weapon_damage_enchants_use_the_weight_specific_base_table() {
         let light = weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Light);
-        let versatile = weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Versatile);
+        let versatile =
+            weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Versatile);
         let heavy = weapon_damage_family_value_for_weight(DamageType::Fire, 10, Weight::Heavy);
-        assert!((light - 57.25).abs() < 0.01, "Fire t10 light = 57.25, got {light}");
-        assert!((versatile - 67.2).abs() < 0.01, "Fire t10 versatile = 67.2, got {versatile}");
-        assert!((heavy - 78.49).abs() < 0.01, "Fire t10 heavy = 78.49, got {heavy}");
+        assert!(
+            (light - 57.25).abs() < 0.01,
+            "Fire t10 light = 57.25, got {light}"
+        );
+        assert!(
+            (versatile - 67.2).abs() < 0.01,
+            "Fire t10 versatile = 67.2, got {versatile}"
+        );
+        assert!(
+            (heavy - 78.49).abs() < 0.01,
+            "Fire t10 heavy = 78.49, got {heavy}"
+        );
     }
 
     #[test]
@@ -1423,7 +1546,15 @@ mod tests {
         unarmed.weapon.weight = None;
         unarmed.enchants = vec![(DamageType::Fire, 10)];
 
-        let hit = m.resolve_attack(&unarmed, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let hit = m.resolve_attack(
+            &unarmed,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
 
         assert_eq!(comp(&hit, DamageType::Fire), 0.0);
     }
@@ -1434,42 +1565,79 @@ mod tests {
         let now = Instant::now();
 
         let mut argonian = plain_blade(Weight::Light);
-        argonian.innate_damage_factors.push(super::super::state::InnateDamageFactor {
-            damage_types: Vec::new(),
-            damage_sources: Vec::new(),
-            weapon_class: Some(Weight::Light),
-            factor: 0.05,
-        });
-        let hit = m.resolve_attack(&argonian, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        argonian
+            .innate_damage_factors
+            .push(super::super::state::InnateDamageFactor {
+                damage_types: Vec::new(),
+                damage_sources: Vec::new(),
+                weapon_class: Some(Weight::Light),
+                factor: 0.05,
+            });
+        let hit = m.resolve_attack(
+            &argonian,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&hit, DamageType::Slashing) - 105.0).abs() < 0.01);
 
         let mut frost = plain_blade(Weight::Light);
         frost.weapon.base_by_type = vec![(DamageType::Frost, 100.0)];
         let mut nord = target();
-        nord.loadout.innate_base_resistances.push(super::super::state::InnateBaseResistance {
-            damage_types: vec![DamageType::Frost],
-            damage_sources: Vec::new(),
-            factor: 0.15,
-        });
-        let resisted = m.resolve_attack(&frost, &nord, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        nord.loadout
+            .innate_base_resistances
+            .push(super::super::state::InnateBaseResistance {
+                damage_types: vec![DamageType::Frost],
+                damage_sources: Vec::new(),
+                factor: 0.15,
+            });
+        let resisted = m.resolve_attack(
+            &frost,
+            &nord,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&resisted, DamageType::Frost) - 85.0).abs() < 0.01);
 
         let mut fire = plain_blade(Weight::Light);
         fire.weapon.base_by_type = vec![(DamageType::Fire, 100.0)];
         fire.perks.element_damage.push((DamageType::Fire, 10.0));
-        fire.innate_damage_factors.push(super::super::state::InnateDamageFactor {
-            damage_types: vec![DamageType::Fire],
-            damage_sources: Vec::new(),
-            weapon_class: None,
-            factor: 0.05,
-        });
-        let ordered = m.resolve_attack(&fire, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        fire.innate_damage_factors
+            .push(super::super::state::InnateDamageFactor {
+                damage_types: vec![DamageType::Fire],
+                damage_sources: Vec::new(),
+                weapon_class: None,
+                factor: 0.05,
+            });
+        let ordered = m.resolve_attack(
+            &fire,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&ordered, DamageType::Fire) - 115.0).abs() < 0.01);
     }
 
     /// An un-armored, un-blocking L100 target.
     pub(super) fn target() -> Fighter {
-        Fighter::new(1, 565, Loadout { level: 100, ..Default::default() }, Instant::now())
+        Fighter::new(
+            1,
+            565,
+            Loadout {
+                level: 100,
+                ..Default::default()
+            },
+            Instant::now(),
+        )
     }
 
     /// A target suffering an elemental condition — the PDOC/EDOC gate.
@@ -1509,10 +1677,30 @@ mod tests {
             let mut with = poison_dagger();
             with.opportunist_physical = PDOC;
             let without = poison_dagger();
-            let a = comp(&m.resolve_attack(&with, &conditioned_target(now),
-                DamageSource::Attack, ActiveSide::Left, 1.0, combo, now), DamageType::Slashing);
-            let b = comp(&m.resolve_attack(&without, &conditioned_target(now),
-                DamageSource::Attack, ActiveSide::Left, 1.0, combo, now), DamageType::Slashing);
+            let a = comp(
+                &m.resolve_attack(
+                    &with,
+                    &conditioned_target(now),
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    combo,
+                    now,
+                ),
+                DamageType::Slashing,
+            );
+            let b = comp(
+                &m.resolve_attack(
+                    &without,
+                    &conditioned_target(now),
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    combo,
+                    now,
+                ),
+                DamageType::Slashing,
+            );
             a - b
         };
 
@@ -1534,10 +1722,30 @@ mod tests {
         let now = Instant::now();
         let mut a = poison_dagger();
         a.opportunist_physical = 25.20;
-        let with = comp(&m.resolve_attack(&a, &target(),
-            DamageSource::Attack, ActiveSide::Left, 1.0, 0, now), DamageType::Slashing);
-        let without = comp(&m.resolve_attack(&poison_dagger(), &target(),
-            DamageSource::Attack, ActiveSide::Left, 1.0, 0, now), DamageType::Slashing);
+        let with = comp(
+            &m.resolve_attack(
+                &a,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            ),
+            DamageType::Slashing,
+        );
+        let without = comp(
+            &m.resolve_attack(
+                &poison_dagger(),
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            ),
+            DamageType::Slashing,
+        );
         assert!((with - without).abs() < 0.01, "no condition, no PDOC");
     }
 
@@ -1548,7 +1756,11 @@ mod tests {
         use crate::arena::combat::state::{ActiveEffect, StatusEffectType};
         let m = RetailDamageModel;
         let now = Instant::now();
-        for effect in [StatusEffectType::Staggered, StatusEffectType::Paralyzed, StatusEffectType::Blind] {
+        for effect in [
+            StatusEffectType::Staggered,
+            StatusEffectType::Paralyzed,
+            StatusEffectType::Blind,
+        ] {
             let mut t = target();
             t.effects.push(ActiveEffect {
                 effect,
@@ -1561,10 +1773,22 @@ mod tests {
             });
             let mut a = poison_dagger();
             a.opportunist_physical = 25.20;
-            let with = comp(&m.resolve_attack(&a, &t,
-                DamageSource::Attack, ActiveSide::Left, 1.0, 0, now), DamageType::Slashing);
-            let without = comp(&m.resolve_attack(&poison_dagger(), &t,
-                DamageSource::Attack, ActiveSide::Left, 1.0, 0, now), DamageType::Slashing);
+            let with = comp(
+                &m.resolve_attack(&a, &t, DamageSource::Attack, ActiveSide::Left, 1.0, 0, now),
+                DamageType::Slashing,
+            );
+            let without = comp(
+                &m.resolve_attack(
+                    &poison_dagger(),
+                    &t,
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    0,
+                    now,
+                ),
+                DamageType::Slashing,
+            );
             assert!(
                 (with - without).abs() < 0.01,
                 "{effect:?} is not one of the shipped triggers [4,5,6,7] — it must not arm PDOC"
@@ -1582,10 +1806,30 @@ mod tests {
         let gain_at = |combo: u32| -> f32 {
             let mut with = poison_dagger();
             with.opportunist_elemental = 25.20;
-            let a = comp(&m.resolve_attack(&with, &conditioned_target(now),
-                DamageSource::Attack, ActiveSide::Left, 1.0, combo, now), DamageType::Poison);
-            let b = comp(&m.resolve_attack(&poison_dagger(), &conditioned_target(now),
-                DamageSource::Attack, ActiveSide::Left, 1.0, combo, now), DamageType::Poison);
+            let a = comp(
+                &m.resolve_attack(
+                    &with,
+                    &conditioned_target(now),
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    combo,
+                    now,
+                ),
+                DamageType::Poison,
+            );
+            let b = comp(
+                &m.resolve_attack(
+                    &poison_dagger(),
+                    &conditioned_target(now),
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    combo,
+                    now,
+                ),
+                DamageType::Poison,
+            );
             a - b
         };
         let shallow = gain_at(0);
@@ -1598,7 +1842,11 @@ mod tests {
     }
 
     fn comp(rd: &ResolvedDamage, ty: DamageType) -> f32 {
-        rd.components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+        rd.components
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum()
     }
 
     #[test]
@@ -1678,25 +1926,51 @@ mod tests {
         let lo = poison_dagger();
         let now = Instant::now();
         let fresh_poison = comp(
-            &m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
+            &m.resolve_attack(
+                &lo,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            ),
             DamageType::Poison,
         );
         for c in [0u32, 1] {
             for swing in [0.0f32, 0.1625, 0.325] {
                 let rd = m.resolve_attack(
-                    &lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0 + swing, c, now,
+                    &lo,
+                    &target(),
+                    DamageSource::Attack,
+                    ActiveSide::Right,
+                    1.0 + swing,
+                    c,
+                    now,
                 );
                 let want = 144.0 * (1.0 + 0.54 * c as f32 + swing);
                 let got = comp(&rd, DamageType::Slashing);
-                assert!((got - want).abs() < 0.05, "combo {c}, swing {swing}: {got} != {want}");
+                assert!(
+                    (got - want).abs() < 0.05,
+                    "combo {c}, swing {swing}: {got} != {want}"
+                );
                 assert!((comp(&rd, DamageType::Poison) - fresh_poison).abs() < 1e-3);
 
                 let man = m.resolve_attack(
-                    &lo, &target(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.0 + swing, c, now,
+                    &lo,
+                    &target(),
+                    DamageSource::WeaponManeuver,
+                    ActiveSide::Middle,
+                    1.0 + swing,
+                    c,
+                    now,
                 );
                 let want = 144.0 * (1.0 + 0.54 * c as f32);
                 let got = comp(&man, DamageType::Slashing);
-                assert!((got - want).abs() < 0.05, "maneuver, combo {c}, swing {swing}: {got} != {want}");
+                assert!(
+                    (got - want).abs() < 0.05,
+                    "maneuver, combo {c}, swing {swing}: {got} != {want}"
+                );
             }
         }
     }
@@ -1766,9 +2040,33 @@ mod tests {
         let m = RetailDamageModel;
         let lo = poison_dagger();
         let now = Instant::now();
-        let c0 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        let c1 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
-        let c4 = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
+        let c0 = m.resolve_attack(
+            &lo,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let c1 = m.resolve_attack(
+            &lo,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Left,
+            1.0,
+            1,
+            now,
+        );
+        let c4 = m.resolve_attack(
+            &lo,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            4,
+            now,
+        );
 
         // Un-armored: the raw tempered base of 144.0.
         assert!((comp(&c0, DamageType::Slashing) - 144.0).abs() < 0.5);
@@ -1794,29 +2092,70 @@ mod tests {
         armored.loadout.armor_rating = 301.8; // → 30.18 flat
         let now = Instant::now();
         let c0 = comp(
-            &m.resolve_attack(&lo, &armored, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
+            &m.resolve_attack(
+                &lo,
+                &armored,
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            ),
             DamageType::Slashing,
         );
         let c1 = comp(
-            &m.resolve_attack(&lo, &armored, DamageSource::Attack, ActiveSide::Left, 1.0, 1, now),
+            &m.resolve_attack(
+                &lo,
+                &armored,
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                1,
+                now,
+            ),
             DamageType::Slashing,
         );
         assert!((c0 - 113.82).abs() < 0.05, "144 − 30.18 = 113.82, got {c0}");
-        assert!((c1 - 191.58).abs() < 0.05, "144 × 1.54 − 30.18 = 191.58, got {c1}");
+        assert!(
+            (c1 - 191.58).abs() < 0.05,
+            "144 × 1.54 − 30.18 = 191.58, got {c1}"
+        );
         // Armor does NOT touch the elemental track.
         let poison = comp(
-            &m.resolve_attack(&lo, &armored, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
+            &m.resolve_attack(
+                &lo,
+                &armored,
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            ),
             DamageType::Poison,
         );
-        assert!((poison - 57.25).abs() < 0.5, "armor is physical-only, got {poison}");
+        assert!(
+            (poison - 57.25).abs() < 0.5,
+            "armor is physical-only, got {poison}"
+        );
         // Armor Piercing eats the rating.
         let mut piercer = poison_dagger();
         piercer.armor_piercing_rating = 301.8;
         let pierced = comp(
-            &m.resolve_attack(&piercer, &armored, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now),
+            &m.resolve_attack(
+                &piercer,
+                &armored,
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            ),
             DamageType::Slashing,
         );
-        assert!((pierced - 144.0).abs() < 0.05, "full piercing removes the armor cut");
+        assert!(
+            (pierced - 144.0).abs() < 0.05,
+            "full piercing removes the armor cut"
+        );
     }
 
     /// ENCHANT (Phase 3.6): the magnitude follows the family's convex curve, and
@@ -1825,26 +2164,64 @@ mod tests {
     fn enchant_uses_the_family_curve_and_the_right_drain() {
         let m = RetailDamageModel;
         let now = Instant::now();
-        let rd = m.resolve_attack(&poison_dagger(), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let rd = m.resolve_attack(
+            &poison_dagger(),
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&rd, DamageType::Poison) - 57.25).abs() < 0.5);
-        assert_eq!(comp(&rd, DamageType::Magicka), 0.0, "Poison does NOT drain Magicka");
-        assert_eq!(comp(&rd, DamageType::Stamina), 0.0, "Poison does NOT drain Stamina");
+        assert_eq!(
+            comp(&rd, DamageType::Magicka),
+            0.0,
+            "Poison does NOT drain Magicka"
+        );
+        assert_eq!(
+            comp(&rd, DamageType::Stamina),
+            0.0,
+            "Poison does NOT drain Stamina"
+        );
 
         // Shock DOES drain Magicka 1:1; Frost drains Stamina 1:1.
         let mut shock = plain_blade(Weight::Light);
         shock.enchants = vec![(DamageType::Shock, 7)];
-        let s = m.resolve_attack(&shock, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let s = m.resolve_attack(
+            &shock,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(comp(&s, DamageType::Shock) > 0.0);
         assert!((comp(&s, DamageType::Magicka) - comp(&s, DamageType::Shock)).abs() < 1e-3);
 
         let mut frost = plain_blade(Weight::Light);
         frost.enchants = vec![(DamageType::Frost, 4)];
-        let f = m.resolve_attack(&frost, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let f = m.resolve_attack(
+            &frost,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(comp(&f, DamageType::Frost) > 0.0);
         assert!((comp(&f, DamageType::Stamina) - comp(&f, DamageType::Frost)).abs() < 1e-3);
-        assert_eq!(comp(&f, DamageType::Magicka), 0.0, "Frost drains STAMINA, not Magicka");
+        assert_eq!(
+            comp(&f, DamageType::Magicka),
+            0.0,
+            "Frost drains STAMINA, not Magicka"
+        );
         // Drains never count toward the wire total.
-        assert!((s.total - comp(&s, DamageType::Slashing) - comp(&s, DamageType::Shock)).abs() < 1e-3);
+        assert!(
+            (s.total - comp(&s, DamageType::Slashing) - comp(&s, DamageType::Shock)).abs() < 1e-3
+        );
     }
 
     #[test]
@@ -1856,7 +2233,15 @@ mod tests {
         let mut resisted = target();
         resisted.loadout.resistances = vec![(DamageType::Shock, 20.0)];
 
-        let hit = m.resolve_attack(&shock, &resisted, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let hit = m.resolve_attack(
+            &shock,
+            &resisted,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
 
         assert!((comp(&hit, DamageType::Shock) - 80.0).abs() < 0.01);
         assert!((comp(&hit, DamageType::Magicka) - 80.0).abs() < 0.01);
@@ -1968,9 +2353,15 @@ mod tests {
         let def = guarding(now, Some((EBONY_SHIELD_330, 0)), None, true);
         let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
         assert!(b.blocking && !b.optimal);
-        assert!(close(apply(&b, &[(DamageType::Slashing, 200.0)])[0].1, 147.2));
+        assert!(close(
+            apply(&b, &[(DamageType::Slashing, 200.0)])[0].1,
+            147.2
+        ));
         for d in [150.0_f32, 450.0] {
-            assert!(close(d - apply(&b, &[(DamageType::Slashing, d)])[0].1, 52.8), "d={d}");
+            assert!(
+                close(d - apply(&b, &[(DamageType::Slashing, d)])[0].1, 52.8),
+                "d={d}"
+            );
         }
         // 50 is under the budget: the 5 % floor holds it at 2.5, never 0.
         assert!(close(apply(&b, &[(DamageType::Slashing, 50.0)])[0].1, 2.5));
@@ -1990,24 +2381,59 @@ mod tests {
         let m = RetailDamageModel;
         let now = Instant::now();
         let lo = poison_dagger();
-        let open = m.resolve_attack(&lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let open = m.resolve_attack(
+            &lo,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(close(comp(&open, DamageType::Slashing), 144.0));
         assert!(close(comp(&open, DamageType::Poison), 57.25));
         assert!(!open.blocked);
 
         let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
-        let opt = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let opt = m.resolve_attack(
+            &lo,
+            &def,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(opt.blocked);
         assert_ne!(opt.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
-        assert!(close(comp(&opt, DamageType::Slashing), 28.8), "{:?}", opt.components);
-        assert!(close(comp(&opt, DamageType::Poison), 2.8625), "{:?}", opt.components);
+        assert!(
+            close(comp(&opt, DamageType::Slashing), 28.8),
+            "{:?}",
+            opt.components
+        );
+        assert!(
+            close(comp(&opt, DamageType::Poison), 2.8625),
+            "{:?}",
+            opt.components
+        );
         assert!(close(opt.block_physical, 28.8 / 144.0));
 
         // The same guard, low: 144 − 57.6 plus the low elemental budget; no wire flag.
         let low_def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, true);
-        let low = m.resolve_attack(&lo, &low_def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let low = m.resolve_attack(
+            &lo,
+            &low_def,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(low.blocked);
-        assert_eq!(low.flags & (flags::WAS_OPTIMAL_BLOCKING | flags::WAS_LATE_BLOCKING), 0);
+        assert_eq!(
+            low.flags & (flags::WAS_OPTIMAL_BLOCKING | flags::WAS_LATE_BLOCKING),
+            0
+        );
         assert!(close(comp(&low, DamageType::Slashing), 86.4));
         assert!(close(comp(&low, DamageType::Poison), 27.73));
     }
@@ -2020,15 +2446,29 @@ mod tests {
         let now = Instant::now();
         let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
         let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
-        let out = apply(&b, &[(DamageType::Magicka, 255.83), (DamageType::Stamina, 40.0)]);
-        assert_eq!(out, vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]);
+        let out = apply(
+            &b,
+            &[(DamageType::Magicka, 255.83), (DamageType::Stamina, 40.0)],
+        );
+        assert_eq!(
+            out,
+            vec![(DamageType::Magicka, 0.0), (DamageType::Stamina, 0.0)]
+        );
         // Control: unblocked, they pass.
         let open = block_outcome(&target(), &Loadout::default(), ActiveSide::Right, now);
         assert_eq!(apply(&open, &[(DamageType::Magicka, 255.83)])[0].1, 255.83);
 
         let mut frost = poison_dagger();
         frost.enchants = vec![(DamageType::Frost, 10)];
-        let r = RetailDamageModel.resolve_attack(&frost, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let r = RetailDamageModel.resolve_attack(
+            &frost,
+            &def,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(comp(&r, DamageType::Frost) > 0.0);
         assert_eq!(comp(&r, DamageType::Stamina), comp(&r, DamageType::Frost));
     }
@@ -2044,8 +2484,14 @@ mod tests {
         pierce.block_piercing_rating = 60.0;
         let b = block_outcome(&def, &pierce, ActiveSide::Right, now);
         assert!(b.optimal);
-        assert!(close(1000.0 - apply(&b, &[(DamageType::Slashing, 1000.0)])[0].1, 105.6));
-        assert!(close(1000.0 - apply(&b, &[(DamageType::Fire, 1000.0)])[0].1, 59.04));
+        assert!(close(
+            1000.0 - apply(&b, &[(DamageType::Slashing, 1000.0)])[0].1,
+            105.6
+        ));
+        assert!(close(
+            1000.0 - apply(&b, &[(DamageType::Fire, 1000.0)])[0].1,
+            59.04
+        ));
         // Piercing can never make the rating negative.
         pierce.block_piercing_rating = 10_000.0;
         let b = block_outcome(&def, &pierce, ActiveSide::Right, now);
@@ -2062,7 +2508,11 @@ mod tests {
         let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
         let out = apply(
             &b,
-            &[(DamageType::Slashing, 100.0), (DamageType::Bashing, 300.0), (DamageType::Fire, 200.0)],
+            &[
+                (DamageType::Slashing, 100.0),
+                (DamageType::Bashing, 300.0),
+                (DamageType::Fire, 200.0),
+            ],
         );
         assert!(close(out[0].1, 71.2));
         assert!(close(out[1].1, 213.6));
@@ -2075,12 +2525,27 @@ mod tests {
     #[test]
     fn the_optimal_boost_is_one_plus_the_items_own_boost() {
         let now = Instant::now();
-        let pestle = guarding(now, None, Some(("12bc6bad-15df-4fa1-8335-22fbb4eb8d9f", 0)), false);
+        let pestle = guarding(
+            now,
+            None,
+            Some(("12bc6bad-15df-4fa1-8335-22fbb4eb8d9f", 0)),
+            false,
+        );
         assert_eq!(pestle.loadout.block_rating, 5.0);
         assert!(close(pestle.block_rating(true), 7.5));
-        let initial = guarding(now, None, Some(("d0386ef9-9e0f-47a8-b091-976def4d63b2", 0)), false);
+        let initial = guarding(
+            now,
+            None,
+            Some(("d0386ef9-9e0f-47a8-b091-976def4d63b2", 0)),
+            false,
+        );
         assert!(close(initial.block_rating(true), 15.0));
-        let steel = guarding(now, None, Some(("68577fab-83f5-4bd1-983c-f396963ac14b", 0)), false);
+        let steel = guarding(
+            now,
+            None,
+            Some(("68577fab-83f5-4bd1-983c-f396963ac14b", 0)),
+            false,
+        );
         assert_eq!(steel.block_rating(false), 116.0, "ceil(115.5)");
         assert_eq!(steel.block_rating(true), 232.0);
         // Block Reduction enchants add AFTER the boost, so they are not doubled.
@@ -2097,7 +2562,10 @@ mod tests {
         let b = block_outcome(&def, &Loadout::default(), ActiveSide::Right, now);
         assert_eq!(b.rating_for_type(DamageType::Slashing), b.rating_for(true));
         assert_eq!(b.rating_for_type(DamageType::Frost), b.rating_for(false));
-        assert_eq!(b.rating_for_type(DamageType::Fire), b.rating_for(false) + 100.0);
+        assert_eq!(
+            b.rating_for_type(DamageType::Fire),
+            b.rating_for(false) + 100.0
+        );
 
         let out = apply(
             &b,
@@ -2110,10 +2578,16 @@ mod tests {
                 ActiveSide::Right,
                 now,
             );
-            apply(&plain, &[(DamageType::Slashing, 200.0), (DamageType::Fire, 200.0)])
+            apply(
+                &plain,
+                &[(DamageType::Slashing, 200.0), (DamageType::Fire, 200.0)],
+            )
         };
         assert_eq!(out[0].1, control[0].1, "Slashing is unchanged");
-        assert!(out[1].1 < control[1].1, "Fire receives the extra block rating");
+        assert!(
+            out[1].1 < control[1].1,
+            "Fire receives the extra block rating"
+        );
     }
 
     /// Optimal eligibility is LATCHED when the guard goes up
@@ -2142,7 +2616,15 @@ mod tests {
         let now = Instant::now();
         let def = guarding(now, Some((EBONY_SHIELD_330, 0)), None, false);
         let at = now + Duration::from_secs(3);
-        let r = RetailDamageModel.resolve_attack(&poison_dagger(), &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, at);
+        let r = RetailDamageModel.resolve_attack(
+            &poison_dagger(),
+            &def,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            at,
+        );
         assert!(r.blocked);
         assert_eq!(r.flags & flags::WAS_LATE_BLOCKING, 0);
         assert_eq!(r.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
@@ -2154,13 +2636,26 @@ mod tests {
     fn an_area_effect_tick_is_not_blocked_but_carries_the_optimal_bit() {
         let now = Instant::now();
         let def = guarding(now, Some((LEATHER_SHIELD_247, 10)), None, false);
-        let tick = resolve_continuous_area_tick(&Loadout::default(), &def, DamageType::Poison, 20.0, now);
+        let tick =
+            resolve_continuous_area_tick(&Loadout::default(), &def, DamageType::Poison, 20.0, now);
         assert!(!tick.blocked);
-        assert!(close(comp(&tick, DamageType::Poison), 20.0 * CONTINUOUS_AREA_TICK_SECS));
+        assert!(close(
+            comp(&tick, DamageType::Poison),
+            20.0 * CONTINUOUS_AREA_TICK_SECS
+        ));
         assert_ne!(tick.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
         // Control: the same tick on an unguarded defender, same value, no bit.
-        let open = resolve_continuous_area_tick(&Loadout::default(), &target(), DamageType::Poison, 20.0, now);
-        assert_eq!(comp(&open, DamageType::Poison), comp(&tick, DamageType::Poison));
+        let open = resolve_continuous_area_tick(
+            &Loadout::default(),
+            &target(),
+            DamageType::Poison,
+            20.0,
+            now,
+        );
+        assert_eq!(
+            comp(&open, DamageType::Poison),
+            comp(&tick, DamageType::Poison)
+        );
         assert_eq!(open.flags & flags::WAS_OPTIMAL_BLOCKING, 0);
     }
 
@@ -2186,13 +2681,29 @@ mod tests {
         let mut tgt = target();
         tgt.loadout.resistances = vec![(DamageType::Poison, 40.0)];
         let now = Instant::now();
-        let rd = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let rd = m.resolve_attack(
+            &poison_dagger(),
+            &tgt,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&rd, DamageType::Poison) - 17.25).abs() < 0.5);
         assert_eq!(rd.most_resisted, DamageType::Poison);
 
         let mut piercer = poison_dagger();
         piercer.elem_resist_piercing_rating = 25.0;
-        let rd2 = m.resolve_attack(&piercer, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let rd2 = m.resolve_attack(
+            &piercer,
+            &tgt,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(
             (comp(&rd2, DamageType::Poison) - 42.25).abs() < 0.5,
             "piercing 25 of the 40 rating leaves 15, got {}",
@@ -2201,7 +2712,15 @@ mod tests {
         // Resistance can never remove more than 95 % of the component.
         let mut wall = target();
         wall.loadout.resistances = vec![(DamageType::Poison, 100_000.0)];
-        let rd3 = m.resolve_attack(&poison_dagger(), &wall, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let rd3 = m.resolve_attack(
+            &poison_dagger(),
+            &wall,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&rd3, DamageType::Poison) - 2.8625).abs() < 0.5);
     }
 
@@ -2242,24 +2761,32 @@ mod tests {
         assert!((fire(&armor_enchant) - 91.125).abs() < 0.001);
 
         let mut potion = target();
-        potion
-            .transient_resistances
-            .push((DamageType::Fire, 30.0, now + std::time::Duration::from_secs(10)));
+        potion.transient_resistances.push((
+            DamageType::Fire,
+            30.0,
+            now + std::time::Duration::from_secs(10),
+        ));
         assert!((fire(&potion) - 81.125).abs() < 0.001);
 
         let mut resist_elements = target();
-        resist_elements
-            .transient_resistances
-            .push((DamageType::Fire, 48.54, now + std::time::Duration::from_secs(10)));
+        resist_elements.transient_resistances.push((
+            DamageType::Fire,
+            48.54,
+            now + std::time::Duration::from_secs(10),
+        ));
         assert!((fire(&resist_elements) - 62.585).abs() < 0.001);
 
         let mut stacked_transients = target();
-        stacked_transients
-            .transient_resistances
-            .push((DamageType::Fire, 30.0, now + std::time::Duration::from_secs(10)));
-        stacked_transients
-            .transient_resistances
-            .push((DamageType::Fire, 48.54, now + std::time::Duration::from_secs(10)));
+        stacked_transients.transient_resistances.push((
+            DamageType::Fire,
+            30.0,
+            now + std::time::Duration::from_secs(10),
+        ));
+        stacked_transients.transient_resistances.push((
+            DamageType::Fire,
+            48.54,
+            now + std::time::Duration::from_secs(10),
+        ));
         assert!((fire(&stacked_transients) - 32.585).abs() < 0.001);
     }
 
@@ -2283,7 +2810,13 @@ mod tests {
         let spell = gamedata::ids::FIREBALL;
 
         let bare = m.resolve_ability(
-            spell, 1, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
+            spell,
+            1,
+            &crate::arena::combat::perks::CasterPerks::none(),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
 
         let fortify = vec![(DamageType::Fire, 137.32_f32)];
         let perks = crate::arena::combat::perks::PerkBonuses::default();
@@ -2296,7 +2829,13 @@ mod tests {
             element_fortify: &fortify,
         };
         let fortified = m.resolve_ability(
-            spell, 1, &fortified_caster, &target(), ActiveSide::Middle, now);
+            spell,
+            1,
+            &fortified_caster,
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
 
         let gain = comp(&fortified, DamageType::Fire) - comp(&bare, DamageType::Fire);
         assert!(
@@ -2324,9 +2863,23 @@ mod tests {
             a
         };
         let small = m.resolve_attack(
-            &mk(4), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+            &mk(4),
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         let large = m.resolve_attack(
-            &mk(10), &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+            &mk(10),
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
 
         // A flat add contributes the SAME amount to both. A multiplier would scale
         // with the track it multiplies, so the gap would differ.
@@ -2336,10 +2889,30 @@ mod tests {
         nofort4.element_fortify.clear();
         let mut nofort10 = mk(10);
         nofort10.element_fortify.clear();
-        let plain_small = comp(&m.resolve_attack(
-            &nofort4, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now), DamageType::Poison);
-        let plain_large = comp(&m.resolve_attack(
-            &nofort10, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now), DamageType::Poison);
+        let plain_small = comp(
+            &m.resolve_attack(
+                &nofort4,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            ),
+            DamageType::Poison,
+        );
+        let plain_large = comp(
+            &m.resolve_attack(
+                &nofort10,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            ),
+            DamageType::Poison,
+        );
 
         let gain_small = base_small - plain_small;
         let gain_large = base_large - plain_large;
@@ -2362,12 +2935,31 @@ mod tests {
         let mut tgt = target();
         tgt.loadout.weaknesses = vec![(DamageType::Poison, 50.0)];
         let now = Instant::now();
-        let rd = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let rd = m.resolve_attack(
+            &poison_dagger(),
+            &tgt,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!((comp(&rd, DamageType::Poison) - 107.25).abs() < 0.5);
         let mut huge = target();
         huge.loadout.weaknesses = vec![(DamageType::Poison, 100_000.0)];
-        let rd2 = m.resolve_attack(&poison_dagger(), &huge, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!((comp(&rd2, DamageType::Poison) - 114.5).abs() < 0.5, "capped at ×2");
+        let rd2 = m.resolve_attack(
+            &poison_dagger(),
+            &huge,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!(
+            (comp(&rd2, DamageType::Poison) - 114.5).abs() < 0.5,
+            "capped at ×2"
+        );
     }
 
     #[test]
@@ -2376,12 +2968,29 @@ mod tests {
         let lo = poison_dagger();
         let tgt = target();
         let now = Instant::now();
-        let rd = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
-        let health_sum: f32 = rd.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
+        let rd = m.resolve_attack(
+            &lo,
+            &tgt,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            4,
+            now,
+        );
+        let health_sum: f32 = rd
+            .components
+            .iter()
+            .filter(|(t, _)| is_health_type(*t))
+            .map(|(_, v)| *v)
+            .sum();
         assert!((rd.total - health_sum).abs() < 1e-3);
         // The total is the exact Σ of components — no clamp scaling anywhere.
         let expect = 278.85;
-        assert!((rd.total - expect).abs() < 1.0, "unclamped total {} != {expect}", rd.total);
+        assert!(
+            (rd.total - expect).abs() < 1.0,
+            "unclamped total {} != {expect}",
+            rd.total
+        );
     }
 
     #[test]
@@ -2402,11 +3011,19 @@ mod tests {
             dodge_effectiveness: 1.0,
             bypass_types: &[],
         });
-        let mut components = vec![(DamageType::Slashing, 200.0), (DamageType::Poison, 137.3), (DamageType::Magicka, 137.3)];
+        let mut components = vec![
+            (DamageType::Slashing, 200.0),
+            (DamageType::Poison, 137.3),
+            (DamageType::Magicka, 137.3),
+        ];
         let res = tgt.apply_negation_pools(&mut components);
         assert!(res.negated);
         assert!((res.heal - (200.0 + 137.3)).abs() < 1e-2);
-        let health: f32 = components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
+        let health: f32 = components
+            .iter()
+            .filter(|(t, _)| is_health_type(*t))
+            .map(|(_, v)| *v)
+            .sum();
         assert_eq!(health, 0.0);
     }
 
@@ -2415,17 +3032,51 @@ mod tests {
     fn ability_damage_comes_from_the_shipped_rank() {
         let now = Instant::now();
         let m = RetailDamageModel;
-        let r1 = m.resolve_ability(gamedata::ids::FIREBALL, 1, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
-        let r3 = m.resolve_ability(gamedata::ids::FIREBALL, 3, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
+        let r1 = m.resolve_ability(
+            gamedata::ids::FIREBALL,
+            1,
+            &crate::arena::combat::perks::CasterPerks::none(),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
+        let r3 = m.resolve_ability(
+            gamedata::ids::FIREBALL,
+            3,
+            &crate::arena::combat::perks::CasterPerks::none(),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
         assert_eq!(r1.source, DamageSource::Spell);
-        assert!((comp(&r1, DamageType::Fire) - 73.89).abs() < 0.01, "Fireball R1 = 73.89");
-        assert!((comp(&r3, DamageType::Fire) - 150.24).abs() < 0.01, "Fireball R3 = 150.24");
+        assert!(
+            (comp(&r1, DamageType::Fire) - 73.89).abs() < 0.01,
+            "Fireball R1 = 73.89"
+        );
+        assert!(
+            (comp(&r3, DamageType::Fire) - 150.24).abs() < 0.01,
+            "Fireball R3 = 150.24"
+        );
         // A Shock spell drains Magicka as well.
-        let bolt = m.resolve_ability("7fc15804-1637-40a9-8dcc-3ea1eb0f778d", 1, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
+        let bolt = m.resolve_ability(
+            "7fc15804-1637-40a9-8dcc-3ea1eb0f778d",
+            1,
+            &crate::arena::combat::perks::CasterPerks::none(),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
         assert!(comp(&bolt, DamageType::Shock) > 0.0);
         assert!((comp(&bolt, DamageType::Magicka) - comp(&bolt, DamageType::Shock)).abs() < 1e-3);
         // Paralyze deals Poison at its shipped 88.7 @ R1.
-        let par = m.resolve_ability(gamedata::ids::PARALYZE, 1, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
+        let par = m.resolve_ability(
+            gamedata::ids::PARALYZE,
+            1,
+            &crate::arena::combat::perks::CasterPerks::none(),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
         assert!((comp(&par, DamageType::Poison) - 88.7).abs() < 0.01);
     }
 
@@ -2437,7 +3088,10 @@ mod tests {
     #[test]
     fn a_status_effect_dot_is_not_blocked_and_its_resistance_is_derated() {
         assert_eq!(combat_params::CONTINUOUS_DAMAGE_BLOCKING_EFFECTIVENESS, 1.0);
-        assert_eq!(combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS, 0.75);
+        assert_eq!(
+            combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS,
+            0.75
+        );
         let m = RetailDamageModel;
         let now = Instant::now();
         let mut tgt = target();
@@ -2449,8 +3103,24 @@ mod tests {
         tgt.blocking_side = ActiveSide::Right;
         tgt.block_raised_at = Some(now);
         tgt.blocking_until = Some(now + Duration::from_secs(2));
-        let dot = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::StatusEffect, ActiveSide::Right, 1.0, 0, now);
-        let hit = m.resolve_attack(&poison_dagger(), &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+        let dot = m.resolve_attack(
+            &poison_dagger(),
+            &tgt,
+            DamageSource::StatusEffect,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        let hit = m.resolve_attack(
+            &poison_dagger(),
+            &tgt,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
         assert!(!dot.blocked);
         assert!((comp(&dot, DamageType::Poison) - 27.25).abs() < 0.01);
         assert!(hit.blocked);
@@ -2517,9 +3187,19 @@ mod tests {
         def.block_raised_at = Some(now);
         def.blocking_until = Some(now + Duration::from_secs(8));
 
-        let early =
-            m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-        assert!(early.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "held briefly → HIGH");
+        let early = m.resolve_attack(
+            &lo,
+            &def,
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!(
+            early.flags & flags::WAS_OPTIMAL_BLOCKING != 0,
+            "held briefly → HIGH"
+        );
 
         let late_at = now + Duration::from_secs_f32(BLOCK_OPTIMAL_TIME_SECS + 0.1);
         let held = m.resolve_attack(
@@ -2533,18 +3213,24 @@ mod tests {
         );
         // LOW: still a block, at ×1 R, and with NO wire flag (03-D5).
         assert!(held.blocked, "held too long → LOW, still blocked");
-        assert_eq!(held.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
-        assert!((comp(&held, DamageType::Slashing) - 86.4).abs() < 0.01, "144 − 57.6");
+        assert_eq!(
+            held.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING),
+            0
+        );
+        assert!(
+            (comp(&held, DamageType::Slashing) - 86.4).abs() < 0.01,
+            "144 − 57.6"
+        );
     }
 }
 
 #[cfg(test)]
 mod every_cast_does_something {
+    use super::tests::target;
     use super::*;
     use crate::arena::combat::gamedata;
     use crate::arena::combat::loadout::ability_tag_for_template;
     use crate::arena::combat::state::AbilityTag;
-    use super::tests::target;
 
     /// **No ability a player can equip may cost a resource and do nothing.**
     ///
@@ -2599,7 +3285,10 @@ mod every_cast_does_something {
 
         for a in gamedata::ABILITIES.iter() {
             let tag = ability_tag_for_template(a.uuid);
-            if !matches!(tag, AbilityTag::Damage | AbilityTag::Paralyze | AbilityTag::Generic) {
+            if !matches!(
+                tag,
+                AbilityTag::Damage | AbilityTag::Paralyze | AbilityTag::Generic
+            ) {
                 continue;
             }
             // Only abilities that SHIP a damage number. An ability with neither
@@ -2623,7 +3312,14 @@ mod every_cast_does_something {
             }
             // Rank 1 is what a freshly-equipped ability resolves at, so it is the
             // floor that matters.
-            let r = m.resolve_ability(a.uuid, 1, &crate::arena::combat::perks::CasterPerks::none(), &target(), ActiveSide::Middle, now);
+            let r = m.resolve_ability(
+                a.uuid,
+                1,
+                &crate::arena::combat::perks::CasterPerks::none(),
+                &target(),
+                ActiveSide::Middle,
+                now,
+            );
             if r.total <= 0.0 {
                 dead.push(format!("{} ({}, tag {tag:?})", a.editor_name, a.uuid));
             }
@@ -2649,7 +3345,10 @@ mod periodic_fortify_tests {
     fn a_periodic_tick_pays_a_scaled_fortify_bonus() {
         let scale = combat_params::CONTINUOUS_DAMAGE_FORTIFY_EFFECTIVENESS
             * combat_params::GLOBAL_TICK_INTERVAL;
-        assert!((scale - 0.075).abs() < 1e-6, "0.75 x 0.1 = 0.075, got {scale}");
+        assert!(
+            (scale - 0.075).abs() < 1e-6,
+            "0.75 x 0.1 = 0.075, got {scale}"
+        );
 
         // Augmented Flames rank 11 over a 15-tick, 3 s channel.
         let bonus = 22.5_f32;
@@ -2660,7 +3359,10 @@ mod periodic_fortify_tests {
             (whole_channel - 25.3125).abs() < 1e-3,
             "a full channel adds ~25, not the 337.5 an unscaled per-tick payout gives"
         );
-        assert!(whole_channel < bonus * 2.0, "and nowhere near 15x the printed value");
+        assert!(
+            whole_channel < bonus * 2.0,
+            "and nowhere near 15x the printed value"
+        );
     }
 
     /// The scaling uses `_globalTickInterval` (0.1), NOT `_globalPvPTickInterval`

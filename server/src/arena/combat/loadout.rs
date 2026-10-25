@@ -2516,7 +2516,7 @@ mod tests {
     /// LOWERS an item below its untempered `blockBase` (row 0 is tempering level 1).
     #[test]
     fn the_temper_table_is_consistent_with_the_templates() {
-        use super::super::block_temper::{tempered_block_value, BLOCK_TEMPER};
+        use super::super::block_temper::{BLOCK_TEMPER, tempered_block_value};
         assert!(
             BLOCK_TEMPER.windows(2).all(|w| w[0].0 < w[1].0),
             "sorted for binary search"

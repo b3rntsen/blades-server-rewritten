@@ -63,7 +63,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::economy::{RewardGrant, GOLD};
+use crate::economy::{GOLD, RewardGrant};
 use crate::user_data::{CompleteInventory, InventoryChangeTracker, Item};
 
 /// Catalog refresh window. **MEASURED**: `expiration − start` was 36,000,000 ms
@@ -177,11 +177,7 @@ impl SellPrices {
             Some(ladder) if !ladder.is_empty() => {
                 let idx = ((level - 1) as usize).min(ladder.len() - 1);
                 let m = ladder[idx];
-                if m > 0.0 {
-                    m
-                } else {
-                    1.0
-                }
+                if m > 0.0 { m } else { 1.0 }
             }
             // Untemperable, or a template with no ladder: temper cannot raise the
             // price, so pay the base value.

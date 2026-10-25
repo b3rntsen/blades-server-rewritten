@@ -73,11 +73,17 @@ impl UdpServer {
         tap: Option<UnboundedSender<(SocketAddr, u8)>>,
     ) -> io::Result<Arc<Self>> {
         let socket = Arc::new(UdpSocket::bind(addr).await?);
-        Ok(Arc::new(UdpServer { socket, registry, tap }))
+        Ok(Arc::new(UdpServer {
+            socket,
+            registry,
+            tap,
+        }))
     }
 
     pub fn local_addr(&self) -> SocketAddr {
-        self.socket.local_addr().expect("bound socket has a local addr")
+        self.socket
+            .local_addr()
+            .expect("bound socket has a local addr")
     }
 
     /// Demux loop: decode frames from admitted peers; handshake unknown peers
@@ -130,7 +136,9 @@ impl UdpServer {
                             warn!("arena-udp: handshake reply to {peer} failed: {e}");
                         }
                     }
-                    None => debug!("arena-udp: {peer} handshake for unknown psess '{psid}' — ignored"),
+                    None => {
+                        debug!("arena-udp: {peer} handshake for unknown psess '{psid}' — ignored")
+                    }
                 }
             } else {
                 debug!("arena-udp: {peer} {n}B from unknown peer (not a handshake)");
@@ -189,7 +197,10 @@ mod tests {
 
         reg.remove(&peer); // disconnect frees the slot
         assert_eq!(reg.available_permits(), 1);
-        assert!(reg.allocate(&["c".into()], Vec::new(), Uuid::new_v4()), "slot freed");
+        assert!(
+            reg.allocate(&["c".into()], Vec::new(), Uuid::new_v4()),
+            "slot freed"
+        );
     }
 
     /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the idle/under-capacity sweep is disabled, so
@@ -207,7 +218,11 @@ mod tests {
         assert!(off.allocate(&["a".into()], Vec::new(), Uuid::new_v4()));
         assert_eq!(off.active_count(), 1);
         off.sweep_expired(way_later);
-        assert_eq!(off.active_count(), 0, "HOLD off: idle/under-capacity match swept");
+        assert_eq!(
+            off.active_count(),
+            0,
+            "HOLD off: idle/under-capacity match swept"
+        );
 
         // HOLD on: the same match survives the sweep indefinitely.
         let on = MatchRegistry::new_with_debug_hold(4, true);
@@ -226,12 +241,20 @@ mod tests {
         assert!(reg.allocate(&["a".into()], Vec::new(), Uuid::new_v4()));
 
         reg.sweep_expired(now + Duration::from_secs(20));
-        assert_eq!(reg.active_count(), 1, "the hold protects the match before expiry");
+        assert_eq!(
+            reg.active_count(),
+            1,
+            "the hold protects the match before expiry"
+        );
 
         // Also older than CONNECT_DEADLINE, so once the hold expires the ordinary
         // under-capacity cleanup has an immediately reclaimable match to remove.
         reg.sweep_expired(now + Duration::from_secs(46));
-        assert_eq!(reg.active_count(), 0, "the stuck match is sweepable after expiry");
+        assert_eq!(
+            reg.active_count(),
+            0,
+            "the stuck match is sweepable after expiry"
+        );
     }
 
     /// Live loopback: real sockets, full allocate→handshake→encrypted frame the

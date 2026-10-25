@@ -379,7 +379,11 @@ pub fn pay_inputs(
     for &(template, needed) in &materials {
         let have = inventory.backpack.stackable_items.count(template);
         if have < needed {
-            return Err(EconomyError::InsufficientStackable { template, needed, have });
+            return Err(EconomyError::InsufficientStackable {
+                template,
+                needed,
+                have,
+            });
         }
     }
     wallet.try_pay(&prices)?;
@@ -498,7 +502,8 @@ mod tests {
         assert_eq!(w.balance(GOLD), 100);
         assert_eq!(w.balance(GEMS), 1);
         // Affordable → both charged.
-        w.try_pay(&[Price::new(GOLD, 50), Price::new(GEMS, 1)]).unwrap();
+        w.try_pay(&[Price::new(GOLD, 50), Price::new(GEMS, 1)])
+            .unwrap();
         assert_eq!(w.balance(GOLD), 50);
         assert_eq!(w.balance(GEMS), 0);
     }
@@ -510,7 +515,10 @@ mod tests {
         assert_eq!(inv.backpack.stackable_items.count(GOLD), 3);
         assert_eq!(inv.backpack.stackable_items.remove(GOLD, 1).unwrap(), 2);
         assert_eq!(inv.backpack.stackable_items.remove(GOLD, 2).unwrap(), 0);
-        assert!(inv.backpack.stackable_items.is_empty(), "zeroed stack removed");
+        assert!(
+            inv.backpack.stackable_items.is_empty(),
+            "zeroed stack removed"
+        );
         assert_eq!(inv.backpack.stackable_items.remove(GOLD, 1), Err(0));
     }
 
@@ -543,7 +551,12 @@ mod tests {
         assert_eq!(inv.backpack.stackable_items.count(material), 5);
         assert!(inv.backpack.items.0.contains_key(&instanced));
         assert_eq!(ch.experience, 800);
-        assert!(tracker.modified_backpack.stackable_items.contains(&material));
+        assert!(
+            tracker
+                .modified_backpack
+                .stackable_items
+                .contains(&material)
+        );
         assert!(tracker.modified_backpack.items.contains(&instanced));
     }
 
@@ -592,15 +605,39 @@ mod tests {
 
         let (mut inv, mut w) = setup();
         let mut tracker = InventoryChangeTracker::default();
-        let err = pay_inputs(&[(GOLD, 10), (mat, 3), (mat, 3)], &mut w, &mut inv, &mut tracker);
-        assert_eq!(err, Err(EconomyError::InsufficientStackable { template: mat, needed: 6, have: 5 }));
-        assert_eq!((w.balance(GOLD), inv.backpack.stackable_items.count(mat)), (100, 5));
+        let err = pay_inputs(
+            &[(GOLD, 10), (mat, 3), (mat, 3)],
+            &mut w,
+            &mut inv,
+            &mut tracker,
+        );
+        assert_eq!(
+            err,
+            Err(EconomyError::InsufficientStackable {
+                template: mat,
+                needed: 6,
+                have: 5
+            })
+        );
+        assert_eq!(
+            (w.balance(GOLD), inv.backpack.stackable_items.count(mat)),
+            (100, 5)
+        );
         assert!(tracker.modified_backpack.stackable_items.is_empty());
 
         let (mut inv, mut w) = setup();
         let mut tracker = InventoryChangeTracker::default();
-        pay_inputs(&[(GOLD, 10), (mat, 3), (mat, 2)], &mut w, &mut inv, &mut tracker).unwrap();
-        assert_eq!((w.balance(GOLD), inv.backpack.stackable_items.count(mat)), (90, 0));
+        pay_inputs(
+            &[(GOLD, 10), (mat, 3), (mat, 2)],
+            &mut w,
+            &mut inv,
+            &mut tracker,
+        )
+        .unwrap();
+        assert_eq!(
+            (w.balance(GOLD), inv.backpack.stackable_items.count(mat)),
+            (90, 0)
+        );
         assert!(tracker.modified_backpack.stackable_items.contains(&mat));
     }
 }

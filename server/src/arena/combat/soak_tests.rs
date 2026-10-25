@@ -84,7 +84,10 @@ fn inventory_from(equipped: &Value) -> CompleteInventory {
     };
     CompleteInventory {
         backpack: Backpack::default(),
-        loadout: InvLoadout { equipped_items, ..Default::default() },
+        loadout: InvLoadout {
+            equipped_items,
+            ..Default::default()
+        },
         treasury: Treasury::default(),
         overflow_treasury: Treasury::default(),
         backpack_version: 1,
@@ -149,7 +152,9 @@ fn load_fixtures() -> Vec<Fixture> {
         let name = row["fixture"].as_str().unwrap().to_string();
         let gear = match row["gear"].as_str().unwrap_or("none") {
             "shield" => pick(&|l: &Loadout| l.has_shield),
-            "two-handed" => pick(&|l: &Loadout| !l.has_shield && l.weapon.weight == Some(Weight::Heavy)),
+            "two-handed" => {
+                pick(&|l: &Loadout| !l.has_shield && l.weapon.weight == Some(Weight::Heavy))
+            }
             "strongest" => pick(&|_: &Loadout| true),
             _ => Value::Null,
         };
@@ -168,7 +173,10 @@ fn load_fixtures() -> Vec<Fixture> {
 /// Every soak fixture as `(name, loadout)`, for the real-transport soak in
 /// `enet_host` (which drives the same loadouts over rusty_enet + ChaCha20).
 pub(crate) fn fixture_loadouts() -> Vec<(String, Loadout)> {
-    load_fixtures().into_iter().map(|f| (f.name, f.loadout)).collect()
+    load_fixtures()
+        .into_iter()
+        .map(|f| (f.name, f.loadout))
+        .collect()
 }
 
 /// [`match_bound`] at the soak's maximum tick, for the real-transport soak.
@@ -285,7 +293,10 @@ fn check_frame(frame: &[u8], stats: &mut BTreeMap<u8, usize>) -> Result<Option<i
         return Err(format!("frame too short: {frame:02x?}"));
     }
     if frame[0] != 0xBE {
-        return Err(format!("s2c frame does not start with the 0xBE marker: {:02x?}", &frame[..3]));
+        return Err(format!(
+            "s2c frame does not start with the 0xBE marker: {:02x?}",
+            &frame[..3]
+        ));
     }
     *stats.entry(frame[1]).or_insert(0) += 1;
     let channel = messages::retail_channel(frame);
@@ -301,7 +312,10 @@ fn check_frame(frame: &[u8], stats: &mut BTreeMap<u8, usize>) -> Result<Option<i
     let body = &frame[2..];
     let nd = arena_proto::parse_netdata(body);
     if !nd.ok {
-        return Err(format!("carrier 0x{:02x}: NetData ran out of bytes at {}", frame[1], nd.consumed));
+        return Err(format!(
+            "carrier 0x{:02x}: NetData ran out of bytes at {}",
+            frame[1], nd.consumed
+        ));
     }
     if nd.consumed != body.len() {
         return Err(format!(
@@ -321,7 +335,10 @@ fn check_frame(frame: &[u8], stats: &mut BTreeMap<u8, usize>) -> Result<Option<i
         .finish_checked()
         .map_err(|o| format!("carrier 0x{:02x}: re-encode overflow {o:?}", frame[1]))?;
     if re != body {
-        return Err(format!("carrier 0x{:02x}: NetData does not re-encode byte-identically", frame[1]));
+        return Err(format!(
+            "carrier 0x{:02x}: NetData does not re-encode byte-identically",
+            frame[1]
+        ));
     }
     Ok(if frame[1] == 0x36 { nd.int(3) } else { None })
 }
@@ -331,10 +348,15 @@ fn check_frame(frame: &[u8], stats: &mut BTreeMap<u8, usize>) -> Result<Option<i
 /// newly added float cannot escape the check.
 fn check_combat_floats(m: &MatchInstance) -> Result<(), String> {
     let dump = format!("{:?}", m.combat);
-    for bad in ["NaN", ": inf", ": -inf", "(inf", "(-inf", " inf,", " -inf,", " inf)", " -inf)"] {
+    for bad in [
+        "NaN", ": inf", ": -inf", "(inf", "(-inf", " inf,", " -inf,", " inf)", " -inf)",
+    ] {
         if let Some(at) = dump.find(bad) {
             let lo = at.saturating_sub(160);
-            return Err(format!("non-finite float in combat state (`{bad}`): …{}…", &dump[lo..(at + 40).min(dump.len())]));
+            return Err(format!(
+                "non-finite float in combat state (`{bad}`): …{}…",
+                &dump[lo..(at + 40).min(dump.len())]
+            ));
         }
     }
     Ok(())
@@ -369,7 +391,10 @@ fn legal(prev: u8, next: u8) -> bool {
         || e(S::InRound, S::PostRound)
         || e(S::PostRound, S::ChooseLoadout)
         || e(S::ChooseLoadout, S::AwaitingClientBackendSynchronization)
-        || e(S::AwaitingClientBackendSynchronization, S::SynchronizingLoadout)
+        || e(
+            S::AwaitingClientBackendSynchronization,
+            S::SynchronizingLoadout,
+        )
         || e(S::SynchronizingLoadout, S::OpponentShowcase)
         || e(S::PostRound, S::BackendMatchEnd)
         || e(S::BackendMatchEnd, S::Victory)
@@ -381,9 +406,15 @@ fn legal(prev: u8, next: u8) -> bool {
 fn legal_concede(prev: u8, next: u8) -> bool {
     use MatchState as S;
     next == S::PostRound as u8
-        && ![S::PostRound as u8, S::BackendMatchEnd as u8, S::Victory as u8, S::PostMatch as u8,
-            S::DisconnectingPlayersAfterMatch as u8, S::Idle as u8]
-            .contains(&prev)
+        && ![
+            S::PostRound as u8,
+            S::BackendMatchEnd as u8,
+            S::Victory as u8,
+            S::PostMatch as u8,
+            S::DisconnectingPlayersAfterMatch as u8,
+            S::Idle as u8,
+        ]
+        .contains(&prev)
 }
 
 fn c2s_user_message(net_object_id: i32, gmid: u8) -> Vec<u8> {
@@ -396,7 +427,13 @@ fn c2s_user_message(net_object_id: i32, gmid: u8) -> Vec<u8> {
 
 fn c2s_zone(held: bool, block_zone: bool) -> Vec<u8> {
     let mut w = NetDataWriter::new();
-    w.int(0, 565).byte(1, 56).byte(2, 3).byte(3, 46).bool(4, held).float(5, 0.0).bool(6, block_zone);
+    w.int(0, 565)
+        .byte(1, 56)
+        .byte(2, 3)
+        .byte(3, 46)
+        .bool(4, held)
+        .float(5, 0.0)
+        .bool(6, block_zone);
     let mut f = messages::frame_for_test(w.finish());
     f[0] = 0x84;
     f
@@ -416,7 +453,7 @@ fn human_input(m: &MatchInstance, slot: usize, rng: &mut Rng) -> Option<Vec<u8>>
                 // so the soak also drives the charge clock (a tap below MinDamageTime
                 // fails, a hold on the plateau crits, combat-spec 02 X1/X2).
                 3 => c2s_zone(true, false),
-                4 => c2s_zone(true, true),  // raise guard
+                4 => c2s_zone(true, true),   // raise guard
                 5 => c2s_zone(false, false), // release
                 _ => {
                     let casts: Vec<&str> = f
@@ -437,7 +474,8 @@ fn human_input(m: &MatchInstance, slot: usize, rng: &mut Rng) -> Option<Vec<u8>>
         }
         FlowState::BackendMatchCreated | FlowState::NextState | FlowState::RoundEnd => {
             // Occasionally press Ready (op57), which must only ever shorten a hold.
-            rng.chance(8).then(|| c2s_user_message(f.player_net_object_id, 57))
+            rng.chance(8)
+                .then(|| c2s_user_message(f.player_net_object_id, 57))
         }
         _ => None,
     }
@@ -458,7 +496,12 @@ fn run_match(
         Mode::ScriptedPvp | Mode::SilentPvp => (2, 2),
     };
     let fixtures = [a, b];
-    let mut m = MatchInstance::new(2, expected_peers, vec![a.loadout.clone(), b.loadout.clone()], t0);
+    let mut m = MatchInstance::new(
+        2,
+        expected_peers,
+        vec![a.loadout.clone(), b.loadout.clone()],
+        t0,
+    );
     m.set_game_session_id(format!("soak-{seed:016x}"));
     let humans: Vec<usize> = match mode {
         Mode::ScriptedHumanVsBot | Mode::ConcedeMidMatch => vec![0],
@@ -481,7 +524,10 @@ fn run_match(
     let trace = std::env::var("SOAK_TRACE").ok().as_deref() == Some(&format!("{seed:#018x}"));
     let mut traced_winners = 0usize;
     if trace {
-        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Info).try_init();
+        let _ = env_logger::builder()
+            .is_test(true)
+            .filter_level(log::LevelFilter::Info)
+            .try_init();
     }
 
     let mut absorb = |out: Vec<(usize, Vec<u8>)>,
@@ -555,7 +601,9 @@ fn run_match(
         if internal.last() != Some(&st) {
             let prev = *internal.last().unwrap();
             if !(legal(prev, st) || (o.conceded && legal_concede(prev, st))) {
-                return Err(format!("illegal MatchState transition {prev} -> {st} (so far {internal:?})"));
+                return Err(format!(
+                    "illegal MatchState transition {prev} -> {st} (so far {internal:?})"
+                ));
             }
             internal.push(st);
         }
@@ -602,7 +650,9 @@ fn run_match(
                 quit_done = true;
                 let before = m.combat.phase;
                 let out = match mode {
-                    Mode::ConcedeMidMatch => m.on_c2s(0, &[0xBE, GameMessageId::ConcedeMatch as u8], now),
+                    Mode::ConcedeMidMatch => {
+                        m.on_c2s(0, &[0xBE, GameMessageId::ConcedeMatch as u8], now)
+                    }
                     _ => m.concede_by_departure(quitter, now),
                 };
                 if !matches!(before, FlowState::RoundEnd | FlowState::Finished) {
@@ -632,7 +682,10 @@ fn run_match(
                     f.stamina = 0;
                 }
                 if fx.ravage_magicka_at_round_start > 0.0 {
-                    f.apply_ravage(&[(DamageType::Magicka, fx.ravage_magicka_at_round_start)], 1.0);
+                    f.apply_ravage(
+                        &[(DamageType::Magicka, fx.ravage_magicka_at_round_start)],
+                        1.0,
+                    );
                 }
             }
         }
@@ -682,7 +735,9 @@ fn run_match(
 
     // --- terminal-shape assertions --------------------------------------------
     if internal.last() != Some(&(MatchState::DisconnectingPlayersAfterMatch as u8)) {
-        return Err(format!("finished without reaching Disconnecting(19): {internal:?}"));
+        return Err(format!(
+            "finished without reaching Disconnecting(19): {internal:?}"
+        ));
     }
     // The wire must carry the same progression the engine walked (the spawn frame
     // carries WaitingForPlayers, so the op55 stream starts at InitialPlayerSetup).
@@ -692,10 +747,18 @@ fn run_match(
         .filter(|s| *s != MatchState::Idle as u8 && *s != MatchState::WaitingForPlayers as u8)
         .collect();
     if wire != expected_wire {
-        return Err(format!("op55 wire progression {wire:?} != engine progression {expected_wire:?}"));
+        return Err(format!(
+            "op55 wire progression {wire:?} != engine progression {expected_wire:?}"
+        ));
     }
-    let inrounds = internal.iter().filter(|s| **s == MatchState::InRound as u8).count();
-    let postrounds = internal.iter().filter(|s| **s == MatchState::PostRound as u8).count();
+    let inrounds = internal
+        .iter()
+        .filter(|s| **s == MatchState::InRound as u8)
+        .count();
+    let postrounds = internal
+        .iter()
+        .filter(|s| **s == MatchState::PostRound as u8)
+        .count();
     // A concession while the Match object already sits at PostRound (the hold before
     // ChooseLoadout) records its round without a second PostRound broadcast.
     let postround_ok = postrounds == o.rounds || (o.conceded && postrounds + 1 == o.rounds);
@@ -709,16 +772,28 @@ fn run_match(
         return Err("match finished with no winner".into());
     };
     if !o.conceded && o.rounds_won[w] != 2 {
-        return Err(format!("un-conceded match ended without a 2-round winner: {:?}", o.rounds_won));
+        return Err(format!(
+            "un-conceded match ended without a 2-round winner: {:?}",
+            o.rounds_won
+        ));
     }
     if (o.rounds_won[0] + o.rounds_won[1]) as usize > o.rounds {
-        return Err(format!("more round wins {:?} than rounds {}", o.rounds_won, o.rounds));
+        return Err(format!(
+            "more round wins {:?} than rounds {}",
+            o.rounds_won, o.rounds
+        ));
     }
     if o.deaths > o.rounds {
-        return Err(format!("{} op29 death frames for {} rounds", o.deaths, o.rounds));
+        return Err(format!(
+            "{} op29 death frames for {} rounds",
+            o.deaths, o.rounds
+        ));
     }
     if o.round_results_sent != o.rounds {
-        return Err(format!("{} op48 round results for {} rounds", o.round_results_sent, o.rounds));
+        return Err(format!(
+            "{} op48 round results for {} rounds",
+            o.round_results_sent, o.rounds
+        ));
     }
     if o.victory_cards == 0 {
         return Err("no op49 victory card was sent".into());
@@ -737,15 +812,17 @@ fn run_guarded(
     mode: Mode,
     bound: Duration,
 ) -> Result<Outcome, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_match(seed, a, b, mode, bound)))
-        .unwrap_or_else(|p| {
-            let msg = p
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_else(|| "<non-string panic>".into());
-            Err(format!("PANIC: {msg}"))
-        })
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_match(seed, a, b, mode, bound)
+    }))
+    .unwrap_or_else(|p| {
+        let msg = p
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "<non-string panic>".into());
+        Err(format!("PANIC: {msg}"))
+    })
 }
 
 const MAX_TICK: Duration = Duration::from_millis(90);
@@ -761,27 +838,61 @@ const MAX_TICK: Duration = Duration::from_millis(90);
 fn soak_fixtures_build_and_carry_perks() {
     let fx = load_fixtures();
     assert_eq!(fx.len(), 38);
-    let prod_with_perks = fx[..30].iter().filter(|f| !f.loadout.perks.is_empty()).count();
-    assert!(prod_with_perks >= 25, "only {prod_with_perks}/30 prod fixtures resolved any perk");
+    let prod_with_perks = fx[..30]
+        .iter()
+        .filter(|f| !f.loadout.perks.is_empty())
+        .count();
+    assert!(
+        prod_with_perks >= 25,
+        "only {prod_with_perks}/30 prod fixtures resolved any perk"
+    );
     for f in &fx {
         let dump = format!("{:?}", f.loadout);
-        assert!(!dump.contains("NaN") && !dump.contains(": inf"), "{}: non-finite loadout", f.name);
-        assert!(!f.loadout.weapon.base_by_type.is_empty(), "{}: no weapon", f.name);
+        assert!(
+            !dump.contains("NaN") && !dump.contains(": inf"),
+            "{}: non-finite loadout",
+            f.name
+        );
+        assert!(
+            !f.loadout.weapon.base_by_type.is_empty(),
+            "{}: no weapon",
+            f.name
+        );
     }
     let by = |n: &str| fx.iter().find(|f| f.name == n).unwrap();
     let all = &by("edge-all-perks-max").loadout.perks;
-    assert!(all.mettle > 0.0 && all.max_power > 0.0 && all.healing_surge > 0.0 && all.combat_focus > 0.0);
+    assert!(
+        all.mettle > 0.0
+            && all.max_power > 0.0
+            && all.healing_surge > 0.0
+            && all.combat_focus > 0.0
+    );
     assert!(by("edge-mettle-reckless-fury").loadout.perks.mettle > 0.0);
-    assert!(!by("edge-mettle-reckless-fury").loadout.has_shield, "Mettle build must be two-handed");
-    assert!(by("edge-healing-surge-zero-stamina").loadout.perks.healing_surge > 0.0);
+    assert!(
+        !by("edge-mettle-reckless-fury").loadout.has_shield,
+        "Mettle build must be two-handed"
+    );
+    assert!(
+        by("edge-healing-surge-zero-stamina")
+            .loadout
+            .perks
+            .healing_surge
+            > 0.0
+    );
     assert!(by("edge-maximum-power-caster").loadout.perks.max_power > 0.0);
     assert!(by("edge-no-learned-map").loadout.perks.is_empty());
     assert!(by("edge-no-learned-map").loadout.abilities.is_empty());
     // Junk map: only the well-formed entries survive (MatchingSet clamped, CombatFocus
     // clamped); rank 0, "5", -1, 2.5, unknown and enemy-only are dropped.
     let junk = &by("edge-junk-learned-map").loadout.perks;
-    assert!(junk.combat_focus > 0.0, "CombatFocus 65535 clamps to max, not dropped");
-    assert_eq!(junk.healing_surge, 0.0, "a string rank is not a learned perk");
+    assert!(
+        junk.combat_focus > 0.0,
+        "CombatFocus 65535 clamps to max, not dropped"
+    );
+    assert_eq!(
+        junk.healing_surge, 0.0,
+        "a string rank is not a learned perk"
+    );
     assert_eq!(junk.mettle, 0.0, "a float rank is not a learned perk");
     let names: Vec<String> = fx.iter().map(|f| f.name.clone()).collect();
     eprintln!("CRE-SOAK fixtures: {prod_with_perks}/30 prod with perks; {names:?}");
@@ -804,12 +915,16 @@ fn soak_240_full_matches_terminate_cleanly() {
         (Mode::SilentPvp, 4),
     ];
     // `SOAK_SCALE=N` multiplies every count, for a longer explicit run.
-    let scale: usize = std::env::var("SOAK_SCALE").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+    let scale: usize = std::env::var("SOAK_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
     let mut failures = Vec::new();
     let mut n = 0usize;
     let mut slowest = (Duration::ZERO, String::new());
     let mut per_mode: BTreeMap<String, (usize, Duration, Duration)> = BTreeMap::new();
-    let (mut rounds_hist, mut casts, mut dmg, mut frames) = ([0usize; 4], [0u64; 2], 0usize, 0usize);
+    let (mut rounds_hist, mut casts, mut dmg, mut frames) =
+        ([0usize; 4], [0u64; 2], 0usize, 0usize);
     let mut timeouts = 0usize;
     let mut double_ko_matches: Vec<String> = Vec::new();
     // Every edge fixture fights at least twice in bot-vs-bot, whatever the RNG says.
@@ -826,14 +941,21 @@ fn soak_240_full_matches_terminate_cleanly() {
             if ib == ia {
                 ib = (ib + 1) % fx.len();
             }
-            let label = format!("{mode:?} seed={seed:#018x} {} vs {}", fx[ia].name, fx[ib].name);
+            let label = format!(
+                "{mode:?} seed={seed:#018x} {} vs {}",
+                fx[ia].name, fx[ib].name
+            );
             n += 1;
             match run_guarded(seed, &fx[ia], &fx[ib], mode, bound) {
                 Ok(o) => {
                     if o.sim > slowest.0 {
                         slowest = (o.sim, label.clone());
                     }
-                    let e = per_mode.entry(format!("{mode:?}")).or_insert((0, Duration::MAX, Duration::ZERO));
+                    let e = per_mode.entry(format!("{mode:?}")).or_insert((
+                        0,
+                        Duration::MAX,
+                        Duration::ZERO,
+                    ));
                     e.0 += 1;
                     e.1 = e.1.min(o.sim);
                     e.2 = e.2.max(o.sim);
@@ -844,7 +966,10 @@ fn soak_240_full_matches_terminate_cleanly() {
                     frames += o.frames;
                     timeouts += o.ended_by_timeout;
                     if o.double_kos > 0 {
-                        double_ko_matches.push(format!("{label} ({} double KO, {} rounds)", o.double_kos, o.rounds));
+                        double_ko_matches.push(format!(
+                            "{label} ({} double KO, {} rounds)",
+                            o.double_kos, o.rounds
+                        ));
                     }
                 }
                 Err(e) => failures.push(format!("{label}: {e}")),
@@ -863,16 +988,27 @@ fn soak_240_full_matches_terminate_cleanly() {
         casts[0],
         casts[1],
     );
-    eprintln!("CRE-SOAK   scoreless round regressions: {}", double_ko_matches.len());
+    eprintln!(
+        "CRE-SOAK   scoreless round regressions: {}",
+        double_ko_matches.len()
+    );
     for d in double_ko_matches.iter().take(20) {
         eprintln!("CRE-SOAK     {d}");
     }
     for (mode, (c, lo, hi)) in &per_mode {
         eprintln!("CRE-SOAK   {mode}: {c} ok, sim {lo:?} .. {hi:?}");
     }
-    assert!(failures.is_empty(), "{} of {n} matches failed:\n{}", failures.len(), failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {n} matches failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
     assert!(n >= 200 * scale);
-    assert!(casts[0] > 0 && casts[1] > 0, "both sides must cast abilities: {casts:?}");
+    assert!(
+        casts[0] > 0 && casts[1] > 0,
+        "both sides must cast abilities: {casts:?}"
+    );
 }
 
 /// Nobody acts: every round must be closed by the authoritative 120 s ROUND_TIMEOUT
@@ -883,7 +1019,11 @@ fn soak_a_silent_pvp_match_ends_on_round_timeouts() {
     let bound = match_bound(MAX_TICK);
     let o = run_guarded(7, &fx[3], &fx[20], Mode::SilentPvp, bound).expect("silent PvP terminates");
     assert_eq!(o.rounds, 2, "two timed-out rounds decide it: {o:?}");
-    assert!(o.sim >= ROUND_TIMEOUT * 2, "rounds ended before their timeout: {:?}", o.sim);
+    assert!(
+        o.sim >= ROUND_TIMEOUT * 2,
+        "rounds ended before their timeout: {:?}",
+        o.sim
+    );
     assert_eq!(o.damage_frames, 0, "nobody acted, nothing was damaged");
 }
 
@@ -895,8 +1035,17 @@ fn soak_a_passive_human_against_a_bot_still_terminates() {
     for (i, j) in [(0, 29), (29, 0), (31, 33)] {
         let o = run_guarded(11 + i as u64, &fx[i], &fx[j], Mode::SilentHumanVsBot, bound)
             .unwrap_or_else(|e| panic!("{} vs {}: {e}", fx[i].name, fx[j].name));
-        assert_eq!(o.winner, Some(1), "{} (idle) vs {}: the bot wins", fx[i].name, fx[j].name);
-        assert!(o.casts[1] > 0 || fx[j].loadout.abilities.is_empty(), "the bot used its abilities");
+        assert_eq!(
+            o.winner,
+            Some(1),
+            "{} (idle) vs {}: the bot wins",
+            fx[i].name,
+            fx[j].name
+        );
+        assert!(
+            o.casts[1] > 0 || fx[j].loadout.abilities.is_empty(),
+            "the bot used its abilities"
+        );
     }
 }
 
@@ -908,7 +1057,10 @@ fn soak_departure_and_concede_mid_round_terminate() {
     let bound = match_bound(MAX_TICK);
     for seed in 0..12u64 {
         for mode in [Mode::DepartureMidMatch, Mode::ConcedeMidMatch] {
-            let (a, b) = ((seed as usize * 7) % fx.len(), (seed as usize * 11 + 3) % fx.len());
+            let (a, b) = (
+                (seed as usize * 7) % fx.len(),
+                (seed as usize * 11 + 3) % fx.len(),
+            );
             let o = run_guarded(1000 + seed, &fx[a], &fx[b], mode, bound)
                 .unwrap_or_else(|e| panic!("{mode:?} seed {seed}: {e}"));
             assert!(o.rounds <= 3);
@@ -926,9 +1078,18 @@ fn soak_bound_is_derived_from_the_engine_timers() {
         SPAWN_HANDSHAKE_HOLD + walk(MATCH_STATE_ROUND0_PROGRESSION),
         Duration::from_secs(26)
     );
-    assert_eq!(walk(MATCH_STATE_INTERROUND_PROGRESSION), Duration::from_secs(36));
-    assert_eq!(walk(MATCH_STATE_MATCHEND_PROGRESSION), Duration::from_secs(16));
-    assert!(b >= Duration::from_secs(474) && b < Duration::from_secs(480), "bound {b:?}");
+    assert_eq!(
+        walk(MATCH_STATE_INTERROUND_PROGRESSION),
+        Duration::from_secs(36)
+    );
+    assert_eq!(
+        walk(MATCH_STATE_MATCHEND_PROGRESSION),
+        Duration::from_secs(16)
+    );
+    assert!(
+        b >= Duration::from_secs(474) && b < Duration::from_secs(480),
+        "bound {b:?}"
+    );
     eprintln!("CRE-SOAK bound: {b:?}");
 }
 
@@ -938,7 +1099,11 @@ fn soak_bound_is_derived_from_the_engine_timers() {
 #[test]
 fn the_double_ko_loop_seed_terminates() {
     let fx = load_fixtures();
-    let find = |n: &str| fx.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no fixture {n}"));
+    let find = |n: &str| {
+        fx.iter()
+            .find(|f| f.name == n)
+            .unwrap_or_else(|| panic!("no fixture {n}"))
+    };
     let o = run_guarded(
         0x4d4e3b4e79f4ca03,
         find("prod-32"),
@@ -947,8 +1112,15 @@ fn the_double_ko_loop_seed_terminates() {
         match_bound(MAX_TICK),
     )
     .expect("the match terminates within the bound");
-    assert_eq!(o.double_kos, 0, "double-KO rounds must be decided, not replayed");
-    assert!(o.rounds <= super::super::state::MATCH_ROUND_HARD_CAP, "{} rounds", o.rounds);
+    assert_eq!(
+        o.double_kos, 0,
+        "double-KO rounds must be decided, not replayed"
+    );
+    assert!(
+        o.rounds <= super::super::state::MATCH_ROUND_HARD_CAP,
+        "{} rounds",
+        o.rounds
+    );
     let w = o.winner.expect("a match winner");
     assert_eq!(o.rounds_won[w], 2, "{:?}", o.rounds_won);
 }
@@ -958,7 +1130,9 @@ fn the_double_ko_loop_seed_terminates() {
 /// logs. A no-op when `SOAK_ONE` is unset.
 #[test]
 fn soak_replay_one() {
-    let Ok(spec) = std::env::var("SOAK_ONE") else { return };
+    let Ok(spec) = std::env::var("SOAK_ONE") else {
+        return;
+    };
     let parts: Vec<&str> = spec.split(',').collect();
     let seed = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).expect("hex seed");
     let mode = match parts[1] {
@@ -972,8 +1146,18 @@ fn soak_replay_one() {
         m => panic!("unknown mode {m}"),
     };
     let fx = load_fixtures();
-    let find = |n: &str| fx.iter().find(|f| f.name == n).unwrap_or_else(|| panic!("no fixture {n}"));
-    let r = run_guarded(seed, find(parts[2]), find(parts[3]), mode, match_bound(MAX_TICK));
+    let find = |n: &str| {
+        fx.iter()
+            .find(|f| f.name == n)
+            .unwrap_or_else(|| panic!("no fixture {n}"))
+    };
+    let r = run_guarded(
+        seed,
+        find(parts[2]),
+        find(parts[3]),
+        mode,
+        match_bound(MAX_TICK),
+    );
     eprintln!("SOAK_ONE {spec}: {r:?}");
     r.unwrap();
 }
