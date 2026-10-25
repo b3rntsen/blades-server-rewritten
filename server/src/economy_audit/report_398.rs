@@ -222,7 +222,7 @@ fn levels_below_49_are_unchanged() {
             for n in 0..20u64 {
                 digest_of(
                     &mut h,
-                    &store_bundles::roll_bundle_with(&Uuid::from_u128(p), effective_loot_level_u64(l as u64), n, &HashSet::new(), treasury),
+                    &store_bundles::roll_store_chest(&Uuid::from_u128(p), l as u64, n, &HashSet::new(), treasury),
                 );
             }
         }
@@ -264,11 +264,11 @@ fn levels_below_49_are_unchanged() {
         ("quests", 0x3f01_52cb_5eef_d622),
         ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
         ("jobs", 0x0e71_0932_2f7b_96e5),
-        // #421 (owner decision d21, 2026-10-25) re-pins store: a Golden chest bought
-        // at 45-48 pays Grand 60% / Glorious 20% / Transcendent 20%, 3 to 7 (was
+        // #421/#429 (2026-10-25) re-pin store: a Golden, Epic or Legendary chest
+        // bought at 45-48 pays Grand 60% / Glorious 20% / Transcendent 20% (was
         // 0x6bfe_d561_3f10_831a). The treasury digest rolls without an opener level,
         // so the rule (applied at open) leaves it unmoved.
-        ("store", 0xd109_c306_a419_886a),
+        ("store", 0x9307_ca6b_c265_a9ad),
         ("treasury", 0x7aed_eaec_5032_d6b1),
     ];
     assert_eq!(got, pinned.to_vec(), "a source moved for a character below level 49");

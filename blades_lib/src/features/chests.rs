@@ -999,15 +999,66 @@ mod tests {
                 assert_eq!(counts, counts_expected.clone().collect::<HashSet<u64>>(), "tier {tier} L{level}: counts");
             }
         }
-        // Level 44, and Elder and Legendary at any level, are paid exactly as rolled.
-        for (tier, level) in [(2i64, 44i64), (3, 44), (4, 45), (4, 70), (4, 100), (5, 45), (5, 70), (5, 100)] {
-            let chest_level = effective_loot_level_u64(level as u64);
+        // Level 44 is paid exactly as rolled, in every chest tier.
+        for tier in [1i64, 2, 3, 4, 5] {
             for i in 0..300 {
-                let key = format!("421d21-same:{i}:{tier}:{level}");
-                let before = roll_loot(&t, tier, chest_level, &key, &HashSet::new()).unwrap();
+                let key = format!("421d21-same:{i}:{tier}:44");
+                let before = roll_loot(&t, tier, 44, &key, &HashSet::new()).unwrap();
                 let mut after = before.clone();
-                pay_chest_soul_gems(&mut after.stackable_items, tier as u64, level, crate::features::beginner_economy::key_seed(&key));
-                assert_eq!(fingerprint(&before), fingerprint(&after), "tier {tier} L{level} chest {i} moved");
+                pay_chest_soul_gems(&mut after.stackable_items, tier as u64, 44, crate::features::beginner_economy::key_seed(&key));
+                assert_eq!(fingerprint(&before), fingerprint(&after), "tier {tier} L44 chest {i} moved");
+            }
+        }
+    }
+
+    /// Report #429 (HauDrauf, under the owner's standing rule for his reversible
+    /// common-good rules): an Elder or Legendary chest opened at 45-100 that holds
+    /// soul gems re-grades every stack Grand 60% / Glorious 20% / Transcendent 20%,
+    /// keeping each stack's count. Which chests hold soul gems, and how many gems
+    /// each holds, is exactly what it was.
+    #[test]
+    fn an_elder_or_legendary_chest_at_45_to_100_regrades_its_soul_gems() {
+        use crate::features::chest_soul_gems::pay_chest_soul_gems;
+        use crate::features::store_bundles::SOUL_GEMS;
+        use crate::features::loot_level::effective_loot_level_u64;
+        let t = committed();
+        const ROLLS: usize = 3000;
+        let total = |r: &RewardGrant| -> u64 {
+            r.stackable_items.iter().filter(|(id, _)| SOUL_GEMS.contains(id)).map(|(_, n)| n).sum()
+        };
+        for tier in [4i64, 5] {
+            for level in [45i64, 70, 100] {
+                let chest_level = effective_loot_level_u64(level as u64);
+                let (mut with_gems, mut single, mut kinds) = (0usize, 0usize, [0usize; 10]);
+                for i in 0..ROLLS {
+                    let key = format!("429:{i}:{tier}:{level}");
+                    let before = roll_loot(&t, tier, chest_level, &key, &HashSet::new()).unwrap();
+                    let mut after = before.clone();
+                    pay_chest_soul_gems(&mut after.stackable_items, tier as u64, level, crate::features::beginner_economy::key_seed(&key));
+                    assert_eq!(total(&before), total(&after), "tier {tier} L{level} chest {i}: soul-gem count moved");
+                    let mut rest_before = before.clone();
+                    rest_before.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    let mut rest_after = after.clone();
+                    rest_after.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    assert_eq!(fingerprint(&rest_before), fingerprint(&rest_after));
+                    assert!(after.stackable_items.keys().all(|id| !SOUL_GEMS[..7].contains(id)), "tier {tier} L{level}: below Grand");
+                    if total(&before) > 0 {
+                        with_gems += 1;
+                    }
+                    let stacks_before = before.stackable_items.keys().filter(|id| SOUL_GEMS.contains(id)).count();
+                    if stacks_before == 1 {
+                        single += 1;
+                        for (k, id) in SOUL_GEMS.iter().enumerate() {
+                            kinds[k] += usize::from(after.stackable_items.contains_key(id));
+                        }
+                    }
+                }
+                assert!(with_gems > 0, "tier {tier} L{level}: no chest held soul gems");
+                assert!(single >= 300, "tier {tier} L{level}: {single} one-stack chests");
+                let of = |k: usize| kinds[k] as f64 / single as f64;
+                assert!((0.53..=0.67).contains(&of(7)), "tier {tier} L{level}: Grand {:.3}", of(7));
+                assert!((0.14..=0.26).contains(&of(8)), "tier {tier} L{level}: Glorious {:.3}", of(8));
+                assert!((0.14..=0.26).contains(&of(9)), "tier {tier} L{level}: Transcendent {:.3}", of(9));
             }
         }
     }

@@ -59,8 +59,8 @@ fn open_season_chests(
         let level = if chest.level == 0 { character_level } else { chest.level };
         let key = format!("{key_prefix}:{}:{index}", chest.tier);
         if let Some(mut loot) = chests::roll_loot(tables, chest.tier as i64, level, &key, owned) {
-            // A Silver or Gold chest's soul gems at 45-100 (owner-approved
-            // deviation from retail, #421).
+            // A Silver, Gold, Elder or Legendary chest's soul gems at 45-100
+            // (owner-approved deviation from retail, #421, #429).
             blades_lib::features::chest_soul_gems::pay_chest_soul_gems(
                 &mut loot.stackable_items,
                 chest.tier as u64,

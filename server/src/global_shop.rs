@@ -1526,12 +1526,11 @@ pub async fn purchase_global_shop(
             // the Golden Chest is a Gold chest, so from 49 it is a level-100
             // treasury Gold chest (#421).
             let reward = {
-                blades_lib::features::store_bundles::roll_bundle_with(
+                // From level 49 the level-100 buyer's chest (#398); a chest's soul
+                // gems at 45-100 by the owner's rule (#421, #429).
+                blades_lib::features::store_bundles::roll_store_chest(
                     &product_id,
-                    // From level 49 the level-100 buyer's chest (#398).
-                    blades_lib::features::loot_level::effective_loot_level_u64(u64::from(
-                        entry.character.0.level,
-                    )),
+                    u64::from(entry.character.0.level),
                     roll_nonce,
                     &entry.inventory.0.item_templates(),
                     Some(&globals.static_data.chest_loots),

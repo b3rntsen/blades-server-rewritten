@@ -107,8 +107,8 @@ pub async fn collect_chest(
                 i64::from(entry.character.0.level),
                 blades_lib::features::beginner_economy::key_seed(&loot_key),
             );
-            // A Silver or Gold chest's soul gems for a level 45-100 opener
-            // (owner-approved deviation from retail, #421).
+            // A Silver, Gold, Elder or Legendary chest's soul gems for a level
+            // 45-100 opener (owner-approved deviation from retail, #421, #429).
             blades_lib::features::chest_soul_gems::pay_chest_soul_gems(
                 &mut reward.stackable_items,
                 chest_tier.max(0) as u64,

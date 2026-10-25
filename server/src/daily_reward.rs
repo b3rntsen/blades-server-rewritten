@@ -174,8 +174,8 @@ fn collect_reward_for(
         if let Some(mut loot) =
             chests::roll_loot(chest_loots, chest.tier as i64, chest.level, &key, owned)
         {
-            // A Silver or Gold chest's soul gems at 45-100 (owner-approved
-            // deviation from retail, #421).
+            // A Silver, Gold, Elder or Legendary chest's soul gems at 45-100
+            // (owner-approved deviation from retail, #421, #429).
             blades_lib::features::chest_soul_gems::pay_chest_soul_gems(
                 &mut loot.stackable_items,
                 chest.tier as u64,
