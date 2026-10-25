@@ -898,6 +898,44 @@ pub fn roll_bundle_for(
 /// chest's (#368): from 45, where Dragon unlocks and its population changes.
 pub const ELDER_HIGH_LEVEL: u64 = 45;
 
+/// The chest tier a store chest product is: the Golden chest a Gold chest (3),
+/// the Epic chest an Elder chest (4), the Legendary chest a Legendary chest (5).
+/// `None` for any other product.
+pub fn store_chest_tier(product_id: &Uuid) -> Option<u64> {
+    match corpus_product(product_id)?.product_id {
+        GOLDEN_CHEST_CORPUS_ID => Some(3),
+        ELDER_CHEST_CORPUS_ID => Some(4),
+        LEGENDARY_CHEST_CORPUS_ID => Some(5),
+        _ => None,
+    }
+}
+
+/// A store purchase: [`roll_bundle_with`] at the buyer's loot level, then a chest
+/// product's soul gems by the #421/#429 rule for a `character_level` buyer
+/// ([`crate::features::chest_soul_gems`]; owner-approved deviation from retail).
+/// The rule is applied here, not in [`roll_bundle_with`], because a treasury
+/// Elder or Legendary chest also rolls through that and is paid the rule when it
+/// is opened, at the opener's level.
+pub fn roll_store_chest(
+    product_id: &Uuid,
+    character_level: u64,
+    nonce: u64,
+    owned: &HashSet<Uuid>,
+    treasury: Option<&crate::features::chests::ChestLootTables>,
+) -> Option<RewardGrant> {
+    let buyer_level = crate::features::loot_level::effective_loot_level_u64(character_level);
+    let mut grant = roll_bundle_with(product_id, buyer_level, nonce, owned, treasury)?;
+    if let Some(tier) = store_chest_tier(product_id) {
+        crate::features::chest_soul_gems::pay_chest_soul_gems(
+            &mut grant.stackable_items,
+            tier,
+            i64::try_from(character_level).unwrap_or(i64::MAX),
+            mix(product_id.as_u128() as u64 ^ mix(nonce) ^ 0x0421_0429_5701_6E35),
+        );
+    }
+    Some(grant)
+}
+
 /// [`roll_bundle_for`], with retail's treasury chest openings (`chest_loots.json`):
 /// tier 4 for an Elder chest at [`ELDER_HIGH_LEVEL`] and above, and the Gold chest
 /// table for a Golden chest from [`TOP_LOOT_FROM_LEVEL`] (`None` keeps the band).
@@ -2720,7 +2758,7 @@ mod tests {
     /// it, with the shipped chest tables.
     fn store_golden(t: &crate::features::chests::ChestLootTables, level: u64, n: u64) -> RewardGrant {
         let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
-        roll_bundle_with(&golden, level, n, &HashSet::new(), Some(t))
+        roll_store_chest(&golden, level, n, &HashSet::new(), Some(t))
             .expect("the Golden chest rolls")
     }
 
@@ -2772,6 +2810,92 @@ mod tests {
         for n in 0..ROLLS {
             let r = store_golden(&t, 46, n);
             assert!(SOUL_GEMS[..7].iter().all(|id| !r.stackable_items.contains_key(id)), "L46 chest {n}");
+        }
+    }
+
+    /// Report #421, owner decision d21: the store's Golden chest is the Gold chest,
+    /// so from buyer level 45 to 100 its soul gems, when it pays any, are Grand 60%
+    /// / Glorious 20% / Transcendent 20%, 3 to 7 of them, one kind a chest. At 44 it
+    /// is untouched: lower soul gems still come.
+    #[test]
+    fn a_store_golden_chest_at_45_to_100_pays_the_owners_soul_gems() {
+        let t = committed_chest_tables();
+        const ROLLS: u64 = 3000;
+        for level in [45u64, 70, 100] {
+            let (mut with_gems, mut kinds, mut counts) = (0u64, [0u64; 10], HashSet::new());
+            for n in 0..ROLLS {
+                let r = store_golden(&t, level, n);
+                let gems: Vec<(usize, u64)> =
+                    SOUL_GEMS.iter().enumerate().filter_map(|(k, id)| r.stackable_items.get(id).map(|q| (k, *q))).collect();
+                assert!(gems.len() <= 1, "L{level} chest {n}: {gems:?}");
+                for (k, q) in gems {
+                    with_gems += 1;
+                    kinds[k] += 1;
+                    counts.insert(q);
+                }
+            }
+            let share = with_gems as f64 / ROLLS as f64;
+            assert!((0.20..=0.45).contains(&share), "L{level}: {share:.3} of chests paid soul gems");
+            let of = |k: usize| kinds[k] as f64 / with_gems as f64;
+            assert_eq!(kinds[..7].iter().sum::<u64>(), 0, "L{level}: below Grand {kinds:?}");
+            assert!((0.53..=0.67).contains(&of(7)), "L{level}: Grand {:.3}", of(7));
+            assert!((0.14..=0.26).contains(&of(8)), "L{level}: Glorious {:.3}", of(8));
+            assert!((0.14..=0.26).contains(&of(9)), "L{level}: Transcendent {:.3}", of(9));
+            assert_eq!(counts, (3..=7).collect::<HashSet<u64>>(), "L{level}: counts");
+        }
+        let lower = (0..ROLLS).filter(|&n| SOUL_GEMS[..7].iter().any(|id| store_golden(&t, 44, n).stackable_items.contains_key(id))).count();
+        assert!(lower > 0, "L44: the Golden chest's own soul gems must be left alone");
+    }
+
+    /// Report #429: the store's Epic (Elder) and Legendary chests bought at 45-100
+    /// re-grade each soul-gem stack Grand 60% / Glorious 20% / Transcendent 20%,
+    /// keeping every count; whether a chest holds soul gems, and how many, is what
+    /// [`roll_bundle_with`] rolled. At 44 nothing moves.
+    #[test]
+    fn store_elder_and_legendary_chests_at_45_to_100_regrade_their_soul_gems() {
+        let t = committed_chest_tables();
+        let total = |r: &RewardGrant| -> u64 {
+            r.stackable_items.iter().filter(|(id, _)| SOUL_GEMS.contains(id)).map(|(_, n)| n).sum()
+        };
+        for product in [EPIC_CHEST_PRODUCT_ID, LEGENDARY_CHEST_PRODUCT_ID] {
+            assert!(store_chest_tier(&product).is_some_and(|t| t >= 4));
+            for level in [45u64, 70, 100] {
+                let (mut single, mut kinds) = (0usize, [0usize; 10]);
+                for n in 0..2000u64 {
+                    let rolled = roll_bundle_with(
+                        &product,
+                        crate::features::loot_level::effective_loot_level_u64(level),
+                        n,
+                        &HashSet::new(),
+                        Some(&t),
+                    )
+                    .unwrap();
+                    let paid = roll_store_chest(&product, level, n, &HashSet::new(), Some(&t)).unwrap();
+                    assert_eq!(total(&rolled), total(&paid), "{product} L{level} chest {n}");
+                    assert!(paid.stackable_items.keys().all(|id| !SOUL_GEMS[..7].contains(id)), "L{level}");
+                    if rolled.stackable_items.keys().filter(|id| SOUL_GEMS.contains(id)).count() == 1 {
+                        single += 1;
+                        for (k, id) in SOUL_GEMS.iter().enumerate() {
+                            kinds[k] += usize::from(paid.stackable_items.contains_key(id));
+                        }
+                    }
+                }
+                assert!(single >= 200, "{product} L{level}: {single} one-stack chests");
+                let of = |k: usize| kinds[k] as f64 / single as f64;
+                assert!((0.52..=0.68).contains(&of(7)), "{product} L{level}: Grand {:.3}", of(7));
+                assert!((0.13..=0.27).contains(&of(8)), "{product} L{level}: Glorious {:.3}", of(8));
+                assert!((0.13..=0.27).contains(&of(9)), "{product} L{level}: Transcendent {:.3}", of(9));
+            }
+            for n in 0..300u64 {
+                let rolled = roll_bundle_with(&product, 44, n, &HashSet::new(), Some(&t)).unwrap();
+                let paid = roll_store_chest(&product, 44, n, &HashSet::new(), Some(&t)).unwrap();
+                let sorted = |m: &std::collections::HashMap<Uuid, u64>| {
+                    let mut v: Vec<_> = m.iter().map(|(k, q)| (*k, *q)).collect();
+                    v.sort_unstable();
+                    v
+                };
+                assert_eq!(sorted(&rolled.stackable_items), sorted(&paid.stackable_items), "L44 chest {n}");
+            }
         }
     }
 

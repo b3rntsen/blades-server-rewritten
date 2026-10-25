@@ -158,6 +158,7 @@ fn collect_reward_for(
     reward_uid: Uuid,
     roll_key: &str,
     owned: &std::collections::HashSet<Uuid>,
+    character_level: i64,
 ) -> RewardGrant {
     let mut reward = RewardGrant {
         stackable_items: payload.stackable_items.clone(),
@@ -170,9 +171,17 @@ fn collect_reward_for(
     // instead carry `items`, `stackableItems` and `currencies`.
     for (idx, chest) in payload.chests.iter().enumerate() {
         let key = format!("daily:{reward_uid}:{roll_key}:{idx}:{}:{}", chest.tier, chest.level);
-        if let Some(loot) =
+        if let Some(mut loot) =
             chests::roll_loot(chest_loots, chest.tier as i64, chest.level, &key, owned)
         {
+            // A Silver, Gold, Elder or Legendary chest's soul gems at 45-100
+            // (owner-approved deviation from retail, #421, #429).
+            blades_lib::features::chest_soul_gems::pay_chest_soul_gems(
+                &mut loot.stackable_items,
+                chest.tier as u64,
+                character_level,
+                blades_lib::features::beginner_economy::key_seed(&key),
+            );
             merge_reward(&mut reward, &loot);
         }
     }
@@ -259,6 +268,7 @@ pub async fn collect_daily_reward(
                     def.reward_uid,
                     &roll_key,
                     &entry.inventory.0.item_templates(),
+                    i64::from(entry.character.0.level),
                 );
                 // A chest's soul gems: the three best at 45-48 (owner-approved
                 // deviation from retail, #388).
@@ -328,7 +338,7 @@ mod collect_response_tests {
     /// Build the `reward` exactly as `collect_daily_reward` does, for one day's
     /// definition. Kept beside the handler so the two cannot drift silently.
     fn reward_for(payload: &blades_lib::features::daily_reward::DailyRewardPayload) -> RewardGrant {
-        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A), "char:1", &Default::default())
+        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A), "char:1", &Default::default(), 1)
     }
 
     fn loot_tables() -> ChestLootTables {
@@ -430,7 +440,7 @@ mod collect_response_tests {
             .expect("scaled daily reward def deserializes");
 
         let status_payload = def.daily_reward_for_level(74);
-        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid, "char:1", &Default::default());
+        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid, "char:1", &Default::default(), 1);
 
         assert_eq!(
             collect_reward.stackable_items,
@@ -484,7 +494,7 @@ mod collect_response_tests {
         for character in 0..5 {
             for week in 0..4 {
                 let key = format!("{character}:{week}");
-                let r = collect_reward_for(&payload, &tables, uid, &key, &Default::default());
+                let r = collect_reward_for(&payload, &tables, uid, &key, &Default::default(), 1);
                 assert_eq!(r.items.len(), 2);
                 seen.insert(format!("{:?}{:?}", r.currencies, r.stackable_items));
             }
@@ -492,8 +502,60 @@ mod collect_response_tests {
         assert!(seen.len() >= 15, "20 Sunday chests gave only {} distinct", seen.len());
 
         // The same character's same period pays the same (status == collect).
-        let a = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default());
-        let b = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default());
+        let a = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default(), 1);
+        let b = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default(), 1);
         assert_eq!(a.currencies, b.currencies);
+    }
+
+    /// Report #421 (owner decision d21): a daily Silver or Gold chest collected at
+    /// level 45-100 pays its soul gems as Grand, Glorious or Transcendent, 1-2 in
+    /// Silver and 3-7 in Gold; at 44 it is paid as rolled.
+    #[test]
+    fn a_daily_silver_or_gold_chest_at_45_to_100_pays_the_owners_soul_gems() {
+        let tables: ChestLootTables =
+            serde_json::from_str(include_str!("chest_loots.json")).expect("chest_loots.json");
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        let uid: Uuid = "2c4ba1ff-517d-4a7f-b353-054d635ecd9e".parse().unwrap();
+        for (tier, counts) in [(2u64, 1u64..=2), (3, 3..=7)] {
+            let payload: blades_lib::features::daily_reward::DailyRewardPayload =
+                serde_json::from_value(serde_json::json!({ "chests": [{ "tier": tier, "level": 100 }] })).unwrap();
+            let mut paid = 0;
+            for n in 0..600 {
+                let key = format!("421:{n}");
+                let gems_of = |r: &RewardGrant| {
+                    let mut v: Vec<_> = r.stackable_items.iter().filter(|(id, _)| soul_gems.contains(id)).collect();
+                    v.sort();
+                    format!("{v:?}")
+                };
+                let rest_of = |r: &RewardGrant| {
+                    let mut v: Vec<_> = r.stackable_items.iter().filter(|(id, _)| !soul_gems.contains(id)).collect();
+                    v.sort();
+                    let mut c: Vec<_> = r.currencies.iter().collect();
+                    c.sort();
+                    format!("{v:?}{c:?}")
+                };
+                let high = collect_reward_for(&payload, &tables, uid, &key, &Default::default(), 70);
+                for (id, q) in &high.stackable_items {
+                    if soul_gems.contains(id) {
+                        paid += 1;
+                        assert!(soul_gems[7..].contains(id), "tier {tier}: {id} at 70");
+                        assert!(counts.contains(q), "tier {tier}: {q} soul gems at 70");
+                    }
+                }
+                // At 44 the chest is paid exactly as rolled.
+                let low = collect_reward_for(&payload, &tables, uid, &key, &Default::default(), 44);
+                let rolled = chests::roll_loot(
+                    &tables,
+                    tier as i64,
+                    100,
+                    &format!("daily:{uid}:{key}:0:{tier}:100"),
+                    &Default::default(),
+                )
+                .unwrap();
+                assert_eq!(gems_of(&low), gems_of(&rolled), "tier {tier} chest {n} at 44");
+                assert_eq!(gems_of(&low).len() > 2, gems_of(&high).len() > 2, "frequency moved");
+                assert_eq!(rest_of(&low), rest_of(&high), "only soul gems move");
+            }
+        }
     }
 }
