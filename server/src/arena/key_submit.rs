@@ -84,9 +84,8 @@ impl KeySubmitConfig {
         }
         KeySubmitConfig {
             enabled: flag("ARENA_SUBMIT_KEYS", true),
-            url: std::env::var("ARENA_SUBMIT_URL").unwrap_or_else(|_| {
-                "http://newblades-web:3000/api/arena/submit-key".to_string()
-            }),
+            url: std::env::var("ARENA_SUBMIT_URL")
+                .unwrap_or_else(|_| "http://newblades-web:3000/api/arena/submit-key".to_string()),
             token: std::env::var("ARENA_SUBMIT_TOKEN")
                 .ok()
                 .map(|s| s.trim().to_string())
@@ -133,9 +132,7 @@ impl KeySubmitter {
         let handle = match tokio::runtime::Handle::try_current() {
             Ok(h) => h,
             Err(_) => {
-                warn!(
-                    "arena key-submit: no tokio runtime at startup — key submission disabled"
-                );
+                warn!("arena key-submit: no tokio runtime at startup — key submission disabled");
                 return None;
             }
         };
@@ -214,8 +211,7 @@ pub(crate) fn build_submit_body(
 /// Standard (RFC 4648) base64 with `=` padding — the alphabet the web handler
 /// decodes with `Buffer.from(s, "base64")` and re-validates.
 pub(crate) fn b64_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -298,7 +294,10 @@ async fn post_submit(url: &str, token: &str, body: &str) -> Result<u16, String> 
         // body, and `Connection: close` lets the server tear down after replying.
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 128];
-        let n = stream.read(&mut buf).await.map_err(|e| format!("read: {e}"))?;
+        let n = stream
+            .read(&mut buf)
+            .await
+            .map_err(|e| format!("read: {e}"))?;
         parse_status_code(&buf[..n])
     })
     .await
@@ -358,7 +357,14 @@ mod tests {
     fn submit_body_is_the_expected_json_shape() {
         let key = [1u8; 32];
         let nonce = [2u8; 8];
-        let body = build_submit_body(&key, &nonce, "10.99.0.1", 7777, 1_700_000_000_123, "10.99.0.47");
+        let body = build_submit_body(
+            &key,
+            &nonce,
+            "10.99.0.1",
+            7777,
+            1_700_000_000_123,
+            "10.99.0.47",
+        );
         // Exact shape the route parses: key_b64, nonce_b64, ts (number),
         // gamelift_ip (string), gamelift_port (number), peer_ip (string).
         // peer_ip is what lets the route attribute the key to the peer that
@@ -384,12 +390,20 @@ mod tests {
     fn parse_url_variants() {
         assert_eq!(
             parse_http_url("http://newblades-web:3000/api/arena/submit-key").unwrap(),
-            ("newblades-web".to_string(), 3000, "/api/arena/submit-key".to_string())
+            (
+                "newblades-web".to_string(),
+                3000,
+                "/api/arena/submit-key".to_string()
+            )
         );
         // Default port 80 when omitted.
         assert_eq!(
             parse_http_url("http://10.99.0.1:8889/api/arena/submit-key").unwrap(),
-            ("10.99.0.1".to_string(), 8889, "/api/arena/submit-key".to_string())
+            (
+                "10.99.0.1".to_string(),
+                8889,
+                "/api/arena/submit-key".to_string()
+            )
         );
         assert_eq!(
             parse_http_url("http://host/p").unwrap(),
@@ -423,8 +437,14 @@ mod tests {
     #[test]
     fn status_code_parsing() {
         assert_eq!(parse_status_code(b"HTTP/1.1 200 OK\r\n").unwrap(), 200);
-        assert_eq!(parse_status_code(b"HTTP/1.1 401 Unauthorized\r\n").unwrap(), 401);
-        assert_eq!(parse_status_code(b"HTTP/1.0 500 Internal\r\n").unwrap(), 500);
+        assert_eq!(
+            parse_status_code(b"HTTP/1.1 401 Unauthorized\r\n").unwrap(),
+            401
+        );
+        assert_eq!(
+            parse_status_code(b"HTTP/1.0 500 Internal\r\n").unwrap(),
+            500
+        );
         assert!(parse_status_code(b"garbage").is_err());
     }
 

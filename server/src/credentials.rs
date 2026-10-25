@@ -102,12 +102,7 @@ pub fn hash_password(password: &str) -> String {
     // randomness in this binary rather than a second one just for salts.
     let salt: [u8; SALT_LEN] = rand::rng().random();
     let dk = pbkdf2_sha256(password.as_bytes(), &salt, DEFAULT_ITERATIONS);
-    format!(
-        "pbkdf2${}${}${}",
-        DEFAULT_ITERATIONS,
-        hex(&salt),
-        hex(&dk)
-    )
+    format!("pbkdf2${}${}${}", DEFAULT_ITERATIONS, hex(&salt), hex(&dk))
 }
 
 /// Constant-time verify. Returns false for any malformed stored value rather
@@ -249,8 +244,8 @@ mod tests {
             "pbkdf2$200000$zz$zz",
             "pbkdf2$0$aabb$ccdd",
             "bcrypt$200000$aabb$ccdd",
-            "pbkdf2$200000$aabb$ccdd",           // hash too short
-            "pbkdf2$200000$aabb$ccdd$extra",     // trailing field
+            "pbkdf2$200000$aabb$ccdd",       // hash too short
+            "pbkdf2$200000$aabb$ccdd$extra", // trailing field
             "$$$",
         ] {
             assert!(!verify_password("anything", bad), "accepted {bad:?}");
@@ -267,7 +262,10 @@ mod tests {
             let dk = pbkdf2_sha256(b"pw", &salt, 1000);
             format!("pbkdf2$1000${}${}", hex(&salt), hex(&dk))
         };
-        assert!(verify_password("pw", &cheap), "an older cost must still verify");
+        assert!(
+            verify_password("pw", &cheap),
+            "an older cost must still verify"
+        );
     }
 
     #[test]

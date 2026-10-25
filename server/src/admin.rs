@@ -28,11 +28,9 @@ use std::{
 };
 
 use actix_web::{
-    HttpRequest, HttpResponse,
-    get,
+    HttpRequest, HttpResponse, get,
     http::StatusCode,
-    post,
-    put,
+    post, put,
     web::{self, Json},
 };
 use blades_lib::{
@@ -317,18 +315,35 @@ fn extract_import_token(req: &HttpRequest) -> Option<String> {
 
 /// Validate the dev token against the one captured at startup. Returns the
 /// appropriate `BladeApiError` on failure so the caller can `?` it.
-pub(crate) fn check_import_token(app_state: &ServerGlobal, req: &HttpRequest) -> Result<(), BladeApiError> {
+pub(crate) fn check_import_token(
+    app_state: &ServerGlobal,
+    req: &HttpRequest,
+) -> Result<(), BladeApiError> {
     // No token configured -> endpoint disabled.
     let expected = match app_state.arena_import_token.as_deref() {
         Some(token) if !token.is_empty() => token,
-        _ => return Err(BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 1)),
+        _ => {
+            return Err(BladeApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                IMPORT_SERVICE_ID,
+                1,
+            ));
+        }
     };
 
     match extract_import_token(req) {
         // constant-time-ish: lengths differ -> mismatch; otherwise compare.
         Some(provided) if provided == expected => Ok(()),
-        Some(_) => Err(BladeApiError::new(StatusCode::FORBIDDEN, IMPORT_SERVICE_ID, 2)),
-        None => Err(BladeApiError::new(StatusCode::UNAUTHORIZED, IMPORT_SERVICE_ID, 3)),
+        Some(_) => Err(BladeApiError::new(
+            StatusCode::FORBIDDEN,
+            IMPORT_SERVICE_ID,
+            2,
+        )),
+        None => Err(BladeApiError::new(
+            StatusCode::UNAUTHORIZED,
+            IMPORT_SERVICE_ID,
+            3,
+        )),
     }
 }
 
@@ -643,8 +658,12 @@ fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
         return ParkedEvents::default();
     };
     ParkedEvents {
-        completions: obj.remove(PARKED_EVENT_COMPLETIONS_KEY).filter(Value::is_array),
-        dungeons: obj.remove(PARKED_EVENT_DUNGEONS_KEY).filter(Value::is_array),
+        completions: obj
+            .remove(PARKED_EVENT_COMPLETIONS_KEY)
+            .filter(Value::is_array),
+        dungeons: obj
+            .remove(PARKED_EVENT_DUNGEONS_KEY)
+            .filter(Value::is_array),
     }
 }
 
@@ -1603,8 +1622,9 @@ pub async fn put_arena_ranking_config(
     if let Err(errors) = config.validate() {
         return Ok(HttpResponse::BadRequest().json(RankingValidationErrorResponse { errors }));
     }
-    let config_value = serde_json::to_value(&config)
-        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 80))?;
+    let config_value = serde_json::to_value(&config).map_err(|_| {
+        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 80)
+    })?;
     let mut conn = app_state.db_pool.get().await.unwrap();
     let created: RankingConfigRow = conn
         .transaction::<_, BladeApiError, _>(|mut conn| {
@@ -1763,12 +1783,13 @@ pub async fn get_arena_h2h_top(
             (season, rows)
         }
         ranking::H2hSeasonSelection::Season(season_id) => {
-            let season: H2hSeasonSummary =
-                diesel::sql_query("SELECT id, name, starts_at, ends_at FROM arena_seasons WHERE id = $1")
-                    .bind::<diesel::sql_types::Uuid, _>(season_id)
-                    .get_result(&mut conn)
-                    .await
-                    .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 82))?;
+            let season: H2hSeasonSummary = diesel::sql_query(
+                "SELECT id, name, starts_at, ends_at FROM arena_seasons WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(season_id)
+            .get_result(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 82))?;
             let rows = ranking::h2h_board(&mut conn, Some(season.id), min_games, limit).await?;
             (Some(season), rows)
         }
@@ -1822,7 +1843,10 @@ pub async fn rebuild_arena_h2h_ratings(
             warn!("arena h2h rebuild failed: {e}");
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 83)
         })?;
-    Ok(Json(H2hRebuildResponse { characters: report.characters, matches: report.matches }))
+    Ok(Json(H2hRebuildResponse {
+        characters: report.characters,
+        matches: report.matches,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -1913,7 +1937,9 @@ const GAME_NAME_CHARS: &[(u32, u32)] = &[
 
 fn is_game_name_char(ch: char) -> bool {
     let cp = ch as u32;
-    GAME_NAME_CHARS.iter().any(|&(lo, hi)| (lo..=hi).contains(&cp))
+    GAME_NAME_CHARS
+        .iter()
+        .any(|&(lo, hi)| (lo..=hi).contains(&cp))
 }
 
 /// Whether the client would accept this (already trimmed) name. The whitelist
@@ -1991,11 +2017,10 @@ pub async fn set_current_character_name(
     let name = normalise_current_character_name(&body.name)
         .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 26))?;
 
-    let mut conn = app_state
-        .db_pool
-        .get()
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
 
     conn.transaction(move |mut conn| {
         async move { rename_current_character(&mut conn, character_id, body.user_id, name).await }
@@ -2012,10 +2037,7 @@ fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
     // "(AI)" is already outside the whitelist; checked by name anyway, because
     // the reservation is a policy of ours that must not hinge on the game's
     // character set.
-    if !is_game_name(&name)
-        || is_reserved_ai_name(&name)
-        || crate::testchar::is_test_name(&name)
-    {
+    if !is_game_name(&name) || is_reserved_ai_name(&name) || crate::testchar::is_test_name(&name) {
         return Err(());
     }
     Ok(name)
@@ -2087,18 +2109,22 @@ async fn rename_current_character(
             .filter(characters::id.eq(character_id))
             .filter(characters::user_id.eq(user_id)),
     )
-        .set((
-            characters::character.eq(character),
-            characters::server_state.eq(server_state),
-        ))
-        .execute(conn)
-        .await
-        .map_err(|e| {
-            warn!("current-character rename: write failed for {character_id}: {e}");
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 32)
-        })?;
+    .set((
+        characters::character.eq(character),
+        characters::server_state.eq(server_state),
+    ))
+    .execute(conn)
+    .await
+    .map_err(|e| {
+        warn!("current-character rename: write failed for {character_id}: {e}");
+        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 32)
+    })?;
 
-    log::info!("current-character rename: {character_id} {:?} -> {:?}", previous_name, name);
+    log::info!(
+        "current-character rename: {character_id} {:?} -> {:?}",
+        previous_name,
+        name
+    );
     Ok(SetCurrentCharacterNameResponse {
         ok: true,
         character_id,
@@ -2119,8 +2145,9 @@ fn append_current_character_rename_audit(
             31,
         ));
     };
-    let entry = serde_json::to_value(entry)
-        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 31))?;
+    let entry = serde_json::to_value(entry).map_err(|_| {
+        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 31)
+    })?;
     match obj.get_mut("currentCharacterRenames") {
         Some(Value::Array(entries)) => entries.push(entry),
         Some(_) => {
@@ -2255,8 +2282,7 @@ pub struct BindDeviceResponse {
 /// always sends the list (empty array when the claimant has no peers, which is
 /// fail-closed: `= ANY('{}')` is false, so every attributable row is refused).
 /// Tighten this to `NOT NULL` once both halves are in production.
-pub(crate) const BIND_DEVICE_SQL: &str =
-    "INSERT INTO device_bindings (device_id, user_id, bound_at, last_seen) \
+pub(crate) const BIND_DEVICE_SQL: &str = "INSERT INTO device_bindings (device_id, user_id, bound_at, last_seen) \
      VALUES ($1, $2, now(), now()) \
      ON CONFLICT (device_id) DO UPDATE SET user_id = EXCLUDED.user_id, bound_at = now() \
      WHERE device_bindings.user_id = EXCLUDED.user_id \
@@ -2424,8 +2450,7 @@ pub async fn bind_device(
 /// existing value is already correct — clearing it would make the row read as
 /// "seen on no tunnel", which `BIND_DEVICE_SQL` treats as PERMISSIVE and would
 /// hand the row to the next claimant who asks.
-pub(crate) const REASSIGN_DEVICE_SQL: &str =
-    "INSERT INTO device_bindings (device_id, user_id, bound_at, last_seen) \
+pub(crate) const REASSIGN_DEVICE_SQL: &str = "INSERT INTO device_bindings (device_id, user_id, bound_at, last_seen) \
      VALUES ($1, $2, now(), now()) \
      ON CONFLICT (device_id) DO UPDATE SET user_id = EXCLUDED.user_id, bound_at = now()";
 
@@ -2588,10 +2613,11 @@ pub async fn recent_devices(
         .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(query.into_inner().user_id)
         .get_results::<RecentDevice>(&mut conn)
         .await
-        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 11))?;
+        .map_err(|_| {
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 11)
+        })?;
     Ok(Json(rows))
 }
-
 
 // ------------------------------------------------------ account credentials
 
@@ -2632,10 +2658,18 @@ pub async fn set_arena_credential(
     let body = body.into_inner();
 
     if !credentials::username_is_valid(&body.username) {
-        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 40));
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            40,
+        ));
     }
     if body.password.chars().count() < credentials::MIN_PASSWORD_LEN {
-        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 41));
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            41,
+        ));
     }
     let username = credentials::normalise_username(&body.username);
     let hash = credentials::hash_password(&body.password);
@@ -2656,7 +2690,11 @@ pub async fn set_arena_credential(
             .await
             .unwrap_or(0);
         if exists == 0 {
-            return Err(BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 46));
+            return Err(BladeApiError::new(
+                StatusCode::NOT_FOUND,
+                IMPORT_SERVICE_ID,
+                46,
+            ));
         }
     }
 
@@ -2670,7 +2708,11 @@ pub async fn set_arena_credential(
         .optional()
         .unwrap_or(None);
     if matches!(existing_owner, Some(owner) if owner != body.user_id) {
-        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 42));
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            42,
+        ));
     }
 
     // One login per account: drop whatever this user had, then insert. That
@@ -2813,12 +2855,20 @@ pub async fn create_arena_season(
     let body = body.into_inner();
     let name = body.name.trim().to_string();
     if name.is_empty() {
-        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 21));
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            21,
+        ));
     }
     let starts_at = body.starts_at.unwrap_or_else(arena_season::now_unix);
     let ends_at = body.ends_at.unwrap_or(starts_at + 30 * 86_400);
     if ends_at <= starts_at {
-        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 22));
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            22,
+        ));
     }
 
     let mut conn = app_state.db_pool.get().await.unwrap();
@@ -2957,7 +3007,11 @@ pub async fn start_arena_season(
         .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 50))?;
 
     if season.status == "ended" {
-        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 51));
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            51,
+        ));
     }
 
     // One live season at a time. The partial unique index enforces it in the
@@ -2971,7 +3025,11 @@ pub async fn start_arena_season(
         .optional()
         .unwrap_or(None);
     if already.is_some() {
-        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 52));
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            52,
+        ));
     }
 
     let cfg = season.config();
@@ -3001,76 +3059,105 @@ pub async fn start_arena_season(
     let resp = conn
         .transaction(|mut conn| {
             async move {
-    for limit_sql in [
-        "SET LOCAL lock_timeout = '1s'",
-        "SET LOCAL statement_timeout = '10s'",
-        "SET LOCAL work_mem = '1MB'",
-        "SET LOCAL temp_file_limit = '4MB'",
-    ] {
-        diesel::sql_query(limit_sql)
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season start: could not set transaction limits: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 57)
-            })?;
-    }
+                for limit_sql in [
+                    "SET LOCAL lock_timeout = '1s'",
+                    "SET LOCAL statement_timeout = '10s'",
+                    "SET LOCAL work_mem = '1MB'",
+                    "SET LOCAL temp_file_limit = '4MB'",
+                ] {
+                    diesel::sql_query(limit_sql)
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season start: could not set transaction limits: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                57,
+                            )
+                        })?;
+                }
 
-    // Same query shape the end/rollover path uses, so both walk the character
-    // table identically. It runs inside the bounded transaction: character
-    // JSON is the largest season-lifecycle read on the box.
-    let rows: Vec<SeasonRolloverRow> =
-        diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
-            .get_results(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season start: could not read characters: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 53)
-            })?;
+                // Same query shape the end/rollover path uses, so both walk the character
+                // table identically. It runs inside the bounded transaction: character
+                // JSON is the largest season-lifecycle read on the box.
+                let rows: Vec<SeasonRolloverRow> =
+                    diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
+                        .get_results(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season start: could not read characters: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                53,
+                            )
+                        })?;
 
-    for row in rows {
-        let mut ch: CompleteCharacter = match serde_json::from_value(row.character.clone()) {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("season start: character {} does not deserialize: {e}", row.id);
-                resp.characters_unreadable += 1;
-                continue;
-            }
-        };
-        if !arena_season::roll_character_into(&mut ch, &cfg).reset {
-            resp.characters_already_current += 1;
-            continue;
-        }
-        resp.characters_reset += 1;
-        if !body.apply {
-            continue;
-        }
-        let updated = serde_json::to_value(&ch).map_err(|e| {
-            warn!("season start: character {} does not serialize: {e}", row.id);
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 54)
-        })?;
-        diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
-            .bind::<diesel::sql_types::Jsonb, _>(updated)
-            .bind::<diesel::sql_types::Uuid, _>(row.id)
-            .execute(&mut conn)
-            .await
-            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 55))?;
-    }
+                for row in rows {
+                    let mut ch: CompleteCharacter =
+                        match serde_json::from_value(row.character.clone()) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                warn!(
+                                    "season start: character {} does not deserialize: {e}",
+                                    row.id
+                                );
+                                resp.characters_unreadable += 1;
+                                continue;
+                            }
+                        };
+                    if !arena_season::roll_character_into(&mut ch, &cfg).reset {
+                        resp.characters_already_current += 1;
+                        continue;
+                    }
+                    resp.characters_reset += 1;
+                    if !body.apply {
+                        continue;
+                    }
+                    let updated = serde_json::to_value(&ch).map_err(|e| {
+                        warn!("season start: character {} does not serialize: {e}", row.id);
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 54)
+                    })?;
+                    diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
+                        .bind::<diesel::sql_types::Jsonb, _>(updated)
+                        .bind::<diesel::sql_types::Uuid, _>(row.id)
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|_| {
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                55,
+                            )
+                        })?;
+                }
 
-    if body.apply {
-        diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
-            .set((
-                s::status.eq("active"),
-                s::starts_at.eq(activated_starts_at(season.starts_at, arena_season::now_unix())),
-            ))
-            .execute(&mut conn)
-            .await
-            .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 56))?;
-        log::info!(
-            "season start: '{}' (#{}) is live — {} character(s) reset to zero cups",
-            resp.season_name, resp.season_number, resp.characters_reset
-        );
-    }
+                if body.apply {
+                    diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
+                        .set((
+                            s::status.eq("active"),
+                            s::starts_at.eq(activated_starts_at(
+                                season.starts_at,
+                                arena_season::now_unix(),
+                            )),
+                        ))
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|_| {
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                56,
+                            )
+                        })?;
+                    log::info!(
+                        "season start: '{}' (#{}) is live — {} character(s) reset to zero cups",
+                        resp.season_name,
+                        resp.season_number,
+                        resp.characters_reset
+                    );
+                }
 
                 Ok::<_, BladeApiError>(resp)
             }
@@ -3175,190 +3262,243 @@ pub async fn end_arena_season(
 
     let resp = conn
         .transaction(move |mut conn| {
-        async move {
-    // Keep an operator click from monopolising the small production database.
-    // Each statement either completes inside these bounds or the entire close
-    // rolls back, leaving the active season and every character untouched.
-    for limit_sql in [
-        "SET LOCAL lock_timeout = '1s'",
-        "SET LOCAL statement_timeout = '10s'",
-        "SET LOCAL work_mem = '1MB'",
-        "SET LOCAL temp_file_limit = '4MB'",
-    ] {
-        diesel::sql_query(limit_sql)
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season end: could not set transaction limits: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 35)
-            })?;
-    }
+            async move {
+                // Keep an operator click from monopolising the small production database.
+                // Each statement either completes inside these bounds or the entire close
+                // rolls back, leaving the active season and every character untouched.
+                for limit_sql in [
+                    "SET LOCAL lock_timeout = '1s'",
+                    "SET LOCAL statement_timeout = '10s'",
+                    "SET LOCAL work_mem = '1MB'",
+                    "SET LOCAL temp_file_limit = '4MB'",
+                ] {
+                    diesel::sql_query(limit_sql)
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season end: could not set transaction limits: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                35,
+                            )
+                        })?;
+                }
 
-    // Serialize competing close requests and re-check status in the transaction.
-    let locked_season: season_store::SeasonRow = s::arena_seasons
-        .filter(s::id.eq(season_id))
-        .select(season_store::SeasonRow::as_select())
-        .for_update()
-        .first(&mut conn)
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 24))?;
-    if locked_season.status != "active" {
-        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 24));
-    }
+                // Serialize competing close requests and re-check status in the transaction.
+                let locked_season: season_store::SeasonRow = s::arena_seasons
+                    .filter(s::id.eq(season_id))
+                    .select(season_store::SeasonRow::as_select())
+                    .for_update()
+                    .first(&mut conn)
+                    .await
+                    .map_err(|_| {
+                        BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 24)
+                    })?;
+                if locked_season.status != "active" {
+                    return Err(BladeApiError::new(
+                        StatusCode::CONFLICT,
+                        IMPORT_SERVICE_ID,
+                        24,
+                    ));
+                }
 
-    // Validate the next season BEFORE writing or ending the current one.
-    let next = if let Some(next_id) = requested_next {
-        let row: season_store::SeasonRow = s::arena_seasons
-            .filter(s::id.eq(next_id))
-            .select(season_store::SeasonRow::as_select())
-            .first(&mut conn)
-            .await
-            .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 30))?;
-        if row.id == season_id || row.status != "scheduled" {
-            return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 34));
-        }
-        Some(row)
-    } else {
-        None
-    };
+                // Validate the next season BEFORE writing or ending the current one.
+                let next = if let Some(next_id) = requested_next {
+                    let row: season_store::SeasonRow = s::arena_seasons
+                        .filter(s::id.eq(next_id))
+                        .select(season_store::SeasonRow::as_select())
+                        .first(&mut conn)
+                        .await
+                        .map_err(|_| {
+                            BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 30)
+                        })?;
+                    if row.id == season_id || row.status != "scheduled" {
+                        return Err(BladeApiError::new(
+                            StatusCode::CONFLICT,
+                            IMPORT_SERVICE_ID,
+                            34,
+                        ));
+                    }
+                    Some(row)
+                } else {
+                    None
+                };
 
-    // Re-freeze after taking the lifecycle lock. The first snapshot was the
-    // dry-run preview and may be older than the apply click.
-    let standings = season_store::freeze_standings(&mut conn, &locked_season)
-        .await
-        .map_err(|e| {
-            warn!("season end: could not freeze standings in transaction: {e}");
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 25)
-        })?;
-    let guilds = season_store::guild_standings_from(season_id, &standings);
-    let awards = season_store::awards_from(season_id, &standings, &guilds);
-    resp.ranked_characters = standings.len();
-    resp.ranked_guilds = guilds.len();
-    resp.awards = awards.len();
-    resp.top_trophies = standings.get(0).map(|x| x.trophies).unwrap_or(0);
+                // Re-freeze after taking the lifecycle lock. The first snapshot was the
+                // dry-run preview and may be older than the apply click.
+                let standings = season_store::freeze_standings(&mut conn, &locked_season)
+                    .await
+                    .map_err(|e| {
+                        warn!("season end: could not freeze standings in transaction: {e}");
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 25)
+                    })?;
+                let guilds = season_store::guild_standings_from(season_id, &standings);
+                let awards = season_store::awards_from(season_id, &standings, &guilds);
+                resp.ranked_characters = standings.len();
+                resp.ranked_guilds = guilds.len();
+                resp.awards = awards.len();
+                resp.top_trophies = standings.get(0).map(|x| x.trophies).unwrap_or(0);
 
-    // 1. freeze, 2. award, 3. optional roll/activation. All writes are in
-    // this transaction, so none survives if a later stage fails.
-    let standing_inserts: Vec<season_store::StandingInsertRow> =
-        standings.iter().map(Into::into).collect();
-    for chunk in standing_inserts.chunks(500) {
-        diesel::insert_into(crate::schema::arena_season_standings::table)
-            .values(chunk)
-            .on_conflict_do_nothing()
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season end: standings insert failed: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 26)
-            })?;
-    }
-    if !guilds.is_empty() {
-        diesel::insert_into(crate::schema::arena_season_guild_standings::table)
-            .values(&guilds)
-            .on_conflict_do_nothing()
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season end: guild standings insert failed: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
-            })?;
-    }
+                // 1. freeze, 2. award, 3. optional roll/activation. All writes are in
+                // this transaction, so none survives if a later stage fails.
+                let standing_inserts: Vec<season_store::StandingInsertRow> =
+                    standings.iter().map(Into::into).collect();
+                for chunk in standing_inserts.chunks(500) {
+                    diesel::insert_into(crate::schema::arena_season_standings::table)
+                        .values(chunk)
+                        .on_conflict_do_nothing()
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season end: standings insert failed: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                26,
+                            )
+                        })?;
+                }
+                if !guilds.is_empty() {
+                    diesel::insert_into(crate::schema::arena_season_guild_standings::table)
+                        .values(&guilds)
+                        .on_conflict_do_nothing()
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season end: guild standings insert failed: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                27,
+                            )
+                        })?;
+                }
 
-    // A guild's trophies RESET with the season, exactly like a player's cups. The
-    // season's final standing has just been frozen into `arena_season_guild_standings`
-    // above, so the live column is cleared here and starts the next season at zero.
-    //
-    // Inside the same transaction as the freeze: if any later stage fails, the reset
-    // rolls back with it, so a guild can never lose its total to a half-applied
-    // rollover.
-    diesel::sql_query("UPDATE guilds SET trophies = 0")
-        .execute(&mut conn)
-        .await
-        .map_err(|e| {
-            warn!("season end: guild trophy reset failed: {e}");
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
-        })?;
-    for chunk in awards.chunks(500) {
-        diesel::insert_into(crate::schema::arena_season_awards::table)
-            .values(chunk)
-            .on_conflict_do_nothing()
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season end: awards insert failed: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 28)
-            })?;
-    }
+                // A guild's trophies RESET with the season, exactly like a player's cups. The
+                // season's final standing has just been frozen into `arena_season_guild_standings`
+                // above, so the live column is cleared here and starts the next season at zero.
+                //
+                // Inside the same transaction as the freeze: if any later stage fails, the reset
+                // rolls back with it, so a guild can never lose its total to a half-applied
+                // rollover.
+                diesel::sql_query("UPDATE guilds SET trophies = 0")
+                    .execute(&mut conn)
+                    .await
+                    .map_err(|e| {
+                        warn!("season end: guild trophy reset failed: {e}");
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
+                    })?;
+                for chunk in awards.chunks(500) {
+                    diesel::insert_into(crate::schema::arena_season_awards::table)
+                        .values(chunk)
+                        .on_conflict_do_nothing()
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season end: awards insert failed: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                28,
+                            )
+                        })?;
+                }
 
-    diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
-        .set((s::status.eq("ended"), s::ended_at.eq(Some(arena_season::now_unix()))))
-        .execute(&mut conn)
-        .await
-        .map_err(|e| {
-            warn!("season end: could not mark ended: {e}");
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 29)
-        })?;
+                diesel::update(s::arena_seasons.filter(s::id.eq(season_id)))
+                    .set((
+                        s::status.eq("ended"),
+                        s::ended_at.eq(Some(arena_season::now_unix())),
+                    ))
+                    .execute(&mut conn)
+                    .await
+                    .map_err(|e| {
+                        warn!("season end: could not mark ended: {e}");
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 29)
+                    })?;
 
-    // 3. roll everyone into the next season, which is what actually zeroes the
-    // cups and the top-100. Without a next season there is nothing to roll INTO
-    // and the standings simply stay as they are — deliberately, so "end the
-    // season" and "open the next one" can be two decisions.
-    if let Some(next) = next {
-        let next_id = next.id;
-        let cfg = next.config();
+                // 3. roll everyone into the next season, which is what actually zeroes the
+                // cups and the top-100. Without a next season there is nothing to roll INTO
+                // and the standings simply stay as they are — deliberately, so "end the
+                // season" and "open the next one" can be two decisions.
+                if let Some(next) = next {
+                    let next_id = next.id;
+                    let cfg = next.config();
 
-        let rows: Vec<SeasonRolloverRow> =
-            diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
-                .get_results(&mut conn)
-                .await
-                .map_err(|e| {
-                    warn!("season end: could not read characters: {e}");
-                    BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 31)
-                })?;
-        for row in rows {
-            let Ok(mut ch) = serde_json::from_value::<CompleteCharacter>(row.character.clone())
-            else {
-                // Same tolerance as the rollover endpoint: one unreadable row
-                // must not abort everyone else's season change.
-                warn!("season end: character {} does not deserialize; skipped", row.id);
-                continue;
-            };
-            if !arena_season::roll_character_into(&mut ch, &cfg).reset {
-                continue;
+                    let rows: Vec<SeasonRolloverRow> =
+                        diesel::sql_query("SELECT id, character FROM characters ORDER BY id")
+                            .get_results(&mut conn)
+                            .await
+                            .map_err(|e| {
+                                warn!("season end: could not read characters: {e}");
+                                BladeApiError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    IMPORT_SERVICE_ID,
+                                    31,
+                                )
+                            })?;
+                    for row in rows {
+                        let Ok(mut ch) =
+                            serde_json::from_value::<CompleteCharacter>(row.character.clone())
+                        else {
+                            // Same tolerance as the rollover endpoint: one unreadable row
+                            // must not abort everyone else's season change.
+                            warn!(
+                                "season end: character {} does not deserialize; skipped",
+                                row.id
+                            );
+                            continue;
+                        };
+                        if !arena_season::roll_character_into(&mut ch, &cfg).reset {
+                            continue;
+                        }
+                        let Ok(updated) = serde_json::to_value(&ch) else {
+                            warn!(
+                                "season end: character {} does not serialize; skipped",
+                                row.id
+                            );
+                            continue;
+                        };
+                        diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
+                            .bind::<diesel::sql_types::Jsonb, _>(updated)
+                            .bind::<diesel::sql_types::Uuid, _>(row.id)
+                            .execute(&mut conn)
+                            .await
+                            .map_err(|e| {
+                                warn!("season end: write failed for character {}: {e}", row.id);
+                                BladeApiError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    IMPORT_SERVICE_ID,
+                                    32,
+                                )
+                            })?;
+                        resp.characters_rolled += 1;
+                    }
+
+                    diesel::update(s::arena_seasons.filter(s::id.eq(next_id)))
+                        .set((
+                            s::status.eq("active"),
+                            s::starts_at.eq(activated_starts_at(
+                                next.starts_at,
+                                arena_season::now_unix(),
+                            )),
+                        ))
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season end: could not activate {next_id}: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                33,
+                            )
+                        })?;
+                    resp.next_season_id = Some(next_id);
+                }
+
+                Ok::<_, BladeApiError>(resp)
             }
-            let Ok(updated) = serde_json::to_value(&ch) else {
-                warn!("season end: character {} does not serialize; skipped", row.id);
-                continue;
-            };
-            diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
-                .bind::<diesel::sql_types::Jsonb, _>(updated)
-                .bind::<diesel::sql_types::Uuid, _>(row.id)
-                .execute(&mut conn)
-                .await
-                .map_err(|e| {
-                    warn!("season end: write failed for character {}: {e}", row.id);
-                    BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 32)
-                })?;
-            resp.characters_rolled += 1;
-        }
-
-        diesel::update(s::arena_seasons.filter(s::id.eq(next_id)))
-            .set((
-                s::status.eq("active"),
-                s::starts_at.eq(activated_starts_at(next.starts_at, arena_season::now_unix())),
-            ))
-            .execute(&mut conn)
-            .await
-            .map_err(|e| {
-                warn!("season end: could not activate {next_id}: {e}");
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 33)
-            })?;
-        resp.next_season_id = Some(next_id);
-    }
-
-            Ok::<_, BladeApiError>(resp)
-        }
-        .scope_boxed()
+            .scope_boxed()
         })
         .await?;
 
@@ -3459,13 +3599,25 @@ pub async fn grant_arena_season_awards(
         .await
         .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 60))?;
     if season.status != "ended" {
-        return Err(BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 61));
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            61,
+        ));
     }
-    if body.rewards.values().any(|reward| !award_reward_is_supported(reward)) {
+    if body
+        .rewards
+        .values()
+        .any(|reward| !award_reward_is_supported(reward))
+    {
         // Season awards do not load a town row, and the shared apply_reward
         // helper intentionally does not apply town XP. Reject instead of
         // acknowledging a catalogue entry that would be only partly granted.
-        return Err(BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 72));
+        return Err(BladeApiError::new(
+            StatusCode::BAD_REQUEST,
+            IMPORT_SERVICE_ID,
+            72,
+        ));
     }
 
     let pending_before: i64 = a::arena_season_awards
@@ -3523,163 +3675,163 @@ pub async fn grant_arena_season_awards(
 
     let (considered, granted) = conn
         .transaction(move |mut conn| {
-        async move {
-            // These are intentionally stricter than season close: a grant pass
-            // touches at most 25 rows and defaults to five. A contended or
-            // unexpectedly expensive batch rolls back without partial payment.
-            for limit_sql in [
-                "SET LOCAL lock_timeout = '500ms'",
-                "SET LOCAL statement_timeout = '3s'",
-                "SET LOCAL work_mem = '1MB'",
-                "SET LOCAL temp_file_limit = '4MB'",
-            ] {
-                diesel::sql_query(limit_sql)
-                    .execute(&mut conn)
-                    .await
-                    .map_err(|e| {
-                        warn!("season grant: could not set transaction limits: {e}");
-                        BladeApiError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            IMPORT_SERVICE_ID,
-                            73,
-                        )
-                    })?;
-            }
+            async move {
+                // These are intentionally stricter than season close: a grant pass
+                // touches at most 25 rows and defaults to five. A contended or
+                // unexpectedly expensive batch rolls back without partial payment.
+                for limit_sql in [
+                    "SET LOCAL lock_timeout = '500ms'",
+                    "SET LOCAL statement_timeout = '3s'",
+                    "SET LOCAL work_mem = '1MB'",
+                    "SET LOCAL temp_file_limit = '4MB'",
+                ] {
+                    diesel::sql_query(limit_sql)
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| {
+                            warn!("season grant: could not set transaction limits: {e}");
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                73,
+                            )
+                        })?;
+                }
 
-            // Filter to catalogue keys before LIMIT. Otherwise unknown rows at
-            // the head of the queue permanently starve later configured awards.
-            //
-            // Only awards whose alt is the one live now: the grant writes into the
-            // live character row, which a user's alts take turns occupying. An
-            // award of a switched-out alt stays pending — that alt claims it in
-            // game, or a later pass grants it while it is live (owner decision
-            // 2026-10-10, tracker #348).
-            let candidates: Vec<season_store::AwardGrantCandidate> = diesel::sql_query(format!(
-                "SELECT a.id, a.character_id, a.source_alt_uuid, a.kind, a.tier, a.payload \
+                // Filter to catalogue keys before LIMIT. Otherwise unknown rows at
+                // the head of the queue permanently starve later configured awards.
+                //
+                // Only awards whose alt is the one live now: the grant writes into the
+                // live character row, which a user's alts take turns occupying. An
+                // award of a switched-out alt stays pending — that alt claims it in
+                // game, or a later pass grants it while it is live (owner decision
+                // 2026-10-10, tracker #348).
+                let candidates: Vec<season_store::AwardGrantCandidate> =
+                    diesel::sql_query(format!(
+                        "SELECT a.id, a.character_id, a.source_alt_uuid, a.kind, a.tier, a.payload \
                  FROM arena_season_awards a \
                  WHERE a.season_id = $1 AND a.granted_at IS NULL \
                    AND (a.kind || ':' || a.tier) = ANY($2) \
                    AND {} \
                  ORDER BY a.rank, a.kind, a.id LIMIT $3 FOR UPDATE OF a SKIP LOCKED",
-                season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
-            ))
-            .bind::<diesel::sql_types::Uuid, _>(season_id)
-            .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(eligible_keys)
-            .bind::<diesel::sql_types::BigInt, _>(limit)
-            .load(&mut conn)
-            .await
-            .map_err(|_| {
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 64)
-            })?;
-
-            let considered = candidates.len();
-            let mut granted = 0usize;
-
-            for award in candidates {
-                let key = award_reward_key(&award.kind, &award.tier);
-                // The SQL predicate was built from these exact non-empty keys.
-                let mut reward = rewards
-                    .get(&key)
-                    .filter(|reward| !reward.is_empty())
-                    .cloned()
-                    .or_else(|| {
-                        season_rewards::reward_for_award(
-                            season_number,
-                            &award.kind,
-                            &award.tier,
-                            &award.payload,
-                            &repair_data,
-                        )
-                    })
-                    .ok_or_else(|| {
-                        BladeApiError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            IMPORT_SERVICE_ID,
-                            65,
-                        )
+                        season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
+                    ))
+                    .bind::<diesel::sql_types::Uuid, _>(season_id)
+                    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(eligible_keys)
+                    .bind::<diesel::sql_types::BigInt, _>(limit)
+                    .load(&mut conn)
+                    .await
+                    .map_err(|_| {
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 64)
                     })?;
-                if !apply {
-                    continue;
-                }
 
-                let mut entry = {
-                    use crate::schema::characters;
-                    characters::table
-                        .filter(characters::id.eq(award.character_id))
-                        .select(CharacterDbEntryEconomy::as_select())
-                        .for_no_key_update()
-                        .first(&mut conn)
-                        .await
-                        .map_err(|_| {
-                            BladeApiError::new(
-                                StatusCode::CONFLICT,
-                                IMPORT_SERVICE_ID,
-                                64,
+                let considered = candidates.len();
+                let mut granted = 0usize;
+
+                for award in candidates {
+                    let key = award_reward_key(&award.kind, &award.tier);
+                    // The SQL predicate was built from these exact non-empty keys.
+                    let mut reward = rewards
+                        .get(&key)
+                        .filter(|reward| !reward.is_empty())
+                        .cloned()
+                        .or_else(|| {
+                            season_rewards::reward_for_award(
+                                season_number,
+                                &award.kind,
+                                &award.tier,
+                                &award.payload,
+                                &repair_data,
                             )
-                        })?
-                };
-                // The candidate filter ran before this row was locked; a switch
-                // committed in between would pay this alt's placing into the
-                // other alt's row (#348). Locked now, so the alt is stable.
-                {
-                    use crate::schema::characters;
-                    let live: Option<Uuid> = characters::table
-                        .filter(characters::id.eq(award.character_id))
-                        .select(characters::source_alt_uuid)
-                        .first(&mut conn)
-                        .await
-                        .map_err(|_| {
-                            BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 64)
+                        })
+                        .ok_or_else(|| {
+                            BladeApiError::new(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                IMPORT_SERVICE_ID,
+                                65,
+                            )
                         })?;
-                    if !season_store::award_belongs_to_alt(award.source_alt_uuid, live) {
+                    if !apply {
                         continue;
                     }
-                }
 
-                let mut tracker = InventoryChangeTracker::default();
-                // Catalogue item ids describe the reward template, not a
-                // globally reusable inventory instance. Mint fresh ids per
-                // recipient so two award tiers can never overwrite each other
-                // in one character's backpack.
-                for item in &mut reward.items {
-                    item.id = Uuid::new_v4();
-                }
-                // Built-in season gift chests carry a zero level sentinel;
-                // treasury chests are levelled to the recipient like every
-                // other Arena chest.
-                for chest in &mut reward.chests {
-                    if chest.level == 0 {
-                        // The recipient's paid-as level: 100 from level 49 (#398).
-                        chest.level = blades_lib::features::loot_level::effective_loot_level_u64(
-                            entry.character.0.level as u64,
-                        );
+                    let mut entry = {
+                        use crate::schema::characters;
+                        characters::table
+                            .filter(characters::id.eq(award.character_id))
+                            .select(CharacterDbEntryEconomy::as_select())
+                            .for_no_key_update()
+                            .first(&mut conn)
+                            .await
+                            .map_err(|_| {
+                                BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 64)
+                            })?
+                    };
+                    // The candidate filter ran before this row was locked; a switch
+                    // committed in between would pay this alt's placing into the
+                    // other alt's row (#348). Locked now, so the alt is stable.
+                    {
+                        use crate::schema::characters;
+                        let live: Option<Uuid> = characters::table
+                            .filter(characters::id.eq(award.character_id))
+                            .select(characters::source_alt_uuid)
+                            .first(&mut conn)
+                            .await
+                            .map_err(|_| {
+                                BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 64)
+                            })?;
+                        if !season_store::award_belongs_to_alt(award.source_alt_uuid, live) {
+                            continue;
+                        }
                     }
-                }
-                apply_reward(
-                    &reward,
-                    &mut entry.wallet.0,
-                    &mut entry.inventory.0,
-                    &mut entry.character.0,
-                    &mut tracker,
-                );
-                for chest in &reward.chests {
-                    grant_chest(
+
+                    let mut tracker = InventoryChangeTracker::default();
+                    // Catalogue item ids describe the reward template, not a
+                    // globally reusable inventory instance. Mint fresh ids per
+                    // recipient so two award tiers can never overwrite each other
+                    // in one character's backpack.
+                    for item in &mut reward.items {
+                        item.id = Uuid::new_v4();
+                    }
+                    // Built-in season gift chests carry a zero level sentinel;
+                    // treasury chests are levelled to the recipient like every
+                    // other Arena chest.
+                    for chest in &mut reward.chests {
+                        if chest.level == 0 {
+                            // The recipient's paid-as level: 100 from level 49 (#398).
+                            chest.level =
+                                blades_lib::features::loot_level::effective_loot_level_u64(
+                                    entry.character.0.level as u64,
+                                );
+                        }
+                    }
+                    apply_reward(
+                        &reward,
+                        &mut entry.wallet.0,
                         &mut entry.inventory.0,
-                        chest.tier,
-                        chest.level,
+                        &mut entry.character.0,
                         &mut tracker,
                     );
-                }
-                if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
-                    entry.inventory.0.backpack_version += 1;
-                }
-                if !reward.chests.is_empty() {
-                    entry.inventory.0.treasury_version += 1;
-                }
+                    for chest in &reward.chests {
+                        grant_chest(
+                            &mut entry.inventory.0,
+                            chest.tier,
+                            chest.level,
+                            &mut tracker,
+                        );
+                    }
+                    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+                        entry.inventory.0.backpack_version += 1;
+                    }
+                    if !reward.chests.is_empty() {
+                        entry.inventory.0.treasury_version += 1;
+                    }
 
-                {
-                    use crate::schema::characters;
-                    diesel::update(characters::table.filter(characters::id.eq(award.character_id)))
+                    {
+                        use crate::schema::characters;
+                        diesel::update(
+                            characters::table.filter(characters::id.eq(award.character_id)),
+                        )
                         .set(entry)
                         .execute(&mut conn)
                         .await
@@ -3690,48 +3842,40 @@ pub async fn grant_arena_season_awards(
                                 65,
                             )
                         })?;
+                    }
+
+                    let mut payload = award.payload;
+                    payload["granted"] = serde_json::Value::Bool(true);
+                    payload["reward"] = serde_json::to_value(&reward).map_err(|_| {
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 66)
+                    })?;
+                    let changed = diesel::update(
+                        a::arena_season_awards
+                            .filter(a::id.eq(award.id))
+                            .filter(a::granted_at.is_null()),
+                    )
+                    .set((
+                        a::payload.eq(payload),
+                        a::granted_at.eq(Some(arena_season::now_unix())),
+                    ))
+                    .execute(&mut conn)
+                    .await
+                    .map_err(|_| {
+                        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 67)
+                    })?;
+                    if changed != 1 {
+                        return Err(BladeApiError::new(
+                            StatusCode::CONFLICT,
+                            IMPORT_SERVICE_ID,
+                            68,
+                        ));
+                    }
+                    granted += 1;
                 }
 
-                let mut payload = award.payload;
-                payload["granted"] = serde_json::Value::Bool(true);
-                payload["reward"] = serde_json::to_value(&reward).map_err(|_| {
-                    BladeApiError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        IMPORT_SERVICE_ID,
-                        66,
-                    )
-                })?;
-                let changed = diesel::update(
-                    a::arena_season_awards
-                        .filter(a::id.eq(award.id))
-                        .filter(a::granted_at.is_null()),
-                )
-                .set((
-                    a::payload.eq(payload),
-                    a::granted_at.eq(Some(arena_season::now_unix())),
-                ))
-                .execute(&mut conn)
-                .await
-                .map_err(|_| {
-                    BladeApiError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        IMPORT_SERVICE_ID,
-                        67,
-                    )
-                })?;
-                if changed != 1 {
-                    return Err(BladeApiError::new(
-                        StatusCode::CONFLICT,
-                        IMPORT_SERVICE_ID,
-                        68,
-                    ));
-                }
-                granted += 1;
+                Ok::<_, BladeApiError>((considered, granted))
             }
-
-            Ok::<_, BladeApiError>((considered, granted))
-        }
-        .scope_boxed()
+            .scope_boxed()
         })
         .await?;
 
@@ -3869,8 +4013,7 @@ struct SeasonRolloverRow {
 /// mark. Clear the server-only per-threshold grant ledger in the same row update
 /// that installs the new season's character state; otherwise a later repair in a
 /// new season could be mistaken for a duplicate from the old one.
-const SEASON_CHARACTER_UPDATE_SQL: &str =
-    "UPDATE characters SET character = $1, \
+const SEASON_CHARACTER_UPDATE_SQL: &str = "UPDATE characters SET character = $1, \
      server_state = server_state - 'arenaPromotionLootGrants' \
          - 'arenaPromotionItemRepairs' WHERE id = $2";
 
@@ -3965,7 +4108,10 @@ pub async fn arena_season_rollover(
         let mut ch: CompleteCharacter = match serde_json::from_value(row.character.clone()) {
             Ok(c) => c,
             Err(e) => {
-                warn!("season rollover: character {} does not deserialize: {e}", row.id);
+                warn!(
+                    "season rollover: character {} does not deserialize: {e}",
+                    row.id
+                );
                 resp.characters_unreadable += 1;
                 continue;
             }
@@ -4043,7 +4189,10 @@ pub async fn arena_season_rollover(
             continue;
         }
         let updated = serde_json::to_value(&ch).map_err(|e| {
-            warn!("season rollover: character {} does not serialize: {e}", row.id);
+            warn!(
+                "season rollover: character {} does not serialize: {e}",
+                row.id
+            );
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 15)
         })?;
         diesel::sql_query(SEASON_CHARACTER_UPDATE_SQL)
@@ -4052,7 +4201,10 @@ pub async fn arena_season_rollover(
             .execute(&mut conn)
             .await
             .map_err(|e| {
-                warn!("season rollover: write failed for character {}: {e}", row.id);
+                warn!(
+                    "season rollover: write failed for character {}: {e}",
+                    row.id
+                );
                 BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 16)
             })?;
     }
@@ -4080,17 +4232,20 @@ mod tests {
 
         #[test]
         fn exposes_only_public_character_fields() {
-            let summary = current_character_summary(CharacterDbEntryCharacterAlone {
-                id: Uuid::from_u128(2),
-                user_id: Uuid::from_u128(1),
-                character: JsonDbWrapper(CompleteCharacter {
-                    name: "Current Hero".into(),
-                    level: 42,
-                    pvp_trophies: 733,
-                    global_shop_offers: serde_json::json!([{"private": "not projected"}]),
-                    ..CompleteCharacter::default()
-                }),
-            }, Some(Uuid::from_u128(3)));
+            let summary = current_character_summary(
+                CharacterDbEntryCharacterAlone {
+                    id: Uuid::from_u128(2),
+                    user_id: Uuid::from_u128(1),
+                    character: JsonDbWrapper(CompleteCharacter {
+                        name: "Current Hero".into(),
+                        level: 42,
+                        pvp_trophies: 733,
+                        global_shop_offers: serde_json::json!([{"private": "not projected"}]),
+                        ..CompleteCharacter::default()
+                    }),
+                },
+                Some(Uuid::from_u128(3)),
+            );
             let value = serde_json::to_value(summary).unwrap();
             let mut keys: Vec<&str> = value
                 .as_object()
@@ -4101,7 +4256,14 @@ mod tests {
             keys.sort_unstable();
             assert_eq!(
                 keys,
-                ["characterId", "level", "name", "pvpTrophies", "sourceAltUuid", "userId"]
+                [
+                    "characterId",
+                    "level",
+                    "name",
+                    "pvpTrophies",
+                    "sourceAltUuid",
+                    "userId"
+                ]
             );
             assert_eq!(value["sourceAltUuid"], Uuid::from_u128(3).to_string());
             assert_eq!(value["name"], "Current Hero");
@@ -4172,10 +4334,7 @@ mod tests {
             };
         }
 
-        async fn seed_character(
-            conn: &mut AsyncPgConnection,
-            character: Value,
-        ) -> (Uuid, Uuid) {
+        async fn seed_character(conn: &mut AsyncPgConnection, character: Value) -> (Uuid, Uuid) {
             let id = Uuid::new_v4();
             let user_id = Uuid::new_v4();
             sql_query(
@@ -4217,7 +4376,12 @@ mod tests {
         /// this endpoint, locked its owner out of changing their look.
         #[test]
         fn names_follow_the_games_own_length_rule() {
-            assert_eq!(normalise_current_character_name("Tureduus Callidu").unwrap().len(), 16);
+            assert_eq!(
+                normalise_current_character_name("Tureduus Callidu")
+                    .unwrap()
+                    .len(),
+                16
+            );
             assert_eq!(normalise_current_character_name("  Abc  ").unwrap(), "Abc");
             for long in [
                 "Tureduus Callidus",
@@ -4232,13 +4396,22 @@ mod tests {
 
         #[test]
         fn names_use_only_the_games_characters() {
-            for good in ["J'zargo-the_2nd", "Søvngård", "Мрсири", "AbĂ", "Abƒ", "AbЁ", "Abё", "Abÿ"] {
+            for good in [
+                "J'zargo-the_2nd",
+                "Søvngård",
+                "Мрсири",
+                "AbĂ",
+                "Abƒ",
+                "AbЁ",
+                "Abё",
+                "Abÿ",
+            ] {
                 assert!(normalise_current_character_name(good).is_ok(), "{good}");
             }
             for bad in [
-                "Мрշιрι",       // Armenian and Greek
+                "Мрշιрι",        // Armenian and Greek
                 "\u{1f5e1}Sheo", // emoji
-                "Sheo.grath",   // full stop
+                "Sheo.grath",    // full stop
                 "Sheo\u{101}g",  // ā: in the ranges, on the invalid list
                 "Sheo\u{400}g",  // Ѐ: likewise
                 "\u{202e}Sheogorath",
@@ -4262,7 +4435,10 @@ mod tests {
         fn a_new_alt_name_is_held_to_the_same_rule() {
             assert_eq!(new_alt_requested_name(None), Ok(None));
             assert_eq!(new_alt_requested_name(Some("   ")), Ok(None));
-            assert_eq!(new_alt_requested_name(Some(" Adventurer ")), Ok(Some("Adventurer".into())));
+            assert_eq!(
+                new_alt_requested_name(Some(" Adventurer ")),
+                Ok(Some("Adventurer".into()))
+            );
             assert!(new_alt_requested_name(Some("Tureduus Callidus")).is_err());
         }
 
@@ -4271,14 +4447,10 @@ mod tests {
             let mut conn = db!();
             let (character_id, _owner) =
                 seed_character(&mut conn, serde_json::json!({"name":"Hidden"})).await;
-            let err = rename_current_character(
-                &mut conn,
-                character_id,
-                Uuid::new_v4(),
-                "Visible".into(),
-            )
-            .await
-            .unwrap_err();
+            let err =
+                rename_current_character(&mut conn, character_id, Uuid::new_v4(), "Visible".into())
+                    .await
+                    .unwrap_err();
             assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
         }
 
@@ -4321,8 +4493,14 @@ mod tests {
                 .await
                 .unwrap_err();
             assert_eq!(err.status_code(), StatusCode::CONFLICT);
-            assert_eq!(stored(&mut conn, character_id).await.character["name"], "HauDrauf (Test)");
-            assert!(normalise_current_character_name("Faker (Test)").is_err(), "nor can a player take it");
+            assert_eq!(
+                stored(&mut conn, character_id).await.character["name"],
+                "HauDrauf (Test)"
+            );
+            assert!(
+                normalise_current_character_name("Faker (Test)").is_err(),
+                "nor can a player take it"
+            );
         }
 
         #[actix_web::test]
@@ -4357,7 +4535,10 @@ mod tests {
             assert_eq!(row.character["name"], "New Hero");
             assert_eq!(row.character["level"], 42);
             assert_eq!(row.character["pvpTrophies"], 700);
-            assert_eq!(row.character["futureField"], serde_json::json!({"kept": true}));
+            assert_eq!(
+                row.character["futureField"],
+                serde_json::json!({"kept": true})
+            );
             assert_eq!(
                 row.server_state["currentCharacterRenames"][0]["previousName"],
                 "Old Hero"
@@ -4424,7 +4605,10 @@ mod tests {
             // here, the statement silently stops fixing recycled addresses and
             // report #89 comes back with no error to show for it.
             let sql = super::super::REASSIGN_DEVICE_SQL;
-            assert!(sql.contains("ON CONFLICT (device_id) DO UPDATE"), "must upsert");
+            assert!(
+                sql.contains("ON CONFLICT (device_id) DO UPDATE"),
+                "must upsert"
+            );
             assert!(
                 !sql.to_ascii_uppercase().contains("WHERE"),
                 "REASSIGN_DEVICE_SQL must have no WHERE — the address check in \
@@ -4485,7 +4669,11 @@ mod tests {
             // a report instead. If anyone adds `deny_unknown_fields` this
             // becomes a 400 — also safe, but this test would then need
             // rewriting rather than deleting.
-            for typo in [r#"{"aply":true}"#, r#"{"Apply":true}"#, r#"{"apply_now":true}"#] {
+            for typo in [
+                r#"{"aply":true}"#,
+                r#"{"Apply":true}"#,
+                r#"{"apply_now":true}"#,
+            ] {
                 let r: SeasonRolloverRequest = serde_json::from_str(typo)
                     .unwrap_or_else(|e| panic!("{typo} should parse or 400, got {e}"));
                 assert!(!r.apply, "{typo} must not arm the wipe");
@@ -4533,7 +4721,10 @@ mod tests {
         #[test]
         fn batches_start_small_and_keys_are_unambiguous() {
             assert_eq!(default_award_grant_limit(), 5);
-            assert_eq!(award_reward_key("guild_rank", "top100"), "guild_rank:top100");
+            assert_eq!(
+                award_reward_key("guild_rank", "top100"),
+                "guild_rank:top100"
+            );
             assert_eq!(
                 award_reward_key("arena_reached", "arena2_level4"),
                 "arena_reached:arena2_level4"
@@ -4634,7 +4825,10 @@ mod tests {
         character.number_pvp_match_played = 27;
         character.pvp_winning_streak = 4;
 
-        assert!(align_import_with_active_season(&mut character, Some(&season)));
+        assert!(align_import_with_active_season(
+            &mut character,
+            Some(&season)
+        ));
         assert_eq!(character.pvp_season_id, live_season);
         assert_eq!(character.pvp_trophies, 0);
         assert_eq!(character.matchmaking_pvp_trophies, 0);
@@ -4670,7 +4864,10 @@ mod tests {
         character.pvp_trophies = 77;
         character.number_pvp_match_played = 2;
 
-        assert!(!align_import_with_active_season(&mut character, Some(&season)));
+        assert!(!align_import_with_active_season(
+            &mut character,
+            Some(&season)
+        ));
         assert_eq!(character.pvp_trophies, 77);
         assert_eq!(character.number_pvp_match_played, 2);
     }
@@ -4800,7 +4997,10 @@ mod tests {
             .expect("one unreadable quest must not reject the whole character");
         assert_eq!(parsed.quests.len(), 2, "the two readable quests survive");
         // And the character itself is intact — the point of the whole change.
-        assert_eq!(parsed.user_id.to_string(), "11111111-2222-3333-4444-555555555555");
+        assert_eq!(
+            parsed.user_id.to_string(),
+            "11111111-2222-3333-4444-555555555555"
+        );
     }
 
     /// A quest missing a required field is dropped, not defaulted into
@@ -4928,9 +5128,9 @@ mod tests {
     /// TEST_DATABASE_URL (CI provides one) rather than failing.
     mod character_versions {
         use super::super::{
-            apply_new_alt, apply_restore, apply_switch_alt, import_parks_quests,
-            refuse_unless_new_alt, snapshot_character, snapshot_fallback_alt, NewAltRequest,
-            SwitchAltRequest, MAX_ALTS_PER_USER,
+            MAX_ALTS_PER_USER, NewAltRequest, SwitchAltRequest, apply_new_alt, apply_restore,
+            apply_switch_alt, import_parks_quests, refuse_unless_new_alt, snapshot_character,
+            snapshot_fallback_alt,
         };
         use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
         use uuid::Uuid;
@@ -5083,9 +5283,7 @@ mod tests {
             .bind::<diesel::sql_types::Text, _>(
                 serde_json::json!({"name": name, "level": level}).to_string(),
             )
-            .bind::<diesel::sql_types::Text, _>(
-                serde_json::json!({"gold": gold}).to_string(),
-            )
+            .bind::<diesel::sql_types::Text, _>(serde_json::json!({"gold": gold}).to_string())
             .execute(conn)
             .await
             .unwrap();
@@ -5331,23 +5529,28 @@ mod tests {
         async fn snapshotting_a_missing_character_fails_rather_than_no_ops() {
             let mut c = db!();
             assert!(
-                snapshot_character(&mut c, Uuid::new_v4(), Uuid::new_v4(), None, "import", false)
-                    .await
-                    .is_err()
+                snapshot_character(
+                    &mut c,
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    None,
+                    "import",
+                    false
+                )
+                .await
+                .is_err()
             );
         }
 
         // --- alt selection ------------------------------------------------
 
         async fn bind_device(conn: &mut AsyncPgConnection, device: &str, user: Uuid) {
-            diesel::sql_query(
-                "INSERT INTO device_bindings (device_id, user_id) VALUES ($1, $2)",
-            )
-            .bind::<diesel::sql_types::Text, _>(device.to_string())
-            .bind::<diesel::sql_types::Uuid, _>(user)
-            .execute(conn)
-            .await
-            .unwrap();
+            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Text, _>(device.to_string())
+                .bind::<diesel::sql_types::Uuid, _>(user)
+                .execute(conn)
+                .await
+                .unwrap();
         }
 
         #[derive(diesel::QueryableByName)]
@@ -5447,7 +5650,9 @@ mod tests {
             .execute(&mut c)
             .await
             .unwrap();
-            snapshot_character(&mut c, cid, uid, None, "import", false).await.unwrap();
+            snapshot_character(&mut c, cid, uid, None, "import", false)
+                .await
+                .unwrap();
 
             // Back on A, and A is played up to level 41.
             diesel::sql_query(
@@ -5461,7 +5666,9 @@ mod tests {
             .unwrap();
 
             // Switch to B: A must be kept at 41, and B comes back at 12.
-            let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+            let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                .await
+                .unwrap();
             assert_eq!(out.was_playing, Some(alt_a));
             assert!(!out.noop);
             assert_eq!(live(&mut c, cid).await.character["level"], 12);
@@ -5472,7 +5679,9 @@ mod tests {
             assert_eq!(kept.source_alt_uuid, Some(alt_a));
 
             // And back again: A returns at 41, the level it was left at.
-            let back = apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+            let back = apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                .await
+                .unwrap();
             assert_eq!(back.was_playing, Some(alt_b));
             assert_eq!(live(&mut c, cid).await.character["level"], 41);
         }
@@ -5489,26 +5698,50 @@ mod tests {
             let (original, level1) = (Uuid::new_v4(), Uuid::new_v4());
             let (cid, uid) = seed_character(&mut c, "Sephoris", 47, 0).await;
             add_user_row(&mut c, uid).await;
-            assert_eq!(for_character(&mut c, cid).await, None, "the unstamped original");
+            assert_eq!(
+                for_character(&mut c, cid).await,
+                None,
+                "the unstamped original"
+            );
 
             let mut start = new_alt(uid, level1);
             start.outgoing_alt_uuid = Some(original);
-            apply_new_alt(&mut c, &start, &appearance_cost()).await.unwrap();
-            assert_eq!(for_character(&mut c, cid).await, Some(level1), "the new alt rolls its own");
-            // The original was kept first; make that unambiguous at one-second
-            // resolution before the next snapshot lands.
-            diesel::sql_query("UPDATE character_versions SET saved_at = saved_at - 60 WHERE character_id = $1")
-                .bind::<diesel::sql_types::Uuid, _>(cid)
-                .execute(&mut c)
+            apply_new_alt(&mut c, &start, &appearance_cost())
                 .await
                 .unwrap();
+            assert_eq!(
+                for_character(&mut c, cid).await,
+                Some(level1),
+                "the new alt rolls its own"
+            );
+            // The original was kept first; make that unambiguous at one-second
+            // resolution before the next snapshot lands.
+            diesel::sql_query(
+                "UPDATE character_versions SET saved_at = saved_at - 60 WHERE character_id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .execute(&mut c)
+            .await
+            .unwrap();
 
-            apply_switch_alt(&mut c, &switch(uid, original, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(uid, original, None))
+                .await
+                .unwrap();
             assert_eq!(live_alt(&mut c, cid).await, Some(original));
-            assert_eq!(for_character(&mut c, cid).await, None, "the original, back, rolls as before");
+            assert_eq!(
+                for_character(&mut c, cid).await,
+                None,
+                "the original, back, rolls as before"
+            );
 
-            apply_switch_alt(&mut c, &switch(uid, level1, None)).await.unwrap();
-            assert_eq!(for_character(&mut c, cid).await, Some(level1), "and the alt, back, its own again");
+            apply_switch_alt(&mut c, &switch(uid, level1, None))
+                .await
+                .unwrap();
+            assert_eq!(
+                for_character(&mut c, cid).await,
+                Some(level1),
+                "and the alt, back, its own again"
+            );
         }
 
         /// CONTROL: a row stamped at import (Sephoris on prod) that never set a
@@ -5516,7 +5749,8 @@ mod tests {
         #[tokio::test]
         async fn a_stamped_row_with_no_other_alt_rolls_as_before() {
             let mut c = db!();
-            let (cid, _) = seed_character_on_alt(&mut c, "Sephoris", 47, 0, Some(Uuid::new_v4())).await;
+            let (cid, _) =
+                seed_character_on_alt(&mut c, "Sephoris", 47, 0, Some(Uuid::new_v4())).await;
             assert_eq!(crate::alt_roll::for_character(&mut c, cid).await, None);
         }
 
@@ -5527,7 +5761,9 @@ mod tests {
             let mut c = db!();
             let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
             let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
-            snapshot_character(&mut c, cid, uid, Some(alt_b), "import", false).await.unwrap();
+            snapshot_character(&mut c, cid, uid, Some(alt_b), "import", false)
+                .await
+                .unwrap();
             // Give alt_b a version of its own to switch to.
             diesel::sql_query(
                 "UPDATE character_versions SET source_alt_uuid = $1 WHERE user_id = $2",
@@ -5571,7 +5807,10 @@ mod tests {
                 .unwrap();
 
             assert!(out.noop);
-            assert!(out.left_behind_saved_as.is_none(), "a no-op must not add a version");
+            assert!(
+                out.left_behind_saved_as.is_none(),
+                "a no-op must not add a version"
+            );
             assert!(out.restored_from.is_none());
             assert_eq!(device_alt(&mut c, "phone-a").await, Some(alt));
         }
@@ -5716,8 +5955,10 @@ mod tests {
 
         /// The shipped cost table: 50 Gems for a look change.
         fn appearance_cost() -> serde_json::Value {
-            serde_json::from_str(include_str!("../../deploy/static/appearance_change_cost.json"))
-                .unwrap()
+            serde_json::from_str(include_str!(
+                "../../deploy/static/appearance_change_cost.json"
+            ))
+            .unwrap()
         }
 
         fn new_alt(user_id: Uuid, alt_uuid: Uuid) -> NewAltRequest {
@@ -5789,26 +6030,45 @@ mod tests {
                 Some(4),
                 "retail's four-piece starter loadout, got {equipped}"
             );
-            assert_eq!(live.wallet, serde_json::json!([
-                { "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139", "balance": 50 }
-            ]), "exactly the creation allowance, not the starter's million gold");
+            assert_eq!(
+                live.wallet,
+                serde_json::json!([
+                    { "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139", "balance": 50 }
+                ]),
+                "exactly the creation allowance, not the starter's million gold"
+            );
             assert!(
-                live.data["customization"].as_object().is_some_and(|o| !o.is_empty()),
+                live.data["customization"]
+                    .as_object()
+                    .is_some_and(|o| !o.is_empty()),
                 "an empty customization is the unloadable character of report #191"
             );
-            assert_eq!(live.town, None, "no town of its own: get_town serves the level-0 default");
+            assert_eq!(
+                live.town, None,
+                "no town of its own: get_town serves the level-0 default"
+            );
             assert_eq!(
                 live.server_state,
                 serde_json::to_value(blades_lib::server_state::ServerState::default()).unwrap(),
                 "no server-side history: the old alt's gift claims stay with it"
             );
-            assert!(quests_of(&mut c, cid).await.is_empty(), "the old alt's quests left with it");
+            assert!(
+                quests_of(&mut c, cid).await.is_empty(),
+                "the old alt's quests left with it"
+            );
 
             let kept = version(&mut c, out.left_behind_saved_as.unwrap()).await;
             assert_eq!((kept.name.as_str(), kept.level), ("Adventurer", 48));
             assert_eq!(kept.reason, "new-alt");
-            assert_eq!(kept.source_alt_uuid, Some(starter), "filed under the alt it was");
-            assert_eq!(kept.server_state["claimedGifts"], serde_json::json!(["ebony-mail"]));
+            assert_eq!(
+                kept.source_alt_uuid,
+                Some(starter),
+                "filed under the alt it was"
+            );
+            assert_eq!(
+                kept.server_state["claimedGifts"],
+                serde_json::json!(["ebony-mail"])
+            );
             assert_eq!(
                 kept.server_state["parkedQuests"].as_array().map(Vec::len),
                 Some(2),
@@ -5833,11 +6093,17 @@ mod tests {
                 .unwrap();
             let first = seed_quest(&mut c, cid, "level-1 first quest").await;
 
-            let out = apply_switch_alt(&mut c, &switch(uid, starter, None)).await.unwrap();
+            let out = apply_switch_alt(&mut c, &switch(uid, starter, None))
+                .await
+                .unwrap();
             assert_eq!(out.was_playing, Some(level1));
             assert_eq!(live(&mut c, cid).await.character["level"], 48);
             assert!(
-                live(&mut c, cid).await.server_state.get("parkedQuests").is_none(),
+                live(&mut c, cid)
+                    .await
+                    .server_state
+                    .get("parkedQuests")
+                    .is_none(),
                 "the parking key never reaches the live row"
             );
             let back = quests_of(&mut c, cid).await;
@@ -5848,7 +6114,9 @@ mod tests {
 
             // The level-1 alt is a real alt now: it can be switched back to,
             // with its own quest.
-            apply_switch_alt(&mut c, &switch(uid, level1, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(uid, level1, None))
+                .await
+                .unwrap();
             assert_eq!(live(&mut c, cid).await.character["level"], 1);
             let mine = quests_of(&mut c, cid).await;
             assert_eq!(mine.iter().map(|q| q.id).collect::<Vec<_>>(), vec![first]);
@@ -5918,7 +6186,9 @@ mod tests {
             assert_eq!(live(&mut c, cid).await.character["level"], 3);
 
             // Now level1 is a kept version and another alt is live.
-            snapshot_character(&mut c, cid, uid, None, "import", false).await.unwrap();
+            snapshot_character(&mut c, cid, uid, None, "import", false)
+                .await
+                .unwrap();
             diesel::sql_query("UPDATE characters SET source_alt_uuid = $2 WHERE id = $1")
                 .bind::<diesel::sql_types::Uuid, _>(cid)
                 .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
@@ -5956,7 +6226,9 @@ mod tests {
                 outgoing_alt_uuid: Some(level1),
                 ..new_alt(uid, level1)
             };
-            let err = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap_err();
+            let err = apply_new_alt(&mut c, &req, &appearance_cost())
+                .await
+                .unwrap_err();
             assert_eq!(status(&err), actix_web::http::StatusCode::BAD_REQUEST);
             assert_eq!(live(&mut c, cid).await.character["level"], 61);
         }
@@ -5993,9 +6265,13 @@ mod tests {
                 outgoing_alt_uuid: Some(hint),
                 ..new_alt(uid, Uuid::new_v4())
             };
-            let out = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap();
+            let out = apply_new_alt(&mut c, &req, &appearance_cost())
+                .await
+                .unwrap();
             assert_eq!(
-                version(&mut c, out.left_behind_saved_as.unwrap()).await.source_alt_uuid,
+                version(&mut c, out.left_behind_saved_as.unwrap())
+                    .await
+                    .source_alt_uuid,
                 Some(hint)
             );
 
@@ -6006,9 +6282,13 @@ mod tests {
                 outgoing_alt_uuid: Some(hint),
                 ..new_alt(uid, Uuid::new_v4())
             };
-            let out = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap();
+            let out = apply_new_alt(&mut c, &req, &appearance_cost())
+                .await
+                .unwrap();
             assert_eq!(
-                version(&mut c, out.left_behind_saved_as.unwrap()).await.source_alt_uuid,
+                version(&mut c, out.left_behind_saved_as.unwrap())
+                    .await
+                    .source_alt_uuid,
                 Some(own),
                 "a row that knows its alt is filed under it"
             );
@@ -6178,7 +6458,10 @@ mod tests {
         #[test]
         fn an_import_parks_quests_unless_it_is_the_same_alt() {
             let (a, b) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
-            assert!(!import_parks_quests(a, a), "re-import of the live alt keeps progress");
+            assert!(
+                !import_parks_quests(a, a),
+                "re-import of the live alt keeps progress"
+            );
             assert!(import_parks_quests(a, b));
             assert!(import_parks_quests(None, a));
             assert!(import_parks_quests(a, None));
@@ -6242,9 +6525,14 @@ mod tests {
                 alt: Uuid,
                 back_to: Uuid,
             ) {
-                sql(c, &format!("UPDATE characters SET source_alt_uuid = '{alt}' WHERE id = '{cid}'"))
-                    .await;
-                snapshot_character(c, cid, uid, None, "import", false).await.unwrap();
+                sql(
+                    c,
+                    &format!("UPDATE characters SET source_alt_uuid = '{alt}' WHERE id = '{cid}'"),
+                )
+                .await;
+                snapshot_character(c, cid, uid, None, "import", false)
+                    .await
+                    .unwrap();
                 // Older than anything the test does next: `saved_at` has
                 // one-second resolution and `now()` is frozen in a transaction,
                 // so without this "newest version" would be a coin toss.
@@ -6271,16 +6559,26 @@ mod tests {
                      WHERE id = '{cid}'"
                 ))
                 .await;
-                snapshot_character(c, cid, uid, None, "switch", true).await.unwrap();
-                sql(c, &format!("UPDATE characters SET source_alt_uuid = '{back_to}' WHERE id = '{cid}'"))
-                    .await;
+                snapshot_character(c, cid, uid, None, "switch", true)
+                    .await
+                    .unwrap();
+                sql(
+                    c,
+                    &format!(
+                        "UPDATE characters SET source_alt_uuid = '{back_to}' WHERE id = '{cid}'"
+                    ),
+                )
+                .await;
             }
 
             async fn guilds(c: &mut AsyncPgConnection) {
-                sql(c, "INSERT INTO guilds (id, name, tag_id) VALUES \
+                sql(
+                    c,
+                    "INSERT INTO guilds (id, name, tag_id) VALUES \
                         ('ga', 'Guild A', '0001'), ('gb', 'Guild B', '0002'), \
-                        ('gx', 'Banned From', '0003')")
-                    .await;
+                        ('gx', 'Banned From', '0003')",
+                )
+                .await;
             }
 
             /// The full round trip A -> B -> A -> B, B's only version from before
@@ -6323,17 +6621,36 @@ mod tests {
                 assert_eq!(n(&mut c, &a_rows).await, 5, "control: A holds all five");
 
                 // A -> B. B's version predates this, so B arrives with none of it.
-                let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
-                assert_eq!(n(&mut c, &a_rows).await, 0, "nothing of A's may stay live on B");
+                let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
                 assert_eq!(
-                    n(&mut c, "SELECT count(*) AS n FROM guild_exchanges WHERE id = 'done'").await,
+                    n(&mut c, &a_rows).await,
+                    0,
+                    "nothing of A's may stay live on B"
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM guild_exchanges WHERE id = 'done'"
+                    )
+                    .await,
                     1,
                     "a redeemed request is guild history, not the alt's"
                 );
                 let kept = version(&mut c, out.left_behind_saved_as.unwrap()).await;
                 assert_eq!(kept.server_state["parkedGuildMembers"][0]["guild_id"], "ga");
-                assert_eq!(kept.server_state["parkedGuildMembers"][0]["rank"], "GRANDMASTER");
-                assert!(live(&mut c, cid).await.server_state.get("parkedGuildMembers").is_none());
+                assert_eq!(
+                    kept.server_state["parkedGuildMembers"][0]["rank"],
+                    "GRANDMASTER"
+                );
+                assert!(
+                    live(&mut c, cid)
+                        .await
+                        .server_state
+                        .get("parkedGuildMembers")
+                        .is_none()
+                );
 
                 // B makes its own: another guild, its own Free for All payout.
                 sql(&mut c, &format!(
@@ -6345,44 +6662,67 @@ mod tests {
                 .await;
 
                 // B -> A: everything of A's is back, exactly; B's went with B.
-                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
-                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "GRANDMASTER".into())));
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
                 assert_eq!(n(&mut c, &a_rows).await, 5);
                 assert_eq!(
-                    n(&mut c, &format!(
-                        "SELECT count(*) AS n FROM guild_exchanges WHERE id = 'open' \
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM guild_exchanges WHERE id = 'open' \
                            AND donation_sum = 3 AND requester_character_id = '{cid}' \
                            AND requester_user_id = '{uid}' AND NOT redeemed"
-                    ))
+                        )
+                    )
                     .await,
                     1,
                     "the open request comes back with the donations it had"
                 );
                 assert_eq!(
-                    n(&mut c, &format!(
-                        "SELECT count(*) AS n FROM free_for_all_grants WHERE granted_at = 7 \
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM free_for_all_grants WHERE granted_at = 7 \
                            AND character_id = '{cid}'"
-                    ))
+                        )
+                    )
                     .await,
                     1,
                     "A's own payout, not B's"
                 );
                 assert_eq!(
-                    n(&mut c, "SELECT count(*) AS n FROM guild_removals WHERE guild_id = 'gx' AND banned")
-                        .await,
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM guild_removals WHERE guild_id = 'gx' AND banned"
+                    )
+                    .await,
                     1
                 );
 
                 // A -> B again: B is in its own guild.
-                apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
-                assert_eq!(guild_of(&mut c, uid).await, Some(("gb".into(), "MEMBER".into())));
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("gb".into(), "MEMBER".into()))
+                );
                 assert_eq!(
                     n(&mut c, "SELECT count(*) AS n FROM guild_removals").await,
                     0,
                     "A's ban list is not B's"
                 );
                 assert_eq!(
-                    n(&mut c, "SELECT count(*) AS n FROM free_for_all_grants WHERE granted_at = 9").await,
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM free_for_all_grants WHERE granted_at = 9"
+                    )
+                    .await,
                     1
                 );
             }
@@ -6402,18 +6742,28 @@ mod tests {
                          VALUES ('ga', '{uid}', '{cid}', 'GRANDMASTER', 100)"
                 ))
                 .await;
-                apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
                 sql(&mut c, &format!(
                     "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
                          VALUES ('ga', '{other_u}', '{other_c}', 'GRANDMASTER', 300)"
                 ))
                 .await;
-                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
-                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "MEMBER".into())));
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
                 assert_eq!(
-                    n(&mut c, "SELECT count(*) AS n FROM guild_members \
-                               WHERE guild_id = 'ga' AND rank = 'GRANDMASTER'")
-                        .await,
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "MEMBER".into()))
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM guild_members \
+                               WHERE guild_id = 'ga' AND rank = 'GRANDMASTER'"
+                    )
+                    .await,
                     1
                 );
             }
@@ -6432,9 +6782,13 @@ mod tests {
                          VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 100)"
                 ))
                 .await;
-                apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
                 sql(&mut c, "DELETE FROM guilds WHERE id = 'ga'").await;
-                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
                 assert_eq!(guild_of(&mut c, uid).await, None);
             }
 
@@ -6458,9 +6812,16 @@ mod tests {
                     .await
                     .unwrap();
                 apply_restore(&mut c, old).await.unwrap();
-                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "GRANDMASTER".into())));
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
                 // Older than what follows (one-second `saved_at`, frozen `now()`).
-                sql(&mut c, "UPDATE character_versions SET saved_at = saved_at - 200").await;
+                sql(
+                    &mut c,
+                    "UPDATE character_versions SET saved_at = saved_at - 200",
+                )
+                .await;
 
                 // B's version restored while A is live: A's guild goes with A,
                 // and the row now says B.
@@ -6482,8 +6843,13 @@ mod tests {
                 apply_restore(&mut c, b_version).await.unwrap();
                 assert_eq!(live_alt(&mut c, cid).await, Some(alt_b));
                 assert_eq!(guild_of(&mut c, uid).await, None);
-                apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
-                assert_eq!(guild_of(&mut c, uid).await, Some(("ga".into(), "GRANDMASTER".into())));
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
             }
 
             /// Only a KNOWN different alt counts as another character on import:
@@ -6494,7 +6860,10 @@ mod tests {
                 let (a, b) = (Some(Uuid::new_v4()), Some(Uuid::new_v4()));
                 assert!(import_is_another_alt(a, b));
                 assert!(!import_is_another_alt(a, a));
-                assert!(!import_is_another_alt(None, a), "unknown live alt: keep its state");
+                assert!(
+                    !import_is_another_alt(None, a),
+                    "unknown live alt: keep its state"
+                );
                 assert!(!import_is_another_alt(a, None));
                 assert!(!import_is_another_alt(None, None));
             }
@@ -6515,7 +6884,15 @@ mod tests {
                          VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1);"
                 ))
                 .await;
-                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn","level":30}"#, alt_a).await;
+                parked_version(
+                    &mut c,
+                    cid,
+                    uid,
+                    alt_b,
+                    r#"{"name":"Bryn","level":30}"#,
+                    alt_a,
+                )
+                .await;
                 // A is live with its own claim and guild.
                 sql(&mut c, &format!(
                     "UPDATE characters SET server_state = '{{\"giftClaims\":{{\"sunset\":1}}}}' \
@@ -6530,19 +6907,26 @@ mod tests {
                 snapshot_character_parking(&mut c, cid, uid, Some(alt_b), "import", true, true)
                     .await
                     .unwrap();
-                restore_incoming_alt_state(&mut c, cid, uid, Some(alt_b)).await.unwrap();
+                restore_incoming_alt_state(&mut c, cid, uid, Some(alt_b))
+                    .await
+                    .unwrap();
                 assert_eq!(
                     live(&mut c, cid).await.server_state,
                     serde_json::json!({"giftClaims": {"halloween": 1}}),
                     "B's own claims, no parked keys, nothing of A's"
                 );
-                assert_eq!(guild_of(&mut c, uid).await, Some(("gb".into(), "MEMBER".into())));
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("gb".into(), "MEMBER".into()))
+                );
 
                 // An alt the server has never kept arrives fresh.
                 snapshot_character_parking(&mut c, cid, uid, Some(alt_c), "import", true, true)
                     .await
                     .unwrap();
-                restore_incoming_alt_state(&mut c, cid, uid, Some(alt_c)).await.unwrap();
+                restore_incoming_alt_state(&mut c, cid, uid, Some(alt_c))
+                    .await
+                    .unwrap();
                 assert_eq!(
                     live(&mut c, cid).await.server_state,
                     serde_json::to_value(blades_lib::server_state::ServerState::default()).unwrap()
@@ -6558,13 +6942,16 @@ mod tests {
                 delta: i64,
             ) {
                 let alt = alt.map_or("NULL".to_string(), |a| format!("'{a}'"));
-                sql(c, &format!(
-                    "INSERT INTO arena_match_results \
+                sql(
+                    c,
+                    &format!(
+                        "INSERT INTO arena_match_results \
                          (id, character_id, win, trophy_delta, recorded_at, source_alt_uuid) \
                      VALUES ('{}', '{cid}', {}, {delta}, to_timestamp({at}), {alt})",
-                    Uuid::new_v4(),
-                    delta > 0,
-                ))
+                        Uuid::new_v4(),
+                        delta > 0,
+                    ),
+                )
                 .await;
             }
 
@@ -6596,7 +6983,15 @@ mod tests {
                          VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1)"
                 ))
                 .await;
-                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn","level":30}"#, alt_a).await;
+                parked_version(
+                    &mut c,
+                    cid,
+                    uid,
+                    alt_b,
+                    r#"{"name":"Bryn","level":30}"#,
+                    alt_a,
+                )
+                .await;
                 sql(&mut c, &format!(
                     "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
                          VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 2)"
@@ -6609,16 +7004,27 @@ mod tests {
                 result(&mut c, cid, None, 2_003, -10).await;
 
                 let s = season(Uuid::new_v4(), "active");
-                sql(&mut c, &format!(
-                    "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                sql(
+                    &mut c,
+                    &format!(
+                        "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
                      VALUES ('{}', 9, 'test', 1000, 4000000000, 'active')",
-                    s.id
-                ))
+                        s.id
+                    ),
+                )
                 .await;
                 let standings = season_store::freeze_standings(&mut c, &s).await.unwrap();
                 let got: Vec<_> = standings
                     .iter()
-                    .map(|r| (r.source_alt_uuid, r.trophies, r.matches, r.wins, r.guild_id.clone()))
+                    .map(|r| {
+                        (
+                            r.source_alt_uuid,
+                            r.trophies,
+                            r.matches,
+                            r.wins,
+                            r.guild_id.clone(),
+                        )
+                    })
                     .collect();
                 assert_eq!(
                     got,
@@ -6645,7 +7051,11 @@ mod tests {
                     .await
                     .unwrap();
                 assert_eq!(
-                    n(&mut c, "SELECT count(*) AS n FROM arena_season_awards WHERE kind = 'rank'").await,
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM arena_season_awards WHERE kind = 'rank'"
+                    )
+                    .await,
                     2
                 );
 
@@ -6658,17 +7068,27 @@ mod tests {
                 let per_alt = (awards.len() / 2) as i64;
                 assert_eq!(n(&mut c, &claimable).await, per_alt);
                 assert_eq!(
-                    n(&mut c, &format!(
-                        "{claimable} AND a.source_alt_uuid = '{alt_b}'"
-                    ))
+                    n(
+                        &mut c,
+                        &format!("{claimable} AND a.source_alt_uuid = '{alt_b}'")
+                    )
                     .await,
                     0,
                     "B's placing must not be offered to A"
                 );
-                sql(&mut c, &format!("UPDATE characters SET source_alt_uuid = '{alt_b}' WHERE id = '{cid}'"))
-                    .await;
+                sql(
+                    &mut c,
+                    &format!(
+                        "UPDATE characters SET source_alt_uuid = '{alt_b}' WHERE id = '{cid}'"
+                    ),
+                )
+                .await;
                 assert_eq!(
-                    n(&mut c, &format!("{claimable} AND a.source_alt_uuid = '{alt_b}'")).await,
+                    n(
+                        &mut c,
+                        &format!("{claimable} AND a.source_alt_uuid = '{alt_b}'")
+                    )
+                    .await,
                     per_alt
                 );
                 assert!(award_belongs_to_alt_for_tests(Some(alt_b), Some(alt_b)));
@@ -6699,8 +7119,15 @@ mod tests {
                          VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1)"
                 ))
                 .await;
-                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn","pvpTrophies":20}"#, alt_a)
-                    .await;
+                parked_version(
+                    &mut c,
+                    cid,
+                    uid,
+                    alt_b,
+                    r#"{"name":"Bryn","pvpTrophies":20}"#,
+                    alt_a,
+                )
+                .await;
                 sql(&mut c, &format!(
                     "UPDATE characters SET character = '{{\"name\":\"Aran\",\"pvpTrophies\":60}}' \
                        WHERE id = '{cid}'; \
@@ -6726,8 +7153,18 @@ mod tests {
                 assert_eq!(
                     board,
                     vec![
-                        BoardRow { name: "Aran".into(), guild_name: Some("Guild A".into()), score: 60, wins: 3 },
-                        BoardRow { name: "Bryn".into(), guild_name: Some("Guild B".into()), score: 20, wins: 1 },
+                        BoardRow {
+                            name: "Aran".into(),
+                            guild_name: Some("Guild A".into()),
+                            score: 60,
+                            wins: 3
+                        },
+                        BoardRow {
+                            name: "Bryn".into(),
+                            guild_name: Some("Guild B".into()),
+                            score: 20,
+                            wins: 1
+                        },
                     ]
                 );
             }
@@ -6739,8 +7176,15 @@ mod tests {
                 let mut c = db!();
                 let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
                 let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
-                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn (Test)","pvpTrophies":900}"#, alt_a)
-                    .await;
+                parked_version(
+                    &mut c,
+                    cid,
+                    uid,
+                    alt_b,
+                    r#"{"name":"Bryn (Test)","pvpTrophies":900}"#,
+                    alt_a,
+                )
+                .await;
                 sql(&mut c, &format!(
                     "UPDATE characters SET character = '{{\"name\":\"Aran\",\"pvpTrophies\":60}}' \
                        WHERE id = '{cid}'; \
@@ -6769,7 +7213,11 @@ mod tests {
                     "INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ('{alt_b}', '{uid}', 't')"
                 ))
                 .await;
-                assert_eq!(board(&mut c).await, ["Aran"], "the saved test alt is off the board");
+                assert_eq!(
+                    board(&mut c).await,
+                    ["Aran"],
+                    "the saved test alt is off the board"
+                );
 
                 // Live: switch the test alt in.
                 sql(&mut c, &format!(
@@ -6777,7 +7225,10 @@ mod tests {
                          character = '{{\"name\":\"Bryn (Test)\",\"pvpTrophies\":900}}' WHERE id = '{cid}'"
                 ))
                 .await;
-                assert!(board(&mut c).await.is_empty(), "the live test alt is off the board");
+                assert!(
+                    board(&mut c).await.is_empty(),
+                    "the live test alt is off the board"
+                );
             }
 
             /// …and has no season standing: no placing, no award, no guild share.
@@ -6792,7 +7243,15 @@ mod tests {
                          VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 1)"
                 ))
                 .await;
-                parked_version(&mut c, cid, uid, alt_b, r#"{"name":"Bryn (Test)","level":90}"#, alt_a).await;
+                parked_version(
+                    &mut c,
+                    cid,
+                    uid,
+                    alt_b,
+                    r#"{"name":"Bryn (Test)","level":90}"#,
+                    alt_a,
+                )
+                .await;
                 sql(&mut c, &format!(
                     "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
                          VALUES ('ga', '{uid}', '{cid}', 'MEMBER', 2)"
@@ -6816,7 +7275,10 @@ mod tests {
                 assert_eq!(standings[0].rank, 1, "the real alt moves up into first");
                 let guilds = season_store::guild_standings_from(s.id, &standings);
                 assert_eq!(
-                    guilds.iter().map(|g| g.guild_id.as_str()).collect::<Vec<_>>(),
+                    guilds
+                        .iter()
+                        .map(|g| g.guild_id.as_str())
+                        .collect::<Vec<_>>(),
                     ["ga"],
                     "the test alt's guild gets no share"
                 );
@@ -6829,8 +7291,12 @@ mod tests {
             #[tokio::test]
             async fn the_migration_backfills_which_alt_played_each_match() {
                 let mut c = db!();
-                let (alt_a, alt_b, alt_live, other) =
-                    (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+                let (alt_a, alt_b, alt_live, other) = (
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                );
                 let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_live)).await;
                 let (lone, _) = seed_character_on_alt(&mut c, "Solo", 5, 0, Some(other)).await;
                 let version = |alt: &str, at: i64| {
@@ -6841,22 +7307,34 @@ mod tests {
                         Uuid::new_v4()
                     )
                 };
-                sql(&mut c, &format!(
-                    "{}{}{}",
-                    version(&format!("'{alt_a}'"), 1_000),
-                    version(&format!("'{alt_b}'"), 2_000),
-                    version("NULL", 3_000)
-                ))
+                sql(
+                    &mut c,
+                    &format!(
+                        "{}{}{}",
+                        version(&format!("'{alt_a}'"), 1_000),
+                        version(&format!("'{alt_b}'"), 2_000),
+                        version("NULL", 3_000)
+                    ),
+                )
                 .await;
                 let pre_stamped = Uuid::new_v4();
-                for (at, alt) in [(500, None), (600, Some(pre_stamped)), (1_500, None), (2_500, None), (3_500, None)] {
+                for (at, alt) in [
+                    (500, None),
+                    (600, Some(pre_stamped)),
+                    (1_500, None),
+                    (2_500, None),
+                    (3_500, None),
+                ] {
                     result(&mut c, cid, alt, at, 1).await;
                 }
                 result(&mut c, lone, None, 500, 1).await;
 
-                sql(&mut c, include_str!(
-                    "../../migrations/2026-10-10-000000-0000_alts_own_arena_history/up.sql"
-                ))
+                sql(
+                    &mut c,
+                    include_str!(
+                        "../../migrations/2026-10-10-000000-0000_alts_own_arena_history/up.sql"
+                    ),
+                )
                 .await;
 
                 #[derive(diesel::QueryableByName)]
@@ -6876,15 +7354,24 @@ mod tests {
                 .collect();
                 assert_eq!(
                     stamps,
-                    vec![Some(alt_a), Some(pre_stamped), Some(alt_b), None, Some(alt_live)],
+                    vec![
+                        Some(alt_a),
+                        Some(pre_stamped),
+                        Some(alt_b),
+                        None,
+                        Some(alt_live)
+                    ],
                     "A before its snapshot, B before its, unknown under an unlabelled \
                      snapshot, the live alt after the last; an existing stamp is kept"
                 );
                 assert_eq!(
-                    n(&mut c, &format!(
-                        "SELECT count(*) AS n FROM arena_match_results \
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM arena_match_results \
                           WHERE character_id = '{lone}' AND source_alt_uuid IS NULL"
-                    ))
+                        )
+                    )
                     .await,
                     1,
                     "a character never snapshotted is left alone"
@@ -7048,7 +7535,9 @@ mod tests {
                 match fixture().await {
                     Some(c) => c,
                     None => {
-                        eprintln!("SKIP: TEST_DATABASE_URL unset — device-claim guard NOT verified");
+                        eprintln!(
+                            "SKIP: TEST_DATABASE_URL unset — device-claim guard NOT verified"
+                        );
                         return;
                     }
                 }
@@ -7063,12 +7552,18 @@ mod tests {
         async fn claiming_an_unclaimed_device_works() {
             let mut c = db!();
             let (alice, _bob) = two_users(&mut c).await;
-            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('10.9.0.5', NULL)")
-                .execute(&mut c)
-                .await
-                .unwrap();
+            diesel::sql_query(
+                "INSERT INTO device_bindings (device_id, user_id) VALUES ('10.9.0.5', NULL)",
+            )
+            .execute(&mut c)
+            .await
+            .unwrap();
 
-            assert_eq!(bind(&mut c, "10.9.0.5", alice).await, 1, "an unclaimed device must be claimable");
+            assert_eq!(
+                bind(&mut c, "10.9.0.5", alice).await,
+                1,
+                "an unclaimed device must be claimable"
+            );
             assert_eq!(owner_of(&mut c, "10.9.0.5").await, Some(alice));
         }
 
@@ -7078,7 +7573,11 @@ mod tests {
             let mut c = db!();
             let (alice, _bob) = two_users(&mut c).await;
 
-            assert_eq!(bind(&mut c, "10.9.0.77", alice).await, 1, "a first-seen device must bind");
+            assert_eq!(
+                bind(&mut c, "10.9.0.77", alice).await,
+                1,
+                "a first-seen device must bind"
+            );
             assert_eq!(owner_of(&mut c, "10.9.0.77").await, Some(alice));
         }
 
@@ -7134,7 +7633,11 @@ mod tests {
             bind(&mut c, "10.9.0.5", bob).await;
 
             assert_eq!(bind(&mut c, "10.9.0.5", alice).await, 0);
-            assert_eq!(bind(&mut c, "10.9.0.6", alice).await, 1, "a free device must still bind");
+            assert_eq!(
+                bind(&mut c, "10.9.0.6", alice).await,
+                1,
+                "a free device must still bind"
+            );
             assert_eq!(owner_of(&mut c, "10.9.0.6").await, Some(alice));
         }
 
@@ -7152,7 +7655,12 @@ mod tests {
             // A stable-hash deviceId — the shape rule 1 in the web layer
             // cannot attribute, which is why the ten production rows got past
             // the first fix.
-            seen_on(&mut c, "7d46ac1bf926f22120c2ce82fb834052", Some("10.99.0.37")).await;
+            seen_on(
+                &mut c,
+                "7d46ac1bf926f22120c2ce82fb834052",
+                Some("10.99.0.37"),
+            )
+            .await;
 
             assert_eq!(
                 bind_with(
@@ -7178,7 +7686,12 @@ mod tests {
         async fn claiming_an_unclaimed_device_seen_on_your_own_tunnel_works() {
             let mut c = db!();
             let (alice, _bob) = two_users(&mut c).await;
-            seen_on(&mut c, "7d46ac1bf926f22120c2ce82fb834052", Some("10.99.0.24")).await;
+            seen_on(
+                &mut c,
+                "7d46ac1bf926f22120c2ce82fb834052",
+                Some("10.99.0.24"),
+            )
+            .await;
 
             assert_eq!(
                 bind_with(
@@ -7224,7 +7737,13 @@ mod tests {
             let (alice, _bob) = two_users(&mut c).await;
             seen_on(&mut c, "alices-device", Some("10.99.0.24")).await;
             assert_eq!(
-                bind_with(&mut c, "alices-device", alice, Some(vec!["10.99.0.24".into()])).await,
+                bind_with(
+                    &mut c,
+                    "alices-device",
+                    alice,
+                    Some(vec!["10.99.0.24".into()])
+                )
+                .await,
                 1
             );
 
@@ -7304,10 +7823,12 @@ mod tests {
         async fn the_list_shows_unclaimed_and_own_devices() {
             let mut c = db!();
             let (alice, bob) = two_users(&mut c).await;
-            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('10.9.0.free', NULL)")
-                .execute(&mut c)
-                .await
-                .unwrap();
+            diesel::sql_query(
+                "INSERT INTO device_bindings (device_id, user_id) VALUES ('10.9.0.free', NULL)",
+            )
+            .execute(&mut c)
+            .await
+            .unwrap();
             bind(&mut c, "10.9.0.alice", alice).await;
             bind(&mut c, "10.9.0.bob", bob).await;
 
@@ -7329,10 +7850,12 @@ mod tests {
         async fn an_anonymous_list_leaks_nothing() {
             let mut c = db!();
             let (alice, bob) = two_users(&mut c).await;
-            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ('10.9.0.free', NULL)")
-                .execute(&mut c)
-                .await
-                .unwrap();
+            diesel::sql_query(
+                "INSERT INTO device_bindings (device_id, user_id) VALUES ('10.9.0.free', NULL)",
+            )
+            .execute(&mut c)
+            .await
+            .unwrap();
             bind(&mut c, "10.9.0.alice", alice).await;
             bind(&mut c, "10.9.0.bob", bob).await;
 
@@ -7580,12 +8103,16 @@ mod seasons_are_what_the_database_says {
             body.contains("only_idle_this_season"),
             "the scope must exist"
         );
-        assert!(body.contains("arena_match_results"), "it must count real matches");
+        assert!(
+            body.contains("arena_match_results"),
+            "it must count real matches"
+        );
         // BOTH bounds, on `recorded_at`. Binding the window and then not comparing
         // against it counts a character's whole history, which would skip anyone
         // who ever played — including every player this repair exists for.
         assert!(
-            body.contains("recorded_at >= to_timestamp(") && body.contains("recorded_at < to_timestamp("),
+            body.contains("recorded_at >= to_timestamp(")
+                && body.contains("recorded_at < to_timestamp("),
             "\"played this season\" must be bounded on recorded_at at both ends, \
              not measured over all time"
         );
@@ -7841,11 +8368,10 @@ pub async fn list_character_versions(
         .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 4))?;
 
     use crate::schema::character_versions::dsl as cv;
-    let mut conn = app_state
-        .db_pool
-        .get()
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
 
     let rows: Vec<(Uuid, Uuid, Option<Uuid>, String, i32, String, i64)> = cv::character_versions
         .filter(cv::user_id.eq(user_id))
@@ -7908,11 +8434,10 @@ pub async fn restore_character_version(
     check_import_token(&app_state, &req)?;
     let version_id = path.into_inner();
 
-    let mut conn = app_state
-        .db_pool
-        .get()
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
 
     conn.transaction(move |mut conn| {
         async move { apply_restore(&mut conn, version_id).await }.scope_boxed()
@@ -7992,9 +8517,7 @@ pub(crate) async fn apply_restore(
         park_alt_rows,
     )
     .await
-        .map_err(|_| {
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-        })?;
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
 
     diesel::update(ch::characters.filter(ch::id.eq(character_id)))
         .set((
@@ -8013,17 +8536,23 @@ pub(crate) async fn apply_restore(
         .await
         .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
     if let Some(parked) = parked {
-        unpark_quests(conn, character_id, parked).await.map_err(|_| {
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-        })?;
-        unpark_events(conn, character_id, parked_events).await.map_err(|_| {
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-        })?;
+        unpark_quests(conn, character_id, parked)
+            .await
+            .map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+            })?;
+        unpark_events(conn, character_id, parked_events)
+            .await
+            .map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+            })?;
     }
     if park_alt_rows {
-        unpark_alt_rows(conn, character_id, user_id, parked_rows).await.map_err(|_| {
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-        })?;
+        unpark_alt_rows(conn, character_id, user_id, parked_rows)
+            .await
+            .map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+            })?;
     }
 
     log::info!(
@@ -8135,11 +8664,10 @@ pub async fn list_alts(
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 4))?;
 
-    let mut conn = app_state
-        .db_pool
-        .get()
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
 
     use crate::schema::characters::dsl as ch;
     use crate::schema::device_bindings::dsl as db;
@@ -8229,11 +8757,10 @@ pub async fn switch_alt(
     check_import_token(&app_state, &req)?;
     let body = body.into_inner();
 
-    let mut conn = app_state
-        .db_pool
-        .get()
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
 
     conn.transaction(move |mut conn| {
         async move { apply_switch_alt(&mut conn, &body).await }.scope_boxed()
@@ -8282,25 +8809,32 @@ pub(crate) async fn apply_switch_alt(
     }
 
     // The newest kept version of the alt being switched TO.
-    let target: (Uuid, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value, Option<serde_json::Value>, serde_json::Value) =
-        cv::character_versions
-            .filter(cv::user_id.eq(body.user_id))
-            .filter(cv::source_alt_uuid.eq(body.alt_uuid))
-            .select((
-                cv::id,
-                cv::character,
-                cv::data,
-                cv::inventory,
-                cv::wallet,
-                cv::town,
-                cv::server_state,
-            ))
-            .order(cv::saved_at.desc())
-            .first(conn)
-            .await
-            // No version of that alt is not an error in the switch — it is a
-            // request to play a character this server has never been given.
-            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 6))?;
+    let target: (
+        Uuid,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        serde_json::Value,
+        Option<serde_json::Value>,
+        serde_json::Value,
+    ) = cv::character_versions
+        .filter(cv::user_id.eq(body.user_id))
+        .filter(cv::source_alt_uuid.eq(body.alt_uuid))
+        .select((
+            cv::id,
+            cv::character,
+            cv::data,
+            cv::inventory,
+            cv::wallet,
+            cv::town,
+            cv::server_state,
+        ))
+        .order(cv::saved_at.desc())
+        .first(conn)
+        .await
+        // No version of that alt is not an error in the switch — it is a
+        // request to play a character this server has never been given.
+        .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 6))?;
 
     // KEEP WHAT WE ARE LEAVING, before anything is overwritten. This is the
     // half the owner actually asked for: going back must find the alt as it was
@@ -8308,12 +8842,16 @@ pub(crate) async fn apply_switch_alt(
     //
     // Its quest rows go with it (see `park_quests_in_version`): they are the
     // outgoing alt's, and the alt arriving brings its own.
-    let left_behind_saved_as =
-        snapshot_character(conn, character_id, body.user_id, was_playing, "switch", true)
-            .await
-            .map_err(|_| {
-                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-            })?;
+    let left_behind_saved_as = snapshot_character(
+        conn,
+        character_id,
+        body.user_id,
+        was_playing,
+        "switch",
+        true,
+    )
+    .await
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
 
     let (restored_from, character, data, inventory, wallet, town, mut server_state) = target;
     let parked = take_parked_quests(&mut server_state);
@@ -8333,15 +8871,17 @@ pub(crate) async fn apply_switch_alt(
         .await
         .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
     if let Some(parked) = parked {
-        unpark_quests(conn, character_id, parked).await.map_err(|_| {
-            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-        })?;
+        unpark_quests(conn, character_id, parked)
+            .await
+            .map_err(|_| {
+                BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
+            })?;
     }
     // Independently of the quests: the outgoing alt's event rows were parked
     // with it above, so a version without parked events arrives with none.
-    unpark_events(conn, character_id, parked_events).await.map_err(|_| {
-        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8)
-    })?;
+    unpark_events(conn, character_id, parked_events)
+        .await
+        .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
     // Same rule for guild membership, donation requests and the per-character
     // ledgers: the outgoing alt took its own, the incoming one brings its own
     // or — for a version from before this — arrives with none.
@@ -8502,7 +9042,6 @@ async fn refuse_unless_new_alt(
     Ok(())
 }
 
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NewAltRequest {
@@ -8560,11 +9099,10 @@ pub async fn new_alt(
         .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 26))?;
     let appearance_cost = app_state.appearance_change_cost.clone();
 
-    let mut conn = app_state
-        .db_pool
-        .get()
-        .await
-        .map_err(|_| BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5))?;
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
 
     conn.transaction(move |mut conn| {
         async move { apply_new_alt(&mut conn, &body, &appearance_cost).await }.scope_boxed()
@@ -8721,7 +9259,8 @@ async fn apply_new_alt(
 
     // The creation allowance is already in the wallet; the ledger only records
     // it. In a savepoint, so a ledger problem cannot abort the creation.
-    if let Some((currency, amount)) = crate::character_data::parse_appearance_cost(appearance_cost) {
+    if let Some((currency, amount)) = crate::character_data::parse_appearance_cost(appearance_cost)
+    {
         let _ = conn
             .transaction::<_, diesel::result::Error, _>(|c| {
                 async move {

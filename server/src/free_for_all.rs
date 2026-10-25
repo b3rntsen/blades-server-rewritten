@@ -274,13 +274,13 @@ pub async fn publish_gifts(
     let ids: Vec<Uuid> = body.gifts.iter().map(|g| g.global_gift_id).collect();
 
     if let Some(empty) = first_empty_gift(&body.gifts) {
-        log::warn!(
-            "[gifts] refusing to publish {empty} with no items and no chests"
-        );
+        log::warn!("[gifts] refusing to publish {empty} with no items and no chests");
         return Err(bad(7, StatusCode::BAD_REQUEST));
     }
     if let Some(bad_gift) = first_invalid_enchant(&body.gifts) {
-        log::warn!("[gifts] refusing to publish {bad_gift}: arcane tier must be 1-2 and enchant tiers 1-10");
+        log::warn!(
+            "[gifts] refusing to publish {bad_gift}: arcane tier must be 1-2 and enchant tiers 1-10"
+        );
         return Err(bad(7, StatusCode::BAD_REQUEST));
     }
 
@@ -839,13 +839,18 @@ mod publish_tests {
         GiftPublishItem {
             global_gift_id: Uuid::new_v4(),
             items: (0..items)
-                .map(|_| serde_json::from_str::<GiftItem>(
-                    r#"{"itemTemplateId":"def810af-e9f5-4e23-9247-1edf391d82e1","quantity":1}"#,
-                ).expect("a GiftItem the wire shape parses"))
+                .map(|_| {
+                    serde_json::from_str::<GiftItem>(
+                        r#"{"itemTemplateId":"def810af-e9f5-4e23-9247-1edf391d82e1","quantity":1}"#,
+                    )
+                    .expect("a GiftItem the wire shape parses")
+                })
                 .collect(),
             chests: (0..chests)
-                .map(|_| serde_json::from_str::<GiftChest>(r#"{"rarity":3}"#)
-                    .expect("a GiftChest the wire shape parses"))
+                .map(|_| {
+                    serde_json::from_str::<GiftChest>(r#"{"rarity":3}"#)
+                        .expect("a GiftChest the wire shape parses")
+                })
                 .collect(),
             start_time: 0,
             end_time: 0,

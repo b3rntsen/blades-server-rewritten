@@ -15,7 +15,10 @@
 
 use arena_proto::{GameMessageId, NetDataWriter};
 
-use super::state::{ActiveSide, ActorAnimation, ActorStateType, DamageSource, DamageType, FlowState, MatchState, NetObjectType, NetRole, StatusEffectType};
+use super::state::{
+    ActiveSide, ActorAnimation, ActorStateType, DamageSource, DamageType, FlowState, MatchState,
+    NetObjectType, NetRole, StatusEffectType,
+};
 
 /// `NetTransportMessage.MAGIC_HEADER` — present on every message, both directions.
 pub const MARKER_S2C: u8 = 0xBE;
@@ -72,7 +75,10 @@ pub(crate) fn frame_for_test(body: Vec<u8>) -> Vec<u8> {
 /// match (s293 used 436, s506 used 119). Returns `None` for the synthetic
 /// [`FlowState`]s that have no wire string (`Connecting`/`Spawning`/`Finished`).
 pub fn flow_state(flow_controller_id: i32, state: FlowState) -> Option<Vec<u8>> {
-    Some(match_state_change_request(flow_controller_id, state.wire_name()?))
+    Some(match_state_change_request(
+        flow_controller_id,
+        state.wire_name()?,
+    ))
 }
 
 /// op79 `MatchStateChangeRequest` (carrier `0x36`) on the Control net object: the
@@ -427,11 +433,7 @@ pub fn stat_update(avatar_net_object_id: i32) -> Vec<u8> {
 /// *other* fighter was at zero on all three pools. That is the same propId 4/5 pair
 /// `receive_damage` and `player_channeling_state_change` already fill correctly, so
 /// this was the one emitter in the family that shipped a placeholder.
-pub fn player_stats_update(
-    avatar_net_object_id: i32,
-    packed: u64,
-    other_packed: u64,
-) -> Vec<u8> {
+pub fn player_stats_update(avatar_net_object_id: i32, packed: u64, other_packed: u64) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, avatar_net_object_id)
         .byte(1, super::state::NetObjectType::Avatar as u8)
@@ -470,7 +472,11 @@ pub fn player_welcome(player_net_object_id: i32, param: u8) -> Vec<u8> {
 /// A `CombatScreenInfo` (op55) — a lightweight per-net-object signal carrying
 /// only NetObjectInfo (no payload). Emitted for the relevant player/avatar
 /// objects as the combat screen comes up.
-pub fn combat_screen_info(net_object_id: i32, net_object_type: NetObjectType, role: NetRole) -> Vec<u8> {
+pub fn combat_screen_info(
+    net_object_id: i32,
+    net_object_type: NetObjectType,
+    role: NetRole,
+) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.net_object_info(net_object_id, net_object_type as u8, role as u8);
     frame(MSGTYPE_COMBAT_SCREEN, w.finish())
@@ -632,13 +638,19 @@ pub fn spawn_control(net_object_id: i32) -> Vec<u8> {
         .byte(2, NetRole::Autonomous as u8)
         .bool(control_prop::LAG_COMPENSATION, CONTROL_LAG_COMPENSATION)
         .float(control_prop::SERVER_HIT_TIME, CONTROL_SERVER_HIT_TIME)
-        .bool(control_prop::INSTANT_SHIELD_BLOCK, CONTROL_INSTANT_SHIELD_BLOCK)
+        .bool(
+            control_prop::INSTANT_SHIELD_BLOCK,
+            CONTROL_INSTANT_SHIELD_BLOCK,
+        )
         .bool(control_prop::COMBAT_DEBUG_INFO, CONTROL_COMBAT_DEBUG_INFO)
         .bool(control_prop::INPUT_MANAGER, CONTROL_INPUT_MANAGER)
         .bool(control_prop::STATE_PREDICTION, CONTROL_STATE_PREDICTION)
         .bool(control_prop::PAUSE_INROUND_TIME, CONTROL_PAUSE_TIME)
         .bool(control_prop::PAUSE_LOADOUT_TIME, CONTROL_PAUSE_TIME)
-        .bool(control_prop::PAUSE_OPPONENT_SHOWCASE_TIME, CONTROL_PAUSE_TIME);
+        .bool(
+            control_prop::PAUSE_OPPONENT_SHOWCASE_TIME,
+            CONTROL_PAUSE_TIME,
+        );
     frame(MSGTYPE_SPAWN, w.finish())
 }
 
@@ -733,17 +745,21 @@ pub fn receive_damage(
     components: &[(DamageType, f32)],
 ) -> Vec<u8> {
     let mut w = NetDataWriter::new();
-    w.net_object_info(damaged_net_object_id, damaged_net_object_type, NetRole::Authority as u8)
-        .byte(3, 50) // gameMessageId = ReceiveDamage (the real discriminator)
-        .ulong(4, damaged_packed_stats)
-        .ulong(5, other_packed_stats)
-        .byte(6, source as u8)
-        .byte(7, flags)
-        .float(8, total_damage)
-        .int16(9, combo)
-        .byte(10, active_side as u8)
-        .byte(11, most_resisted as u8)
-        .byte(12, components.len() as u8);
+    w.net_object_info(
+        damaged_net_object_id,
+        damaged_net_object_type,
+        NetRole::Authority as u8,
+    )
+    .byte(3, 50) // gameMessageId = ReceiveDamage (the real discriminator)
+    .ulong(4, damaged_packed_stats)
+    .ulong(5, other_packed_stats)
+    .byte(6, source as u8)
+    .byte(7, flags)
+    .float(8, total_damage)
+    .int16(9, combo)
+    .byte(10, active_side as u8)
+    .byte(11, most_resisted as u8)
+    .byte(12, components.len() as u8);
     for (k, (ty, val)) in components.iter().enumerate() {
         let base = 13 + 2 * k as u8;
         w.byte(base, *ty as u8).float(base + 1, *val);
@@ -929,7 +945,10 @@ pub fn player_channeling_state_change(
 /// 4 — the same pattern as op51 `ChangeCombatStatusEffectMessage$$Deserialize@0x1ce2c0c`,
 /// whose propId 4 is capture-proven. **No retail op83 frame is in the corpus**, so this
 /// layout is read from the binary, not byte-diffed.
-pub fn modify_ability_cooldowns(avatar_net_object_id: i32, cooldown_modification_secs: f32) -> Vec<u8> {
+pub fn modify_ability_cooldowns(
+    avatar_net_object_id: i32,
+    cooldown_modification_secs: f32,
+) -> Vec<u8> {
     let mut w = NetDataWriter::new();
     w.int(0, avatar_net_object_id)
         .byte(1, NetObjectType::Avatar as u8)
@@ -1249,12 +1268,19 @@ pub fn match_post_round_info(
     match_id: &str,
     is_match_ended: bool,
     /* MatchConceded (propId 14). Capture-proven to be genuinely set: 4 of the 375
-       captured op48 frames carry true. It was hardcoded false here, which the
-       corpus disproves. */
+    captured op48 frames carry true. It was hardcoded false here, which the
+    corpus disproves. */
     conceded: bool,
 ) -> Vec<u8> {
     let latest = round_results.last().map(|(w, l)| (w.as_str(), l.as_str()));
-    post_round_info(match_net_object_id, round_results, latest, match_id, is_match_ended, conceded)
+    post_round_info(
+        match_net_object_id,
+        round_results,
+        latest,
+        match_id,
+        is_match_ended,
+        conceded,
+    )
 }
 
 /// op48 for a REPLAYED double KO (AUTHORED; no retail capture has one): the round
@@ -1267,7 +1293,14 @@ pub fn match_post_tied_round_info(
     decided_results: &[(String, String)],
     match_id: &str,
 ) -> Vec<u8> {
-    post_round_info(match_net_object_id, decided_results, Some(("", "")), match_id, false, false)
+    post_round_info(
+        match_net_object_id,
+        decided_results,
+        Some(("", "")),
+        match_id,
+        false,
+        false,
+    )
 }
 
 fn post_round_info(
@@ -1409,7 +1442,10 @@ pub fn match_end_match(
     // order, with unused slots empty. Exactly op48's layout, which this message's
     // header mirrors.
     let slot = |i: usize| -> (&str, &str) {
-        round_results.get(i).map(|(w, l)| (w.as_str(), l.as_str())).unwrap_or(("", ""))
+        round_results
+            .get(i)
+            .map(|(w, l)| (w.as_str(), l.as_str()))
+            .unwrap_or(("", ""))
     };
     let (w1, l1) = slot(0);
     let (w2, l2) = slot(1);
@@ -1434,7 +1470,10 @@ pub fn match_end_match(
         .byte(15, 0)
         // p16 OpponentTrophyCount — this recipient's opponent's post-match trophies
         // (s506=757). Clamped into i32 range; real trophy counts never approach it.
-        .int(16, opponent_trophy_count.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+        .int(
+            16,
+            opponent_trophy_count.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        );
     frame(MSGTYPE_USERMESSAGE, w.finish())
 }
 
@@ -1588,7 +1627,7 @@ pub fn results_json(
     reward: &MatchEndReward,
     request_index: i64,
 ) -> String {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     // Start from the recipient's op54 character record, then project it down to the
     // compact character snapshot retail puts in op49. These seven progression and
@@ -1601,9 +1640,8 @@ pub fn results_json(
     // Keep this an explicit deny-list instead of an allow-list: the small scalar
     // character fields include card/menu state and have changed as more captured
     // behavior has been implemented.
-    let mut character: Value = serde_json::from_str(character_json).unwrap_or_else(|_| {
-        json!({ "id": recipient_char_uuid, "name": "" })
-    });
+    let mut character: Value = serde_json::from_str(character_json)
+        .unwrap_or_else(|_| json!({ "id": recipient_char_uuid, "name": "" }));
     if let Some(obj) = character.as_object_mut() {
         for profile_only_field in [
             "abilities",
@@ -1619,23 +1657,35 @@ pub fn results_json(
 
         obj.insert("id".into(), json!(recipient_char_uuid));
         obj.insert("pvpTrophies".into(), json!(reward.pvp_trophies));
-        obj.insert("matchmakingPvpTrophies".into(), json!(reward.matchmaking_pvp_trophies));
+        obj.insert(
+            "matchmakingPvpTrophies".into(),
+            json!(reward.matchmaking_pvp_trophies),
+        );
         // The rest of the post-match PvP block. Retail's card carries all of these
         // and the arena menu reads them straight back out of the snapshot, so
         // leaving them at their stale pre-match values made the chest meter and the
         // ladder position visibly rewind the moment the card appeared.
         obj.insert("pvpChestMeter".into(), json!(reward.pvp_chest_meter));
         obj.insert("pvpWinningStreak".into(), json!(reward.pvp_winning_streak));
-        obj.insert("numberPvpMatchPlayed".into(), json!(reward.number_pvp_match_played));
+        obj.insert(
+            "numberPvpMatchPlayed".into(),
+            json!(reward.number_pvp_match_played),
+        );
         obj.insert("experience".into(), json!(reward.character_experience));
-        obj.insert("highestArenaReached".into(), json!(reward.highest_arena_reached));
+        obj.insert(
+            "highestArenaReached".into(),
+            json!(reward.highest_arena_reached),
+        );
         obj.insert(
             "highestLevelArenaReached".into(),
             json!(reward.highest_level_arena_reached),
         );
         // challengeSeason.rank — create/overlay just the rank (the card reads it for the
         // rank delta); preserve any other season fields already present.
-        let mut season = obj.get("challengeSeason").cloned().unwrap_or_else(|| json!({}));
+        let mut season = obj
+            .get("challengeSeason")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         if let Some(s) = season.as_object_mut() {
             s.insert("rank".into(), json!(reward.challenge_rank));
         } else {
@@ -1645,8 +1695,8 @@ pub fn results_json(
     }
 
     // The inventory snapshot (the op54 equipped-items blob the menu re-syncs from).
-    let loadout: Value = serde_json::from_str::<Value>(equipped_items_json)
-        .unwrap_or_else(|_| json!({}));
+    let loadout: Value =
+        serde_json::from_str::<Value>(equipped_items_json).unwrap_or_else(|_| json!({}));
     let mut inventory = serde_json::Map::new();
     inventory.insert("backpackVersion".into(), json!(reward.backpack_version));
     inventory.insert("treasuryVersion".into(), json!(reward.treasury_version));
@@ -1663,7 +1713,10 @@ pub fn results_json(
         backpack.insert("items".into(), json!(backpack_items));
     }
     if !reward.inventory_stackable_items.is_empty() {
-        backpack.insert("stackableItems".into(), json!(reward.inventory_stackable_items));
+        backpack.insert(
+            "stackableItems".into(),
+            json!(reward.inventory_stackable_items),
+        );
     }
     if !backpack.is_empty() {
         inventory.insert("backpack".into(), Value::Object(backpack));
@@ -1683,7 +1736,8 @@ pub fn results_json(
     if reward.gems > 0 {
         currencies.insert(gems_currency.clone(), json!(reward.gems));
     }
-    let mut wallet = vec![json!({ "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold })];
+    let mut wallet =
+        vec![json!({ "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold })];
     if let Some(balance) = reward.wallet_gems {
         wallet.push(json!({ "currencyId": gems_currency, "balance": balance }));
     }
@@ -1996,9 +2050,7 @@ mod tests {
     #[test]
     fn spawn_control_matches_s616_capture() {
         let got = spawn_control(725);
-        let want: Vec<u8> = hex_bytes(
-            "BE320CF71F706765666666D50200003903000AD7233D01000000000000",
-        );
+        let want: Vec<u8> = hex_bytes("BE320CF71F706765666666D50200003903000AD7233D01000000000000");
         assert_eq!(got, want);
     }
 
@@ -2061,7 +2113,10 @@ mod tests {
         let f = spawn_control(560);
         assert_eq!(f[1], MSGTYPE_SPAWN, "carrier must be op50 SPAWN 0x32");
         let nd = arena_proto::parse_netdata(&f[2..]);
-        assert!(nd.ok && nd.consumed == f.len() - 2, "frame parses and consumes exactly");
+        assert!(
+            nd.ok && nd.consumed == f.len() - 2,
+            "frame parses and consumes exactly"
+        );
         assert_eq!(nd.int(1), Some(57), "prop1 = NetObjectType::Control");
         assert_eq!(nd.int(2), Some(3), "prop2 = NetRole::Autonomous");
         assert_eq!(nd.int(0), Some(560), "prop0 = the Control net-object id");
@@ -2119,7 +2174,11 @@ mod tests {
             p::PAUSE_LOADOUT_TIME,
             p::PAUSE_OPPONENT_SHOWCASE_TIME,
         ];
-        assert_eq!(ids, [4, 5, 6, 7, 8, 9, 10, 11, 12], "ControlPropIds dump.cs:588076");
+        assert_eq!(
+            ids,
+            [4, 5, 6, 7, 8, 9, 10, 11, 12],
+            "ControlPropIds dump.cs:588076"
+        );
         let f = spawn_control(1);
         let nd = arena_proto::parse_netdata(&f[2..]);
         // 2.5 s never appears as a value: the server keeps BASE_STAGGER_DURATION_SECS
@@ -2127,7 +2186,8 @@ mod tests {
         for prop in 0..=12u8 {
             if let Some(arena_proto::NetDataValue::Float(v)) = nd.get(prop) {
                 assert_ne!(
-                    *v, super::super::state::BASE_STAGGER_DURATION_SECS,
+                    *v,
+                    super::super::state::BASE_STAGGER_DURATION_SECS,
                     "no Control prop may carry BASE_STAGGER_DURATION (propId {prop})"
                 );
             }
@@ -2172,7 +2232,8 @@ mod tests {
         let mut want = vec![
             0xBE, 0x32, // marker + SPAWN carrier (op50)
             0x09, 0xFF, 0x03, // maxPropId 9, bitmap {0..9}
-            0x70, 0x07, 0x77, 0x75, 0xA7, // type nibbles [Int,Byte,Byte,Int,Byte,Byte,Float,Byte,Byte,String]
+            0x70, 0x07, 0x77, 0x75,
+            0xA7, // type nibbles [Int,Byte,Byte,Int,Byte,Byte,Float,Byte,Byte,String]
             0x7B, 0x00, 0x00, 0x00, // p0 Int = 123 (Match obj)
             0x36, // p1 Byte = 54 (Match)
             0x02, // p2 Byte = 2 (Simulated)
@@ -2185,7 +2246,10 @@ mod tests {
             0x24, 0x00, // p9 String len = 36
         ];
         want.extend_from_slice(b"5b764e61-8851-4703-8fea-3d8e589ed24f");
-        assert_eq!(got, want, "Match spawn must byte-match s506 obj 123 (p5=WaitingForPlayers)");
+        assert_eq!(
+            got, want,
+            "Match spawn must byte-match s506 obj 123 (p5=WaitingForPlayers)"
+        );
     }
 
     /// Byte-for-byte vs s506 #3522339 — the Match net-object **property UPDATE** (op55,
@@ -2218,7 +2282,10 @@ mod tests {
             0x24, 0x00, // p9 String len = 36
         ];
         want.extend_from_slice(b"5b764e61-8851-4703-8fea-3d8e589ed24f");
-        assert_eq!(got, want, "Match update must byte-match s506 obj 123 (p5=InitialPlayerSetup)");
+        assert_eq!(
+            got, want,
+            "Match update must byte-match s506 obj 123 (p5=InitialPlayerSetup)"
+        );
     }
 
     /// Byte-for-byte vs s506 #3522332 (s2c op21 PlayerWelcome, player B): the
@@ -2279,25 +2346,53 @@ mod tests {
 
         // ch1: the per-player stat words.
         assert_eq!(retail_channel(&user_msg(65)), 1, "PlayerStatsUpdate → ch1");
-        assert_eq!(retail_channel(&stat_update(88)), 1, "stat_update (GMID 65) → ch1");
-        assert_eq!(retail_channel(&user_msg(75)), 1, "PlayerDestroyedStatUpdate → ch1");
+        assert_eq!(
+            retail_channel(&stat_update(88)),
+            1,
+            "stat_update (GMID 65) → ch1"
+        );
+        assert_eq!(
+            retail_channel(&user_msg(75)),
+            1,
+            "PlayerDestroyedStatUpdate → ch1"
+        );
 
         // ch6: combat input (c2s in retail; mapped for symmetry).
         assert_eq!(retail_channel(&user_msg(46)), 6);
         assert_eq!(retail_channel(&user_msg(47)), 6);
 
         // ch0: every other carrier-0x36 GMID + every non-0x36 carrier.
-        assert_eq!(retail_channel(&player_welcome(120, 21)), 0, "PlayerWelcome (GMID 21) → ch0");
+        assert_eq!(
+            retail_channel(&player_welcome(120, 21)),
+            0,
+            "PlayerWelcome (GMID 21) → ch0"
+        );
         assert_eq!(retail_channel(&user_msg(36)), 0, "PlayerLoadoutReady → ch0");
         assert_eq!(retail_channel(&user_msg(50)), 0, "ReceiveDamage → ch0");
-        assert_eq!(retail_channel(&user_msg(79)), 0, "MatchStateChangeRequest → ch0");
-        assert_eq!(retail_channel(&clock(0, 0)), 0, "op58 clock (carrier 0x3a) → ch0");
         assert_eq!(
-            retail_channel(&combat_screen_info(437, NetObjectType::Player, NetRole::Simulated)),
+            retail_channel(&user_msg(79)),
+            0,
+            "MatchStateChangeRequest → ch0"
+        );
+        assert_eq!(
+            retail_channel(&clock(0, 0)),
+            0,
+            "op58 clock (carrier 0x3a) → ch0"
+        );
+        assert_eq!(
+            retail_channel(&combat_screen_info(
+                437,
+                NetObjectType::Player,
+                NetRole::Simulated
+            )),
             0,
             "op55 CombatScreenInfo (carrier 0x37) → ch0"
         );
-        assert_eq!(retail_channel(&spawn_avatar(116, NetRole::Simulated, "x")), 0, "spawn (carrier 0x32) → ch0");
+        assert_eq!(
+            retail_channel(&spawn_avatar(116, NetRole::Simulated, "x")),
+            0,
+            "spawn (carrier 0x32) → ch0"
+        );
     }
 
     #[test]
@@ -2323,7 +2418,9 @@ mod tests {
         let got = combat_screen_info(437, NetObjectType::Player, NetRole::Simulated);
         assert_eq!(
             got,
-            &[0xBE, 0x37, 0x02, 0x07, 0x70, 0x07, 0xB5, 0x01, 0x00, 0x00, 0x37, 0x02]
+            &[
+                0xBE, 0x37, 0x02, 0x07, 0x70, 0x07, 0xB5, 0x01, 0x00, 0x00, 0x37, 0x02
+            ]
         );
     }
 
@@ -2359,11 +2456,19 @@ mod tests {
     /// op50 Avatar spawn is sparse (props 0,1,2,4 — no name). s486 net_obj 200.
     #[test]
     fn spawn_avatar_is_sparse() {
-        let got = spawn_avatar(200, NetRole::Autonomous, "bee74bea-1ab5-46c0-9eb5-f81e6e25ac05");
+        let got = spawn_avatar(
+            200,
+            NetRole::Autonomous,
+            "bee74bea-1ab5-46c0-9eb5-f81e6e25ac05",
+        );
         assert_eq!(&got[0..2], &[0xBE, 0x32], "marker + spawn carrier");
         assert_eq!(got[2], 0x04, "maxPropId = 4");
         assert_eq!(got[3], 0x17, "bitmap = props {{0,1,2,4}}");
-        assert_eq!(&got[4..6], &[0x70, 0xA7], "type nibbles [Int,Byte,Byte,String]");
+        assert_eq!(
+            &got[4..6],
+            &[0x70, 0xA7],
+            "type nibbles [Int,Byte,Byte,String]"
+        );
         assert!(got.ends_with(b"bee74bea-1ab5-46c0-9eb5-f81e6e25ac05"));
     }
 
@@ -2390,7 +2495,11 @@ mod tests {
             Some(&arena_proto::NetDataValue::Bool(false)),
             "p6 Bool must be false (retail s506), not true"
         );
-        assert_eq!(*got.last().unwrap(), 0x00, "final wire byte is the p6=false bool");
+        assert_eq!(
+            *got.last().unwrap(),
+            0x00,
+            "final wire byte is the p6=false bool"
+        );
     }
 
     /// Byte-for-byte vs session-293 frame 1956589 (s2c ReceiveDamage): an Attack
@@ -2465,7 +2574,10 @@ mod tests {
         want.extend_from_slice(b"BackendMatchCreated");
         assert_eq!(got, want);
         // flow_state delegates to it → identical bytes for the same trigger.
-        assert_eq!(flow_state(119, FlowState::BackendMatchCreated).unwrap(), got);
+        assert_eq!(
+            flow_state(119, FlowState::BackendMatchCreated).unwrap(),
+            got
+        );
     }
 
     /// Byte-for-byte vs s506 #3522389 (c2s MatchStateChangeAck, op80): same controller,
@@ -2534,10 +2646,24 @@ mod tests {
             Some(arena_proto::NetDataValue::Float(f)) => *f,
             other => panic!("propId 8 must be a Float, got {other:?}"),
         };
-        assert_eq!(ring.len(), ring[0] as usize + 3, "ring framing: len == count + 3");
-        assert_eq!(*ring.last().unwrap(), 3, "the ring must end in the state the frame reports");
+        assert_eq!(
+            ring.len(),
+            ring[0] as usize + 3,
+            "ring framing: len == count + 3"
+        );
+        assert_eq!(
+            *ring.last().unwrap(),
+            3,
+            "the ring must end in the state the frame reports"
+        );
 
-        let got = player_dead(562, 36_919_538_876_861, 2_485_988_961_403_535_805, &ring, time_in_prev);
+        let got = player_dead(
+            562,
+            36_919_538_876_861,
+            2_485_988_961_403_535_805,
+            &ring,
+            time_in_prev,
+        );
         assert_eq!(got, captured, "op29 must byte-match s616 frame 4410663");
     }
 
@@ -2563,7 +2689,11 @@ mod tests {
         assert_eq!(nd.int(1), Some(54), "p1 Match");
         assert_eq!(nd.int(2), Some(1), "p2 Authority");
         assert_eq!(nd.int(3), Some(48), "p3 gmid");
-        assert_eq!(nd.int(4), Some(3), "p4 is a CONSTANT 3 in every captured frame");
+        assert_eq!(
+            nd.int(4),
+            Some(3),
+            "p4 is a CONSTANT 3 in every captured frame"
+        );
         assert_eq!(nd.string(5), Some(a), "p5 round-1 winner");
         assert_eq!(nd.string(6), Some(b), "p6 round-1 loser");
         assert_eq!(nd.string(7), Some(""), "p7 round-2 slot still empty");
@@ -2573,7 +2703,11 @@ mod tests {
         assert_eq!(nd.int(11), Some(0), "p11 = completedRounds-1 = 0");
         assert_eq!(nd.string(12), Some(a), "p12 latest winner");
         assert_eq!(nd.string(13), Some(b), "p13 latest loser");
-        assert_eq!(nd.props.get(&15), Some(&arena_proto::NetDataValue::Bool(false)), "p15 not ended");
+        assert_eq!(
+            nd.props.get(&15),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "p15 not ended"
+        );
         assert_eq!(nd.string(16), Some(""), "p16 empty until the match ends");
         assert_eq!(nd.string(18), Some(mid), "p18 matchId");
 
@@ -2586,21 +2720,37 @@ mod tests {
         assert_eq!(nd2.string(8), Some(a), "round 2 loser in the second slot");
         assert_eq!(nd2.int(11), Some(1), "p11 = 1");
         assert_eq!(nd2.string(12), Some(b), "p12 tracks the LATEST round");
-        assert_eq!(nd2.props.get(&15), Some(&arena_proto::NetDataValue::Bool(false)));
+        assert_eq!(
+            nd2.props.get(&15),
+            Some(&arena_proto::NetDataValue::Bool(false))
+        );
 
         // ---- 2-0 sweep: ends at round 2 (the most common captured frame, ×271) ----
         let sweep = match_post_round_info(123, &[pair(a, b), pair(a, b)], mid, true, false);
         let nds = arena_proto::parse_netdata(&sweep[2..]);
         assert_eq!(nds.int(11), Some(1), "p11 = 1 for a two-round match");
-        assert_eq!(nds.props.get(&15), Some(&arena_proto::NetDataValue::Bool(true)), "p15 ended");
+        assert_eq!(
+            nds.props.get(&15),
+            Some(&arena_proto::NetDataValue::Bool(true)),
+            "p15 ended"
+        );
         assert_eq!(nds.string(16), Some(a), "p16 = overall winner once ended");
 
         // ---- went the distance: 3 rounds (captured ×53) ----
-        let full = match_post_round_info(123, &[pair(a, b), pair(b, a), pair(a, b)], mid, true, false);
+        let full =
+            match_post_round_info(123, &[pair(a, b), pair(b, a), pair(a, b)], mid, true, false);
         let ndl = arena_proto::parse_netdata(&full[2..]);
         assert_eq!(ndl.int(4), Some(3), "p4 constant 3");
-        assert_eq!(ndl.string(9), Some(a), "round 3 winner fills the third slot");
-        assert_eq!(ndl.string(10), Some(b), "round 3 loser fills the third slot");
+        assert_eq!(
+            ndl.string(9),
+            Some(a),
+            "round 3 winner fills the third slot"
+        );
+        assert_eq!(
+            ndl.string(10),
+            Some(b),
+            "round 3 loser fills the third slot"
+        );
         assert_eq!(ndl.int(11), Some(2), "p11 = 2 for a three-round match");
         assert_eq!(ndl.string(16), Some(a), "overall winner");
 
@@ -2620,7 +2770,11 @@ mod tests {
             "a conceded match must set MatchConceded"
         );
         assert_eq!(ndc.int(4), Some(3), "p4 still the constant 3");
-        assert_eq!(ndc.string(16), Some(a), "the non-conceding player is the winner");
+        assert_eq!(
+            ndc.string(16),
+            Some(a),
+            "the non-conceding player is the winner"
+        );
     }
 
     /// The carrier-`0x36` GameMessageId reader + the combat/non-combat split that
@@ -2635,16 +2789,25 @@ mod tests {
         };
         assert_eq!(user_message_gmid(&op61), Some(61));
         assert!(is_loadout_backend_synchronized(&op61));
-        assert!(is_noncombat_user_message(&op61), "op61 is handshake, not a swing");
+        assert!(
+            is_noncombat_user_message(&op61),
+            "op61 is handshake, not a swing"
+        );
 
         // op80 MatchStateChangeAck + op36 PlayerLoadoutReady are non-combat too.
-        assert!(is_noncombat_user_message(&match_state_change_ack(119, "StateTimeout")));
+        assert!(is_noncombat_user_message(&match_state_change_ack(
+            119,
+            "StateTimeout"
+        )));
         let op36 = {
             let mut w = NetDataWriter::new();
             w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 36);
             frame(MSGTYPE_USERMESSAGE, w.finish())
         };
-        assert!(is_noncombat_user_message(&op36), "PlayerLoadoutReady is handshake");
+        assert!(
+            is_noncombat_user_message(&op36),
+            "PlayerLoadoutReady is handshake"
+        );
 
         // A real combat swing/ability is NOT classified as non-combat.
         // op37 RequestExecuteAbility (real cast) — must fall through to resolution.
@@ -2653,7 +2816,10 @@ mod tests {
             0x24, 0x00,
         ];
         op37.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
-        assert!(!is_noncombat_user_message(&op37), "an ability cast is combat, not handshake");
+        assert!(
+            !is_noncombat_user_message(&op37),
+            "an ability cast is combat, not handshake"
+        );
         // A bare swipe body (no decodable propId 3) is NOT non-combat → resolves as a swing.
         assert_eq!(user_message_gmid(&[0x84, 0x36]), None);
         assert!(!is_noncombat_user_message(&[0x84, 0x36]));
@@ -2677,7 +2843,11 @@ mod tests {
         let nd = arena_proto::parse_netdata(&got[2..]);
         assert_eq!(nd.int(0), Some(565), "p0 emoter obj");
         assert_eq!(nd.int(1), Some(56), "p1 Avatar");
-        assert_eq!(nd.int(2), Some(3), "p2 Autonomous — retail never uses Authority here");
+        assert_eq!(
+            nd.int(2),
+            Some(3),
+            "p2 Autonomous — retail never uses Authority here"
+        );
         assert_eq!(nd.int(3), Some(72), "p3 must be PlayEmote(72), NOT 73");
         assert_eq!(nd.string(4), Some(emote_uuid), "p4 emoteId (a UUID)");
         assert_eq!(nd.int(5), None, "no stateId/extra prop — retail stops at 4");
@@ -2696,7 +2866,10 @@ mod tests {
         f.extend_from_slice(&hex_bytes(
             "041F70770A35020000380348240061363534633065382D626566322D346439652D383338342D363432613638656261303139",
         ));
-        assert!(is_play_emote(&f), "captured frame must classify as PlayEmote");
+        assert!(
+            is_play_emote(&f),
+            "captured frame must classify as PlayEmote"
+        );
         assert_eq!(
             play_emote_id(&f).as_deref(),
             Some("a654c0e8-bef2-4d9e-8384-642a68eba019"),
@@ -2760,7 +2933,11 @@ mod tests {
         // c2s PlayEmote (72): {0:obj · 1:55 · 2:role · 3:72 · 4:String id}.
         let emote = {
             let mut w = NetDataWriter::new();
-            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 72).string(4, "emote_wave");
+            w.int(0, 120)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 72)
+                .string(4, "emote_wave");
             let mut f = frame(MSGTYPE_USERMESSAGE, w.finish());
             f[0] = 0x84;
             f
@@ -2793,10 +2970,17 @@ mod tests {
     fn emote_is_noncombat() {
         let emote = {
             let mut w = NetDataWriter::new();
-            w.int(0, 120).byte(1, 55).byte(2, 3).byte(3, 72).string(4, "x");
+            w.int(0, 120)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 72)
+                .string(4, "x");
             frame(MSGTYPE_USERMESSAGE, w.finish())
         };
-        assert!(is_noncombat_user_message(&emote), "PlayEmote (72) is non-combat");
+        assert!(
+            is_noncombat_user_message(&emote),
+            "PlayEmote (72) is non-combat"
+        );
     }
 
     /// PerformExecuteAbility (38) is the request (37) with the marker, role, and
@@ -2813,7 +2997,11 @@ mod tests {
         assert_eq!(echo[0], 0xBE, "s2c marker");
         assert_eq!(echo[12], NetRole::Authority as u8, "role → Authority");
         assert_eq!(echo[13], 38, "gameMessageId → PerformExecuteAbility");
-        assert_eq!(&echo[16..], b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d", "UUID preserved");
+        assert_eq!(
+            &echo[16..],
+            b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d",
+            "UUID preserved"
+        );
         assert_eq!(echo.len(), req.len());
     }
 
@@ -2838,12 +3026,20 @@ mod tests {
         ];
         let got = match_end_match(123, &rounds, winner, loser, 3, rj, 757);
 
-        assert_eq!(&got[0..2], &[0xBE, 0x36], "carrier 0x36 (NOT 0xc2/0xc6 — that was a fragment-header misread)");
+        assert_eq!(
+            &got[0..2],
+            &[0xBE, 0x36],
+            "carrier 0x36 (NOT 0xc2/0xc6 — that was a fragment-header misread)"
+        );
         let nd = arena_proto::parse_netdata(&got[2..]);
         assert_eq!(nd.int(0), Some(123), "p0 Match obj id");
         assert_eq!(nd.int(1), Some(54), "p1 Match");
         assert_eq!(nd.int(2), Some(1), "p2 Authority");
-        assert_eq!(nd.int(3), Some(49), "p3 MatchEndMatchMsg gmid (op49 IS sent)");
+        assert_eq!(
+            nd.int(3),
+            Some(49),
+            "p3 MatchEndMatchMsg gmid (op49 IS sent)"
+        );
         assert_eq!(nd.int(4), Some(3), "p4 result code = 3");
         for p in [5, 7, 11] {
             assert_eq!(nd.string(p), Some(winner), "p{p} = winner char UUID");
@@ -2854,7 +3050,11 @@ mod tests {
         assert_eq!(nd.string(9), Some(""), "p9 empty");
         assert_eq!(nd.string(10), Some(""), "p10 empty");
         assert_eq!(nd.string(13), Some(rj), "p13 = the ResultsJSON");
-        assert_eq!(nd.props.get(&14), Some(&arena_proto::NetDataValue::Bool(false)), "p14 false");
+        assert_eq!(
+            nd.props.get(&14),
+            Some(&arena_proto::NetDataValue::Bool(false)),
+            "p14 false"
+        );
         assert_eq!(nd.int(15), Some(0), "p15 Byte 0");
         assert_eq!(
             nd.int(16),
@@ -2863,7 +3063,11 @@ mod tests {
         );
 
         // It routes on ENet ch4 (the big fragmented channel) like the op54 profile.
-        assert_eq!(retail_channel(&got), 4, "op49 → ch4 (fragmented, like op54)");
+        assert_eq!(
+            retail_channel(&got),
+            4,
+            "op49 → ch4 (fragmented, like op54)"
+        );
     }
 
     /// A 2-1 MATCH MUST REPORT WHO ACTUALLY WON EACH ROUND.
@@ -2922,9 +3126,17 @@ mod tests {
         assert_eq!(nd.string(5), Some(a));
         assert_eq!(nd.string(6), Some(b));
         for p in [7, 8, 9, 10] {
-            assert_eq!(nd.string(p), Some(""), "p{p} must be empty — round never played");
+            assert_eq!(
+                nd.string(p),
+                Some(""),
+                "p{p} must be empty — round never played"
+            );
         }
-        assert_eq!(nd.string(11), Some(a), "the match winner is still named at p11");
+        assert_eq!(
+            nd.string(11),
+            Some(a),
+            "the match winner is still named at p11"
+        );
     }
 
     /// The op49 `ResultsJSON` (propId 13) carries the victory-card fields the client
@@ -2944,7 +3156,13 @@ mod tests {
         };
         let char_json = r#"{"id":"old","name":"Flappety","level":86,"experience":291458}"#;
         let equipped = r#"{"equippedItems":{}}"#;
-        let out = results_json("38c987fd-c42b-4ea6-b869-c8d4c03055f9", char_json, equipped, &reward, 789104);
+        let out = results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            char_json,
+            equipped,
+            &reward,
+            789104,
+        );
         let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
 
         assert_eq!(v["characterId"], "38c987fd-c42b-4ea6-b869-c8d4c03055f9");
@@ -2981,7 +3199,13 @@ mod tests {
             wallet_gems: Some(1_206),
             ..Default::default()
         };
-        let out = results_json("38c987fd-c42b-4ea6-b869-c8d4c03055f9", "{}", "{}", &reward, 1);
+        let out = results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "{}",
+            "{}",
+            &reward,
+            1,
+        );
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["reward"]["currencies"][ARENA_GOLD_CURRENCY_UUID], 4047);
         assert_eq!(v["reward"]["currencies"][gems.as_str()], 6);
@@ -3132,7 +3356,13 @@ mod tests {
             }),
             ..Default::default()
         };
-        let out = results_json("aaaaaaaa-0000-0000-0000-000000000000", "{}", "{}", &reward, 1);
+        let out = results_json(
+            "aaaaaaaa-0000-0000-0000-000000000000",
+            "{}",
+            "{}",
+            &reward,
+            1,
+        );
         let v: serde_json::Value = serde_json::from_str(&out).expect("ResultsJSON must parse");
         assert_eq!(v["rewardNewLevelArena"]["chests"][0]["tier"], 3);
         assert_eq!(v["rewardNewLevelArena"]["chests"][0]["level"], 5);
@@ -3152,11 +3382,23 @@ mod tests {
     #[test]
     fn promotion_and_meter_chests_share_exact_ids_in_the_inventory_diff() {
         let promotion_chests = vec![
-            MatchEndChest { id: "2".into(), tier: 2, level: 8 },
-            MatchEndChest { id: "3".into(), tier: 2, level: 8 },
+            MatchEndChest {
+                id: "2".into(),
+                tier: 2,
+                level: 8,
+            },
+            MatchEndChest {
+                id: "3".into(),
+                tier: 2,
+                level: 8,
+            },
         ];
         let mut inventory_chests = promotion_chests.clone();
-        let meter_chest = MatchEndChest { id: "4".into(), tier: 3, level: 8 };
+        let meter_chest = MatchEndChest {
+            id: "4".into(),
+            tier: 3,
+            level: 8,
+        };
         inventory_chests.push(meter_chest.clone());
         let reward = MatchEndReward {
             reward_chests: vec![meter_chest],
@@ -3197,10 +3439,19 @@ mod tests {
             value["reward"]["chests"],
             serde_json::json!([{ "id": "4", "tier": 3, "level": 8 }])
         );
-        assert_eq!(value["rewardNewLevelArena"]["chests"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            value["rewardNewLevelArena"]["chests"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(value["inventory"]["backpackVersion"], 226);
         assert_eq!(value["inventory"]["treasuryVersion"], 30);
-        assert_eq!(value["inventory"]["backpack"]["stackableItems"][0]["count"], 17);
+        assert_eq!(
+            value["inventory"]["backpack"]["stackableItems"][0]["count"],
+            17
+        );
         assert_eq!(value["character"]["experience"], 456);
         assert_eq!(value["currentRequestIndex"], 91);
     }
@@ -3230,10 +3481,17 @@ mod tests {
         .unwrap();
         let items = &value["inventory"]["backpack"]["items"];
         assert_eq!(items[0]["id"], gauntlets.id.to_string());
-        assert_eq!(items[0]["itemTemplateId"], "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b");
+        assert_eq!(
+            items[0]["itemTemplateId"],
+            "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b"
+        );
         assert_eq!(items[0]["temperingLevel"], 0);
         assert_eq!(items[0]["durability"], 325.0);
-        assert!(value["inventory"]["backpack"].get("stackableItems").is_none());
+        assert!(
+            value["inventory"]["backpack"]
+                .get("stackableItems")
+                .is_none()
+        );
         // An ordinary match still sends no backpack block at all.
         let plain: serde_json::Value = serde_json::from_str(&results_json(
             "aaaaaaaa-0000-0000-0000-000000000000",
@@ -3251,7 +3509,11 @@ mod tests {
     /// and the omitted loadout/backpack items, so the shape is pinned to retail's.
     #[test]
     fn a_meter_only_card_matches_retail_s615() {
-        let chest = MatchEndChest { id: "47".into(), tier: 2, level: 86 };
+        let chest = MatchEndChest {
+            id: "47".into(),
+            tier: 2,
+            level: 86,
+        };
         let reward = MatchEndReward {
             gold: 12_999,
             character_xp: 499,
@@ -3304,7 +3566,10 @@ mod tests {
             serde_json::from_str(&results_json("a", "{}", "{}", &reward, 0)).unwrap();
         let shown = serde_json::to_value(&weapon).unwrap();
         assert_eq!(v["reward"]["items"], serde_json::json!([shown.clone()]));
-        assert_eq!(v["inventory"]["backpack"]["items"], serde_json::json!([shown]));
+        assert_eq!(
+            v["inventory"]["backpack"]["items"],
+            serde_json::json!([shown])
+        );
         assert_eq!(v["inventory"]["backpack"]["stackableItems"][0]["count"], 3);
 
         let plain: serde_json::Value = serde_json::from_str(&results_json(
@@ -3331,13 +3596,25 @@ mod tests {
         assert_eq!(nd.int(1), Some(56), "p1 Avatar");
         assert_eq!(nd.int(2), Some(1), "p2 Authority");
         assert_eq!(nd.int(3), Some(51), "p3 ChangeCombatStatusEffect gmid");
-        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::Bool(true)), "p4 apply=true");
+        assert_eq!(
+            nd.props.get(&4),
+            Some(&arena_proto::NetDataValue::Bool(true)),
+            "p4 apply=true"
+        );
         assert_eq!(nd.int(5), Some(7), "p5 StatusEffectType Poisoned(7)");
-        assert_eq!(nd.int(7), Some(0), "p7 statusSourceKind 0 (elemental condition)");
+        assert_eq!(
+            nd.int(7),
+            Some(0),
+            "p7 statusSourceKind 0 (elemental condition)"
+        );
 
         // A Paralyzed(3.1s) apply rides the same shape (status byte 9).
         let par = change_combat_status_effect(125, true, StatusEffectType::Paralyzed, 3.1);
-        assert_eq!(arena_proto::parse_netdata(&par[2..]).int(5), Some(9), "Paralyzed = StatusEffectType 9");
+        assert_eq!(
+            arena_proto::parse_netdata(&par[2..]).int(5),
+            Some(9),
+            "Paralyzed = StatusEffectType 9"
+        );
     }
 
     /// propId 7 is 0 for the four elemental conditions and 255 for everything
@@ -3392,7 +3669,10 @@ mod tests {
 07040000001c00044b253240240063666565306230322d366439312d346433342d383639632d613765353433323930363064";
 
     fn unhex(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     /// **Byte-differential**: rebuild three real captured op53 frames from their decoded
@@ -3442,15 +3722,13 @@ mod tests {
         ];
         for (i, c) in cases.iter().enumerate() {
             let want = unhex(c.hex);
-            let got = player_channeling_state_change(
-                c.obj,
-                c.caster,
-                c.opponent,
-                c.secs,
-                c.uuid,
-                c.blob,
+            let got =
+                player_channeling_state_change(c.obj, c.caster, c.opponent, c.secs, c.uuid, c.blob);
+            assert_eq!(
+                hex_of(&got),
+                hex_of(&want),
+                "op53 case {i} must be byte-identical to the capture"
             );
-            assert_eq!(hex_of(&got), hex_of(&want), "op53 case {i} must be byte-identical to the capture");
             // The retail carrier is the UserMessage one; op53 is NOT a 0x35 net-object update.
             assert_eq!(got[1], MSGTYPE_USERMESSAGE, "op53 rides carrier 0x36");
             assert_eq!(user_message_gmid(&got), Some(53), "gmid 53 at propId 3");
@@ -3494,7 +3772,10 @@ mod tests {
             other => panic!("op53 propId 7 must be a ByteArray, got {other:?}"),
         }
         // Control: the neighbouring fields are unchanged.
-        assert_eq!(nd.props.get(&8), Some(&arena_proto::NetDataValue::Float(0.9)));
+        assert_eq!(
+            nd.props.get(&8),
+            Some(&arena_proto::NetDataValue::Float(0.9))
+        );
         assert_eq!(nd.string(9), Some("d07a8d30-9a1c-49b0-866d-97a8aa1534cf"));
     }
 
@@ -3510,13 +3791,20 @@ mod tests {
         ];
         for (want, obj, secs) in cases {
             let got = modify_ability_cooldowns(obj, secs);
-            assert_eq!(hex_of(&got), want, "op83 must be byte-identical to the capture");
+            assert_eq!(
+                hex_of(&got),
+                want,
+                "op83 must be byte-identical to the capture"
+            );
             assert_eq!(user_message_gmid(&got), Some(83));
             assert_eq!(retail_channel(&got), 0);
         }
         // A refund is the same frame with a negative float.
         let nd = arena_proto::parse_netdata(&modify_ability_cooldowns(7, -1.25)[2..]);
-        assert_eq!(nd.props.get(&4), Some(&arena_proto::NetDataValue::Float(-1.25)));
+        assert_eq!(
+            nd.props.get(&4),
+            Some(&arena_proto::NetDataValue::Float(-1.25))
+        );
     }
 
     /// **Byte-differential**: op64 `PerformConsumeConsumable` vs the real prod frame
@@ -3528,7 +3816,11 @@ mod tests {
 64383236656131322d653538332d343763312d613530662d346465363038323831373335",
         );
         let got = perform_consume_consumable(571, "d826ea12-e583-47c1-a50f-4de608281735");
-        assert_eq!(hex_of(&got), hex_of(&want), "op64 must be byte-identical to the capture");
+        assert_eq!(
+            hex_of(&got),
+            hex_of(&want),
+            "op64 must be byte-identical to the capture"
+        );
         assert_eq!(user_message_gmid(&got), Some(64));
         assert_eq!(retail_channel(&got), 0, "op64 rides ENet channel 0");
     }
@@ -3579,14 +3871,20 @@ mod concede_wire_form_tests {
             GameMessageId::ConcedeMatch as u8,
             "byte 1 is the CARRIER, never the GameMessageId — the old check read this"
         );
-        assert!(is_concede_match(&f), "a real client concede must be recognised");
+        assert!(
+            is_concede_match(&f),
+            "a real client concede must be recognised"
+        );
     }
 
     /// The bare-carrier form stays accepted: the debug injector emits it and the
     /// cost is one comparison.
     #[test]
     fn the_bare_carrier_form_is_still_accepted() {
-        assert!(is_concede_match(&[MARKER_S2C, GameMessageId::ConcedeMatch as u8]));
+        assert!(is_concede_match(&[
+            MARKER_S2C,
+            GameMessageId::ConcedeMatch as u8
+        ]));
     }
 
     /// The control, and the one that matters most: the OTHER carrier-0x36 frames
@@ -3596,7 +3894,10 @@ mod concede_wire_form_tests {
     fn the_neighbouring_handshake_frames_are_not_concedes() {
         for (name, gmid) in [
             ("PlayerLoadoutReady", GameMessageId::PlayerLoadoutReady),
-            ("LoadoutClientBackendSynchronized", GameMessageId::LoadoutClientBackendSynchronized),
+            (
+                "LoadoutClientBackendSynchronized",
+                GameMessageId::LoadoutClientBackendSynchronized,
+            ),
             ("PlayerWelcome", GameMessageId::PlayerWelcome),
         ] {
             let mut w = NetDataWriter::new();

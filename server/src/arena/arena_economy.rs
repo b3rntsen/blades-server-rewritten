@@ -241,7 +241,11 @@ fn deliver_card_weapon(
     tracker: &mut InventoryChangeTracker,
 ) {
     // `apply_reward`'s item branch, without a wallet or character to touch.
-    inventory.backpack.items.0.insert(weapon.id, weapon.item.clone());
+    inventory
+        .backpack
+        .items
+        .0
+        .insert(weapon.id, weapon.item.clone());
     tracker.modified_backpack.items.insert(weapon.id);
 }
 
@@ -1125,7 +1129,10 @@ mod tests {
         let promo = arena_ladder::promotion_rewards(1990, 2010, 50);
         let mut reward = RewardGrant::default();
         let inv = empty_inventory();
-        assert_eq!(add_promotion_items(&mut reward, &promo, character, SEASON_1, &inv), 2);
+        assert_eq!(
+            add_promotion_items(&mut reward, &promo, character, SEASON_1, &inv),
+            2
+        );
         let templates = reward
             .items
             .iter()
@@ -1139,7 +1146,10 @@ mod tests {
             ]
         );
         for (granted, item) in reward.items.iter().zip(&promo.items) {
-            assert_eq!(granted.id, arena_ladder::promotion_item_id(character, SEASON_1, item));
+            assert_eq!(
+                granted.id,
+                arena_ladder::promotion_item_id(character, SEASON_1, item)
+            );
             assert_eq!(granted.item.tempering_level, 0);
         }
         assert!(promotion_needs_loot_marker(&promo));
@@ -1160,7 +1170,10 @@ mod tests {
 
         // Season 1: granted, then tempered + enchanted and equipped.
         let mut first = RewardGrant::default();
-        assert_eq!(add_promotion_items(&mut first, &promo, character, SEASON_1, &inv), 1);
+        assert_eq!(
+            add_promotion_items(&mut first, &promo, character, SEASON_1, &inv),
+            1
+        );
         let first_id = first.items[0].id;
         let mut tracker = InventoryChangeTracker::default();
         apply_reward(&first, &mut wallet, &mut inv, &mut ch, &mut tracker);
@@ -1169,18 +1182,28 @@ mod tests {
         let slot = Uuid::from_u128(0x5107);
         inv.loadout.equipped_items.0.insert(
             slot,
-            blades_lib::user_data::SingleEquippedItem { id: first_id, slot, item: owned },
+            blades_lib::user_data::SingleEquippedItem {
+                id: first_id,
+                slot,
+                item: owned,
+            },
         );
 
         // Same season again (a replayed write): nothing is re-granted.
         let mut replay = RewardGrant::default();
-        assert_eq!(add_promotion_items(&mut replay, &promo, character, SEASON_1, &inv), 0);
+        assert_eq!(
+            add_promotion_items(&mut replay, &promo, character, SEASON_1, &inv),
+            0
+        );
         assert!(replay.items.is_empty());
 
         // Season 2: a fresh instance; the equipped, tempered copy is untouched
         // and no id appears in both equippedItems and backpack.items.
         let mut second = RewardGrant::default();
-        assert_eq!(add_promotion_items(&mut second, &promo, character, SEASON_2, &inv), 1);
+        assert_eq!(
+            add_promotion_items(&mut second, &promo, character, SEASON_2, &inv),
+            1
+        );
         assert_ne!(second.items[0].id, first_id);
         apply_reward(&second, &mut wallet, &mut inv, &mut ch, &mut tracker);
         assert!(!inv.backpack.items.0.contains_key(&first_id));
@@ -1198,7 +1221,10 @@ mod tests {
 
         let mut reward = RewardGrant::default();
         let inv = empty_inventory();
-        assert_eq!(add_promotion_items(&mut reward, &promo, character, SEASON_1, &inv), 2);
+        assert_eq!(
+            add_promotion_items(&mut reward, &promo, character, SEASON_1, &inv),
+            2
+        );
 
         let owned = arena_ladder::owned_promotion_item_ids(character, SEASON_1, &inv);
         let off = arena_ladder::card_promotion_items(&promo, character, SEASON_1, &owned, false);
@@ -1234,12 +1260,24 @@ mod tests {
         let mut tracker = InventoryChangeTracker::default();
         deliver_card_weapon(&mut inv, &weapon, &mut tracker);
 
-        let held = inv.backpack.items.0.get(&weapon.id).expect("the weapon is in the backpack");
+        let held = inv
+            .backpack
+            .items
+            .0
+            .get(&weapon.id)
+            .expect("the weapon is in the backpack");
         let mut as_card = serde_json::to_value(&weapon).unwrap();
         as_card.as_object_mut().unwrap().remove("id");
-        assert_eq!(serde_json::to_value(held).unwrap(), as_card, "the card's instance, verbatim");
+        assert_eq!(
+            serde_json::to_value(held).unwrap(),
+            as_card,
+            "the card's instance, verbatim"
+        );
         assert!(tracker.modified_backpack.items.contains(&weapon.id));
-        assert_eq!(inv.backpack_version, 7, "the writer bumps once, alongside promotions");
+        assert_eq!(
+            inv.backpack_version, 7,
+            "the writer bumps once, alongside promotions"
+        );
     }
 
     #[test]
@@ -1248,7 +1286,10 @@ mod tests {
         let mut reward = RewardGrant::default();
         // Retail's 50, doubled by the owner-approved #390/#391 policy.
         assert_eq!(add_promotion_currencies(&mut reward, &promo), 100);
-        assert_eq!(reward.currencies.get(&blades_lib::economy::GEMS), Some(&100));
+        assert_eq!(
+            reward.currencies.get(&blades_lib::economy::GEMS),
+            Some(&100)
+        );
         assert!(
             promotion_needs_loot_marker(&promo),
             "gem-only arena promotions still need the durable per-threshold marker"
@@ -1297,14 +1338,21 @@ mod tests {
             let gems = match_gems(MatchFinish::of(win, false)) as i64;
             let reward = match_reward_grant(&plain_outcome(win, gems));
             assert_eq!(reward.currencies.get(&GEMS), Some(&expected));
-            assert_eq!(reward.currencies.get(&ARENA_GOLD_CURRENCY_UUID_PARSED), Some(&1_000));
+            assert_eq!(
+                reward.currencies.get(&ARENA_GOLD_CURRENCY_UUID_PARSED),
+                Some(&1_000)
+            );
 
             // `apply_reward` credits every `currencies` entry with exactly this call.
             let mut wallet = CompleteWallet::default();
             for (currency, amount) in &reward.currencies {
                 wallet.credit(*currency, *amount);
             }
-            assert_eq!(wallet.balance(GEMS), expected, "the wallet holds the match Gems");
+            assert_eq!(
+                wallet.balance(GEMS),
+                expected,
+                "the wallet holds the match Gems"
+            );
         }
         // CONTROL: an abandoned match grants no Gems at all, not a zero entry.
         let reward = match_reward_grant(&plain_outcome(false, 0));
@@ -1368,9 +1416,8 @@ mod tests {
 
     /// The rating tables as production has them after #373: the real migration.
     async fn apply_h2h_per_alt_migration(conn: &mut AsyncPgConnection) {
-        const UP: &str = include_str!(
-            "../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql"
-        );
+        const UP: &str =
+            include_str!("../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql");
         let sql: String = UP
             .lines()
             .filter(|l| !l.trim_start().starts_with("--"))
@@ -1526,21 +1573,33 @@ mod tests {
             .await
             .unwrap();
         let session = |n: u128| Uuid::from_u128(100 + n);
-        insert_match_audit(&mut conn, &h2h_outcome(cid, legacy, session(1), true), &applied(cid))
-            .await
-            .unwrap();
+        insert_match_audit(
+            &mut conn,
+            &h2h_outcome(cid, legacy, session(1), true),
+            &applied(cid),
+        )
+        .await
+        .unwrap();
         diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
             .bind::<diesel::sql_types::Uuid, _>(alt_b)
             .bind::<diesel::sql_types::Uuid, _>(cid)
             .execute(&mut conn)
             .await
             .unwrap();
-        insert_match_audit(&mut conn, &h2h_outcome(cid, legacy, session(2), false), &applied(cid))
-            .await
-            .unwrap();
-        insert_match_audit(&mut conn, &h2h_outcome(legacy, cid, session(3), true), &applied(legacy))
-            .await
-            .unwrap();
+        insert_match_audit(
+            &mut conn,
+            &h2h_outcome(cid, legacy, session(2), false),
+            &applied(cid),
+        )
+        .await
+        .unwrap();
+        insert_match_audit(
+            &mut conn,
+            &h2h_outcome(legacy, cid, session(3), true),
+            &applied(legacy),
+        )
+        .await
+        .unwrap();
 
         #[derive(diesel::QueryableByName, Debug, PartialEq)]
         struct Stamp {
@@ -1558,10 +1617,19 @@ mod tests {
         assert_eq!(
             stamps,
             vec![
-                Stamp { game_session_id: session(1), source_alt_uuid: Some(alt_a) },
-                Stamp { game_session_id: session(2), source_alt_uuid: Some(alt_b) },
+                Stamp {
+                    game_session_id: session(1),
+                    source_alt_uuid: Some(alt_a)
+                },
+                Stamp {
+                    game_session_id: session(2),
+                    source_alt_uuid: Some(alt_b)
+                },
                 // A character with no alt id stays unstamped: NULL reads as "live".
-                Stamp { game_session_id: session(3), source_alt_uuid: None },
+                Stamp {
+                    game_session_id: session(3),
+                    source_alt_uuid: None
+                },
             ]
         );
     }
@@ -1741,10 +1809,14 @@ mod tests {
             // Distinct times: Elo is order-dependent and the replay orders by time.
             let mut mine = h2h_outcome(me, opp, gs, true);
             mine.completed_at_secs += gsid as i64;
-            persist_h2h_audit_and_rating(conn, cfg, &mine, &applied(me), opp).await.unwrap();
+            persist_h2h_audit_and_rating(conn, cfg, &mine, &applied(me), opp)
+                .await
+                .unwrap();
             let mut theirs = h2h_outcome(opp, me, gs, false);
             theirs.completed_at_secs = mine.completed_at_secs;
-            persist_h2h_audit_and_rating(conn, cfg, &theirs, &applied(opp), me).await.unwrap();
+            persist_h2h_audit_and_rating(conn, cfg, &theirs, &applied(opp), me)
+                .await
+                .unwrap();
         }
         fight(&mut conn, &cfg, 100).await;
         diesel::sql_query("UPDATE characters SET source_alt_uuid = $1 WHERE id = $2")
@@ -1777,15 +1849,27 @@ mod tests {
         let live_all = rows(&mut conn, "arena_h2h_ratings").await;
         let live_season = rows(&mut conn, "arena_h2h_season_ratings").await;
         assert_eq!(
-            live_all.iter().map(|r| (r.character_id, r.alt_key, r.matches)).collect::<Vec<_>>(),
+            live_all
+                .iter()
+                .map(|r| (r.character_id, r.alt_key, r.matches))
+                .collect::<Vec<_>>(),
             vec![(me, alt_a, 1), (me, alt_b, 1), (opp, opp, 2)],
             "two alts, two rows; the opponent without an alt id is keyed by its own id"
         );
         assert_eq!(live_season.len(), 3);
 
-        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
-        assert_eq!(rows(&mut conn, "arena_h2h_ratings").await, live_all, "reconcile agrees");
-        assert_eq!(rows(&mut conn, "arena_h2h_season_ratings").await, live_season);
+        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows(&mut conn, "arena_h2h_ratings").await,
+            live_all,
+            "reconcile agrees"
+        );
+        assert_eq!(
+            rows(&mut conn, "arena_h2h_season_ratings").await,
+            live_season
+        );
     }
 
     /// The live increment skips a fight with an operator test alt
@@ -1801,27 +1885,33 @@ mod tests {
         let (me, opp) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let (real_alt, test_alt) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
         diesel::sql_query("INSERT INTO characters VALUES ($1, $2), ($3, NULL)")
-        .bind::<diesel::sql_types::Uuid, _>(me)
-        .bind::<diesel::sql_types::Uuid, _>(real_alt)
-        .bind::<diesel::sql_types::Uuid, _>(opp)
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        diesel::sql_query("INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ($1, $1, 't')")
-            .bind::<diesel::sql_types::Uuid, _>(test_alt)
+            .bind::<diesel::sql_types::Uuid, _>(me)
+            .bind::<diesel::sql_types::Uuid, _>(real_alt)
+            .bind::<diesel::sql_types::Uuid, _>(opp)
             .execute(&mut conn)
             .await
             .unwrap();
+        diesel::sql_query(
+            "INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ($1, $1, 't')",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(test_alt)
+        .execute(&mut conn)
+        .await
+        .unwrap();
 
         async fn fight(conn: &mut AsyncPgConnection, cfg: &ranking::H2hRatingConfig, gsid: u128) {
             let (me, opp) = (Uuid::from_u128(1), Uuid::from_u128(2));
             let gs = Uuid::from_u128(gsid);
             let mut mine = h2h_outcome(me, opp, gs, true);
             mine.completed_at_secs += gsid as i64;
-            persist_h2h_audit_and_rating(conn, cfg, &mine, &applied(me), opp).await.unwrap();
+            persist_h2h_audit_and_rating(conn, cfg, &mine, &applied(me), opp)
+                .await
+                .unwrap();
             let mut theirs = h2h_outcome(opp, me, gs, false);
             theirs.completed_at_secs = mine.completed_at_secs;
-            persist_h2h_audit_and_rating(conn, cfg, &theirs, &applied(opp), me).await.unwrap();
+            persist_h2h_audit_and_rating(conn, cfg, &theirs, &applied(opp), me)
+                .await
+                .unwrap();
         }
         #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
         struct Row {
@@ -1833,17 +1923,22 @@ mod tests {
             matches: i32,
         }
         async fn all_time(conn: &mut AsyncPgConnection) -> Vec<Row> {
-            diesel::sql_query("SELECT alt_key, rating, matches FROM arena_h2h_ratings ORDER BY alt_key")
-                .get_results(conn)
-                .await
-                .unwrap()
+            diesel::sql_query(
+                "SELECT alt_key, rating, matches FROM arena_h2h_ratings ORDER BY alt_key",
+            )
+            .get_results(conn)
+            .await
+            .unwrap()
         }
 
         // The control: the real alt's fight is rated.
         fight(&mut conn, &cfg, 100).await;
         let after_real = all_time(&mut conn).await;
         assert_eq!(
-            after_real.iter().map(|r| (r.alt_key, r.matches)).collect::<Vec<_>>(),
+            after_real
+                .iter()
+                .map(|r| (r.alt_key, r.matches))
+                .collect::<Vec<_>>(),
             vec![(opp, 1), (Uuid::from_u128(0xa), 1)]
         );
 
@@ -1855,10 +1950,16 @@ mod tests {
             .await
             .unwrap();
         fight(&mut conn, &cfg, 101).await;
-        assert_eq!(all_time(&mut conn).await, after_real, "no row for the test alt, opponent unmoved");
+        assert_eq!(
+            all_time(&mut conn).await,
+            after_real,
+            "no row for the test alt, opponent unmoved"
+        );
 
         // The fight is still in the audit (it happened), and the rebuild agrees.
-        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+        ranking::reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+            .await
+            .unwrap();
         assert_eq!(all_time(&mut conn).await, after_real, "reconcile agrees");
     }
 }

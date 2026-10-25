@@ -15,9 +15,9 @@
 /// `GAMEMESSAGE_IDS` frozenset exactly). Note the gaps: 25, 62, 67, 68, 69 are
 /// not assigned in this APK's enum.
 pub const GAME_MESSAGE_IDS: &[u8] = &[
-    20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43,
-    44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 63, 64, 65, 66, 70,
-    71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
+    20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+    45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 63, 64, 65, 66, 70, 71, 72,
+    73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
 ];
 
 /// True iff `b` is a defined `GameMessageId` — the "this is a real game message"
@@ -252,14 +252,23 @@ mod tests {
         assert_eq!(GAME_MESSAGE_IDS.len(), 59);
         // Spot-check the gaps are excluded.
         for gap in [25u8, 62, 67, 68, 69] {
-            assert!(!is_game_message_id(gap), "{gap} should not be a GameMessageId");
+            assert!(
+                !is_game_message_id(gap),
+                "{gap} should not be a GameMessageId"
+            );
         }
     }
 
     #[test]
     fn known_opcodes() {
-        assert_eq!(GameMessageId::from_u8(50), Some(GameMessageId::ReceiveDamage));
-        assert_eq!(GameMessageId::from_u8(49), Some(GameMessageId::MatchEndMatchMsg));
+        assert_eq!(
+            GameMessageId::from_u8(50),
+            Some(GameMessageId::ReceiveDamage)
+        );
+        assert_eq!(
+            GameMessageId::from_u8(49),
+            Some(GameMessageId::MatchEndMatchMsg)
+        );
         assert_eq!(GameMessageId::ReceiveDamage.as_u8(), 50);
         assert_eq!(GameMessageId::CombatLog.to_string(), "CombatLog");
     }

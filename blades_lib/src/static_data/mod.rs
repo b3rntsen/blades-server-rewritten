@@ -312,8 +312,12 @@ pub struct CountOddsRule {
 impl CountOddsRule {
     pub fn matches(&self, table: &SecondaryEnchantTable) -> bool {
         table.item_type == Some(self.item_type)
-            && self.weapon_type.is_none_or(|w| table.weapon_type == Some(w))
-            && self.equipment_slot.is_none_or(|s| table.equipment_slot == Some(s))
+            && self
+                .weapon_type
+                .is_none_or(|w| table.weapon_type == Some(w))
+            && self
+                .equipment_slot
+                .is_none_or(|s| table.equipment_slot == Some(s))
     }
 }
 
@@ -1417,7 +1421,9 @@ impl EventQuestTemplate {
     pub fn final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
         let mut out = self.retail_final_reward_for_level(real_level)?;
         // Its materials are drawn as the last milestone's (#388).
-        let milestones = self.band_for_level(real_level).map_or(self.rewards.len(), |b| b.rewards.len());
+        let milestones = self
+            .band_for_level(real_level)
+            .map_or(self.rewards.len(), |b| b.rewards.len());
         crate::features::beginner_economy::event_final_reward(
             &mut out,
             real_level,
@@ -1437,7 +1443,11 @@ impl EventQuestTemplate {
     pub fn band_for_level(&self, level: i64) -> Option<&EventLevelBand> {
         let level = crate::features::loot_level::effective_loot_level(level);
         let bands = || self.level_bands.iter().filter(|b| !b.rewards.is_empty());
-        let reached = if level >= EVENT_TOP_BAND_FROM_LEVEL { i64::MAX } else { level };
+        let reached = if level >= EVENT_TOP_BAND_FROM_LEVEL {
+            i64::MAX
+        } else {
+            level
+        };
         bands()
             .filter(|b| b.min_level <= reached)
             .max_by_key(|b| b.min_level)
@@ -1466,7 +1476,10 @@ impl EventQuestTemplate {
     /// material at `level`'s own step like the milestones'. From level 49 that is
     /// the level-100 character's (#398), its soul gems Grand at 49-60
     /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
-    fn retail_final_reward_for_level(&self, real_level: i64) -> Option<crate::economy::RewardGrant> {
+    fn retail_final_reward_for_level(
+        &self,
+        real_level: i64,
+    ) -> Option<crate::economy::RewardGrant> {
         let level = crate::features::loot_level::effective_loot_level(real_level);
         let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
@@ -1484,12 +1497,19 @@ impl EventQuestTemplate {
         let mut grants: Vec<&crate::economy::RewardGrant> = Vec::new();
         if final_slot {
             grants.extend(self.final_reward.iter());
-            grants.extend(self.level_bands.iter().filter_map(|b| b.final_reward.as_ref()));
+            grants.extend(
+                self.level_bands
+                    .iter()
+                    .filter_map(|b| b.final_reward.as_ref()),
+            );
         } else {
             grants.extend(self.rewards.iter());
             grants.extend(self.level_bands.iter().flat_map(|b| b.rewards.iter()));
         }
-        grants.iter().flat_map(|g| g.stackable_items.keys().copied()).collect()
+        grants
+            .iter()
+            .flat_map(|g| g.stackable_items.keys().copied())
+            .collect()
     }
 }
 

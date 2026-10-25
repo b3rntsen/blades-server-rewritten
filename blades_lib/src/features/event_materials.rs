@@ -73,7 +73,12 @@ pub fn ladders() -> &'static [MaterialLadder] {
     static TABLE: OnceLock<Vec<MaterialLadder>> = OnceLock::new();
     TABLE.get_or_init(|| {
         serde_json::from_str::<LadderFile>(LADDERS_RAW)
-            .map(|f| f.ladders.into_iter().filter(|l| !l.steps.is_empty()).collect())
+            .map(|f| {
+                f.ladders
+                    .into_iter()
+                    .filter(|l| !l.steps.is_empty())
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }
@@ -93,7 +98,11 @@ pub fn ladder_for(item: &Uuid, slot: &HashSet<Uuid>) -> Option<&'static Material
     let unique_hits = |l: &MaterialLadder| {
         slot.iter()
             .filter(|x| l.contains(x))
-            .filter(|x| !candidates.iter().any(|o| !std::ptr::eq(*o, l) && o.contains(x)))
+            .filter(|x| {
+                !candidates
+                    .iter()
+                    .any(|o| !std::ptr::eq(*o, l) && o.contains(x))
+            })
             .count()
     };
     let best = candidates.iter().map(|l| unique_hits(l)).max().unwrap_or(0);
@@ -103,7 +112,11 @@ pub fn ladder_for(item: &Uuid, slot: &HashSet<Uuid>) -> Option<&'static Material
 /// Swap every laddered material in `grant` for its step at `level`, keeping the
 /// quantity. Anything not on a ladder (currencies, lumber, limestone) is untouched.
 pub fn scale_to_level(grant: &mut RewardGrant, level: i64, slot: &HashSet<Uuid>) {
-    if !grant.stackable_items.keys().any(|id| ladder_for(id, slot).is_some()) {
+    if !grant
+        .stackable_items
+        .keys()
+        .any(|id| ladder_for(id, slot).is_some())
+    {
         return;
     }
     let mut out: HashMap<Uuid, u64> = HashMap::with_capacity(grant.stackable_items.len());
@@ -134,10 +147,18 @@ mod tests {
 
     #[test]
     fn the_compiled_in_ladders_parse() {
-        assert_eq!(ladders().len(), 6, "two metal lines, soul gems, potions, two gem lines");
+        assert_eq!(
+            ladders().len(),
+            6,
+            "two metal lines, soul gems, potions, two gem lines"
+        );
         for l in ladders() {
             let mins: Vec<i64> = l.steps.iter().map(|s| s.min_level).collect();
-            assert!(mins.windows(2).all(|w| w[0] < w[1]), "{}: steps must ascend {mins:?}", l.name);
+            assert!(
+                mins.windows(2).all(|w| w[0] < w[1]),
+                "{}: steps must ascend {mins:?}",
+                l.name
+            );
             assert_eq!(mins[0], 1, "{}: the first step covers level 1", l.name);
         }
     }
@@ -148,10 +169,20 @@ mod tests {
         let slot: HashSet<Uuid> = [id(DRAGON_BONES)].into();
         let line = ladder_for(&id(EBONY), &slot).expect("ebony is laddered");
         for (level, want) in [
-            (8, SILVER), (12, SILVER), (13, ORICHALCUM), (17, ORICHALCUM), (18, DWARVEN),
-            (22, DWARVEN), (23, QUICKSILVER), (32, "8ef9f10c-3c46-492c-9a00-29fd1626d85e"),
-            (33, EBONY), (38, EBONY), (39, DAEDRA_HEART), (44, DAEDRA_HEART),
-            (45, DRAGON_BONES), (100, DRAGON_BONES),
+            (8, SILVER),
+            (12, SILVER),
+            (13, ORICHALCUM),
+            (17, ORICHALCUM),
+            (18, DWARVEN),
+            (22, DWARVEN),
+            (23, QUICKSILVER),
+            (32, "8ef9f10c-3c46-492c-9a00-29fd1626d85e"),
+            (33, EBONY),
+            (38, EBONY),
+            (39, DAEDRA_HEART),
+            (44, DAEDRA_HEART),
+            (45, DRAGON_BONES),
+            (100, DRAGON_BONES),
         ] {
             assert_eq!(line.item_at(level), id(want), "level {level}");
         }
@@ -164,8 +195,14 @@ mod tests {
     fn a_shared_metal_follows_its_slot() {
         let bones: HashSet<Uuid> = [id(EBONY), id(DRAGON_BONES)].into();
         let scales: HashSet<Uuid> = [id(EBONY), id(DRAGON_SCALES)].into();
-        assert_eq!(ladder_for(&id(EBONY), &bones).unwrap().item_at(26), id(QUICKSILVER));
-        assert_eq!(ladder_for(&id(EBONY), &scales).unwrap().item_at(26), id(MOONSTONE));
+        assert_eq!(
+            ladder_for(&id(EBONY), &bones).unwrap().item_at(26),
+            id(QUICKSILVER)
+        );
+        assert_eq!(
+            ladder_for(&id(EBONY), &scales).unwrap().item_at(26),
+            id(MOONSTONE)
+        );
     }
 
     /// Report #370: Grand from 49 (HauDrauf; no capture at 49), Exceptional at the
@@ -185,7 +222,8 @@ mod tests {
         let mut g = RewardGrant::default();
         g.stackable_items.insert(id(EBONY), 96);
         g.stackable_items.insert(id(LUMBER), 372);
-        g.currencies.insert(id("c64bcb53-41f4-41ba-892a-fe2cca423caa"), 16);
+        g.currencies
+            .insert(id("c64bcb53-41f4-41ba-892a-fe2cca423caa"), 16);
         scale_to_level(&mut g, 17, &slot);
         assert_eq!(g.stackable_items.get(&id(ORICHALCUM)), Some(&96));
         assert_eq!(g.stackable_items.get(&id(LUMBER)), Some(&372));

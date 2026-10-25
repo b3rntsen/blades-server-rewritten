@@ -168,7 +168,7 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng};
 
     fn provided_bonuses(grade: u64) -> &'static [u64] {
         JEWELRY_GRADES.iter().find(|g| g.0 == grade).unwrap().2

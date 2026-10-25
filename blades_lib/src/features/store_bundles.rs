@@ -79,8 +79,9 @@ struct ObservedReward {
 fn corpus() -> &'static Corpus {
     static TABLE: std::sync::OnceLock<Corpus> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
-        serde_json::from_str(STORE_BUNDLE_LOOT_RAW)
-            .unwrap_or_else(|_| Corpus { products: Vec::new() })
+        serde_json::from_str(STORE_BUNDLE_LOOT_RAW).unwrap_or_else(|_| Corpus {
+            products: Vec::new(),
+        })
     })
 }
 
@@ -136,8 +137,7 @@ const STORE_CHEST_ALIASES: [(Uuid, Uuid); 3] = [
     ),
 ];
 
-const LEGENDARY_CHEST_PRODUCT_ID: Uuid =
-    Uuid::from_u128(0x1275d959_bbe5_460d_8f6a_1c31106a8eb2);
+const LEGENDARY_CHEST_PRODUCT_ID: Uuid = Uuid::from_u128(0x1275d959_bbe5_460d_8f6a_1c31106a8eb2);
 
 /// The Epic Chest (750 gems). The APK catalogue sells it as `chests: [{_rarity: 4}]`,
 /// i.e. `ChestRarity.Tier4`, the Elder Chest — so its corpus is the Elder corpus.
@@ -185,30 +185,150 @@ pub fn is_artifact(template: &Uuid) -> bool {
 /// or rings and 3 shields, of 17, 5 and 2 artifacts: the weights predict 10 /
 /// 13 / 4, a uniform pick 19 / 6 / 2.
 const ARTIFACT_LOOT: [(Uuid, u64, u64, f64); 24] = [
-    (Uuid::from_u128(0x4e841f5e_c5d7_47cd_899a_116846dbbfc0), 6, 2, 355.0), // Bloodthirst
-    (Uuid::from_u128(0x12c4920e_a9e0_4498_b134_3ce66fb9558f), 6, 9, 473.0), // Savior's Hide
-    (Uuid::from_u128(0xe86a6f9a_4e40_40d6_a9dd_1036b4190caa), 13, 2, 220.0), // Fork of Horripilation
-    (Uuid::from_u128(0x899b63a7_6eb7_4689_a450_8c6b507763c6), 13, 2, 585.0), // Guardian's Claymore
-    (Uuid::from_u128(0x05862206_b6db_4cd4_9f7a_ed2e03fc90af), 13, 9, 0.0), // Ring of Namira
-    (Uuid::from_u128(0x59c720fb_d761_4ad1_b14c_2aa8c1a4d554), 18, 2, 446.0), // Mace of Molag Bal
-    (Uuid::from_u128(0x6ab76008_dd08_461f_bdcc_6373799ea489), 18, 2, 446.0), // Rueful Axe
-    (Uuid::from_u128(0x86a4ad9d_e2e8_49cd_9642_b553475b6580), 18, 7, 405.0), // Pandemonium
-    (Uuid::from_u128(0xbe1484e6_c156_47db_bdab_3cf5b75096a0), 23, 2, 410.0), // Chrysamere
-    (Uuid::from_u128(0x4b59cdbe_f857_4673_9e40_741ca06aa5d0), 23, 2, 338.0), // Spellbane
-    (Uuid::from_u128(0x8a69bdb2_d179_4f2d_984a_322f9397aedf), 28, 2, 340.0), // Rimelink
-    (Uuid::from_u128(0xaf7759d9_f38e_4384_bf36_1de0c3d150a7), 28, 2, 453.0), // Volendrung
-    (Uuid::from_u128(0xdef810af_e9f5_4e23_9247_1edf391d82e1), 28, 9, 453.0), // Ebony Mail
-    (Uuid::from_u128(0x515450b1_ab21_4cbf_a8ed_c4e0e51df4c0), 33, 2, 496.0), // Dragon's Blight
-    (Uuid::from_u128(0x21f8b677_c1a9_4d5f_87ef_294fc6ba4ba5), 33, 2, 454.0), // Ebony Blade
-    (Uuid::from_u128(0xa0d7dd5e_692e_4fbb_bbf2_19c6a874f3f5), 33, 2, 248.0), // Mehrunes' Razor
-    (Uuid::from_u128(0xca1e2d0f_b902_4c82_b8d6_e82b83dcc9e0), 38, 2, 346.0), // Dawnbreaker
-    (Uuid::from_u128(0x9a22b59a_cdbc_4987_bf4a_0cc812428aeb), 38, 7, 462.0), // Spellbreaker
-    (Uuid::from_u128(0x7d2dfa88_e7ca_4fd6_a173_862cfb077c04), 44, 2, 537.0), // Stendarr's Hammer
-    (Uuid::from_u128(0x23607f09_a103_4ed3_a0de_33e0498f8018), 44, 9, 0.0), // Warlock's Ring
-    (Uuid::from_u128(0x9107fb63_f88b_45fa_bca9_7fe2f9bceb2c), 50, 2, 434.0), // Chillrend
-    (Uuid::from_u128(0x21ed2758_5cf5_4b7d_9047_59bbdbd61820), 50, 2, 626.0), // Onyx Cleaver
-    (Uuid::from_u128(0xda0cf5aa_6d37_48da_8b18_3f4e914145d3), 50, 2, 626.0), // Onyx Saber
-    (Uuid::from_u128(0x975509a9_196f_41c9_8df4_6f0e2d1f02ce), 50, 9, 497.0), // Lord's Mail
+    (
+        Uuid::from_u128(0x4e841f5e_c5d7_47cd_899a_116846dbbfc0),
+        6,
+        2,
+        355.0,
+    ), // Bloodthirst
+    (
+        Uuid::from_u128(0x12c4920e_a9e0_4498_b134_3ce66fb9558f),
+        6,
+        9,
+        473.0,
+    ), // Savior's Hide
+    (
+        Uuid::from_u128(0xe86a6f9a_4e40_40d6_a9dd_1036b4190caa),
+        13,
+        2,
+        220.0,
+    ), // Fork of Horripilation
+    (
+        Uuid::from_u128(0x899b63a7_6eb7_4689_a450_8c6b507763c6),
+        13,
+        2,
+        585.0,
+    ), // Guardian's Claymore
+    (
+        Uuid::from_u128(0x05862206_b6db_4cd4_9f7a_ed2e03fc90af),
+        13,
+        9,
+        0.0,
+    ), // Ring of Namira
+    (
+        Uuid::from_u128(0x59c720fb_d761_4ad1_b14c_2aa8c1a4d554),
+        18,
+        2,
+        446.0,
+    ), // Mace of Molag Bal
+    (
+        Uuid::from_u128(0x6ab76008_dd08_461f_bdcc_6373799ea489),
+        18,
+        2,
+        446.0,
+    ), // Rueful Axe
+    (
+        Uuid::from_u128(0x86a4ad9d_e2e8_49cd_9642_b553475b6580),
+        18,
+        7,
+        405.0,
+    ), // Pandemonium
+    (
+        Uuid::from_u128(0xbe1484e6_c156_47db_bdab_3cf5b75096a0),
+        23,
+        2,
+        410.0,
+    ), // Chrysamere
+    (
+        Uuid::from_u128(0x4b59cdbe_f857_4673_9e40_741ca06aa5d0),
+        23,
+        2,
+        338.0,
+    ), // Spellbane
+    (
+        Uuid::from_u128(0x8a69bdb2_d179_4f2d_984a_322f9397aedf),
+        28,
+        2,
+        340.0,
+    ), // Rimelink
+    (
+        Uuid::from_u128(0xaf7759d9_f38e_4384_bf36_1de0c3d150a7),
+        28,
+        2,
+        453.0,
+    ), // Volendrung
+    (
+        Uuid::from_u128(0xdef810af_e9f5_4e23_9247_1edf391d82e1),
+        28,
+        9,
+        453.0,
+    ), // Ebony Mail
+    (
+        Uuid::from_u128(0x515450b1_ab21_4cbf_a8ed_c4e0e51df4c0),
+        33,
+        2,
+        496.0,
+    ), // Dragon's Blight
+    (
+        Uuid::from_u128(0x21f8b677_c1a9_4d5f_87ef_294fc6ba4ba5),
+        33,
+        2,
+        454.0,
+    ), // Ebony Blade
+    (
+        Uuid::from_u128(0xa0d7dd5e_692e_4fbb_bbf2_19c6a874f3f5),
+        33,
+        2,
+        248.0,
+    ), // Mehrunes' Razor
+    (
+        Uuid::from_u128(0xca1e2d0f_b902_4c82_b8d6_e82b83dcc9e0),
+        38,
+        2,
+        346.0,
+    ), // Dawnbreaker
+    (
+        Uuid::from_u128(0x9a22b59a_cdbc_4987_bf4a_0cc812428aeb),
+        38,
+        7,
+        462.0,
+    ), // Spellbreaker
+    (
+        Uuid::from_u128(0x7d2dfa88_e7ca_4fd6_a173_862cfb077c04),
+        44,
+        2,
+        537.0,
+    ), // Stendarr's Hammer
+    (
+        Uuid::from_u128(0x23607f09_a103_4ed3_a0de_33e0498f8018),
+        44,
+        9,
+        0.0,
+    ), // Warlock's Ring
+    (
+        Uuid::from_u128(0x9107fb63_f88b_45fa_bca9_7fe2f9bceb2c),
+        50,
+        2,
+        434.0,
+    ), // Chillrend
+    (
+        Uuid::from_u128(0x21ed2758_5cf5_4b7d_9047_59bbdbd61820),
+        50,
+        2,
+        626.0,
+    ), // Onyx Cleaver
+    (
+        Uuid::from_u128(0xda0cf5aa_6d37_48da_8b18_3f4e914145d3),
+        50,
+        2,
+        626.0,
+    ), // Onyx Saber
+    (
+        Uuid::from_u128(0x975509a9_196f_41c9_8df4_6f0e2d1f02ce),
+        50,
+        9,
+        497.0,
+    ), // Lord's Mail
 ];
 
 /// How often a chest has its third, artifact slot: (chests with it, chests).
@@ -362,7 +482,11 @@ fn artifact_fallback_piece(level: u64, seed: u64) -> Option<Item> {
 /// The number of item slots every reward in the band has. Retail's chest paid
 /// that many regular pieces; a reward with more carries the artifact slot.
 fn core_slots(band: &Band) -> usize {
-    band.results.iter().map(|r| r.reward.items.len()).min().unwrap_or(0)
+    band.results
+        .iter()
+        .map(|r| r.reward.items.len())
+        .min()
+        .unwrap_or(0)
 }
 
 /// What retail paid in the artifact slot when it was NOT an artifact: one per
@@ -405,7 +529,9 @@ pub fn is_randomised_bundle(product_id: &Uuid) -> bool {
 
 /// How many retail purchases back this product, for tests and diagnostics.
 pub fn bundle_observations(product_id: &Uuid) -> u64 {
-    corpus_product(product_id).map(|p| p.observations).unwrap_or(0)
+    corpus_product(product_id)
+        .map(|p| p.observations)
+        .unwrap_or(0)
 }
 
 /// Roll one purchase of a randomised bundle for a buyer at `buyer_level`.
@@ -453,7 +579,10 @@ fn draw(band: &Band, seed: u64) -> Option<&Drawn> {
 /// containing the level, else in the nearest band that paid any.
 fn artifact_fallback(level: u64, seed: u64) -> Option<&'static Item> {
     let all = artifact_fallbacks();
-    let nearest = all.iter().map(|(lo, hi, _)| level_distance(level, *lo, *hi)).min()?;
+    let nearest = all
+        .iter()
+        .map(|(lo, hi, _)| level_distance(level, *lo, *hi))
+        .min()?;
     let candidates: Vec<&Item> = all
         .iter()
         .filter(|(lo, hi, _)| level_distance(level, *lo, *hi) == nearest)
@@ -572,7 +701,12 @@ fn legendary_slot_tier(
             let lower = slot0_ladder;
             // The tier below slot 1's on the whole ladder; slot 0 catches up only
             // to a tier it paid itself (it never did to Ebony, #368).
-            let prev = ladder.iter().copied().filter(|&t| t < t1).max().unwrap_or(t1);
+            let prev = ladder
+                .iter()
+                .copied()
+                .filter(|&t| t < t1)
+                .max()
+                .unwrap_or(t1);
             let ceiling = Some(&t1) == ladder.last();
             let caught_up = !ceiling && level >= t1 + CATCH_UP_LEVELS && lower.contains(&t1);
             let (usual, other) = if caught_up { (t1, prev) } else { (prev, t1) };
@@ -582,7 +716,10 @@ fn legendary_slot_tier(
                 Some(usual)
             }
         }
-        1 => match ladder.get(top_idx + 1).and_then(|&next| upper(next).map(|a| (next, a))) {
+        1 => match ladder
+            .get(top_idx + 1)
+            .and_then(|&next| upper(next).map(|a| (next, a)))
+        {
             Some((next, ahead))
                 if ahead > t1
                     && next.saturating_sub(level) <= LOOKAHEAD_LEVELS
@@ -626,7 +763,9 @@ fn tier_ladder(product: &Product) -> Vec<u64> {
         .iter()
         .flat_map(|b| {
             let core = core_slots(b);
-            b.results.iter().flat_map(move |r| r.reward.items.iter().take(core))
+            b.results
+                .iter()
+                .flat_map(move |r| r.reward.items.iter().take(core))
         })
         .filter_map(|i| required_level(&i.item_template_id))
         .collect();
@@ -676,7 +815,10 @@ fn legendary_slot_part(
     if candidates.is_empty() {
         return None;
     }
-    Some((candidates[(mix(seed) % candidates.len() as u64) as usize], tier))
+    Some((
+        candidates[(mix(seed) % candidates.len() as u64) as usize],
+        tier,
+    ))
 }
 
 /// What `product` paid in regular `slots` at material tier `tier`, from the bands
@@ -751,7 +893,10 @@ fn elder_slot_part(
     if candidates.is_empty() {
         return None;
     }
-    Some((candidates[(mix(seed) % candidates.len() as u64) as usize], tier))
+    Some((
+        candidates[(mix(seed) % candidates.len() as u64) as usize],
+        tier,
+    ))
 }
 
 /// The Legendary corpus's whole tier ladder and slot 0's own ladder.
@@ -952,7 +1097,9 @@ pub fn roll_bundle_with(
     let is_legendary = product.product_id == LEGENDARY_CHEST_CORPUS_ID;
     let is_elder = product.product_id == ELDER_CHEST_CORPUS_ID;
     let is_golden = product.product_id == GOLDEN_CHEST_CORPUS_ID;
-    let elder_treasury = treasury.and_then(|t| t.provisional_tiers.get(&4)).map(Vec::as_slice);
+    let elder_treasury = treasury
+        .and_then(|t| t.provisional_tiers.get(&4))
+        .map(Vec::as_slice);
 
     // THE GOLDEN CHEST FROM 49 (#421). The store's Golden Chest is the APK's
     // `_rarity: 3`: a Gold chest, sold. From 49 it is bought for a level-100
@@ -1200,22 +1347,22 @@ pub(crate) const SOUL_GEMS: [Uuid; 10] = [
 /// Transcendent first appears at 49.
 const CHEST_SOUL_GEM_LADDER: &[(u64, &[(usize, u64)])] = &[
     (1, &[]),
-    (13, &[(0, 1)]),            // Petty: 26 of 26
-    (15, &[(1, 1)]),            // Lesser 39, Petty 4
-    (18, &[(1, 27), (2, 13)]),  // Lesser 27, Middling 13
-    (20, &[(2, 1)]),            // Middling: 28 of 28
-    (22, &[(2, 35), (3, 11)]),  // Middling 35, Common 11
-    (26, &[(2, 3), (3, 19)]),   // Middling 3, Common 19
-    (27, &[(3, 61), (4, 22)]),  // Common 61, Exceptional 22
-    (33, &[(4, 17), (5, 8)]),   // band 29-35, Ebony top slot
+    (13, &[(0, 1)]),                  // Petty: 26 of 26
+    (15, &[(1, 1)]),                  // Lesser 39, Petty 4
+    (18, &[(1, 27), (2, 13)]),        // Lesser 27, Middling 13
+    (20, &[(2, 1)]),                  // Middling: 28 of 28
+    (22, &[(2, 35), (3, 11)]),        // Middling 35, Common 11
+    (26, &[(2, 3), (3, 19)]),         // Middling 3, Common 19
+    (27, &[(3, 61), (4, 22)]),        // Common 61, Exceptional 22
+    (33, &[(4, 17), (5, 8)]),         // band 29-35, Ebony top slot
     (36, &[(4, 12), (5, 6), (6, 4)]), // band 36-50, Glass+Ebony chests
-    (39, &[(5, 1), (6, 1)]),    // Sephoris; one retail chest: Greater
-    (43, &[(6, 2), (8, 1)]),    // Sephoris: Glorious the highest
+    (39, &[(5, 1), (6, 1)]),          // Sephoris; one retail chest: Greater
+    (43, &[(6, 2), (8, 1)]),          // Sephoris: Glorious the highest
     // Owner-approved deviation from retail, #388, 2026-10-16: the three best from
     // 45 (beginner_economy::TOP_SOUL_GEM_WEIGHTS). Sephoris had Elevated + Glorious
     // at 45-46 and Grand + Glorious at 47-48.
     (45, &[(7, 1), (8, 2), (9, 1)]),
-    (49, &[(8, 96), (9, 41)]),  // 54-89 band: Glorious 96, Transcendent 41
+    (49, &[(8, 96), (9, 41)]), // 54-89 band: Glorious 96, Transcendent 41
 ];
 
 /// The ladder step for `level`.
@@ -1314,7 +1461,9 @@ mod tests {
     }
 
     fn gold_of(g: &RewardGrant) -> u64 {
-        *g.currencies.get(&GOLD.parse::<Uuid>().unwrap()).unwrap_or(&0)
+        *g.currencies
+            .get(&GOLD.parse::<Uuid>().unwrap())
+            .unwrap_or(&0)
     }
 
     /// The corpus must be compiled in and hold what was mined. Everything below
@@ -1327,7 +1476,11 @@ mod tests {
         if let Err(e) = serde_json::from_str::<Corpus>(STORE_BUNDLE_LOOT_RAW) {
             panic!("the corpus failed to parse: {e}");
         }
-        assert_eq!(corpus().products.len(), 4, "four randomised bundles were mined");
+        assert_eq!(
+            corpus().products.len(),
+            4,
+            "four randomised bundles were mined"
+        );
         assert_eq!(bundle_observations(&big()), 4697, "the big bundle corpus");
         assert!(is_randomised_bundle(&big()));
         assert!(
@@ -1343,8 +1496,16 @@ mod tests {
     fn the_store_chests_at_full_price_roll_from_their_promo_corpus() {
         for (base, promo, observations) in [
             ("1275d959-bbe5-460d-8f6a-1c31106a8eb2", BIG, 4697),
-            ("7bf00a9c-6a08-4b55-a60d-53915baa38a3", "9e4dc391-422e-4b25-ba90-faab39e0769f", 405),
-            ("0e224ca0-1506-490f-884a-8871ffe6399b", "11b322d2-1b5e-4e90-bb41-a8d90ca9548b", 355),
+            (
+                "7bf00a9c-6a08-4b55-a60d-53915baa38a3",
+                "9e4dc391-422e-4b25-ba90-faab39e0769f",
+                405,
+            ),
+            (
+                "0e224ca0-1506-490f-884a-8871ffe6399b",
+                "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+                355,
+            ),
         ] {
             let base: Uuid = base.parse().unwrap();
             assert!(is_randomised_bundle(&base), "{base} must roll");
@@ -1355,12 +1516,22 @@ mod tests {
                 let g = roll_bundle(&base, 48, nonce).expect("a store chest must roll");
                 assert!(g.chests.is_empty(), "a bought chest is opened, not stored");
                 assert!(
-                    !g.currencies.is_empty() || !g.stackable_items.is_empty() || !g.items.is_empty(),
+                    !g.currencies.is_empty()
+                        || !g.stackable_items.is_empty()
+                        || !g.items.is_empty(),
                     "{base} rolled an empty chest"
                 );
-                seen.insert((gold_of(&g), g.stackable_items.values().sum::<u64>(), g.items.len()));
+                seen.insert((
+                    gold_of(&g),
+                    g.stackable_items.values().sum::<u64>(),
+                    g.items.len(),
+                ));
             }
-            assert!(seen.len() > 5, "{base}: 40 purchases gave {} distinct rewards", seen.len());
+            assert!(
+                seen.len() > 5,
+                "{base}: 40 purchases gave {} distinct rewards",
+                seen.len()
+            );
         }
     }
 
@@ -1399,8 +1570,14 @@ mod tests {
             "a level-3 buyer received a median {low} gold; retail paid about 9,700 there, \
              so the level bands are being ignored"
         );
-        assert!(high > 45_000, "a level-70 buyer received only {high}; retail paid about 60,000");
-        assert!(high > low * 3, "the payout barely moved with level: {low} -> {high}");
+        assert!(
+            high > 45_000,
+            "a level-70 buyer received only {high}; retail paid about 60,000"
+        );
+        assert!(
+            high > low * 3,
+            "the payout barely moved with level: {low} -> {high}"
+        );
     }
 
     /// Bands must be monotonic in level. A non-monotonic band was what exposed
@@ -1440,8 +1617,14 @@ mod tests {
             v.sort_unstable();
             v[v.len() / 2]
         };
-        assert!(roll_bundle(&big(), 0, 5).is_some(), "level 0 must still roll");
-        assert!(roll_bundle(&big(), 500, 5).is_some(), "level 500 must still roll");
+        assert!(
+            roll_bundle(&big(), 0, 5).is_some(),
+            "level 0 must still roll"
+        );
+        assert!(
+            roll_bundle(&big(), 500, 5).is_some(),
+            "level 500 must still roll"
+        );
 
         let below = median_at(0);
         let lowest = median_at(1);
@@ -1455,7 +1638,10 @@ mod tests {
             above.abs_diff(highest) * 4 < highest,
             "level 500 drew {above} against the highest band's {highest} — it did not clamp"
         );
-        assert!(below < above, "clamping must still respect the ends of the ladder");
+        assert!(
+            below < above,
+            "clamping must still respect the ends of the ladder"
+        );
     }
 
     /// Gear must come out as real items with a fresh instance id — the frozen
@@ -1554,7 +1740,11 @@ mod tests {
                 }
             }
             let distinct: HashSet<_> = artifacts.iter().collect();
-            assert_eq!(distinct.len(), artifacts.len(), "level {level}: {artifacts:?}");
+            assert_eq!(
+                distinct.len(),
+                artifacts.len(),
+                "level {level}: {artifacts:?}"
+            );
         }
     }
 
@@ -1578,8 +1768,15 @@ mod tests {
         let fresh = roll_bundle(&legendary(), 15, nonce).unwrap();
         let held = roll_bundle_for(&legendary(), 15, nonce, &HashSet::from([PANDEMONIUM])).unwrap();
 
-        assert_eq!(held.items.len(), fresh.items.len(), "the slot is replaced, not dropped");
-        assert_eq!(held.currencies, fresh.currencies, "only the artifact slot changes");
+        assert_eq!(
+            held.items.len(),
+            fresh.items.len(),
+            "the slot is replaced, not dropped"
+        );
+        assert_eq!(
+            held.currencies, fresh.currencies,
+            "only the artifact slot changes"
+        );
         assert_eq!(held.stackable_items, fresh.stackable_items);
         for (a, b) in fresh.items.iter().zip(&held.items) {
             if a.item.item_template_id == PANDEMONIUM {
@@ -1605,14 +1802,24 @@ mod tests {
         let product = corpus_product(&legendary()).unwrap();
         for band in &product.by_level {
             let level = band.min_buyer_level;
-            let golds: Vec<u64> =
-                band.results.iter().map(|r| r.reward.currencies[&gold_id()]).collect();
+            let golds: Vec<u64> = band
+                .results
+                .iter()
+                .map(|r| r.reward.currencies[&gold_id()])
+                .collect();
             let (lo, hi) = (*golds.iter().min().unwrap(), *golds.iter().max().unwrap());
             for nonce in 0..200u64 {
                 let g = roll_bundle(&legendary(), level, nonce).unwrap();
                 let gold = gold_of(&g);
-                assert!((lo..=hi).contains(&gold), "level {level}: gold {gold} not in {lo}..={hi}");
-                assert!((2..=3).contains(&g.items.len()), "level {level}: {} items", g.items.len());
+                assert!(
+                    (lo..=hi).contains(&gold),
+                    "level {level}: gold {gold} not in {lo}..={hi}"
+                );
+                assert!(
+                    (2..=3).contains(&g.items.len()),
+                    "level {level}: {} items",
+                    g.items.len()
+                );
                 for piece in &g.items[..2] {
                     if let Some(why) = legendary_gear::rule_broken(&piece.item) {
                         panic!("level {level}: {why}");
@@ -1635,8 +1842,15 @@ mod tests {
             assert!(g.chests.is_empty());
             seen.insert(fingerprint(&g));
         }
-        assert!(seen.len() >= 38, "40 Elder chests gave {} distinct", seen.len());
-        assert!(roll_treasury_chest(3, 60, 1, &HashSet::new(), None).is_none(), "tier 3 keeps its table");
+        assert!(
+            seen.len() >= 38,
+            "40 Elder chests gave {} distinct",
+            seen.len()
+        );
+        assert!(
+            roll_treasury_chest(3, 60, 1, &HashSet::new(), None).is_none(),
+            "tier 3 keeps its table"
+        );
     }
 
     /// The artifact list is the APK's `Item.Tag.Artifact` set, and every artifact
@@ -1657,7 +1871,10 @@ mod tests {
             .map(|i| i.item_template_id)
             .collect();
         for t in paid {
-            assert!(is_artifact(&t), "{t} is paid bare (no enchant/temper/grade) but not listed");
+            assert!(
+                is_artifact(&t),
+                "{t} is paid bare (no enchant/temper/grade) but not listed"
+            );
         }
     }
 
@@ -1694,10 +1911,18 @@ mod tests {
             .flat_map(|b| &b.results)
             .flat_map(|r| &r.reward.items)
         {
-            assert!(required_level(&item.item_template_id).is_some(), "{}", item.item_template_id);
+            assert!(
+                required_level(&item.item_template_id).is_some(),
+                "{}",
+                item.item_template_id
+            );
         }
         let ladder = tier_ladder(corpus_product(&legendary()).unwrap());
-        assert_eq!(ladder, vec![1, 8, 13, 18, 23, 28, 33, 39, 45], "the APK material ladder");
+        assert_eq!(
+            ladder,
+            vec![1, 8, 13, 18, 23, 28, 33, 39, 45],
+            "the APK material ladder"
+        );
     }
 
     /// THE REPORTS. Sephoris at 23 ("Elven should be most of it"), at 33 ("hardly
@@ -1730,7 +1955,11 @@ mod tests {
             );
         }
         let (daedric, _) = slot_share(74, 0, 39, ROLLS);
-        assert!(daedric > 0.8, "level 74 lower slot: Daedric {:.0}%", daedric * 100.0);
+        assert!(
+            daedric > 0.8,
+            "level 74 lower slot: Daedric {:.0}%",
+            daedric * 100.0
+        );
     }
 
     /// The rule against retail at the buyer's EXACT level: 306 retail Legendary
@@ -1789,8 +2018,10 @@ mod tests {
                     counts[ladder.iter().position(|&x| x == r).unwrap()] += 1;
                 }
             }
-            let shares: Vec<String> =
-                counts.iter().map(|c| format!("{:3.0}", *c as f64 / 100.0)).collect();
+            let shares: Vec<String> = counts
+                .iter()
+                .map(|c| format!("{:3.0}", *c as f64 / 100.0))
+                .collect();
             println!("L{level}: {}", shares.join(" "));
         }
     }
@@ -1842,7 +2073,10 @@ mod tests {
     fn legendary_slots_at_36_to_50_pair_as_retail_did() {
         let (glass, _) = slot_share(37, 0, 28, 1_000);
         let (ebony, _) = slot_share(37, 1, 33, 1_000);
-        assert!(glass > 0.7 && ebony > 0.7, "level 37: Glass {glass:.2}, Ebony {ebony:.2}");
+        assert!(
+            glass > 0.7 && ebony > 0.7,
+            "level 37: Glass {glass:.2}, Ebony {ebony:.2}"
+        );
         // (level, slot-0 tier, slot-1 tier)
         for (level, t0, t1) in [
             (39u64, 33u64, 39u64),
@@ -1853,8 +2087,14 @@ mod tests {
         ] {
             let (lower, _) = slot_share(level, 0, t0, 1_000);
             let (upper, _) = slot_share(level, 1, t1, 1_000);
-            assert!(lower > 0.8, "level {level}: tier {t0} in {lower:.2} of lower slots");
-            assert!(upper > 0.99, "level {level}: tier {t1} in {upper:.2} of upper slots");
+            assert!(
+                lower > 0.8,
+                "level {level}: tier {t0} in {lower:.2} of lower slots"
+            );
+            assert!(
+                upper > 0.99,
+                "level {level}: tier {t1} in {upper:.2} of upper slots"
+            );
         }
     }
 
@@ -1994,7 +2234,11 @@ mod tests {
     #[test]
     fn soul_gems_follow_retails_ladder_at_the_exact_level() {
         for (is_legendary, level, _, retail) in RETAIL_SOUL_GEMS {
-            let product = if is_legendary { legendary() } else { EPIC_CHEST_PRODUCT_ID };
+            let product = if is_legendary {
+                legendary()
+            } else {
+                EPIC_CHEST_PRODUCT_ID
+            };
             let name = if is_legendary { "Legendary" } else { "Elder" };
             let ours = soul_gem_shares(&product, level, 600);
             let near: Vec<[u64; 10]> = RETAIL_SOUL_GEMS
@@ -2021,7 +2265,9 @@ mod tests {
                 );
                 continue;
             }
-            let ours_top = (0..10).max_by(|&a, &b| ours[a].total_cmp(&ours[b])).unwrap();
+            let ours_top = (0..10)
+                .max_by(|&a, &b| ours[a].total_cmp(&ours[b]))
+                .unwrap();
             assert!(
                 retail[ours_top] == retail_top,
                 "{name} level {level}: we pay mostly {}, retail {:?}",
@@ -2060,7 +2306,10 @@ mod tests {
                 assert!(
                     allowed.iter().all(|&k| ours[k] > 0.05),
                     "{product} level {level}: {:?} must all come up, got {ours:?}",
-                    allowed.iter().map(|&k| SOUL_GEM_NAMES[k]).collect::<Vec<_>>()
+                    allowed
+                        .iter()
+                        .map(|&k| SOUL_GEM_NAMES[k])
+                        .collect::<Vec<_>>()
                 );
             }
         }
@@ -2074,8 +2323,10 @@ mod tests {
             let mut v: Vec<u64> = (0..400u64)
                 .filter_map(|n| {
                     let g = roll_bundle(product, level, n).unwrap();
-                    let sum: u64 =
-                        SOUL_GEMS.iter().filter_map(|id| g.stackable_items.get(id)).sum();
+                    let sum: u64 = SOUL_GEMS
+                        .iter()
+                        .filter_map(|id| g.stackable_items.get(id))
+                        .sum();
                     (sum > 0).then_some(sum)
                 })
                 .collect();
@@ -2111,11 +2362,19 @@ mod tests {
         };
         for level in [36u64, 37, 38, 40, 43, 44] {
             let s = share(level);
-            assert!(s == 0.0, "level {level}: Daedra hearts in {:.0}% of chests", s * 100.0);
+            assert!(
+                s == 0.0,
+                "level {level}: Daedra hearts in {:.0}% of chests",
+                s * 100.0
+            );
         }
         for level in [45u64, 49, 60, 89] {
             let s = share(level);
-            assert!(s > 0.3, "level {level}: Daedra hearts in only {:.0}%", s * 100.0);
+            assert!(
+                s > 0.3,
+                "level {level}: Daedra hearts in only {:.0}%",
+                s * 100.0
+            );
         }
     }
 
@@ -2147,8 +2406,12 @@ mod tests {
     }
 
     fn piece_key(item: &Item) -> String {
-        let mut e: Vec<String> =
-            item.properties.enchanting.iter().map(|p| format!("{}@{}", p.id, p.tier)).collect();
+        let mut e: Vec<String> = item
+            .properties
+            .enchanting
+            .iter()
+            .map(|p| format!("{}@{}", p.id, p.tier))
+            .collect();
         e.sort();
         format!("{}|{}", item.item_template_id, e.join(","))
     }
@@ -2179,12 +2442,17 @@ mod tests {
             .by_level
             .iter()
             .enumerate()
-            .flat_map(|(b, band)| band.results.iter().map(move |r| (b, r.reward.items.clone())))
+            .flat_map(|(b, band)| {
+                band.results
+                    .iter()
+                    .map(move |r| (b, r.reward.items.clone()))
+            })
             .collect();
         for (name, set) in [("retail", &retail), ("ours", &ours)] {
             for slot in 0..2 {
                 let (rep, n) = banded_repeats(slot, set);
-                let mut by_tier: std::collections::BTreeMap<u64, HashSet<Uuid>> = Default::default();
+                let mut by_tier: std::collections::BTreeMap<u64, HashSet<Uuid>> =
+                    Default::default();
                 let mut counts = [0usize; 4];
                 let mut sets: HashSet<String> = HashSet::new();
                 for (_, items) in set.iter() {
@@ -2198,8 +2466,10 @@ mod tests {
                     e.sort();
                     sets.insert(format!("{e:?}"));
                 }
-                let tiers: Vec<String> =
-                    by_tier.iter().map(|(t, s)| format!("{t}:{}", s.len())).collect();
+                let tiers: Vec<String> = by_tier
+                    .iter()
+                    .map(|(t, s)| format!("{t}:{}", s.len()))
+                    .collect();
                 println!(
                     "{name} slot {slot}: n={n} repeats={rep} ({:.1}%) enchant# {counts:?} \
                      distinct enchant sets {} templates/tier {}",
@@ -2217,7 +2487,11 @@ mod tests {
             .by_level
             .iter()
             .enumerate()
-            .flat_map(|(b, band)| band.results.iter().map(move |r| (b, r.reward.items.clone())))
+            .flat_map(|(b, band)| {
+                band.results
+                    .iter()
+                    .map(move |r| (b, r.reward.items.clone()))
+            })
             .collect()
     }
 
@@ -2322,8 +2596,12 @@ mod tests {
         let sets = |set: &[(usize, Vec<Item>)], slot: usize| -> usize {
             set.iter()
                 .map(|(_, items)| {
-                    let mut e: Vec<Uuid> =
-                        items[slot].properties.enchanting.iter().map(|p| p.id).collect();
+                    let mut e: Vec<Uuid> = items[slot]
+                        .properties
+                        .enchanting
+                        .iter()
+                        .map(|p| p.id)
+                        .collect();
                     e.sort();
                     e
                 })
@@ -2333,7 +2611,10 @@ mod tests {
         let (retail, ours) = (retail_banded(), ours_banded());
         for slot in 0..2 {
             let (r, o) = (sets(&retail, slot), sets(&ours, slot));
-            assert!(o * 10 >= r * 9, "slot {slot}: {o} distinct enchantment sets, retail {r}");
+            assert!(
+                o * 10 >= r * 9,
+                "slot {slot}: {o} distinct enchantment sets, retail {r}"
+            );
         }
     }
 
@@ -2379,13 +2660,19 @@ mod tests {
                     let g = legendary_gear::generate(shell, mix(i as u64 ^ k.rotate_left(40)))
                         .expect("a retail shell must generate");
                     let (s, t) = (&shell.item_template_id, &g.item_template_id);
-                    assert_eq!(legendary_gear::tier_group_of(t), legendary_gear::tier_group_of(s));
+                    assert_eq!(
+                        legendary_gear::tier_group_of(t),
+                        legendary_gear::tier_group_of(s)
+                    );
                     assert_eq!(g.tempering_level, shell.tempering_level);
                     let (ge, se) = (&g.properties.enchanting, &shell.properties.enchanting);
                     assert_eq!(ge.len(), se.len());
                     assert!(ge.iter().zip(se).all(|(a, b)| a.tier == b.tier));
                     if let Some(p) = ge.first() {
-                        assert!(ge[1..].iter().all(|e| e.id != p.id), "secondary repeats primary");
+                        assert!(
+                            ge[1..].iter().all(|e| e.id != p.id),
+                            "secondary repeats primary"
+                        );
                     }
                     let kind = legendary_gear::kind_of(s).unwrap();
                     if kind == "ring" || kind == "necklace" {
@@ -2470,7 +2757,10 @@ mod tests {
         let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
         let count = chest_jewel_split("Golden", &golden);
         let off = off_the_split(&count);
-        assert!(off <= 3.0, "Golden: {count:?} is {off:.1} points off 8/17/75");
+        assert!(
+            off <= 3.0,
+            "Golden: {count:?} is {off:.1} points off 8/17/75"
+        );
     }
 
     /// The Golden regrade touches jewellery GRADING only: the same nonces pay the
@@ -2523,8 +2813,9 @@ mod tests {
 
     // ---- #368 (cont.): the progression tables for the PR ----
 
-    const SOUL_GEM_NAMES: [&str; 10] =
-        ["Pet", "Les", "Mid", "Com", "Exc", "Gre", "Ele", "Gra", "Glo", "Tra"];
+    const SOUL_GEM_NAMES: [&str; 10] = [
+        "Pet", "Les", "Mid", "Com", "Exc", "Gre", "Ele", "Gra", "Glo", "Tra",
+    ];
 
     /// Soul-gem kinds and gear tiers per buyer level, Legendary and Elder.
     /// `cargo test -p blades_lib print_chest_progression -- --ignored --nocapture`
@@ -2573,7 +2864,11 @@ mod tests {
                     .enumerate()
                     .filter(|(_, c)| **c > 0)
                     .map(|(k, c)| {
-                        format!("{} {:.0}%", tier_names[k], *c as f64 * 100.0 / pieces as f64)
+                        format!(
+                            "{} {:.0}%",
+                            tier_names[k],
+                            *c as f64 * 100.0 / pieces as f64
+                        )
                     })
                     .collect();
                 println!(
@@ -2599,7 +2894,10 @@ mod tests {
     ];
 
     fn sephoris_owned() -> HashSet<Uuid> {
-        SEPHORIS_ARTIFACTS.iter().map(|&u| Uuid::from_u128(u)).collect()
+        SEPHORIS_ARTIFACTS
+            .iter()
+            .map(|&u| Uuid::from_u128(u))
+            .collect()
     }
 
     /// (chests with a third item, artifacts paid, artifact templates seen).
@@ -2635,10 +2933,21 @@ mod tests {
     fn sephoris_gets_artifacts_at_retails_rate() {
         let (third, arts, kinds) = third_slots(&legendary(), 45, 6_000, &sephoris_owned());
         let (third, arts) = (third as f64 / 6_000.0, arts as f64 / 6_000.0);
-        assert!((0.04..=0.062).contains(&third), "third slot in {:.1}% of chests", third * 100.0);
-        assert!((0.028..=0.046).contains(&arts), "artifacts in {:.2}% of chests", arts * 100.0);
+        assert!(
+            (0.04..=0.062).contains(&third),
+            "third slot in {:.1}% of chests",
+            third * 100.0
+        );
+        assert!(
+            (0.028..=0.046).contains(&arts),
+            "artifacts in {:.2}% of chests",
+            arts * 100.0
+        );
         assert_eq!(kinds.len(), 8, "the eight unheld artifacts of tiers 7-10");
-        assert!(kinds.is_disjoint(&sephoris_owned()), "a held artifact was paid again");
+        assert!(
+            kinds.is_disjoint(&sephoris_owned()),
+            "a held artifact was paid again"
+        );
     }
 
     /// Retail's artifact slot at every level: the slot in about 5.1% of Legendary
@@ -2649,14 +2958,27 @@ mod tests {
         let none = HashSet::new();
         for level in [3u64, 10, 19, 26, 33, 45, 60, 90] {
             let (third, arts, seen) = third_slots(&legendary(), level, 4_000, &none);
-            assert_eq!(third, arts, "level {level}: nothing held, every slot is an artifact");
+            assert_eq!(
+                third, arts,
+                "level {level}: nothing held, every slot is an artifact"
+            );
             let rate = third as f64 / 4_000.0;
-            assert!((0.04..=0.062).contains(&rate), "level {level}: slot in {:.1}%", rate * 100.0);
+            assert!(
+                (0.04..=0.062).contains(&rate),
+                "level {level}: slot in {:.1}%",
+                rate * 100.0
+            );
             for t in &seen {
                 let req = ARTIFACT_LOOT.iter().find(|a| a.0 == *t).unwrap().1;
-                assert!(artifact_in_window(req, level), "level {level}: artifact of level {req}");
+                assert!(
+                    artifact_in_window(req, level),
+                    "level {level}: artifact of level {req}"
+                );
             }
-            let reachable = ARTIFACT_LOOT.iter().filter(|a| artifact_in_window(a.1, level)).count();
+            let reachable = ARTIFACT_LOOT
+                .iter()
+                .filter(|a| artifact_in_window(a.1, level))
+                .count();
             assert_eq!(seen.len(), reachable, "level {level}");
         }
     }
@@ -2677,9 +2999,21 @@ mod tests {
         let share = |w: u64| by_weight.get(&w).copied().unwrap_or(0) as f64 / n as f64;
         // At 90 the windows hold tiers 8-10: Warlock's Ring and Lord's Mail (9
         // each), Spellbreaker (7), five weapons (2 each), 35 in all.
-        assert!((share(9) - 18.0 / 35.0).abs() < 0.01, "armour and rings {:.3}", share(9));
-        assert!((share(7) - 7.0 / 35.0).abs() < 0.01, "shields {:.3}", share(7));
-        assert!((share(2) - 10.0 / 35.0).abs() < 0.01, "weapons {:.3}", share(2));
+        assert!(
+            (share(9) - 18.0 / 35.0).abs() < 0.01,
+            "armour and rings {:.3}",
+            share(9)
+        );
+        assert!(
+            (share(7) - 7.0 / 35.0).abs() < 0.01,
+            "shields {:.3}",
+            share(7)
+        );
+        assert!(
+            (share(2) - 10.0 / 35.0).abs() < 0.01,
+            "weapons {:.3}",
+            share(2)
+        );
     }
 
     /// THE REPORT (#378): "the third item is always the same sword, ring or
@@ -2697,18 +3031,26 @@ mod tests {
         let mut n = 0;
         for nonce in 0..12_000u64 {
             let g = roll_bundle_for(&legendary(), 45, nonce, &all).unwrap();
-            let Some(third) = g.items.get(2) else { continue };
+            let Some(third) = g.items.get(2) else {
+                continue;
+            };
             let item = &third.item;
             assert!(!is_artifact(&item.item_template_id));
             assert_eq!(legendary_gear::rule_broken(item), None);
             let tier = required_level(&item.item_template_id);
             assert!(matches!(tier, Some(39 | 45)), "fallback at tier {tier:?}");
             templates.insert(item.item_template_id);
-            *pieces.entry(serde_json::to_string(item).unwrap()).or_default() += 1;
+            *pieces
+                .entry(serde_json::to_string(item).unwrap())
+                .or_default() += 1;
             n += 1;
         }
         assert!(n > 400, "{n} fallbacks");
-        assert!(templates.len() >= 25, "{} templates in {n} fallbacks", templates.len());
+        assert!(
+            templates.len() >= 25,
+            "{} templates in {n} fallbacks",
+            templates.len()
+        );
         let most = pieces.values().max().unwrap();
         assert!(*most * 50 <= n, "one piece came {most} times in {n}");
     }
@@ -2744,10 +3086,21 @@ mod tests {
                 n += 1;
             }
         }
-        assert_eq!(props.len(), 34 + 15, "every ring and necklace ability must be reachable");
+        assert_eq!(
+            props.len(),
+            34 + 15,
+            "every ring and necklace ability must be reachable"
+        );
         let most = sets.values().max().unwrap();
-        assert!(sets.len() >= 260, "{} distinct in 307 pieces (retail 288)", sets.len());
-        assert!(*most <= 4, "one ring or necklace came {most} times in 307 (retail 3)");
+        assert!(
+            sets.len() >= 260,
+            "{} distinct in 307 pieces (retail 288)",
+            sets.len()
+        );
+        assert!(
+            *most <= 4,
+            "one ring or necklace came {most} times in 307 (retail 3)"
+        );
     }
 
     fn committed_chest_tables() -> crate::features::chests::ChestLootTables {
@@ -2756,7 +3109,11 @@ mod tests {
 
     /// The store's Golden Chest (Rare, 250 gems) as `purchase_global_shop` rolls
     /// it, with the shipped chest tables.
-    fn store_golden(t: &crate::features::chests::ChestLootTables, level: u64, n: u64) -> RewardGrant {
+    fn store_golden(
+        t: &crate::features::chests::ChestLootTables,
+        level: u64,
+        n: u64,
+    ) -> RewardGrant {
         let golden = Uuid::from_u128(0x0e224ca0_1506_490f_884a_8871ffe6399b);
         roll_store_chest(&golden, level, n, &HashSet::new(), Some(t))
             .expect("the Golden chest rolls")
@@ -2800,16 +3157,34 @@ mod tests {
                     ebony += u64::from(tier == Some(33));
                 }
             }
-            assert_eq!(kinds[..7].iter().sum::<u64>(), 0, "L{level}: soul gems below Grand: {kinds:?}");
+            assert_eq!(
+                kinds[..7].iter().sum::<u64>(),
+                0,
+                "L{level}: soul gems below Grand: {kinds:?}"
+            );
             let share = with_gems as f64 / ROLLS as f64;
-            assert!((0.30..=0.40).contains(&share), "L{level}: {share:.3} of chests paid soul gems");
-            assert!(kinds[7] > kinds[8] && kinds[8] > 0 && kinds[9] > 0, "L{level}: {kinds:?}");
-            assert!(ebony * 2 > items, "L{level}: Ebony in {ebony} of {items} slots");
+            assert!(
+                (0.30..=0.40).contains(&share),
+                "L{level}: {share:.3} of chests paid soul gems"
+            );
+            assert!(
+                kinds[7] > kinds[8] && kinds[8] > 0 && kinds[9] > 0,
+                "L{level}: {kinds:?}"
+            );
+            assert!(
+                ebony * 2 > items,
+                "L{level}: Ebony in {ebony} of {items} slots"
+            );
         }
         // 45-48 keep the #388 rule: the three best, Glorious the likeliest.
         for n in 0..ROLLS {
             let r = store_golden(&t, 46, n);
-            assert!(SOUL_GEMS[..7].iter().all(|id| !r.stackable_items.contains_key(id)), "L46 chest {n}");
+            assert!(
+                SOUL_GEMS[..7]
+                    .iter()
+                    .all(|id| !r.stackable_items.contains_key(id)),
+                "L46 chest {n}"
+            );
         }
     }
 
@@ -2825,8 +3200,11 @@ mod tests {
             let (mut with_gems, mut kinds, mut counts) = (0u64, [0u64; 10], HashSet::new());
             for n in 0..ROLLS {
                 let r = store_golden(&t, level, n);
-                let gems: Vec<(usize, u64)> =
-                    SOUL_GEMS.iter().enumerate().filter_map(|(k, id)| r.stackable_items.get(id).map(|q| (k, *q))).collect();
+                let gems: Vec<(usize, u64)> = SOUL_GEMS
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, id)| r.stackable_items.get(id).map(|q| (k, *q)))
+                    .collect();
                 assert!(gems.len() <= 1, "L{level} chest {n}: {gems:?}");
                 for (k, q) in gems {
                     with_gems += 1;
@@ -2835,16 +3213,48 @@ mod tests {
                 }
             }
             let share = with_gems as f64 / ROLLS as f64;
-            assert!((0.20..=0.45).contains(&share), "L{level}: {share:.3} of chests paid soul gems");
+            assert!(
+                (0.20..=0.45).contains(&share),
+                "L{level}: {share:.3} of chests paid soul gems"
+            );
             let of = |k: usize| kinds[k] as f64 / with_gems as f64;
-            assert_eq!(kinds[..7].iter().sum::<u64>(), 0, "L{level}: below Grand {kinds:?}");
-            assert!((0.53..=0.67).contains(&of(7)), "L{level}: Grand {:.3}", of(7));
-            assert!((0.14..=0.26).contains(&of(8)), "L{level}: Glorious {:.3}", of(8));
-            assert!((0.14..=0.26).contains(&of(9)), "L{level}: Transcendent {:.3}", of(9));
-            assert_eq!(counts, (3..=7).collect::<HashSet<u64>>(), "L{level}: counts");
+            assert_eq!(
+                kinds[..7].iter().sum::<u64>(),
+                0,
+                "L{level}: below Grand {kinds:?}"
+            );
+            assert!(
+                (0.53..=0.67).contains(&of(7)),
+                "L{level}: Grand {:.3}",
+                of(7)
+            );
+            assert!(
+                (0.14..=0.26).contains(&of(8)),
+                "L{level}: Glorious {:.3}",
+                of(8)
+            );
+            assert!(
+                (0.14..=0.26).contains(&of(9)),
+                "L{level}: Transcendent {:.3}",
+                of(9)
+            );
+            assert_eq!(
+                counts,
+                (3..=7).collect::<HashSet<u64>>(),
+                "L{level}: counts"
+            );
         }
-        let lower = (0..ROLLS).filter(|&n| SOUL_GEMS[..7].iter().any(|id| store_golden(&t, 44, n).stackable_items.contains_key(id))).count();
-        assert!(lower > 0, "L44: the Golden chest's own soul gems must be left alone");
+        let lower = (0..ROLLS)
+            .filter(|&n| {
+                SOUL_GEMS[..7]
+                    .iter()
+                    .any(|id| store_golden(&t, 44, n).stackable_items.contains_key(id))
+            })
+            .count();
+        assert!(
+            lower > 0,
+            "L44: the Golden chest's own soul gems must be left alone"
+        );
     }
 
     /// Report #429: the store's Epic (Elder) and Legendary chests bought at 45-100
@@ -2855,7 +3265,11 @@ mod tests {
     fn store_elder_and_legendary_chests_at_45_to_100_regrade_their_soul_gems() {
         let t = committed_chest_tables();
         let total = |r: &RewardGrant| -> u64 {
-            r.stackable_items.iter().filter(|(id, _)| SOUL_GEMS.contains(id)).map(|(_, n)| n).sum()
+            r.stackable_items
+                .iter()
+                .filter(|(id, _)| SOUL_GEMS.contains(id))
+                .map(|(_, n)| n)
+                .sum()
         };
         for product in [EPIC_CHEST_PRODUCT_ID, LEGENDARY_CHEST_PRODUCT_ID] {
             assert!(store_chest_tier(&product).is_some_and(|t| t >= 4));
@@ -2870,21 +3284,48 @@ mod tests {
                         Some(&t),
                     )
                     .unwrap();
-                    let paid = roll_store_chest(&product, level, n, &HashSet::new(), Some(&t)).unwrap();
+                    let paid =
+                        roll_store_chest(&product, level, n, &HashSet::new(), Some(&t)).unwrap();
                     assert_eq!(total(&rolled), total(&paid), "{product} L{level} chest {n}");
-                    assert!(paid.stackable_items.keys().all(|id| !SOUL_GEMS[..7].contains(id)), "L{level}");
-                    if rolled.stackable_items.keys().filter(|id| SOUL_GEMS.contains(id)).count() == 1 {
+                    assert!(
+                        paid.stackable_items
+                            .keys()
+                            .all(|id| !SOUL_GEMS[..7].contains(id)),
+                        "L{level}"
+                    );
+                    if rolled
+                        .stackable_items
+                        .keys()
+                        .filter(|id| SOUL_GEMS.contains(id))
+                        .count()
+                        == 1
+                    {
                         single += 1;
                         for (k, id) in SOUL_GEMS.iter().enumerate() {
                             kinds[k] += usize::from(paid.stackable_items.contains_key(id));
                         }
                     }
                 }
-                assert!(single >= 200, "{product} L{level}: {single} one-stack chests");
+                assert!(
+                    single >= 200,
+                    "{product} L{level}: {single} one-stack chests"
+                );
                 let of = |k: usize| kinds[k] as f64 / single as f64;
-                assert!((0.52..=0.68).contains(&of(7)), "{product} L{level}: Grand {:.3}", of(7));
-                assert!((0.13..=0.27).contains(&of(8)), "{product} L{level}: Glorious {:.3}", of(8));
-                assert!((0.13..=0.27).contains(&of(9)), "{product} L{level}: Transcendent {:.3}", of(9));
+                assert!(
+                    (0.52..=0.68).contains(&of(7)),
+                    "{product} L{level}: Grand {:.3}",
+                    of(7)
+                );
+                assert!(
+                    (0.13..=0.27).contains(&of(8)),
+                    "{product} L{level}: Glorious {:.3}",
+                    of(8)
+                );
+                assert!(
+                    (0.13..=0.27).contains(&of(9)),
+                    "{product} L{level}: Transcendent {:.3}",
+                    of(9)
+                );
             }
             for n in 0..300u64 {
                 let rolled = roll_bundle_with(&product, 44, n, &HashSet::new(), Some(&t)).unwrap();
@@ -2894,7 +3335,11 @@ mod tests {
                     v.sort_unstable();
                     v
                 };
-                assert_eq!(sorted(&rolled.stackable_items), sorted(&paid.stackable_items), "L44 chest {n}");
+                assert_eq!(
+                    sorted(&rolled.stackable_items),
+                    sorted(&paid.stackable_items),
+                    "L44 chest {n}"
+                );
             }
         }
     }
@@ -2918,7 +3363,11 @@ mod tests {
                 let key = format!("elder:{i}:4:{level}");
                 let r = crate::features::chests::roll_loot(&t, 4, level, &key, &HashSet::new())
                     .unwrap();
-                assert!((lo..=hi).contains(&gold(&r)), "level {level}: {} gold", gold(&r));
+                assert!(
+                    (lo..=hi).contains(&gold(&r)),
+                    "level {level}: {} gold",
+                    gold(&r)
+                );
                 for item in &r.items[..2] {
                     assert_eq!(legendary_gear::rule_broken(&item.item), None);
                     let tier = required_level(&item.item.item_template_id).unwrap();
@@ -2931,7 +3380,10 @@ mod tests {
                 "level {level}: Daedric {:.0}%: {tiers:?}",
                 share(39) * 100.0
             );
-            assert!((0.06..=0.22).contains(&share(45)), "level {level}: {tiers:?}");
+            assert!(
+                (0.06..=0.22).contains(&share(45)),
+                "level {level}: {tiers:?}"
+            );
         }
     }
 
@@ -2945,8 +3397,21 @@ mod tests {
     #[test]
     fn elder_gear_follows_the_buyers_tier() {
         const RETAIL_LEVELS: [(u64, u64); 15] = [
-            (3, 8), (4, 20), (6, 9), (7, 10), (8, 20), (10, 60), (17, 30), (19, 20),
-            (20, 10), (21, 30), (25, 20), (26, 10), (28, 20), (29, 10), (30, 10),
+            (3, 8),
+            (4, 20),
+            (6, 9),
+            (7, 10),
+            (8, 20),
+            (10, 60),
+            (17, 30),
+            (19, 20),
+            (20, 10),
+            (21, 30),
+            (25, 20),
+            (26, 10),
+            (28, 20),
+            (29, 10),
+            (30, 10),
         ];
         let ladder = [1u64, 8, 13, 18, 23, 28, 33, 39, 45];
         let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
@@ -2973,7 +3438,10 @@ mod tests {
             for nonce in 0..40u64 {
                 for i in &roll_bundle(&epic, level, nonce).unwrap().items[..2] {
                     let at = offset(level, &i.item);
-                    assert!((-1..=1).contains(&at), "level {level}: {at} tiers from the buyer's");
+                    assert!(
+                        (-1..=1).contains(&at),
+                        "level {level}: {at} tiers from the buyer's"
+                    );
                 }
             }
         }
@@ -3014,7 +3482,12 @@ mod tests {
             (23, 18, 23, "Chrysamere"),
             (28, 18, 23, "Rimelink"),
             (18, 18, 23, "Pandemonium"),
-            (38, 31, 32, "Spellbreaker, Glass+Glass chest, Greater soul gem"),
+            (
+                38,
+                31,
+                32,
+                "Spellbreaker, Glass+Glass chest, Greater soul gem",
+            ),
             (33, 33, 35, "Mehrunes' Razor, Ebony on top"),
             (50, 43, 50, "Onyx Cleaver, Daedric+Dragon chest"),
             (38, 31, 89, "Dawnbreaker (Elder)"),
@@ -3027,8 +3500,15 @@ mod tests {
                 "{what} (required level {req}) at {lo}-{hi} is outside its window"
             );
         }
-        for (req, what) in [(38, "Spellbreaker"), (44, "Warlock's Ring"), (50, "Chillrend")] {
-            assert!(artifact_in_window(req, 60), "HauDrauf's Gold chest {what} at 60");
+        for (req, what) in [
+            (38, "Spellbreaker"),
+            (44, "Warlock's Ring"),
+            (50, "Chillrend"),
+        ] {
+            assert!(
+                artifact_in_window(req, 60),
+                "HauDrauf's Gold chest {what} at 60"
+            );
         }
         // The windows bite: no tier 2-7 artifact past its "findable before"
         // level, no tier 9-10 artifact before 39.
@@ -3049,8 +3529,14 @@ mod tests {
             for level in [10u64, 45, 90] {
                 for i in 0..2_000 {
                     let key = format!("g{i}");
-                    let r = crate::features::chests::roll_loot(&t, tier as i64, level, &key, &HashSet::new())
-                        .unwrap();
+                    let r = crate::features::chests::roll_loot(
+                        &t,
+                        tier as i64,
+                        level,
+                        &key,
+                        &HashSet::new(),
+                    )
+                    .unwrap();
                     assert!(r.items.len() <= 1, "tier {tier} paid a third item");
                 }
             }
@@ -3060,34 +3546,52 @@ mod tests {
         for i in 0..n {
             let level = [20u64, 45, 60][(i % 3) as usize];
             let key = format!("gold:{i}:3:{level}");
-            let r = crate::features::chests::roll_loot(&t, 3, level, &key, &HashSet::new()).unwrap();
+            let r =
+                crate::features::chests::roll_loot(&t, 3, level, &key, &HashSet::new()).unwrap();
             assert!((2..=3).contains(&r.items.len()));
             if let Some(x) = r.items.get(2) {
                 third += 1;
                 let tpl = x.item.item_template_id;
                 assert!(is_artifact(&tpl), "nothing held, the slot is an artifact");
                 let req = ARTIFACT_LOOT.iter().find(|a| a.0 == tpl).unwrap().1;
-                assert!(artifact_in_window(req, level), "level {level}: required level {req}");
+                assert!(
+                    artifact_in_window(req, level),
+                    "level {level}: required level {req}"
+                );
                 arts += 1;
             }
         }
-        assert!((35..=90).contains(&third), "{third} Gold chests of {n} had a third item");
+        assert!(
+            (35..=90).contains(&third),
+            "{third} Gold chests of {n} had a third item"
+        );
         assert_eq!(third, arts);
         // A held artifact is replaced, never paid twice (#310).
         let all: HashSet<Uuid> = ARTIFACT_TEMPLATES.iter().copied().collect();
         for i in 0..n / 3 {
             let r = crate::features::chests::roll_loot(&t, 3, 60, &format!("gold:{i}:3:60"), &all)
                 .unwrap();
-            assert!(r.items.iter().all(|x| !is_artifact(&x.item.item_template_id)));
+            assert!(
+                r.items
+                    .iter()
+                    .all(|x| !is_artifact(&x.item.item_template_id))
+            );
         }
         let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
         let (third, arts, seen) = third_slots(&epic, 45, 20_000, &HashSet::new());
         let rate = third as f64 / 20_000.0;
         assert_eq!(third, arts);
-        assert!((0.005..=0.015).contains(&rate), "Elder artifact slot in {:.2}%", rate * 100.0);
+        assert!(
+            (0.005..=0.015).contains(&rate),
+            "Elder artifact slot in {:.2}%",
+            rate * 100.0
+        );
         for tpl in seen {
             let req = ARTIFACT_LOOT.iter().find(|a| a.0 == tpl).unwrap().1;
-            assert!(artifact_in_window(req, 45), "Elder at 45: required level {req}");
+            assert!(
+                artifact_in_window(req, 45),
+                "Elder at 45: required level {req}"
+            );
         }
     }
 
@@ -3110,7 +3614,10 @@ mod tests {
         let leg: Uuid = BIG.parse().unwrap();
         let epic: Uuid = "7bf00a9c-6a08-4b55-a60d-53915baa38a3".parse().unwrap();
         for (name, product) in [("Legendary", leg), ("Elder", epic)] {
-            for (who, owned) in [("nothing held", HashSet::new()), ("Sephoris's 6", seph.clone())] {
+            for (who, owned) in [
+                ("nothing held", HashSet::new()),
+                ("Sephoris's 6", seph.clone()),
+            ] {
                 for level in [10u64, 20, 30, 45, 60, 90] {
                     let n = 10_000u64;
                     let (mut third, mut arts) = (0, 0);
@@ -3118,7 +3625,8 @@ mod tests {
                     let mut fb: HashSet<String> = HashSet::new();
                     let mut fb_n = 0;
                     for nonce in 0..n {
-                        let g = roll_bundle_for(&product, level, nonce.wrapping_mul(7919), &owned).unwrap();
+                        let g = roll_bundle_for(&product, level, nonce.wrapping_mul(7919), &owned)
+                            .unwrap();
                         if let Some(x) = g.items.get(2) {
                             third += 1;
                             if is_artifact(&x.item.item_template_id) {
@@ -3148,18 +3656,42 @@ mod tests {
             let mut ench: std::collections::BTreeMap<u64, u64> = Default::default();
             let mut golds = Vec::new();
             for i in 0..2_000u64 {
-                let r = crate::features::chests::roll_loot(&t, 4, level, &format!("e:{i}:{level}"), &HashSet::new()).unwrap();
-                golds.push(r.currencies.get(&GOLD.parse::<Uuid>().unwrap()).copied().unwrap_or(0));
+                let r = crate::features::chests::roll_loot(
+                    &t,
+                    4,
+                    level,
+                    &format!("e:{i}:{level}"),
+                    &HashSet::new(),
+                )
+                .unwrap();
+                golds.push(
+                    r.currencies
+                        .get(&GOLD.parse::<Uuid>().unwrap())
+                        .copied()
+                        .unwrap_or(0),
+                );
                 for i in &r.items[..2] {
-                    *tiers.entry(required_level(&i.item.item_template_id).unwrap_or(0)).or_default() += 1;
-                    *ench.entry(i.item.properties.enchanting.first().map_or(0, |e| e.tier)).or_default() += 1;
+                    *tiers
+                        .entry(required_level(&i.item.item_template_id).unwrap_or(0))
+                        .or_default() += 1;
+                    *ench
+                        .entry(i.item.properties.enchanting.first().map_or(0, |e| e.tier))
+                        .or_default() += 1;
                 }
             }
             golds.sort_unstable();
             let pct = |m: &std::collections::BTreeMap<u64, u64>| {
-                m.iter().map(|(k, v)| format!("{k}:{:.0}%", *v as f64 * 100.0 / 4000.0)).collect::<Vec<_>>().join(" ")
+                m.iter()
+                    .map(|(k, v)| format!("{k}:{:.0}%", *v as f64 * 100.0 / 4000.0))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             };
-            println!("Elder treasury L{level:3}: gold median {}  tiers {}  ench tier {}", golds[1000], pct(&tiers), pct(&ench));
+            println!(
+                "Elder treasury L{level:3}: gold median {}  tiers {}  ench tier {}",
+                golds[1000],
+                pct(&tiers),
+                pct(&ench)
+            );
         }
     }
 
@@ -3183,7 +3715,9 @@ mod tests {
             for i in g.items.iter().map(|i| &i.item) {
                 scale += u64::from(i.item_template_id == scale_shield);
                 plate += u64::from(i.item_template_id == plate_shield);
-                if i.item_template_id == cuirass && i.properties.enchanting.iter().any(|e| e.id == fire) {
+                if i.item_template_id == cuirass
+                    && i.properties.enchanting.iter().any(|e| e.id == fire)
+                {
                     assert_eq!(i.properties.enchanting[0].id, fire, "a primary only");
                     assert!([7, 9, 10].contains(&i.properties.enchanting[0].tier));
                     hit = true;
@@ -3192,9 +3726,16 @@ mod tests {
             fire_cuirass += u64::from(hit);
         }
         let share = scale as f64 / (scale + plate) as f64;
-        assert!((0.47..=0.53).contains(&share), "Dragonscale shields {share:.3} of {}", scale + plate);
+        assert!(
+            (0.47..=0.53).contains(&share),
+            "Dragonscale shields {share:.3} of {}",
+            scale + plate
+        );
         let p = fire_cuirass as f64 / chests as f64;
-        assert!((0.006..=0.012).contains(&p), "Fire Resistance Dragonscale Armor in {p:.4} of chests");
+        assert!(
+            (0.006..=0.012).contains(&p),
+            "Fire Resistance Dragonscale Armor in {p:.4} of chests"
+        );
     }
 
     /// The #392 audit: the Golden chest's gear was replayed verbatim from its
@@ -3247,9 +3788,21 @@ mod tests {
                 }
             }
         }
-        assert_eq!(grading["ring"].len(), 34, "every RingGradePropertyList entry");
-        assert_eq!(grading["necklace"].len(), 15, "every NecklaceGradePropertyList entry");
+        assert_eq!(
+            grading["ring"].len(),
+            34,
+            "every RingGradePropertyList entry"
+        );
+        assert_eq!(
+            grading["necklace"].len(),
+            15,
+            "every NecklaceGradePropertyList entry"
+        );
         // Control: the band draw alone paid 552 distinct pieces in 10,000.
-        assert!(pieces.len() * 2 > items, "{} distinct pieces in {items}", pieces.len());
+        assert!(
+            pieces.len() * 2 > items,
+            "{} distinct pieces in {items}",
+            pieces.len()
+        );
     }
 }

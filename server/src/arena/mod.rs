@@ -4,9 +4,6 @@ pub mod arena_fight_gift;
 pub mod arena_ladder;
 pub mod arena_promotion_loot;
 pub mod arena_season;
-pub mod season_store;
-pub mod season_rewards;
-pub mod top100_boards;
 pub mod avatar;
 pub mod combat;
 pub mod config;
@@ -23,6 +20,9 @@ pub mod presence;
 pub mod promotion_gem_backfill;
 pub mod pvp_tuning;
 pub mod ranking;
+pub mod season_rewards;
+pub mod season_store;
+pub mod top100_boards;
 pub mod udp;
 
 use serde::Serialize;
@@ -193,7 +193,9 @@ mod tests {
 
     #[test]
     fn potential_match_status() {
-        let v = parsed(&MatchmakingMessage::PotentialMatch { ticket_id: Uuid::nil() });
+        let v = parsed(&MatchmakingMessage::PotentialMatch {
+            ticket_id: Uuid::nil(),
+        });
         assert_eq!(v["payload"]["ticketStatus"], json!("PotentialMatchCreated"));
         assert!(v["payload"]["address"].is_null());
     }
@@ -225,7 +227,10 @@ mod tests {
         assert_eq!(p["ticketStatus"], json!("MatchmakingFailed"));
         assert_eq!(p["ticketId"], json!("12345678-0000-0000-0000-000000000000"));
         for k in ["playerSessionId", "gameSessionId", "address", "port"] {
-            assert!(p.get(k).is_some(), "key {k} must be present in Failed frame");
+            assert!(
+                p.get(k).is_some(),
+                "key {k} must be present in Failed frame"
+            );
             assert!(p[k].is_null(), "key {k} must be null in Failed frame");
         }
     }

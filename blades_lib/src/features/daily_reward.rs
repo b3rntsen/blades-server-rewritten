@@ -100,7 +100,10 @@ impl DailyRewardDef {
         if paid_as != character_level {
             let own = self.payload_at(character_level);
             let same_items = own.stackable_items.len() == payload.stackable_items.len()
-                && own.stackable_items.keys().all(|k| payload.stackable_items.contains_key(k));
+                && own
+                    .stackable_items
+                    .keys()
+                    .all(|k| payload.stackable_items.contains_key(k));
             if same_items {
                 for (item, count) in own.stackable_items {
                     let paid = payload.stackable_items.entry(item).or_insert(0);

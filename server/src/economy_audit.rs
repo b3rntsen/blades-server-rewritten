@@ -112,9 +112,18 @@ const ENCHANTING_INGREDIENTS: [u128; 7] = [
 
 /// The three store chests at full price; their 1-gem promo twins share a corpus.
 const STORE_CHESTS: [(u128, &str); 3] = [
-    (0x0e224ca0_1506_490f_884a_8871ffe6399b, "Golden (Rare) store chest"),
-    (0x7bf00a9c_6a08_4b55_a60d_53915baa38a3, "Epic (Elder) store chest"),
-    (0x1275d959_bbe5_460d_8f6a_1c31106a8eb2, "Legendary store chest"),
+    (
+        0x0e224ca0_1506_490f_884a_8871ffe6399b,
+        "Golden (Rare) store chest",
+    ),
+    (
+        0x7bf00a9c_6a08_4b55_a60d_53915baa38a3,
+        "Epic (Elder) store chest",
+    ),
+    (
+        0x1275d959_bbe5_460d_8f6a_1c31106a8eb2,
+        "Legendary store chest",
+    ),
 ];
 
 /// One cycle of the replayed shop calendar starts here: 2026-10-15 00:00 UTC.
@@ -264,8 +273,10 @@ impl Ctx {
         let sd = crate::static_loader::load(&repo().join("deploy/static"));
         let gd: blades_lib::game_data::GameData = read("deploy/static/parsed.json");
         let durability: Value = read("deploy/static/item_durability.json");
-        let repair =
-            blades_lib::features::repair::RepairData::from_json(&durability, &serde_json::json!({}));
+        let repair = blades_lib::features::repair::RepairData::from_json(
+            &durability,
+            &serde_json::json!({}),
+        );
         let raw: ApkFactsRaw = read("server/data/economy_audit_apk.json");
         let apk = ApkFacts {
             item_required_level: raw.item_required_level,
@@ -393,7 +404,11 @@ impl Subject {
         }
     }
     fn flag(&mut self, check: Check, detail: String) {
-        if !self.findings.iter().any(|(c, d)| *c == check && *d == detail) {
+        if !self
+            .findings
+            .iter()
+            .any(|(c, d)| *c == check && *d == detail)
+        {
             self.findings.push((check, detail));
         }
     }
@@ -420,9 +435,19 @@ impl Subject {
 /// An item instance's identity for variety: template and every property, but not
 /// its instance id or its (temper-derived) durability.
 fn item_key(i: &Item) -> String {
-    let mut e: Vec<(Uuid, u64)> = i.properties.enchanting.iter().map(|p| (p.id, p.tier)).collect();
+    let mut e: Vec<(Uuid, u64)> = i
+        .properties
+        .enchanting
+        .iter()
+        .map(|p| (p.id, p.tier))
+        .collect();
     e.sort();
-    let mut g: Vec<(Uuid, u64)> = i.properties.grading.iter().map(|p| (p.id, p.tier)).collect();
+    let mut g: Vec<(Uuid, u64)> = i
+        .properties
+        .grading
+        .iter()
+        .map(|p| (p.id, p.tier))
+        .collect();
     g.sort();
     format!(
         "{}|g{:?}|t{}|a{:?}|e{:?}|r{:?}",
@@ -468,7 +493,9 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
     // GRADING.
     if matches!(kind, RING | NECKLACE) && !fixed {
         match (item.grade, grading.is_empty()) {
-            (None, true) => out.push(format!("{name}: ungraded (APK _alwaysGradedItemTypes [10, 11])")),
+            (None, true) => out.push(format!(
+                "{name}: ungraded (APK _alwaysGradedItemTypes [10, 11])"
+            )),
             (Some(g), true) => out.push(format!(
                 "{name}: grade {g} but no GRADING properties (its ability bonuses are missing)"
             )),
@@ -476,7 +503,10 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
         }
         for p in grading {
             if !jewelry_grade::slot_allows(kind, p.id) {
-                out.push(format!("{name}: GRADING {} not on the slot's APK list", short(&p.id)));
+                out.push(format!(
+                    "{name}: GRADING {} not on the slot's APK list",
+                    short(&p.id)
+                ));
             }
             if !(1..=2).contains(&p.tier) {
                 out.push(format!("{name}: GRADING tier {} outside 1..=2", p.tier));
@@ -484,7 +514,10 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
         }
         let sum: u64 = grading.iter().map(|p| p.tier).sum();
         if !grading.is_empty() && item.grade != Some(sum) {
-            out.push(format!("{name}: grade {:?} != sum of tiers {sum}", item.grade));
+            out.push(format!(
+                "{name}: grade {:?} != sum of tiers {sum}",
+                item.grade
+            ));
         }
         if item.arcane_tier.unwrap_or(0) == 0 && !grading.is_empty() {
             let mut tiers: Vec<u64> = grading.iter().map(|p| p.tier).collect();
@@ -500,7 +533,9 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
             }
         }
         if !grading.is_empty() && (item.tempering_level != 0 || item.durability != 0.0) {
-            out.push(format!("{name}: graded jewellery carries tempering/durability"));
+            out.push(format!(
+                "{name}: graded jewellery carries tempering/durability"
+            ));
         }
     } else if !matches!(kind, RING | NECKLACE) {
         if item.grade.is_some() || !grading.is_empty() {
@@ -510,7 +545,10 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
             && ctx.repair.max_durability(t, item.tempering_level).is_some()
             && item.durability <= 0.0
         {
-            out.push(format!("{name}: wearable gear with durability {}", item.durability));
+            out.push(format!(
+                "{name}: wearable gear with durability {}",
+                item.durability
+            ));
         }
     }
     let mut seen = HashSet::new();
@@ -534,7 +572,10 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
             out.push(format!("{name}: ENCHANTING {} twice", short(&p.id)));
         }
         if !(lo..=hi).contains(&p.tier) {
-            out.push(format!("{name}: enchant tier {} outside APK {lo}..={hi}", p.tier));
+            out.push(format!(
+                "{name}: enchant tier {} outside APK {lo}..={hi}",
+                p.tier
+            ));
         }
         if !fixed && !table.contains(&p.id) && !ctx.recipe_tiers.contains_key(&p.id) {
             out.push(format!(
@@ -546,10 +587,16 @@ fn validate(ctx: &Ctx, item: &Item, rule: LevelRule) -> Vec<String> {
     if let Some(a) = item.arcane_tier.filter(|a| *a > 0) {
         let n = enchanting.len() as u64;
         if !fixed && n != 0 && n != a + 1 {
-            out.push(format!("{name}: {n} enchantments on arcane tier {a} (0 or {})", a + 1));
+            out.push(format!(
+                "{name}: {n} enchantments on arcane tier {a} (0 or {})",
+                a + 1
+            ));
         }
     } else if !fixed && enchanting.len() > 3 {
-        out.push(format!("{name}: {} enchantments (APK max primary + 2)", enchanting.len()));
+        out.push(format!(
+            "{name}: {} enchantments (APK max primary + 2)",
+            enchanting.len()
+        ));
     }
 
     // Required level.
@@ -572,7 +619,10 @@ fn modal_share<'a>(keys: impl IntoIterator<Item = &'a String>) -> (f64, usize, S
         *counts.entry(k).or_insert(0) += 1;
         n += 1;
     }
-    let Some((k, c)) = counts.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0))) else {
+    let Some((k, c)) = counts
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(a.0)))
+    else {
         return (0.0, 0, String::new());
     };
     (c as f64 / n.max(1) as f64, c, k.clone())
@@ -582,7 +632,11 @@ fn describe_key(ctx: &Ctx, key: &str) -> String {
     let template = key.split('|').next().and_then(|t| Uuid::parse_str(t).ok());
     match template {
         Some(t) => {
-            let grade = key.split("|g").nth(1).and_then(|s| s.split('|').next()).unwrap_or("");
+            let grade = key
+                .split("|g")
+                .nth(1)
+                .and_then(|s| s.split('|').next())
+                .unwrap_or("");
             format!("{} (grade {grade})", ctx.name(&t))
         }
         None => "the same whole reward".to_string(),
@@ -618,7 +672,11 @@ fn grading_coverage(ctx: &Ctx, items: &[&Item]) -> Vec<String> {
                 "{label} GRADING: {}/{} APK properties reached, missing {}",
                 all.len() - missing.len(),
                 all.len(),
-                missing.iter().map(|p| short(p)).collect::<Vec<_>>().join(", ")
+                missing
+                    .iter()
+                    .map(|p| short(p))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
@@ -644,7 +702,12 @@ fn enchant_coverage(ctx: &Ctx, items: &[&Item]) -> Vec<String> {
         let Some(table) = ctx.sd.enchanting.table_for(&t) else {
             continue;
         };
-        let allowed: Vec<Uuid> = table.properties.iter().filter(|p| p.weight > 0.0).map(|p| p.id).collect();
+        let allowed: Vec<Uuid> = table
+            .properties
+            .iter()
+            .filter(|p| p.weight > 0.0)
+            .map(|p| p.id)
+            .collect();
         let missing = allowed.iter().filter(|p| !seen.contains(p)).count();
         if missing > 0 {
             out.push(format!(
@@ -696,7 +759,10 @@ struct Sample {
 
 impl Sample {
     fn items(&self) -> Vec<&Item> {
-        self.rewards.iter().flat_map(|r| r.items.iter().map(|i| &i.item)).collect()
+        self.rewards
+            .iter()
+            .flat_map(|r| r.items.iter().map(|i| &i.item))
+            .collect()
     }
 }
 
@@ -729,7 +795,11 @@ fn judge(
             .iter()
             .filter(|i| !store_bundles::is_artifact(&i.item_template_id))
             .filter(|i| {
-                ctx.apk.item_required_level.get(&i.item_template_id).copied().unwrap_or(0)
+                ctx.apk
+                    .item_required_level
+                    .get(&i.item_template_id)
+                    .copied()
+                    .unwrap_or(0)
                     > level + REQUIRED_LEVEL_LOOKAHEAD
             })
             .count();
@@ -803,7 +873,10 @@ fn judge(
 /// ingredients, against the kinds paid anywhere at `level`.
 fn level_fit(ctx: &Ctx, s: &mut Subject, sample: &Sample, level: u64, available: &LevelKinds) {
     let metals: HashSet<Uuid> = chests::METALS.iter().map(|m| Uuid::from_u128(*m)).collect();
-    let salts: HashSet<Uuid> = ENCHANTING_INGREDIENTS.iter().map(|m| Uuid::from_u128(*m)).collect();
+    let salts: HashSet<Uuid> = ENCHANTING_INGREDIENTS
+        .iter()
+        .map(|m| Uuid::from_u128(*m))
+        .collect();
     for (family, set, avail) in [
         ("metal", &metals, available.metals.get(&level)),
         ("enchanting ingredient", &salts, available.salts.get(&level)),
@@ -853,9 +926,13 @@ fn chest_key(i: u64, tier: i64, level: u64) -> String {
 /// How far above its chest level retail's own treasury openings of `tier` paid
 /// gear: the "unless retail did otherwise" of the required-level rule.
 fn treasury_slack(ctx: &Ctx, tier: i64) -> u64 {
-    let pool = u64::try_from(tier)
-        .ok()
-        .and_then(|t| ctx.sd.chest_loots.tiers.get(&t).or(ctx.sd.chest_loots.provisional_tiers.get(&t)));
+    let pool = u64::try_from(tier).ok().and_then(|t| {
+        ctx.sd
+            .chest_loots
+            .tiers
+            .get(&t)
+            .or(ctx.sd.chest_loots.provisional_tiers.get(&t))
+    });
     pool.into_iter()
         .flatten()
         .flat_map(|s| {
@@ -905,9 +982,18 @@ fn store_slack(ctx: &Ctx, product: &Uuid) -> u64 {
     }
     // The base chest ids are mined under their 1-gem promo twins.
     let mined_as: HashMap<Uuid, Uuid> = [
-        (0x0e224ca0_1506_490f_884a_8871ffe6399b, 0x11b322d2_1b5e_4e90_bb41_a8d90ca9548b),
-        (0x7bf00a9c_6a08_4b55_a60d_53915baa38a3, 0x9e4dc391_422e_4b25_ba90_faab39e0769f),
-        (0x1275d959_bbe5_460d_8f6a_1c31106a8eb2, 0x11102495_fde7_4e77_b6c4_d13b9303f1f5),
+        (
+            0x0e224ca0_1506_490f_884a_8871ffe6399b,
+            0x11b322d2_1b5e_4e90_bb41_a8d90ca9548b,
+        ),
+        (
+            0x7bf00a9c_6a08_4b55_a60d_53915baa38a3,
+            0x9e4dc391_422e_4b25_ba90_faab39e0769f,
+        ),
+        (
+            0x1275d959_bbe5_460d_8f6a_1c31106a8eb2,
+            0x11102495_fde7_4e77_b6c4_d13b9303f1f5,
+        ),
     ]
     .into_iter()
     .map(|(a, b)| (Uuid::from_u128(a), Uuid::from_u128(b)))
@@ -945,7 +1031,8 @@ fn sample_treasury(ctx: &Ctx, tier: i64, level: u64, daily: bool) -> Sample {
         } else {
             chest_key(i, tier, level)
         };
-        if let Some(r) = chests::roll_loot(&ctx.sd.chest_loots, tier, level, &key, &HashSet::new()) {
+        if let Some(r) = chests::roll_loot(&ctx.sd.chest_loots, tier, level, &key, &HashSet::new())
+        {
             out.rewards.push(r);
         }
     }
@@ -968,7 +1055,11 @@ fn sample_store_chest(ctx: &Ctx, product: Uuid, level: u64) -> Sample {
 
 fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
     let kinds: [(i64, &str, &str); 6] = [
-        (chests::TUTORIAL_FIRST_CHEST, "tutorial", "Tutorial first chest (tier -1)"),
+        (
+            chests::TUTORIAL_FIRST_CHEST,
+            "tutorial",
+            "Tutorial first chest (tier -1)",
+        ),
         (1, "wooden", "Wooden chest (tier 1)"),
         (2, "silver", "Silver chest (tier 2)"),
         (3, "gold", "Gold chest (tier 3)"),
@@ -979,8 +1070,10 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
     let mut slack: HashMap<String, u64> = HashMap::new();
     for (tier, key, name) in kinds {
         let levels: Vec<u64> = if tier < 1 { vec![1] } else { LEVELS.to_vec() };
-        let per: Vec<(u64, Sample)> =
-            levels.iter().map(|&l| (l, sample_treasury(ctx, tier, l, false))).collect();
+        let per: Vec<(u64, Sample)> = levels
+            .iter()
+            .map(|&l| (l, sample_treasury(ctx, tier, l, false)))
+            .collect();
         slack.insert(format!("chest:treasury:{key}"), treasury_slack(ctx, tier));
         samples.push((
             format!("chest:treasury:{key}"),
@@ -990,9 +1083,14 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
             per,
         ));
     }
-    for (tier, key, name) in [(2i64, "silver", "Daily Silver chest"), (3, "gold", "Daily Gold chest")] {
-        let per: Vec<(u64, Sample)> =
-            LEVELS.iter().map(|&l| (l, sample_treasury(ctx, tier, l, true))).collect();
+    for (tier, key, name) in [
+        (2i64, "silver", "Daily Silver chest"),
+        (3, "gold", "Daily Gold chest"),
+    ] {
+        let per: Vec<(u64, Sample)> = LEVELS
+            .iter()
+            .map(|&l| (l, sample_treasury(ctx, tier, l, true)))
+            .collect();
         slack.insert(format!("chest:daily:{key}"), treasury_slack(ctx, tier));
         samples.push((
             format!("chest:daily:{key}"),
@@ -1004,9 +1102,14 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
     }
     for (id, name) in STORE_CHESTS {
         let product = Uuid::from_u128(id);
-        let per: Vec<(u64, Sample)> =
-            LEVELS.iter().map(|&l| (l, sample_store_chest(ctx, product, l))).collect();
-        slack.insert(format!("chest:store:{}", short(&product)), store_slack(ctx, &product));
+        let per: Vec<(u64, Sample)> = LEVELS
+            .iter()
+            .map(|&l| (l, sample_store_chest(ctx, product, l)))
+            .collect();
+        slack.insert(
+            format!("chest:store:{}", short(&product)),
+            store_slack(ctx, &product),
+        );
         samples.push((
             format!("chest:store:{}", short(&product)),
             name.to_string(),
@@ -1019,7 +1122,10 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
     // The kinds every chest pays at each level, for level fit.
     let mut available = LevelKinds::default();
     let metals: HashSet<Uuid> = chests::METALS.iter().map(|m| Uuid::from_u128(*m)).collect();
-    let salts: HashSet<Uuid> = ENCHANTING_INGREDIENTS.iter().map(|m| Uuid::from_u128(*m)).collect();
+    let salts: HashSet<Uuid> = ENCHANTING_INGREDIENTS
+        .iter()
+        .map(|m| Uuid::from_u128(*m))
+        .collect();
     for (_, _, _, _, per) in &samples {
         for (l, s) in per {
             for r in &s.rewards {
@@ -1045,7 +1151,11 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
     let mut out = Vec::new();
     for (key, name, how, rolled, per) in samples {
         let mut s = Subject::new("chest", key, name, how);
-        s.levels = per.iter().map(|(l, _)| l.to_string()).collect::<Vec<_>>().join(",");
+        s.levels = per
+            .iter()
+            .map(|(l, _)| l.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         s.rolls = ctx.rolls;
         let mut all_items: Vec<Item> = Vec::new();
         let mut distinct_rewards = 0usize;
@@ -1053,14 +1163,22 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
         for (l, sample) in &per {
             let rule = LevelRule::Character {
                 level: *l,
-                slack: slack.get(&s.key).copied().unwrap_or(REQUIRED_LEVEL_LOOKAHEAD),
+                slack: slack
+                    .get(&s.key)
+                    .copied()
+                    .unwrap_or(REQUIRED_LEVEL_LOOKAHEAD),
             };
             judge(ctx, &mut s, sample, Some(*l), rule, rolled, rolled);
             if rolled {
                 level_fit(ctx, &mut s, sample, *l, &available);
             }
             all_items.extend(sample.items().into_iter().cloned());
-            distinct_rewards += sample.rewards.iter().map(reward_key).collect::<HashSet<_>>().len();
+            distinct_rewards += sample
+                .rewards
+                .iter()
+                .map(reward_key)
+                .collect::<HashSet<_>>()
+                .len();
             total_rewards += sample.rewards.len();
         }
         let refs: Vec<&Item> = all_items.iter().collect();
@@ -1072,9 +1190,14 @@ fn audit_chests(ctx: &Ctx) -> Vec<Subject> {
                 s.flag(Check::Coverage, c);
             }
         } else {
-            s.notes.push("scripted retail bundle (3 recorded openings): fixed by definition".into());
+            s.notes
+                .push("scripted retail bundle (3 recorded openings): fixed by definition".into());
         }
-        let distinct_items = refs.iter().map(|i| item_key(i)).collect::<HashSet<_>>().len();
+        let distinct_items = refs
+            .iter()
+            .map(|i| item_key(i))
+            .collect::<HashSet<_>>()
+            .len();
         s.notes.push(format!(
             "{distinct_rewards}/{total_rewards} distinct rewards, {distinct_items} distinct item instances in {} items",
             refs.len()
@@ -1117,7 +1240,9 @@ fn audit_products(ctx: &Ctx) -> Vec<Subject> {
         if store_bundles::is_randomised_bundle(&id) {
             // Sampled once per corpus under the store chests (chest section).
             let mut s = Subject::new("product", key, name, "randomised store chest".into());
-            s.notes.push("rolled by store_bundles::roll_bundle_with; audited in the chest section".into());
+            s.notes.push(
+                "rolled by store_bundles::roll_bundle_with; audited in the chest section".into(),
+            );
             out.push(s);
             continue;
         }
@@ -1129,7 +1254,8 @@ fn audit_products(ctx: &Ctx) -> Vec<Subject> {
             .global_shop_offer_contents
             .get(&id)
             .is_some_and(|c| c.contents.iter().any(crate::global_shop::is_themed_jewelry));
-        let rolled = crate::global_shop::rolls_jewelry_per_purchase(&ctx.sd, &ctx.items, id) && !themed;
+        let rolled =
+            crate::global_shop::rolls_jewelry_per_purchase(&ctx.sd, &ctx.items, id) && !themed;
         let how = if themed {
             "global_shop::purchase_reward, themed jewellery: APK-authored set (fixed, #403)"
         } else if rolled {
@@ -1169,16 +1295,35 @@ fn audit_products(ctx: &Ctx) -> Vec<Subject> {
                         && e.grading.is_empty()
                 })
             });
-        judge(ctx, &mut s, &sample, None, LevelRule::Gated, apk_rolls, false);
-        let distinct = sample.items().iter().map(|i| item_key(i)).collect::<HashSet<_>>().len();
+        judge(
+            ctx,
+            &mut s,
+            &sample,
+            None,
+            LevelRule::Gated,
+            apk_rolls,
+            false,
+        );
+        let distinct = sample
+            .items()
+            .iter()
+            .map(|i| item_key(i))
+            .collect::<HashSet<_>>()
+            .len();
         if apk_rolls {
             let items = sample.items();
-            for c in grading_coverage(ctx, &items).into_iter().chain(enchant_coverage(ctx, &items)) {
+            for c in grading_coverage(ctx, &items)
+                .into_iter()
+                .chain(enchant_coverage(ctx, &items))
+            {
                 s.flag(Check::Coverage, c);
             }
             // A product whose definition rolls but whose output never varies.
             if distinct == 1 && !items.is_empty() {
-                s.flag(Check::Variety, "frozen: every purchase is the same item".into());
+                s.flag(
+                    Check::Variety,
+                    "frozen: every purchase is the same item".into(),
+                );
             }
         } else if !sample.items().is_empty() {
             s.notes.push("fixed by its APK definition".into());
@@ -1186,7 +1331,12 @@ fn audit_products(ctx: &Ctx) -> Vec<Subject> {
         // An item the offer's own gate lets a character buy before they can use it.
         if let Some(gate) = ctx.apk.offer_level_gates.get(&id).filter(|g| g.max > 0) {
             for item in sample.items() {
-                let req = ctx.apk.item_required_level.get(&item.item_template_id).copied().unwrap_or(0);
+                let req = ctx
+                    .apk
+                    .item_required_level
+                    .get(&item.item_template_id)
+                    .copied()
+                    .unwrap_or(0);
                 if req > gate.min.max(1) + REQUIRED_LEVEL_LOOKAHEAD {
                     s.notes.push(format!(
                         "APK gate {}-{} sells {} (requires {req}); authored that way",
@@ -1225,7 +1375,10 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
         s.levels = "building 0-9".into();
         s.rolls = windows;
         let Some(building) = ctx.shop_stock.generation.get(&type_id) else {
-            s.flag(Check::Availability, "no shop_stock generation config".into());
+            s.flag(
+                Check::Availability,
+                "no shop_stock generation config".into(),
+            );
             out.push(s);
             continue;
         };
@@ -1247,7 +1400,10 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
                 for (idx, b) in bundles.iter().enumerate() {
                     stocked.insert(b.id);
                     let Some(def) = ctx.sd.shop_bundles.get(&b.id) else {
-                        s.flag(Check::Availability, format!("stocks unknown bundle {}", short(&b.id)));
+                        s.flag(
+                            Check::Availability,
+                            format!("stocks unknown bundle {}", short(&b.id)),
+                        );
                         continue;
                     };
                     let mut grant = def.grant.clone();
@@ -1257,12 +1413,19 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
                         start_ms as u64 ^ idx as u64,
                     );
                     for item in &mut grant.items {
-                        crate::jewelry_roll::roll_generated_jewelry(&mut item.item, &ctx.items, &mut rng);
+                        crate::jewelry_roll::roll_generated_jewelry(
+                            &mut item.item,
+                            &ctx.items,
+                            &mut rng,
+                        );
                         item.item.properties.enchanting.clear();
                         jewelry_grade::grade_if_bare(&mut item.item, &ctx.items, &mut rng);
                         if ctx.is_jewelry(&item.item.item_template_id) {
                             jewels.push(item.item.clone());
-                            per_bundle.entry(b.id).or_default().push(item_key(&item.item));
+                            per_bundle
+                                .entry(b.id)
+                                .or_default()
+                                .push(item_key(&item.item));
                         }
                     }
                     sample.rewards.push(grant);
@@ -1302,8 +1465,12 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
         // The capture-measured level pools replace the authored tier pool at
         // every level they cover (`shop_gen::generate_catalog`), so they are
         // what a merchant can stock.
-        let measured: HashSet<Uuid> =
-            building.level_pools.values().flatten().map(|e| e.bundle_id).collect();
+        let measured: HashSet<Uuid> = building
+            .level_pools
+            .values()
+            .flatten()
+            .map(|e| e.bundle_id)
+            .collect();
         let pool: HashSet<Uuid> = if measured.is_empty() {
             building.item_pool.iter().map(|e| e.bundle_id).collect()
         } else {
@@ -1313,10 +1480,17 @@ fn audit_merchants(ctx: &Ctx) -> Vec<Subject> {
         if never > 0 {
             s.flag(
                 Check::Coverage,
-                format!("{never}/{} stockable bundles never stocked at building levels 0-9", pool.len()),
+                format!(
+                    "{never}/{} stockable bundles never stocked at building levels 0-9",
+                    pool.len()
+                ),
             );
         }
-        s.notes.push(format!("{} bundles stocked, {} jewellery rolls", stocked.len(), jewels.len()));
+        s.notes.push(format!(
+            "{} bundles stocked, {} jewellery rolls",
+            stocked.len(),
+            jewels.len()
+        ));
         out.push(s);
     }
     out
@@ -1329,10 +1503,22 @@ fn merchant_pool(
     building: &crate::shop_gen::BuildingGeneration,
     level: u64,
 ) -> Vec<&crate::shop_gen::PoolEntry> {
-    let cap = building.levels.get(&level.to_string()).map(|p| p.tier_cap).unwrap_or(0);
-    match building.level_pools.get(&level.to_string()).filter(|p| !p.is_empty()) {
+    let cap = building
+        .levels
+        .get(&level.to_string())
+        .map(|p| p.tier_cap)
+        .unwrap_or(0);
+    match building
+        .level_pools
+        .get(&level.to_string())
+        .filter(|p| !p.is_empty())
+    {
         Some(pool) => pool.iter().collect(),
-        None => building.item_pool.iter().filter(|e| e.tier <= cap).collect(),
+        None => building
+            .item_pool
+            .iter()
+            .filter(|e| e.tier <= cap)
+            .collect(),
     }
 }
 
@@ -1368,8 +1554,14 @@ fn merchant_potion_reach(
             .into_iter()
             .filter(|(b, _)| own.contains(b))
             .collect();
-    let held: HashSet<Uuid> = merchant_pool(building, level).iter().map(|e| e.bundle_id).collect();
-    let tiers: Vec<u64> = held.iter().filter_map(|b| potions.get(b).copied()).collect();
+    let held: HashSet<Uuid> = merchant_pool(building, level)
+        .iter()
+        .map(|e| e.bundle_id)
+        .collect();
+    let tiers: Vec<u64> = held
+        .iter()
+        .filter_map(|b| potions.get(b).copied())
+        .collect();
     let (lo, hi) = (*tiers.iter().min()?, *tiers.iter().max()?);
     let allowed: Vec<Uuid> = potions
         .iter()
@@ -1380,7 +1572,12 @@ fn merchant_potion_reach(
         .iter()
         .filter(|b| !held.contains(b))
         .map(|b| {
-            let template = ctx.sd.shop_bundles[b].grant.stackable_items.keys().next().copied();
+            let template = ctx.sd.shop_bundles[b]
+                .grant
+                .stackable_items
+                .keys()
+                .next()
+                .copied();
             template.map(|t| ctx.name(&t)).unwrap_or_else(|| short(b))
         })
         .collect();
@@ -1409,7 +1606,9 @@ struct Availability {
     live_any: usize,
 }
 
-const AVAIL_LEVELS: [u64; 16] = [1, 10, 20, 30, 35, 40, 44, 45, 46, 47, 48, 49, 50, 60, 80, 100];
+const AVAIL_LEVELS: [u64; 16] = [
+    1, 10, 20, 30, 35, 40, 44, 45, 46, 47, 48, 49, 50, 60, 80, 100,
+];
 
 fn live_offers(ctx: &Ctx, now: i64) -> BTreeMap<Uuid, Value> {
     crate::global_shop::current_catalog(&ctx.sd, now)
@@ -1428,7 +1627,13 @@ fn live_offers(ctx: &Ctx, now: i64) -> BTreeMap<Uuid, Value> {
 }
 
 fn audit_availability(ctx: &Ctx) -> Availability {
-    let gate = |id: &Uuid| ctx.apk.offer_level_gates.get(id).copied().unwrap_or(Gate { min: 0, max: 0 });
+    let gate = |id: &Uuid| {
+        ctx.apk
+            .offer_level_gates
+            .get(id)
+            .copied()
+            .unwrap_or(Gate { min: 0, max: 0 })
+    };
     let mut counts: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     let mut ever_live: HashSet<Uuid> = HashSet::new();
     let mut live_mid: HashSet<Uuid> = HashSet::new();
@@ -1444,13 +1649,19 @@ fn audit_availability(ctx: &Ctx) -> Availability {
             // the same entry; recomputing the catalogue per offer is too slow here.
             let limits = entry.get("maxPurchaseLimits").and_then(Value::as_array);
             for lim in limits.into_iter().flatten() {
-                let tid = lim.get("purchaseTrackingId").and_then(Value::as_str).unwrap_or("");
+                let tid = lim
+                    .get("purchaseTrackingId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let windowed = tid
                     .rsplit("::")
                     .next()
                     .is_some_and(|t| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit()));
                 if windowed && lim.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0 {
-                    windowed_keys.entry(*id).or_default().insert(tid.to_string());
+                    windowed_keys
+                        .entry(*id)
+                        .or_default()
+                        .insert(tid.to_string());
                 }
             }
             if d >= AVAILABILITY_DAYS {
@@ -1485,7 +1696,9 @@ fn audit_availability(ctx: &Ctx) -> Availability {
             continue;
         }
         let nonce = crate::global_shop::purchase_roll_nonce(0, buyer(0), None);
-        if crate::global_shop::purchase_reward(&ctx.sd, &ctx.repair, &ctx.items, *id, nonce).is_none() {
+        if crate::global_shop::purchase_reward(&ctx.sd, &ctx.repair, &ctx.items, *id, nonce)
+            .is_none()
+        {
             ungrantable.insert(*id);
         }
     }
@@ -1494,7 +1707,13 @@ fn audit_availability(ctx: &Ctx) -> Availability {
         .into_iter()
         .map(|(l, mut v)| {
             v.sort_unstable();
-            (l, v[0], v[v.len() / 2], v[v.len() - 1], v.iter().sum::<usize>() / v.len().max(1))
+            (
+                l,
+                v[0],
+                v[v.len() / 2],
+                v[v.len() - 1],
+                v.iter().sum::<usize>() / v.len().max(1),
+            )
         })
         .collect();
 
@@ -1505,7 +1724,11 @@ fn audit_availability(ctx: &Ctx) -> Availability {
         "Storefront over one 42-day replay cycle".into(),
         "global_shop::current_catalog + APK level gate (client filter)".into(),
     );
-    s.levels = AVAIL_LEVELS.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    s.levels = AVAIL_LEVELS
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     s.rolls = AVAILABILITY_DAYS as u64;
     let served = served_products(ctx);
     // Retail scheduled a few offers with `isActive: false` in every window: they
@@ -1518,9 +1741,10 @@ fn audit_availability(ctx: &Ctx) -> Availability {
         .into_iter()
         .flatten()
         .filter(|(_, list)| {
-            list.as_array().into_iter().flatten().all(|e| {
-                !e.get("isActive").and_then(Value::as_bool).unwrap_or(false)
-            })
+            list.as_array()
+                .into_iter()
+                .flatten()
+                .all(|e| !e.get("isActive").and_then(Value::as_bool).unwrap_or(false))
         })
         .filter_map(|(k, _)| Uuid::parse_str(k).ok())
         .collect();
@@ -1528,7 +1752,11 @@ fn audit_availability(ctx: &Ctx) -> Availability {
         s.notes.push(format!(
             "{} offers inactive in every retail window (never shown by retail either): {}",
             inactive.len(),
-            inactive.iter().map(|id| product_name(ctx, id)).collect::<Vec<_>>().join(", ")
+            inactive
+                .iter()
+                .map(|id| product_name(ctx, id))
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     let served: BTreeSet<Uuid> = served.difference(&inactive).copied().collect();
@@ -1539,7 +1767,11 @@ fn audit_availability(ctx: &Ctx) -> Availability {
             format!(
                 "{} offers never live in a whole cycle: {}",
                 never.len(),
-                never.iter().map(|id| product_name(ctx, id)).collect::<Vec<_>>().join(", ")
+                never
+                    .iter()
+                    .map(|id| product_name(ctx, id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         );
     }
@@ -1553,7 +1785,11 @@ fn audit_availability(ctx: &Ctx) -> Availability {
             format!(
                 "{} offers gated for levels 40-50 but never live: {}",
                 mid_never.len(),
-                mid_never.iter().map(|id| product_name(ctx, id)).collect::<Vec<_>>().join(", ")
+                mid_never
+                    .iter()
+                    .map(|id| product_name(ctx, id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         );
     }
@@ -1563,7 +1799,11 @@ fn audit_availability(ctx: &Ctx) -> Availability {
             format!(
                 "{} live offers cannot be bought (no deliverable reward): {}",
                 ungrantable.len(),
-                ungrantable.iter().map(|id| product_name(ctx, id)).collect::<Vec<_>>().join(", ")
+                ungrantable
+                    .iter()
+                    .map(|id| product_name(ctx, id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         );
     }
@@ -1573,7 +1813,11 @@ fn audit_availability(ctx: &Ctx) -> Availability {
             format!(
                 "{} live offers have no authoritative price (purchase refused): {}",
                 unpriced.len(),
-                unpriced.iter().map(|id| product_name(ctx, id)).collect::<Vec<_>>().join(", ")
+                unpriced
+                    .iter()
+                    .map(|id| product_name(ctx, id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         );
     }
@@ -1594,14 +1838,30 @@ fn audit_availability(ctx: &Ctx) -> Availability {
     // Permanent hide: a non-timestamped override counter with a limit on an
     // offer that has no lifetime cap would hide it for ever after one purchase.
     let mut permanent = BTreeSet::new();
-    if let Some(cal) = ctx.sd.global_shop_windows.get("globalShopWindows").and_then(Value::as_object) {
+    if let Some(cal) = ctx
+        .sd
+        .global_shop_windows
+        .get("globalShopWindows")
+        .and_then(Value::as_object)
+    {
         for (k, list) in cal {
             for e in list.as_array().into_iter().flatten() {
                 let lifetime = e.get("maxPurchases").and_then(Value::as_u64).unwrap_or(0);
-                for lim in e.get("maxPurchaseLimits").and_then(Value::as_array).into_iter().flatten() {
-                    let tid = lim.get("purchaseTrackingId").and_then(Value::as_str).unwrap_or("");
+                for lim in e
+                    .get("maxPurchaseLimits")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let tid = lim
+                        .get("purchaseTrackingId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
                     let n = lim.get("limit").and_then(Value::as_u64).unwrap_or(0);
-                    let windowed = tid.rsplit("::").next().is_some_and(|t| t.chars().all(|c| c.is_ascii_digit()));
+                    let windowed = tid
+                        .rsplit("::")
+                        .next()
+                        .is_some_and(|t| t.chars().all(|c| c.is_ascii_digit()));
                     if n > 0 && tid.contains("::override::") && !windowed && lifetime == 0 {
                         permanent.insert(k.clone());
                     }
@@ -1612,23 +1872,34 @@ fn audit_availability(ctx: &Ctx) -> Availability {
     if !permanent.is_empty() {
         s.flag(
             Check::Availability,
-            format!("{} offers carry a never-resetting override cap without a lifetime cap", permanent.len()),
+            format!(
+                "{} offers carry a never-resetting override cap without a lifetime cap",
+                permanent.len()
+            ),
         );
     }
-    let gated = served.iter().filter(|id| ctx.apk.offer_level_gates.contains_key(id)).count();
+    let gated = served
+        .iter()
+        .filter(|id| ctx.apk.offer_level_gates.contains_key(id))
+        .count();
     s.notes.push(format!(
         "{gated}/{} served offers have an APK entry (the rest are ungated)",
         served.len()
     ));
     subjects.push(s);
-    Availability { per_level, subjects, live_any: ever_live.len() }
+    Availability {
+        per_level,
+        subjects,
+        live_any: ever_live.len(),
+    }
 }
 
 // ---------------------------------------------------------------------------
 // The report
 // ---------------------------------------------------------------------------
 
-const BEGIN: &str = "<!-- BEGIN GENERATED: cargo test -p server economy_audit (ECONOMY_AUDIT_WRITE=1) -->";
+const BEGIN: &str =
+    "<!-- BEGIN GENERATED: cargo test -p server economy_audit (ECONOMY_AUDIT_WRITE=1) -->";
 const END: &str = "<!-- END GENERATED -->";
 
 fn esc(s: &str) -> String {
@@ -1642,7 +1913,11 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
         o,
         "Rolls per subject and level: **{}**. Levels: {}. Variety limit: {:.0}% of rolls; level-fit limit: {:.0}% of a family's stacks.\n",
         ctx.rolls,
-        LEVELS.iter().map(u64::to_string).collect::<Vec<_>>().join(", "),
+        LEVELS
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(", "),
         VARIETY_MAX_SHARE * 100.0,
         SINGLE_KIND_MAX_SHARE * 100.0
     );
@@ -1654,14 +1929,27 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
             *by_check.entry(c).or_insert(0) += 1;
         }
     }
-    let _ = writeln!(o, "### Summary\n\n| Check | Subjects flagged | Asserted |\n|---|---:|---|");
-    for c in [Check::Validity, Check::Variety, Check::Coverage, Check::LevelFit, Check::Availability] {
+    let _ = writeln!(
+        o,
+        "### Summary\n\n| Check | Subjects flagged | Asserted |\n|---|---:|---|"
+    );
+    for c in [
+        Check::Validity,
+        Check::Variety,
+        Check::Coverage,
+        Check::LevelFit,
+        Check::Availability,
+    ] {
         let _ = writeln!(
             o,
             "| {} | {} | {} |",
             c.label(),
             by_check.get(&c).copied().unwrap_or(0),
-            if c.asserted() { "yes (allowlist below)" } else { "no, warning" }
+            if c.asserted() {
+                "yes (allowlist below)"
+            } else {
+                "no, warning"
+            }
         );
     }
     let total = subjects.len();
@@ -1672,7 +1960,10 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
         ("chest", "Chests"),
         ("merchant", "Town merchants"),
         ("availability", "Storefront availability"),
-        ("product", "Global-shop products (Sigil shop and storefront)"),
+        (
+            "product",
+            "Global-shop products (Sigil shop and storefront)",
+        ),
     ] {
         let rows: Vec<&Subject> = subjects.iter().filter(|s| s.section == section).collect();
         let _ = writeln!(o, "### {title}\n");
@@ -1682,7 +1973,10 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
                 "Offers the client lists at each character level (live in the replayed calendar AND inside the APK `_min/_maxPlayerLevelAllowedForPurchase` gate), one sample a day over a whole 42-day cycle from 2026-10-15. {} distinct offers are live at some point.\n",
                 avail.live_any
             );
-            let _ = writeln!(o, "| Level | min | median | max | mean |\n|---:|---:|---:|---:|---:|");
+            let _ = writeln!(
+                o,
+                "| Level | min | median | max | mean |\n|---:|---:|---:|---:|---:|"
+            );
             for (l, mn, md, mx, mean) in &avail.per_level {
                 let _ = writeln!(o, "| {l} | {mn} | {md} | {mx} | {mean} |");
             }
@@ -1691,13 +1985,23 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
         let flagged: Vec<&&Subject> = rows.iter().filter(|s| s.status() != "PASS").collect();
         let passed: Vec<&&Subject> = rows.iter().filter(|s| s.status() == "PASS").collect();
         if !flagged.is_empty() || section != "product" {
-            let _ = writeln!(o, "| Subject | Generator | Levels | Rolls | Status | Findings | Notes |\n|---|---|---|---:|---|---|---|");
-            for s in rows.iter().filter(|s| section != "product" || s.status() != "PASS") {
+            let _ = writeln!(
+                o,
+                "| Subject | Generator | Levels | Rolls | Status | Findings | Notes |\n|---|---|---|---:|---|---|---|"
+            );
+            for s in rows
+                .iter()
+                .filter(|s| section != "product" || s.status() != "PASS")
+            {
                 let findings: Vec<String> = s
                     .findings
                     .iter()
                     .map(|(c, d)| {
-                        let known = if c.asserted() && s.known(*c, d).is_some() { " (known)" } else { "" };
+                        let known = if c.asserted() && s.known(*c, d).is_some() {
+                            " (known)"
+                        } else {
+                            ""
+                        };
                         format!("**{}**{known}: {}", c.label(), esc(d))
                     })
                     .collect();
@@ -1709,7 +2013,11 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
                     esc(&s.levels),
                     s.rolls,
                     s.status(),
-                    if findings.is_empty() { "-".into() } else { findings.join("<br>") },
+                    if findings.is_empty() {
+                        "-".into()
+                    } else {
+                        findings.join("<br>")
+                    },
                     esc(&s.notes.join("; "))
                 );
             }
@@ -1722,7 +2030,13 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
                 passed.len()
             );
             for s in passed {
-                let _ = writeln!(o, "| {} | {} | {} |", esc(&s.name), esc(&s.how), esc(&s.notes.join("; ")));
+                let _ = writeln!(
+                    o,
+                    "| {} | {} | {} |",
+                    esc(&s.name),
+                    esc(&s.how),
+                    esc(&s.notes.join("; "))
+                );
             }
             let _ = writeln!(o, "\n</details>\n");
         }
@@ -1732,7 +2046,10 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
     if KNOWN_FAILURES.is_empty() {
         let _ = writeln!(o, "Empty.\n");
     } else {
-        let _ = writeln!(o, "| Subject | Check | Finding | Reason | Firing |\n|---|---|---|---|---:|");
+        let _ = writeln!(
+            o,
+            "| Subject | Check | Finding | Reason | Firing |\n|---|---|---|---|---:|"
+        );
         for k in KNOWN_FAILURES {
             let firing: usize = subjects
                 .iter()
@@ -1751,7 +2068,11 @@ fn render(ctx: &Ctx, subjects: &[Subject], avail: &Availability) -> String {
                 k.check.label(),
                 k.contains,
                 esc(k.reason),
-                if firing > 0 { firing.to_string() } else { "**0: remove the entry**".into() }
+                if firing > 0 {
+                    firing.to_string()
+                } else {
+                    "**0: remove the entry**".into()
+                }
             );
         }
         let _ = writeln!(o);
@@ -1780,15 +2101,27 @@ fn economy_audit() {
     subjects.extend(audit_merchants(&ctx));
     let avail = audit_availability(&ctx);
     subjects.extend(audit_products(&ctx));
-    let Availability { per_level, subjects: av, live_any } = avail;
+    let Availability {
+        per_level,
+        subjects: av,
+        live_any,
+    } = avail;
     subjects.extend(av);
-    let avail = Availability { per_level, subjects: Vec::new(), live_any };
+    let avail = Availability {
+        per_level,
+        subjects: Vec::new(),
+        live_any,
+    };
 
     let report = render(&ctx, &subjects, &avail);
     if std::env::var_os("ECONOMY_AUDIT_WRITE").is_some() {
         write_report(&report);
     }
-    eprintln!("economy audit: {} subjects in {:?}", subjects.len(), started.elapsed());
+    eprintln!(
+        "economy audit: {} subjects in {:?}",
+        subjects.len(),
+        started.elapsed()
+    );
 
     let mut failures = Vec::new();
     for s in &subjects {
@@ -1815,7 +2148,11 @@ fn economy_audit_rules_reject_known_bad_items() {
     let ctx = Ctx::load();
     // Brass Pearl Ring, a plain (non-fixed) level-1 ring the chests pay.
     let ring = Uuid::parse_str("869bf6f4-f7fb-43cf-b264-02b84f9a5425").unwrap();
-    assert_eq!(ctx.item_type(&ring), Some(RING), "control: the fixture is a ring");
+    assert_eq!(
+        ctx.item_type(&ring),
+        Some(RING),
+        "control: the fixture is a ring"
+    );
     let ring_props: Vec<Uuid> = crate::arena::combat::gamedata::GRADE_PROPERTIES
         .iter()
         .filter(|g| g.slot == "Ring")
@@ -1832,29 +2169,59 @@ fn economy_audit_rules_reject_known_bad_items() {
         grade,
         tempering_level: 0,
         durability: 0.0,
-        properties: ItemPropertiesAll { enchanting: Vec::new(), grading },
+        properties: ItemPropertiesAll {
+            enchanting: Vec::new(),
+            grading,
+        },
         arcane_tier: None,
     };
-    let rule = LevelRule::Character { level: 100, slack: REQUIRED_LEVEL_LOOKAHEAD };
+    let rule = LevelRule::Character {
+        level: 100,
+        slack: REQUIRED_LEVEL_LOOKAHEAD,
+    };
     let cases: Vec<(&str, Item)> = vec![
         ("grade but no GRADING", jewel(Some(3), Vec::new())),
         ("ungraded", jewel(None, Vec::new())),
-        ("not on the slot's APK list", jewel(Some(1), vec![p(necklace_prop, 1)])),
-        ("!= sum of tiers", jewel(Some(3), vec![p(ring_props[0], 1), p(ring_props[1], 1)])),
-        ("twice", jewel(Some(2), vec![p(ring_props[0], 1), p(ring_props[0], 1)])),
-        ("not a JewelryGradeData row", jewel(Some(3), vec![p(ring_props[0], 2), p(ring_props[1], 1)])),
+        (
+            "not on the slot's APK list",
+            jewel(Some(1), vec![p(necklace_prop, 1)]),
+        ),
+        (
+            "!= sum of tiers",
+            jewel(Some(3), vec![p(ring_props[0], 1), p(ring_props[1], 1)]),
+        ),
+        (
+            "twice",
+            jewel(Some(2), vec![p(ring_props[0], 1), p(ring_props[0], 1)]),
+        ),
+        (
+            "not a JewelryGradeData row",
+            jewel(Some(3), vec![p(ring_props[0], 2), p(ring_props[1], 1)]),
+        ),
     ];
     for (want, item) in &cases {
         let got = validate(&ctx, item, rule).join("; ");
-        let want = if *want == "grade but no GRADING" { "but no GRADING properties" } else { want };
+        let want = if *want == "grade but no GRADING" {
+            "but no GRADING properties"
+        } else {
+            want
+        };
         assert!(got.contains(want), "expected '{want}', got '{got}'");
     }
     // Arcane tier 1 with one enchantment: 0 or 2 are the only counts.
     let mut arcane = jewel(Some(1), vec![p(ring_props[0], 1)]);
     arcane.arcane_tier = Some(1);
-    let table = ctx.sd.enchanting.table_for(&ring).expect("rings have a secondary table");
+    let table = ctx
+        .sd
+        .enchanting
+        .table_for(&ring)
+        .expect("rings have a secondary table");
     arcane.properties.enchanting = vec![p(table.properties[0].id, 1)];
-    assert!(validate(&ctx, &arcane, rule).join(";").contains("on arcane tier 1"));
+    assert!(
+        validate(&ctx, &arcane, rule)
+            .join(";")
+            .contains("on arcane tier 1")
+    );
     // Required level: a Dragon piece at character level 10.
     let dragon = ctx
         .apk
@@ -1866,11 +2233,28 @@ fn economy_audit_rules_reject_known_bad_items() {
     let mut gear = jewel(None, Vec::new());
     gear.item_template_id = dragon;
     gear.durability = ctx.repair.max_durability(dragon, 0).unwrap_or(100.0);
-    let low = LevelRule::Character { level: 10, slack: REQUIRED_LEVEL_LOOKAHEAD };
-    assert!(validate(&ctx, &gear, low).join(";").contains("requires level 45"));
-    assert!(validate(&ctx, &gear, rule).is_empty(), "control: fine at level 100");
+    let low = LevelRule::Character {
+        level: 10,
+        slack: REQUIRED_LEVEL_LOOKAHEAD,
+    };
+    assert!(
+        validate(&ctx, &gear, low)
+            .join(";")
+            .contains("requires level 45")
+    );
+    assert!(
+        validate(&ctx, &gear, rule).is_empty(),
+        "control: fine at level 100"
+    );
     // And a valid ring passes: grade 3 = three tier-1 properties.
-    let good = jewel(Some(3), vec![p(ring_props[0], 1), p(ring_props[1], 1), p(ring_props[2], 1)]);
+    let good = jewel(
+        Some(3),
+        vec![
+            p(ring_props[0], 1),
+            p(ring_props[1], 1),
+            p(ring_props[2], 1),
+        ],
+    );
     assert_eq!(validate(&ctx, &good, rule), Vec::<String>::new());
     // Variety: a frozen list is caught, a varied one is not.
     let frozen: Vec<String> = (0..10).map(|_| "a".to_string()).collect();
@@ -1888,7 +2272,11 @@ fn economy_audit_flags_unreachable_merchant_potions() {
     let ctx = Ctx::load();
     let alchemist = crate::shop::VENDOR_BUILDING_TYPES[3];
     let committed = ctx.shop_stock.generation[&alchemist].clone();
-    assert_eq!(merchant_potion_reach(&ctx, &committed, 9), None, "committed L9 pool reaches every potion");
+    assert_eq!(
+        merchant_potion_reach(&ctx, &committed, 9),
+        None,
+        "committed L9 pool reaches every potion"
+    );
     assert_eq!(frozen_catalog(&committed, 9), None);
 
     // The pre-#397 pool: the same pool without the twelve potions no captured
@@ -1896,11 +2284,29 @@ fn economy_audit_flags_unreachable_merchant_potions() {
     let mut thin = committed.clone();
     let pool = thin.level_pools.get_mut("9").expect("L9 pool");
     let filled = [
-        "11603218-", "44f78c79-", "55183a20-", "68dc8e66-", "6b34cb1d-", "6f6ce4e9-",
-        "7432e1ab-", "8da4936d-", "9c07230e-", "a9be5d5f-", "e0ffce3a-", "fec18f17-",
+        "11603218-",
+        "44f78c79-",
+        "55183a20-",
+        "68dc8e66-",
+        "6b34cb1d-",
+        "6f6ce4e9-",
+        "7432e1ab-",
+        "8da4936d-",
+        "9c07230e-",
+        "a9be5d5f-",
+        "e0ffce3a-",
+        "fec18f17-",
     ];
-    pool.retain(|e| !filled.iter().any(|p| e.bundle_id.to_string().starts_with(p)));
-    assert_eq!(pool.len(), 42, "control: retail listed 42 distinct L9 bundles");
+    pool.retain(|e| {
+        !filled
+            .iter()
+            .any(|p| e.bundle_id.to_string().starts_with(p))
+    });
+    assert_eq!(
+        pool.len(),
+        42,
+        "control: retail listed 42 distinct L9 bundles"
+    );
     let finding = merchant_potion_reach(&ctx, &thin, 9).expect("the thin pool is flagged");
     assert!(finding.starts_with("L9: 12/42 potions"), "{finding}");
 

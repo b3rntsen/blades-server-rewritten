@@ -256,7 +256,11 @@ fn le_len(b: &[u8], o: usize, width: usize) -> usize {
 pub fn parse_netdata(body: &[u8]) -> NetDataParse {
     let mut props = BTreeMap::new();
     if body.is_empty() {
-        return NetDataParse { props, consumed: 0, ok: false };
+        return NetDataParse {
+            props,
+            consumed: 0,
+            ok: false,
+        };
     }
 
     let mut i = 0usize;
@@ -265,7 +269,11 @@ pub fn parse_netdata(body: &[u8]) -> NetDataParse {
 
     let bm_len = (max_prop_id >> 3) + 1;
     if i + bm_len > body.len() {
-        return NetDataParse { props, consumed: i, ok: false };
+        return NetDataParse {
+            props,
+            consumed: i,
+            ok: false,
+        };
     }
     // Present propIds, ascending (LSB-first within each bitmap byte).
     let mut prop_ids: Vec<u8> = Vec::new();
@@ -281,7 +289,11 @@ pub fn parse_netdata(body: &[u8]) -> NetDataParse {
 
     let n_type_bytes = (prop_ids.len() + 1) >> 1;
     if i + n_type_bytes > body.len() {
-        return NetDataParse { props, consumed: i, ok: false };
+        return NetDataParse {
+            props,
+            consumed: i,
+            ok: false,
+        };
     }
     // Type nibble per present propId: even index → low nibble, odd → high nibble.
     let mut types: Vec<NetDataType> = Vec::with_capacity(prop_ids.len());
@@ -298,14 +310,24 @@ pub fn parse_netdata(body: &[u8]) -> NetDataParse {
             // Length-prefixed: the prefix WIDTH depends on the type (String u16,
             // ByteArray u8 — module docs).
             NetDataType::String | NetDataType::ByteArray => {
-                let lw = ty.len_prefix_width().expect("String/ByteArray are prefixed");
+                let lw = ty
+                    .len_prefix_width()
+                    .expect("String/ByteArray are prefixed");
                 if i + lw > body.len() {
-                    return NetDataParse { props, consumed: i, ok: false };
+                    return NetDataParse {
+                        props,
+                        consumed: i,
+                        ok: false,
+                    };
                 }
                 let l = le_len(body, i, lw);
                 i += lw;
                 if i + l > body.len() {
-                    return NetDataParse { props, consumed: i, ok: false };
+                    return NetDataParse {
+                        props,
+                        consumed: i,
+                        ok: false,
+                    };
                 }
                 let val = if ty == NetDataType::String {
                     NetDataValue::String(String::from_utf8_lossy(&body[i..i + l]).into_owned())
@@ -321,15 +343,25 @@ pub fn parse_netdata(body: &[u8]) -> NetDataParse {
                     None => {
                         // NetData (nested) — not produced by the decoded opcodes;
                         // bail rather than guess a length.
-                        return NetDataParse { props, consumed: i, ok: false };
+                        return NetDataParse {
+                            props,
+                            consumed: i,
+                            ok: false,
+                        };
                     }
                 };
                 if i + w > body.len() {
-                    return NetDataParse { props, consumed: i, ok: false };
+                    return NetDataParse {
+                        props,
+                        consumed: i,
+                        ok: false,
+                    };
                 }
                 let s = &body[i..i + w];
                 let val = match ty {
-                    NetDataType::Int => NetDataValue::Int(i32::from_le_bytes(s.try_into().unwrap())),
+                    NetDataType::Int => {
+                        NetDataValue::Int(i32::from_le_bytes(s.try_into().unwrap()))
+                    }
                     NetDataType::UInt => {
                         NetDataValue::UInt(u32::from_le_bytes(s.try_into().unwrap()))
                     }
@@ -370,7 +402,11 @@ pub fn parse_netdata(body: &[u8]) -> NetDataParse {
         }
     }
 
-    NetDataParse { props, consumed: i, ok: true }
+    NetDataParse {
+        props,
+        consumed: i,
+        ok: true,
+    }
 }
 
 /// The largest byte length a NetData `String` value can carry: its wire length
@@ -429,7 +465,9 @@ pub struct NetDataWriter {
 
 impl NetDataWriter {
     pub fn new() -> Self {
-        Self { props: BTreeMap::new() }
+        Self {
+            props: BTreeMap::new(),
+        }
     }
 
     /// Set a property (replaces any previous value at `prop_id`). Chainable.
@@ -477,7 +515,12 @@ impl NetDataWriter {
 
     /// Helper: write the actor `NetObjectInfo` at the canonical propIds 0/1/2
     /// (`netObjectId` Int, `netObjectType` Byte, `netRole` Byte).
-    pub fn net_object_info(&mut self, net_object_id: i32, net_object_type: u8, net_role: u8) -> &mut Self {
+    pub fn net_object_info(
+        &mut self,
+        net_object_id: i32,
+        net_object_type: u8,
+        net_role: u8,
+    ) -> &mut Self {
         self.int(0, net_object_id)
             .byte(1, net_object_type)
             .byte(2, net_role)
@@ -495,7 +538,11 @@ impl NetDataWriter {
                     NetDataValue::ByteArray(b) => (b.len(), NETDATA_MAX_BYTEARRAY_LEN),
                     _ => return None,
                 };
-                (len > limit).then_some(NetDataOverflow { prop_id, len, limit })
+                (len > limit).then_some(NetDataOverflow {
+                    prop_id,
+                    len,
+                    limit,
+                })
             })
             .collect()
     }
@@ -505,7 +552,11 @@ impl NetDataWriter {
     /// prefix. Callers that must not ship a lossy frame should use this.
     pub fn finish_checked(&self) -> Result<Vec<u8>, Vec<NetDataOverflow>> {
         let over = self.overflows();
-        if over.is_empty() { Ok(self.finish()) } else { Err(over) }
+        if over.is_empty() {
+            Ok(self.finish())
+        } else {
+            Err(over)
+        }
     }
 
     /// Serialize to the canonical NetData byte layout.
@@ -662,7 +713,8 @@ mod tests {
     /// the gap in the bitmap + the u16-LE length-prefixed String path.
     fn op50ish_body() -> Vec<u8> {
         let mut b = vec![
-            0x04, 0x17, 0x70, 0xA7, // maxPropId=4, bitmap {0,1,2,4}, types [Int,Byte,Byte,String]
+            0x04, 0x17, 0x70,
+            0xA7, // maxPropId=4, bitmap {0,1,2,4}, types [Int,Byte,Byte,String]
             0xB9, 0x01, 0x00, 0x00, // propId0 Int = 441
             0x38, // propId1 Byte = 56
             0x03, // propId2 Byte = 3
@@ -681,10 +733,7 @@ mod tests {
         assert_eq!(p.get(0), Some(&NetDataValue::Int(441)));
         assert_eq!(p.get(1), Some(&NetDataValue::Byte(56)));
         assert_eq!(p.get(2), Some(&NetDataValue::Byte(3)));
-        assert_eq!(
-            p.string(4),
-            Some("30074991-417c-45e6-a73a-ace52b659338")
-        );
+        assert_eq!(p.string(4), Some("30074991-417c-45e6-a73a-ace52b659338"));
         assert!(p.get(3).is_none(), "propId 3 absent (gap in bitmap)");
     }
 
@@ -719,13 +768,18 @@ mod tests {
     /// packed stats · 6:Byte 4 · 7:ByteArray(7) · 8:Float · 9:String uuid}`.
     fn op53_body() -> Vec<u8> {
         let mut b = hex(concat!(
-            "09ff03707722d7a5",                     // maxPropId 9, bitmap {0..9}, 5 type bytes
-            "35020000", "38", "01", "35",           // pid0 Int, pid1/2/3 Byte
-            "1f000000f4216d25", "1f000000ffffff3f", // pid4/5 ULong
-            "04",                                   // pid6 Byte
-            "07", "040000001c0004",                 // pid7 ByteArray: u8 len 7 + 7 bytes
-            "83d4ac3f",                             // pid8 Float
-            "2400",                                 // pid9 String: u16 len 36
+            "09ff03707722d7a5", // maxPropId 9, bitmap {0..9}, 5 type bytes
+            "35020000",
+            "38",
+            "01",
+            "35", // pid0 Int, pid1/2/3 Byte
+            "1f000000f4216d25",
+            "1f000000ffffff3f", // pid4/5 ULong
+            "04",               // pid6 Byte
+            "07",
+            "040000001c0004", // pid7 ByteArray: u8 len 7 + 7 bytes
+            "83d4ac3f",       // pid8 Float
+            "2400",           // pid9 String: u16 len 36
         ));
         b.extend_from_slice(b"7fc15804-1637-40a9-8dcc-3ea1eb0f778d");
         b
@@ -736,10 +790,15 @@ mod tests {
     fn op58_body() -> Vec<u8> {
         let mut b = hex(concat!(
             "0aff07707722d7a507", // maxPropId 10, bitmap {0..10}, 6 type bytes
-            "3b020000", "38", "01", "3a",
-            "66000000ea92943d", "66000000ffffbf39",
+            "3b020000",
+            "38",
+            "01",
+            "3a",
+            "66000000ea92943d",
+            "66000000ffffbf39",
             "0b",
-            "0d", "0a0000001c000100040001000b",
+            "0d",
+            "0a0000001c000100040001000b",
             "a7bf7b3f",
             "2400",
         ));
@@ -884,7 +943,11 @@ mod tests {
         // The explicit-error API names the offending property.
         assert_eq!(
             w.finish_checked().unwrap_err(),
-            vec![NetDataOverflow { prop_id: 1, len: OVERSIZE, limit: NETDATA_MAX_STRING_LEN }],
+            vec![NetDataOverflow {
+                prop_id: 1,
+                len: OVERSIZE,
+                limit: NETDATA_MAX_STRING_LEN
+            }],
             "finish_checked must reject the oversize propId, not silently emit it",
         );
 
@@ -904,8 +967,16 @@ mod tests {
         // The load-bearing assertions: the properties AFTER the oversize one are
         // intact. With `len as u16` these decode from inside the payload ('A' = 65).
         assert_eq!(p.int(0), Some(4242), "propId 0 (before the oversize value)");
-        assert_eq!(p.int(2), Some(7), "propId 2 AFTER the oversize value must survive");
-        assert_eq!(p.int(3), Some(-99), "propId 3 AFTER the oversize value must survive");
+        assert_eq!(
+            p.int(2),
+            Some(7),
+            "propId 2 AFTER the oversize value must survive"
+        );
+        assert_eq!(
+            p.int(3),
+            Some(-99),
+            "propId 3 AFTER the oversize value must survive"
+        );
     }
 
     /// Same guard for `ByteArray` — but at ITS ceiling, which is 255 B, not 64 KB.
@@ -933,28 +1004,51 @@ mod tests {
         match p.get(1) {
             Some(NetDataValue::ByteArray(b)) => {
                 assert_eq!(b.len(), NETDATA_MAX_BYTEARRAY_LEN);
-                assert_eq!(b[..], big[..NETDATA_MAX_BYTEARRAY_LEN], "a true prefix of the input");
+                assert_eq!(
+                    b[..],
+                    big[..NETDATA_MAX_BYTEARRAY_LEN],
+                    "a true prefix of the input"
+                );
             }
             other => panic!("expected a ByteArray at propId 1, got {other:?}"),
         }
-        assert_eq!(p.int(2), Some(0xAB), "the property after the oversize one survives");
+        assert_eq!(
+            p.int(2),
+            Some(0xAB),
+            "the property after the oversize one survives"
+        );
     }
 
     /// A `ByteArray` at and just under its own 255 B ceiling round-trips exactly,
     /// and the property after it stays intact.
     #[test]
     fn bytearray_at_its_u8_ceiling_roundtrips() {
-        for len in [0usize, 1, 23, NETDATA_MAX_BYTEARRAY_LEN - 1, NETDATA_MAX_BYTEARRAY_LEN] {
+        for len in [
+            0usize,
+            1,
+            23,
+            NETDATA_MAX_BYTEARRAY_LEN - 1,
+            NETDATA_MAX_BYTEARRAY_LEN,
+        ] {
             let blob: Vec<u8> = (0..len as u32).map(|i| (i % 251) as u8).collect();
             let mut w = NetDataWriter::new();
-            w.put(1, NetDataValue::ByteArray(blob.clone())).byte(2, 0x5A);
+            w.put(1, NetDataValue::ByteArray(blob.clone()))
+                .byte(2, 0x5A);
             assert!(w.finish_checked().is_ok(), "len {len} must not be flagged");
             let bytes = w.finish();
             // One length byte, not two.
-            assert_eq!(bytes.len(), 1 + 1 + 1 + 1 + len + 1, "len {len}: u8 prefix only");
+            assert_eq!(
+                bytes.len(),
+                1 + 1 + 1 + 1 + len + 1,
+                "len {len}: u8 prefix only"
+            );
             let p = parse_netdata(&bytes);
             assert!(p.ok, "len {len} must parse");
-            assert_eq!(p.get(1), Some(&NetDataValue::ByteArray(blob)), "len {len} round-trips");
+            assert_eq!(
+                p.get(1),
+                Some(&NetDataValue::ByteArray(blob)),
+                "len {len} round-trips"
+            );
             assert_eq!(p.int(2), Some(0x5A), "len {len}: following property intact");
         }
     }
@@ -971,23 +1065,40 @@ mod tests {
         let p = parse_netdata(&w.finish());
         assert!(p.ok);
         let s = p.string(1).expect("string at propId 1");
-        assert_eq!(s.len() % 3, 0, "cut on a code-point boundary (65535 % 3 == 0 is false)");
+        assert_eq!(
+            s.len() % 3,
+            0,
+            "cut on a code-point boundary (65535 % 3 == 0 is false)"
+        );
         assert!(s.len() <= NETDATA_MAX_STRING_LEN && s.len() > NETDATA_MAX_STRING_LEN - 3);
-        assert!(s.chars().all(|c| c == '→'), "no partial code point / replacement char");
+        assert!(
+            s.chars().all(|c| c == '→'),
+            "no partial code point / replacement char"
+        );
     }
 
     /// Non-breaking: values AT the ceiling and just under it encode exactly as
     /// before (no truncation, no error) — normal-size payloads are untouched.
     #[test]
     fn at_and_under_the_ceiling_is_unchanged() {
-        for len in [0usize, 1, 4096, NETDATA_MAX_STRING_LEN - 1, NETDATA_MAX_STRING_LEN] {
+        for len in [
+            0usize,
+            1,
+            4096,
+            NETDATA_MAX_STRING_LEN - 1,
+            NETDATA_MAX_STRING_LEN,
+        ] {
             let s = "x".repeat(len);
             let mut w = NetDataWriter::new();
             w.string(1, s.clone()).byte(2, 9);
             assert!(w.finish_checked().is_ok(), "len {len} must not be flagged");
             let p = parse_netdata(&w.finish());
             assert!(p.ok, "len {len} must parse");
-            assert_eq!(p.string(1), Some(s.as_str()), "len {len} round-trips exactly");
+            assert_eq!(
+                p.string(1),
+                Some(s.as_str()),
+                "len {len} round-trips exactly"
+            );
             assert_eq!(p.int(2), Some(9), "len {len}: following property intact");
         }
     }

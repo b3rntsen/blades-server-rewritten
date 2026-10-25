@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 
 use uuid::Uuid;
 
-use super::{consume_stackable, is_currency, EconomyError, GEMS};
+use super::{EconomyError, GEMS, consume_stackable, is_currency};
 use crate::user_data::{CompleteInventory, CompleteWallet, InventoryChangeTracker};
 
 static INGREDIENT_VALUES_RAW: &str = include_str!("../ingredient_values.json");
@@ -37,7 +37,12 @@ fn gem_values() -> &'static HashMap<Uuid, f32> {
         }
         // The JSON holds each f32 widened to f64; narrowing gets the exact f32 back.
         serde_json::from_str::<Raw>(INGREDIENT_VALUES_RAW)
-            .map(|r| r.gem_values.into_iter().map(|(k, v)| (k, v as f32)).collect())
+            .map(|r| {
+                r.gem_values
+                    .into_iter()
+                    .map(|(k, v)| (k, v as f32))
+                    .collect()
+            })
             .unwrap_or_default()
     })
 }
@@ -102,9 +107,17 @@ pub fn pay_inputs_with_gems(
         let take = have.min(needed);
         let missing = needed - take;
         let cost = gem_cost_for_ingredient(template, missing).ok_or(if is_currency(template) {
-            EconomyError::InsufficientFunds { currency: template, needed, have }
+            EconomyError::InsufficientFunds {
+                currency: template,
+                needed,
+                have,
+            }
         } else {
-            EconomyError::InsufficientStackable { template, needed, have }
+            EconomyError::InsufficientStackable {
+                template,
+                needed,
+                have,
+            }
         })?;
         gem_bill += cost;
         if take > 0 {
@@ -113,7 +126,11 @@ pub fn pay_inputs_with_gems(
     }
     let gems = wallet.balance(GEMS);
     if gems < gem_bill {
-        return Err(EconomyError::InsufficientFunds { currency: GEMS, needed: gem_bill, have: gems });
+        return Err(EconomyError::InsufficientFunds {
+            currency: GEMS,
+            needed: gem_bill,
+            have: gems,
+        });
     }
 
     // Phase 2: commit. Every amount was checked against the stock above.
@@ -174,10 +191,22 @@ mod tests {
     /// The two retail gem-paid enchants: the missing gold, priced per the client.
     #[test]
     fn missing_gold_is_priced_exactly_as_retail_charged_it() {
-        assert_eq!(gem_cost_for_ingredient(GOLD, 8_467), Some(128), "capture 59598");
-        assert_eq!(gem_cost_for_ingredient(GOLD, 35_000), Some(525), "capture 59601");
+        assert_eq!(
+            gem_cost_for_ingredient(GOLD, 8_467),
+            Some(128),
+            "capture 59598"
+        );
+        assert_eq!(
+            gem_cost_for_ingredient(GOLD, 35_000),
+            Some(525),
+            "capture 59601"
+        );
         assert_eq!(gem_cost_for_ingredient(GOLD, 0), Some(0));
-        assert_eq!(gem_cost_for_ingredient(GOLD, 1), Some(1), "any shortfall costs a gem");
+        assert_eq!(
+            gem_cost_for_ingredient(GOLD, 1),
+            Some(1),
+            "any shortfall costs a gem"
+        );
         assert_eq!(gem_cost_for_ingredient(uuid(FROST_SALTS), 17), Some(85));
         assert_eq!(gem_cost_for_ingredient(Uuid::nil(), 1), None, "unpriced");
     }
@@ -189,7 +218,11 @@ mod tests {
         let mut inv = inventory(&[(FROST_SALTS, 40), (GRAND_SOUL_GEM, 9)]);
         let mut tr = InventoryChangeTracker::default();
         let gems = pay_inputs_with_gems(
-            &[(GOLD, 42_000), (uuid(FROST_SALTS), 99), (uuid(GRAND_SOUL_GEM), 4)],
+            &[
+                (GOLD, 42_000),
+                (uuid(FROST_SALTS), 99),
+                (uuid(GRAND_SOUL_GEM), 4),
+            ],
             &mut w,
             &mut inv,
             &mut tr,
@@ -200,20 +233,42 @@ mod tests {
         assert_eq!(w.balance(GOLD), 58_000);
         assert_eq!(inv.backpack.stackable_items.count(uuid(FROST_SALTS)), 0);
         assert_eq!(inv.backpack.stackable_items.count(uuid(GRAND_SOUL_GEM)), 5);
-        assert!(tr.modified_backpack.stackable_items.contains(&uuid(FROST_SALTS)));
+        assert!(
+            tr.modified_backpack
+                .stackable_items
+                .contains(&uuid(FROST_SALTS))
+        );
     }
 
     #[test]
     fn short_of_gems_is_refused_and_nothing_moves() {
         let mut w = wallet(100_000, 294);
         let mut inv = inventory(&[(FROST_SALTS, 40)]);
-        let before = (serde_json::to_value(&w).unwrap(), inv.backpack.stackable_items.count(uuid(FROST_SALTS)));
+        let before = (
+            serde_json::to_value(&w).unwrap(),
+            inv.backpack.stackable_items.count(uuid(FROST_SALTS)),
+        );
         let mut tr = InventoryChangeTracker::default();
-        let err = pay_inputs_with_gems(&[(GOLD, 42_000), (uuid(FROST_SALTS), 99)], &mut w, &mut inv, &mut tr)
-            .expect_err("one gem short");
-        assert_eq!(err, EconomyError::InsufficientFunds { currency: GEMS, needed: 295, have: 294 });
+        let err = pay_inputs_with_gems(
+            &[(GOLD, 42_000), (uuid(FROST_SALTS), 99)],
+            &mut w,
+            &mut inv,
+            &mut tr,
+        )
+        .expect_err("one gem short");
         assert_eq!(
-            (serde_json::to_value(&w).unwrap(), inv.backpack.stackable_items.count(uuid(FROST_SALTS))),
+            err,
+            EconomyError::InsufficientFunds {
+                currency: GEMS,
+                needed: 295,
+                have: 294
+            }
+        );
+        assert_eq!(
+            (
+                serde_json::to_value(&w).unwrap(),
+                inv.backpack.stackable_items.count(uuid(FROST_SALTS))
+            ),
             before
         );
         assert!(tr.modified_backpack.stackable_items.is_empty());
@@ -224,9 +279,21 @@ mod tests {
         let unpriced = Uuid::from_u128(7);
         let mut w = wallet(100_000, 1_000_000);
         let mut inv = inventory(&[]);
-        let err = pay_inputs_with_gems(&[(unpriced, 1)], &mut w, &mut inv, &mut InventoryChangeTracker::default())
-            .expect_err("no gem price");
-        assert_eq!(err, EconomyError::InsufficientStackable { template: unpriced, needed: 1, have: 0 });
+        let err = pay_inputs_with_gems(
+            &[(unpriced, 1)],
+            &mut w,
+            &mut inv,
+            &mut InventoryChangeTracker::default(),
+        )
+        .expect_err("no gem price");
+        assert_eq!(
+            err,
+            EconomyError::InsufficientStackable {
+                template: unpriced,
+                needed: 1,
+                have: 0
+            }
+        );
         assert_eq!(w.balance(GEMS), 1_000_000);
     }
 }

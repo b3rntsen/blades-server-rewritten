@@ -610,7 +610,11 @@ mod tests {
     fn permission_matrix_matches_the_extracted_asset() {
         let d = asset();
         let ranks = d["guild_ranks_data"].as_array().expect("guild_ranks_data");
-        assert_eq!(ranks.len(), 4, "precondition: the asset lists all four ranks");
+        assert_eq!(
+            ranks.len(),
+            4,
+            "precondition: the asset lists all four ranks"
+        );
 
         for entry in ranks {
             let rank = GuildRank::from_wire(entry["guild_rank"].as_str().unwrap())
@@ -1177,7 +1181,10 @@ mod tests {
         // rejection. Retail validates against a code-point whitelist, so its
         // bounds are code-point counts.
         let msg = "é".repeat(MESSAGE_MAX_LEN);
-        assert!(msg.len() > MESSAGE_MAX_LEN, "precondition: this is multi-byte");
+        assert!(
+            msg.len() > MESSAGE_MAX_LEN,
+            "precondition: this is multi-byte"
+        );
         assert!(message_length_ok(&msg));
         assert!(!message_length_ok(&"é".repeat(MESSAGE_MAX_LEN + 1)));
     }
@@ -1185,7 +1192,10 @@ mod tests {
     #[test]
     fn guild_text_respects_the_assets_length_bounds() {
         assert!(guild_text_ok("abc", "s", ""));
-        assert!(!guild_text_ok("ab", "s", ""), "name below 3 must be rejected");
+        assert!(
+            !guild_text_ok("ab", "s", ""),
+            "name below 3 must be rejected"
+        );
         assert!(
             !guild_text_ok(&"x".repeat(NAME_MAX_LEN + 1), "s", ""),
             "name above 40 must be rejected"
@@ -1199,7 +1209,11 @@ mod tests {
             &"x".repeat(SHORT_DESCRIPTION_MAX_LEN + 1),
             ""
         ));
-        assert!(guild_text_ok("abc", "s", &"x".repeat(LONG_DESCRIPTION_MAX_LEN)));
+        assert!(guild_text_ok(
+            "abc",
+            "s",
+            &"x".repeat(LONG_DESCRIPTION_MAX_LEN)
+        ));
         assert!(!guild_text_ok(
             "abc",
             "s",
@@ -1265,6 +1279,9 @@ mod tests {
                 "trim-then-validate accepted {raw:?}"
             );
         }
-        assert!(guild_text_ok("Bladeworks", "a short one", ""), "a real name was rejected");
+        assert!(
+            guild_text_ok("Bladeworks", "a short one", ""),
+            "a real name was rejected"
+        );
     }
 }

@@ -141,7 +141,11 @@ pub async fn get_arena_game_top(
     if let Some(v) = cached(&key) {
         return Ok(Json(v));
     }
-    let mut conn = app_state.db_pool.get().await.map_err(BladeApiError::generic_internal_error)?;
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(BladeApiError::generic_internal_error)?;
     let season = active_season(&mut conn).await?;
     let total = crate::arena::leaderboards::count_entries(&mut conn).await?;
     let rows = crate::arena::leaderboards::ranked_entries(&mut conn, limit, 0)
@@ -149,8 +153,12 @@ pub async fn get_arena_game_top(
         .into_iter()
         .map(GameTopRow::from)
         .collect();
-    let value = serde_json::to_value(GameTopResponse { season, total, rows })
-        .map_err(BladeApiError::generic_internal_error)?;
+    let value = serde_json::to_value(GameTopResponse {
+        season,
+        total,
+        rows,
+    })
+    .map_err(BladeApiError::generic_internal_error)?;
     store(key, &value);
     Ok(Json(value))
 }
@@ -178,11 +186,19 @@ pub async fn get_arena_game_guilds(
     if let Some(v) = cached(&key) {
         return Ok(Json(v));
     }
-    let mut conn = app_state.db_pool.get().await.map_err(BladeApiError::generic_internal_error)?;
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(BladeApiError::generic_internal_error)?;
     let season = active_season(&mut conn).await?;
     let (total, rows) = crate::guild::guild_board(&mut conn, limit as usize).await?;
-    let value = serde_json::to_value(GameGuildsResponse { season, total, rows })
-        .map_err(BladeApiError::generic_internal_error)?;
+    let value = serde_json::to_value(GameGuildsResponse {
+        season,
+        total,
+        rows,
+    })
+    .map_err(BladeApiError::generic_internal_error)?;
     store(key, &value);
     Ok(Json(value))
 }
@@ -335,27 +351,39 @@ pub async fn get_arena_h2h_guilds(
     if let Some(v) = cached(&key) {
         return Ok(Json(v));
     }
-    let min_games = ranking::load(&app_state.db_pool).await.config.h2h_rating.min_games_listed as i32;
-    let mut conn = app_state.db_pool.get().await.map_err(BladeApiError::generic_internal_error)?;
-    let (season, entries): (Option<H2hSeasonSummary>, Vec<ranking::H2hBoardEntry>) = match selection {
-        ranking::H2hSeasonSelection::AllTime => {
-            (None, ranking::h2h_board(&mut conn, None, min_games, ALL_BOARD_ROWS).await?)
-        }
+    let min_games = ranking::load(&app_state.db_pool)
+        .await
+        .config
+        .h2h_rating
+        .min_games_listed as i32;
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(BladeApiError::generic_internal_error)?;
+    let (season, entries): (Option<H2hSeasonSummary>, Vec<ranking::H2hBoardEntry>) = match selection
+    {
+        ranking::H2hSeasonSelection::AllTime => (
+            None,
+            ranking::h2h_board(&mut conn, None, min_games, ALL_BOARD_ROWS).await?,
+        ),
         ranking::H2hSeasonSelection::Current => match active_season(&mut conn).await? {
             Some(season) => {
                 let entries =
-                    ranking::h2h_board(&mut conn, Some(season.id), min_games, ALL_BOARD_ROWS).await?;
+                    ranking::h2h_board(&mut conn, Some(season.id), min_games, ALL_BOARD_ROWS)
+                        .await?;
                 (Some(season), entries)
             }
             None => (None, Vec::new()),
         },
         ranking::H2hSeasonSelection::Season(season_id) => {
-            let season: H2hSeasonSummary =
-                diesel::sql_query("SELECT id, name, starts_at, ends_at FROM arena_seasons WHERE id = $1")
-                    .bind::<diesel::sql_types::Uuid, _>(season_id)
-                    .get_result(&mut conn)
-                    .await
-                    .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 85))?;
+            let season: H2hSeasonSummary = diesel::sql_query(
+                "SELECT id, name, starts_at, ends_at FROM arena_seasons WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(season_id)
+            .get_result(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 85))?;
             let entries =
                 ranking::h2h_board(&mut conn, Some(season.id), min_games, ALL_BOARD_ROWS).await?;
             (Some(season), entries)
@@ -392,7 +420,10 @@ mod tests {
         let ratings = [1200, 1100, 1000, 990, 950];
         let rows = h2h_guild_board(ratings.iter().map(|r| member("a", *r, 4)).collect(), 100);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].score, guild_weighted_score(ratings.iter().map(|r| *r as i64).collect()));
+        assert_eq!(
+            rows[0].score,
+            guild_weighted_score(ratings.iter().map(|r| *r as i64).collect())
+        );
         // 0.30 * (1200 + 1100 + 1000 + 990) + 0.25 * 950 = 1287 + 237.5
         assert_eq!(rows[0].score, 1525);
         assert_eq!(rows[0].members, 5);
@@ -442,10 +473,17 @@ mod tests {
     #[test]
     fn limit_truncates_after_ranking() {
         let rows = h2h_guild_board(
-            vec![member("a", 900, 3), member("b", 1100, 3), member("c", 1000, 3)],
+            vec![
+                member("a", 900, 3),
+                member("b", 1100, 3),
+                member("c", 1000, 3),
+            ],
             2,
         );
-        assert_eq!(rows.iter().map(|r| r.guild_id.as_str()).collect::<Vec<_>>(), vec!["b", "c"]);
+        assert_eq!(
+            rows.iter().map(|r| r.guild_id.as_str()).collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
     }
 
     /// The humans guild board must admit exactly the rows the human player board
@@ -467,9 +505,16 @@ mod tests {
             matches: 3,
             last_match_at: None,
         };
-        let members = h2h_guild_members(vec![entry(1, Some("a")), entry(2, Some("b")), entry(3, None)]);
+        let members = h2h_guild_members(vec![
+            entry(1, Some("a")),
+            entry(2, Some("b")),
+            entry(3, None),
+        ]);
         assert_eq!(
-            members.iter().map(|m| m.guild_id.as_str()).collect::<Vec<_>>(),
+            members
+                .iter()
+                .map(|m| m.guild_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "b"],
             "two alts of one character count for their own guilds; guildless rows drop out"
         );

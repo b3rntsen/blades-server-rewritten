@@ -78,7 +78,11 @@ const PAGE_SIZE: i64 = 100;
 /// `totalPages` for a given `totalEntries`. Written out rather than `div_ceil`,
 /// which is still unstable for `i64` on this toolchain.
 fn page_count(total: i64) -> i64 {
-    if total <= 0 { 0 } else { (total + PAGE_SIZE - 1) / PAGE_SIZE }
+    if total <= 0 {
+        0
+    } else {
+        (total + PAGE_SIZE - 1) / PAGE_SIZE
+    }
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -376,10 +380,12 @@ async fn build(
 pub(crate) async fn count_entries(
     conn: &mut diesel_async::AsyncPgConnection,
 ) -> Result<i64, diesel::result::Error> {
-    Ok(sql_query(format!("{RANKED_CTE} SELECT COUNT(*) AS total FROM ranked"))
-        .get_result::<CountRow>(conn)
-        .await?
-        .total)
+    Ok(
+        sql_query(format!("{RANKED_CTE} SELECT COUNT(*) AS total FROM ranked"))
+            .get_result::<CountRow>(conn)
+            .await?
+            .total,
+    )
 }
 
 /// One slice of the board, in board order — THE ranking the client's arena

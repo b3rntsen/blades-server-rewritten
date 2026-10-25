@@ -779,7 +779,11 @@ fn craft_town_xp(job: &CraftJob, reward: &RewardGrant) -> u64 {
     else {
         return 0;
     };
-    let units = reward.stackable_items.get(&decoration).copied().unwrap_or(0)
+    let units = reward
+        .stackable_items
+        .get(&decoration)
+        .copied()
+        .unwrap_or(0)
         + reward
             .items
             .iter()
@@ -830,8 +834,7 @@ pub async fn finish_craft(
             if response.town_xp > 0 {
                 // Same transaction and row lock as the collect above, re-read after
                 // its write, so nothing it changed is written back stale.
-                let mut entry =
-                    crate::town::load_town_economy(conn, character_id, user_id).await?;
+                let mut entry = crate::town::load_town_economy(conn, character_id, user_id).await?;
                 response.town = crate::town::credit_town_xp(
                     &mut entry.town,
                     &mut entry.server_state.0,
@@ -2354,7 +2357,10 @@ mod tests {
             deploy_items(),
             &mut seeded(264),
         );
-        assert!(!out.properties.enchanting.is_empty(), "the enchant itself is present");
+        assert!(
+            !out.properties.enchanting.is_empty(),
+            "the enchant itself is present"
+        );
         assert_eq!(out.grade, None);
         assert!(out.properties.grading.is_empty());
     }
@@ -2610,23 +2616,68 @@ mod tests {
             !shipped.tuning.secondary_count_odds.is_empty(),
             "the shipped file spells the odds out"
         );
-        assert_eq!(
-            shipped.tuning.double_ravage_pity,
-            Default::default(),
-            "shipped pity settings = code defaults"
-        );
-        for e in [code_default, &shipped] {
-            for (i, t) in e.secondary_tables.iter().enumerate() {
-                assert_eq!(e.count_odds_for(t), t.count_odds.as_slice(), "table {i}");
-            }
-            let odds = |template: &str| e.count_odds_for(e.table_for(&uuid(template)).unwrap());
-            assert_eq!(odds(MADNESS_BATTLEAXE), [0.6, 0.25, 0.15], "weapons");
-            assert_eq!(odds(GOLD_EMERALD_RING), [0.3, 0.6, 0.1], "rings");
+        // The code default is retail for every table.
+        for (i, t) in code_default.secondary_tables.iter().enumerate() {
+            assert_eq!(
+                code_default.count_odds_for(t),
+                t.count_odds.as_slice(),
+                "table {i}"
+            );
         }
+        let odds = |e: &EnchantingData, template: &str| {
+            e.count_odds_for(e.table_for(&uuid(template)).unwrap())
+                .to_vec()
+        };
+        assert_eq!(
+            odds(code_default, MADNESS_BATTLEAXE),
+            [0.6, 0.25, 0.15],
+            "retail weapons"
+        );
+        assert_eq!(
+            odds(code_default, GOLD_EMERALD_RING),
+            [0.3, 0.6, 0.1],
+            "retail rings"
+        );
+        // The shipped file: HauDrauf's rule for weapons and rings (#415, 2026-10-25);
+        // every other table stays retail.
+        assert_eq!(
+            odds(&shipped, MADNESS_BATTLEAXE),
+            [0.25, 0.5, 0.25],
+            "shipped weapons"
+        );
+        assert_eq!(
+            odds(&shipped, GOLD_EMERALD_RING),
+            [0.25, 0.5, 0.25],
+            "shipped rings"
+        );
+        for (i, t) in shipped.secondary_tables.iter().enumerate() {
+            if matches!(t.item_type, Some(2) | Some(10)) {
+                continue;
+            }
+            assert_eq!(
+                shipped.count_odds_for(t),
+                t.count_odds.as_slice(),
+                "table {i}"
+            );
+        }
+        // The pity threshold follows the shipped weapon P(2): 1 / (P2 x 2 x 0.07^2 / 0.93).
+        let p2 = odds(&shipped, MADNESS_BATTLEAXE)[2];
+        let expected = 1.0 / (p2 * 2.0 * 0.07 * 0.07 / 0.93);
+        let normal = shipped.tuning.double_ravage_pity.tries["normal"] as f64;
+        assert!(
+            (normal - expected).abs() < 1.0,
+            "normal tries {normal} vs expected {expected:.1}"
+        );
+        assert!(shipped.tuning.double_ravage_pity.enabled);
+        assert_eq!(shipped.tuning.double_ravage_pity.tries["arcane2"], 95);
         // Every table is covered by a rule, so editing the file reaches every type.
         for (i, t) in shipped.secondary_tables.iter().enumerate() {
             assert!(
-                shipped.tuning.secondary_count_odds.iter().any(|r| r.matches(t)),
+                shipped
+                    .tuning
+                    .secondary_count_odds
+                    .iter()
+                    .any(|r| r.matches(t)),
                 "table {i} ({:?}/{:?}/{:?}) has no rule",
                 t.item_type,
                 t.weapon_type,
@@ -2976,7 +3027,11 @@ mod tests {
                 .expect("reward item")
                 .item;
             let g = &item.properties.grading;
-            assert_eq!(item.grade, Some(g.iter().map(|p| p.tier).sum()), "grade = sum of tiers");
+            assert_eq!(
+                item.grade,
+                Some(g.iter().map(|p| p.tier).sum()),
+                "grade = sum of tiers"
+            );
             count[g.len()] += 1;
         }
         eprintln!("#393 crafted: {count:?} of {n}");
@@ -3059,7 +3114,10 @@ mod tests {
     #[test]
     fn craft_duration_prefers_the_apk_recipe_and_keeps_the_fallback_otherwise() {
         let steel_gauntlets = uuid("f069258d-b765-4c68-9218-0522f131e69f");
-        assert_eq!(craft_duration_ms(steel_gauntlets, 0, 1, 17_999_872), 600_000);
+        assert_eq!(
+            craft_duration_ms(steel_gauntlets, 0, 1, 17_999_872),
+            600_000
+        );
         assert_eq!(
             craft_duration_ms(uuid(DRAGONSCALE_ARMOR_RECIPE), 0, 1, 0),
             27_000_000
@@ -5615,8 +5673,12 @@ mod tests {
             let rd = repair_data_from_deploy();
             let s = seed(&mut conn, 0).await;
             // Forge crafts are paid now: stock exactly what the two recipes cost.
-            stock_inputs(&mut conn, &s, &[DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE])
-                .await;
+            stock_inputs(
+                &mut conn,
+                &s,
+                &[DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE],
+            )
+            .await;
             // Precondition: both recipes really take the APK-output path (not a captured
             // recipe, not a smith craftable) — otherwise this proves nothing.
             for r in [DRAGONSCALE_HELMET_RECIPE, DRAGONSCALE_ARMOR_RECIPE] {
@@ -5973,7 +6035,10 @@ mod tests {
             let item = &row.inventory.0.backpack.items.0[&s.item_id];
             assert_eq!(item.tempering_level, 9);
             assert_eq!(item.durability, full_at_9);
-            assert!(!rd.needs_repair(item), "a fresh temper must not need repair");
+            assert!(
+                !rd.needs_repair(item),
+                "a fresh temper must not need repair"
+            );
         }
 
         /// A temper started BEFORE the fix stored the item at its old condition.
@@ -6159,10 +6224,12 @@ mod tests {
             )
             .await
             .expect("an affordable Stalhrim craft starts");
-            assert_eq!(started.craft["results"]["items"][0]["itemTemplateId"], STALHRIM_BOOTS);
             assert_eq!(
-                started.craft["craftingTypeId"],
-                "a47707e6-59e9-43b0-a29f-6d703acd8171",
+                started.craft["results"]["items"][0]["itemTemplateId"],
+                STALHRIM_BOOTS
+            );
+            assert_eq!(
+                started.craft["craftingTypeId"], "a47707e6-59e9-43b0-a29f-6d703acd8171",
                 "a Smithing job"
             );
             assert_eq!(started.wallet.balance(GOLD), 10_000 - 3367);
@@ -6190,8 +6257,15 @@ mod tests {
             .await
             .expect("finish");
             assert_eq!(fin.reward.items.len(), 1);
-            assert_eq!(fin.reward.items[0].item.item_template_id, uuid(STALHRIM_BOOTS));
-            assert_eq!(gold_of(&stored(&mut conn, &s).await), 10_000 - 3367, "finish is free");
+            assert_eq!(
+                fin.reward.items[0].item.item_template_id,
+                uuid(STALHRIM_BOOTS)
+            );
+            assert_eq!(
+                gold_of(&stored(&mut conn, &s).await),
+                10_000 - 3367,
+                "finish is free"
+            );
         }
 
         /// CONTROL: one Stalhrim short and the forge craft is refused with the economy
@@ -6256,13 +6330,28 @@ mod tests {
             .await
             .expect("the decoration craft starts");
             let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
-            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
-                .await
-                .expect("finish");
-            assert_eq!(fin.reward.stackable_items.get(&uuid(ANCIENT_TREE)), Some(&1));
+            let fin = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("finish");
+            assert_eq!(
+                fin.reward.stackable_items.get(&uuid(ANCIENT_TREE)),
+                Some(&1)
+            );
             assert_eq!(fin.town_xp, 91, "retail paid +91 for one Ancient Tree");
             let wire = serde_json::to_value(&fin).unwrap();
-            assert!(wire["reward"].get("townXp").is_none(), "retail's craft reward has no townXp: {wire}");
+            assert!(
+                wire["reward"].get("townXp").is_none(),
+                "retail's craft reward has no townXp: {wire}"
+            );
         }
 
         /// CONTROL: a craft that is not a Workshop decoration owes the town nothing,
@@ -6285,9 +6374,18 @@ mod tests {
             .await
             .expect("enchant starts");
             let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
-            let fin = collect_craft(&mut conn, &sd, rd, None, s.user_id, s.character_id, craft_id, false)
-                .await
-                .expect("finish");
+            let fin = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("finish");
             assert_eq!(fin.town_xp, 0);
             assert!(serde_json::to_value(&fin).unwrap().get("town").is_none());
         }

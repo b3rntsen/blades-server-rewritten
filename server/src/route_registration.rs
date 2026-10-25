@@ -62,8 +62,10 @@ mod tests {
                     // attribute applies to.
                     if let Some(j) = rest.find("async fn ") {
                         let after = &rest[j + "async fn ".len()..];
-                        let name: String =
-                            after.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        let name: String = after
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
                         // Only count it when `pub` sits between the attribute and
                         // the fn — a private routed handler cannot be registered
                         // from main.rs and is not what this guards.
@@ -133,7 +135,11 @@ mod tests {
             "only found {} attributed handlers; the scan is broken, not the server",
             handlers.len()
         );
-        assert!(registered.len() > 60, "only found {} registered services", registered.len());
+        assert!(
+            registered.len() > 60,
+            "only found {} registered services",
+            registered.len()
+        );
 
         let missing: Vec<&String> = handlers
             .iter()
@@ -194,14 +200,12 @@ mod retail_coverage {
 
     /// Endpoints we knowingly do not serve, each with the reason. An entry here is
     /// a decision; anything else failing this test is a gap.
-    const NOT_SERVED: &[(&str, &str)] = &[
-        (
-            "DELETE /characters/{id}/loadouts/profiles/{n}",
-            "Deleting a saved loadout profile. 3 captures from 1 player — the only \
+    const NOT_SERVED: &[(&str, &str)] = &[(
+        "DELETE /characters/{id}/loadouts/profiles/{n}",
+        "Deleting a saved loadout profile. 3 captures from 1 player — the only \
              route in the corpus we do not answer. Saving over a slot (POST) works, \
              so nothing is unreachable; clearing one is not.",
-        ),
-    ];
+    )];
 
     /// Route paths declared anywhere in `server/src`, normalised to the shape the
     /// capture inventory uses.
@@ -274,7 +278,11 @@ mod retail_coverage {
         let raw = fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p:?}: {e}"));
         let inventory: serde_json::Value = serde_json::from_str(&raw).expect("valid json");
         let rows = inventory["observations"].as_array().expect("observations");
-        assert!(rows.len() >= 80, "only {} endpoints in the inventory", rows.len());
+        assert!(
+            rows.len() >= 80,
+            "only {} endpoints in the inventory",
+            rows.len()
+        );
 
         let ours = declared_routes();
         assert!(
@@ -327,7 +335,10 @@ mod retail_coverage {
                 known.contains(endpoint),
                 "NOT_SERVED excuses `{endpoint}`, which retail never answered"
             );
-            assert!(why.len() > 40, "`{endpoint}` needs a real reason, not a label");
+            assert!(
+                why.len() > 40,
+                "`{endpoint}` needs a real reason, not a label"
+            );
         }
     }
 }
@@ -403,7 +414,10 @@ mod scaling_comes_from_the_loaded_table {
     #[test]
     fn no_production_code_asks_an_empty_scaling_table() {
         let mut files = Vec::new();
-        rs_files(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        rs_files(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
 
         let mut offenders = Vec::new();
         let mut scanned = 0;

@@ -73,14 +73,20 @@ fn step_at(steps: &[(u32, f64)], enemy_level: u32) -> Option<f64> {
 /// The kill-score multiplier for an enemy of `enemy_level` on a floor of dungeon
 /// `dungeon_settings_id`. `None` for a dungeon the table does not hold.
 pub fn floor_multiplier(dungeon_settings_id: Uuid, enemy_level: u32) -> Option<f64> {
-    step_at(&table().dungeons.get(&dungeon_settings_id)?.steps, enemy_level)
+    step_at(
+        &table().dungeons.get(&dungeon_settings_id)?.steps,
+        enemy_level,
+    )
 }
 
 /// The kill-score multiplier of the enemy that spawn group `spawn_group_id` spawns at
 /// `enemy_level` — the very number the client multiplies that kill by. `None` for a
 /// group the table does not hold (only Abyss dungeons' groups are in it).
 pub fn spawn_group_multiplier(spawn_group_id: Uuid, enemy_level: u32) -> Option<f64> {
-    step_at(&spawn_group_table().spawn_groups.get(&spawn_group_id)?.steps, enemy_level)
+    step_at(
+        &spawn_group_table().spawn_groups.get(&spawn_group_id)?.steps,
+        enemy_level,
+    )
 }
 
 /// The multiplier for one kill: the enemy's own, else the floor's, else `None`.
@@ -154,7 +160,11 @@ mod tests {
         let floor = id("0ec5e913-6074-4490-abaa-f1802827b007");
         let critter = id("998b8cd8-75e2-4826-af97-253bd1ad378a");
         let ordinary = id("17fca83f-dfe0-484c-a1e8-6a96c104f621");
-        assert_eq!(floor_multiplier(floor, 16), Some(0.33), "the floor table: lowest");
+        assert_eq!(
+            floor_multiplier(floor, 16),
+            Some(0.33),
+            "the floor table: lowest"
+        );
         assert_eq!(kill_multiplier(Some(critter), floor, 16), Some(0.33));
         assert_eq!(kill_multiplier(Some(ordinary), floor, 16), Some(1.0));
     }
@@ -162,7 +172,10 @@ mod tests {
     #[test]
     fn an_unknown_spawn_group_falls_back_to_the_floor() {
         let goblin_floor = id("663053f0-3a46-4012-b004-6cb2e907f33c");
-        assert_eq!(kill_multiplier(Some(Uuid::nil()), goblin_floor, 1), Some(1.0));
+        assert_eq!(
+            kill_multiplier(Some(Uuid::nil()), goblin_floor, 1),
+            Some(1.0)
+        );
         assert_eq!(kill_multiplier(None, goblin_floor, 1), Some(1.0));
         assert_eq!(kill_multiplier(None, Uuid::nil(), 1), None);
     }

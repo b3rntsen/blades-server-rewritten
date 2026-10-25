@@ -25,13 +25,19 @@
 //! roll differently after this.
 
 use diesel::sql_types::{Nullable, Uuid as SqlUuid};
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use uuid::Uuid;
 
 /// The alt to fold into a roll seed, or `None` to keep the seed exactly as it
 /// was before alts existed. `live_alt` is the row's `source_alt_uuid`;
 /// `original_alt` the alt of its earliest kept version, if it has one.
-pub fn roll_alt(character_id: Uuid, live_alt: Option<Uuid>, original_alt: Option<Uuid>) -> Option<Uuid> {
+pub fn roll_alt(
+    character_id: Uuid,
+    live_alt: Option<Uuid>,
+    original_alt: Option<Uuid>,
+) -> Option<Uuid> {
     let alt = live_alt.filter(|alt| *alt != character_id)?;
     let original = original_alt?;
     (alt != original).then_some(alt)
@@ -102,7 +108,9 @@ pub async fn for_character(conn: &mut AsyncPgConnection, character_id: Uuid) -> 
             .next()
             .and_then(|r| roll_alt(character_id, r.live, r.original)),
         Err(e) => {
-            log::warn!("[alt-roll] could not read character {character_id}'s alt ({e}); rolling as the original");
+            log::warn!(
+                "[alt-roll] could not read character {character_id}'s alt ({e}); rolling as the original"
+            );
             None
         }
     }
@@ -144,7 +152,10 @@ mod tests {
             (1..=10_000u128).map(|n| salt(Uuid::from_u128(n))).collect();
         assert_eq!(salts.len(), 10_000);
         // Uuids differing only in the high half differ too.
-        assert_ne!(salt(Uuid::from_u128(1 << 64)), salt(Uuid::from_u128(2 << 64)));
+        assert_ne!(
+            salt(Uuid::from_u128(1 << 64)),
+            salt(Uuid::from_u128(2 << 64))
+        );
     }
 }
 
@@ -164,7 +175,9 @@ mod db {
             eprintln!("SKIP: TEST_DATABASE_URL unset — alt roll read NOT verified");
             return;
         };
-        let mut c = AsyncPgConnection::establish(&url).await.expect("TEST_DATABASE_URL unreachable");
+        let mut c = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL unreachable");
         c.begin_test_transaction().await.unwrap();
         let schema = format!("t{}", Uuid::new_v4().simple());
         c.batch_execute(&format!(

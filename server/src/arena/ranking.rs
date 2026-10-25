@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use diesel::OptionalExtension;
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -70,11 +72,23 @@ pub struct FixedDeltas {
 
 impl FixedDeltas {
     pub const fn bot_default() -> Self {
-        Self { win_2_0: 32, win_2_1: 28, loss_1_2: -16, loss_0_2: -20, tie: 0 }
+        Self {
+            win_2_0: 32,
+            win_2_1: 28,
+            loss_1_2: -16,
+            loss_0_2: -20,
+            tie: 0,
+        }
     }
 
     pub const fn human_default() -> Self {
-        Self { win_2_0: 40, win_2_1: 35, loss_1_2: -10, loss_0_2: -15, tie: 0 }
+        Self {
+            win_2_0: 40,
+            win_2_1: 35,
+            loss_1_2: -10,
+            loss_0_2: -15,
+            tie: 0,
+        }
     }
 
     pub fn delta(&self, outcome: MatchOutcome) -> i64 {
@@ -101,7 +115,13 @@ pub struct ScoreTable {
 
 impl Default for ScoreTable {
     fn default() -> Self {
-        Self { win_2_0: 1.0, win_2_1: 0.92, loss_1_2: 0.12, loss_0_2: 0.0, tie: 0.5 }
+        Self {
+            win_2_0: 1.0,
+            win_2_1: 0.92,
+            loss_1_2: 0.12,
+            loss_0_2: 0.0,
+            tie: 0.5,
+        }
     }
 }
 
@@ -130,7 +150,14 @@ pub struct EloConfig {
 impl Default for EloConfig {
     fn default() -> Self {
         Self {
-            k_table: vec![[0, 100], [500, 90], [1000, 80], [1500, 70], [2000, 60], [2500, 50]],
+            k_table: vec![
+                [0, 100],
+                [500, 90],
+                [1000, 80],
+                [1500, 70],
+                [2000, 60],
+                [2500, 50],
+            ],
             score: ScoreTable::default(),
             min_win: 1,
             max_loss: -1,
@@ -218,7 +245,13 @@ pub struct H2hRatingConfig {
 
 impl Default for H2hRatingConfig {
     fn default() -> Self {
-        Self { start: 1000, k: 32, k_provisional: 48, provisional_games: 10, min_games_listed: 3 }
+        Self {
+            start: 1000,
+            k: 32,
+            k_provisional: 48,
+            provisional_games: 10,
+            min_games_listed: 3,
+        }
     }
 }
 
@@ -263,7 +296,10 @@ impl RankingConfig {
             errors.insert("bot.jitter".into(), "must be between 0 and 1000".into());
         }
         if self.bot.avoid_recent_opponents > 50 {
-            errors.insert("bot.avoid_recent_opponents".into(), "must be at most 50".into());
+            errors.insert(
+                "bot.avoid_recent_opponents".into(),
+                "must be at most 50".into(),
+            );
         }
         if self.human.flat_award < 0 {
             errors.insert("human.flat_award".into(), "must be non-negative".into());
@@ -272,12 +308,18 @@ impl RankingConfig {
             errors.insert("human.pair_daily_cap".into(), "must be at most 100".into());
         }
         if self.elo.k_table.is_empty() {
-            errors.insert("elo.k_table".into(), "must contain at least one band".into());
+            errors.insert(
+                "elo.k_table".into(),
+                "must contain at least one band".into(),
+            );
         }
         let mut last = None;
         for (i, [floor, k]) in self.elo.k_table.iter().copied().enumerate() {
             if floor < 0 {
-                errors.insert(format!("elo.k_table[{i}][0]"), "must be non-negative".into());
+                errors.insert(
+                    format!("elo.k_table[{i}][0]"),
+                    "must be non-negative".into(),
+                );
             }
             if k <= 0 {
                 errors.insert(format!("elo.k_table[{i}][1]"), "must be positive".into());
@@ -285,11 +327,20 @@ impl RankingConfig {
             if let Some(prev) = last
                 && floor <= prev
             {
-                errors.insert("elo.k_table".into(), "floors must be strictly ascending".into());
+                errors.insert(
+                    "elo.k_table".into(),
+                    "floors must be strictly ascending".into(),
+                );
             }
             last = Some(floor);
         }
-        if self.elo.k_table.as_slice().first().is_some_and(|x| x[0] != 0) {
+        if self
+            .elo
+            .k_table
+            .as_slice()
+            .first()
+            .is_some_and(|x| x[0] != 0)
+        {
             errors.insert("elo.k_table[0][0]".into(), "must start at 0".into());
         }
         for (field, score) in [
@@ -300,7 +351,10 @@ impl RankingConfig {
             ("elo.score.tie", self.elo.score.tie),
         ] {
             if !(0.0..=1.0).contains(&score) || !score.is_finite() {
-                errors.insert(field.into(), "must be a finite value between 0 and 1".into());
+                errors.insert(
+                    field.into(),
+                    "must be a finite value between 0 and 1".into(),
+                );
             }
         }
         if self.elo.min_win < 0 {
@@ -319,10 +373,16 @@ impl RankingConfig {
             errors.insert("h2h_rating.k_provisional".into(), "must be positive".into());
         }
         if self.h2h_rating.provisional_games < 0 {
-            errors.insert("h2h_rating.provisional_games".into(), "must be non-negative".into());
+            errors.insert(
+                "h2h_rating.provisional_games".into(),
+                "must be non-negative".into(),
+            );
         }
         if self.h2h_rating.min_games_listed < 0 {
-            errors.insert("h2h_rating.min_games_listed".into(), "must be non-negative".into());
+            errors.insert(
+                "h2h_rating.min_games_listed".into(),
+                "must be non-negative".into(),
+            );
         }
         if self.h2h_reconcile_minutes != 0 && !(1..=1440).contains(&self.h2h_reconcile_minutes) {
             errors.insert(
@@ -330,16 +390,26 @@ impl RankingConfig {
                 "must be 0 or between 1 and 1440".into(),
             );
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
 fn validate_fixed(prefix: &str, fixed: &FixedDeltas, errors: &mut ValidationErrors) {
     if fixed.win_2_0 < fixed.win_2_1 || fixed.win_2_1 < 0 {
-        errors.insert(format!("{prefix}.win_2_0"), "wins must be non-negative and 2-0 >= 2-1".into());
+        errors.insert(
+            format!("{prefix}.win_2_0"),
+            "wins must be non-negative and 2-0 >= 2-1".into(),
+        );
     }
     if fixed.loss_0_2 > fixed.loss_1_2 || fixed.loss_1_2 > 0 {
-        errors.insert(format!("{prefix}.loss_0_2"), "losses must be non-positive and 0-2 <= 1-2".into());
+        errors.insert(
+            format!("{prefix}.loss_0_2"),
+            "losses must be non-positive and 0-2 <= 1-2".into(),
+        );
     }
 }
 
@@ -420,7 +490,10 @@ async fn load_uncached(pool: &DbPool) -> Result<Option<LoadedRankingConfig>, any
     let Some(row) = row else { return Ok(None) };
     let config: RankingConfig = serde_json::from_value(row.config)?;
     if let Err(errors) = config.validate() {
-        anyhow::bail!("active config v{} does not validate: {errors:?}", row.version);
+        anyhow::bail!(
+            "active config v{} does not validate: {errors:?}",
+            row.version
+        );
     }
     Ok(Some(LoadedRankingConfig {
         version: row.version,
@@ -443,7 +516,10 @@ pub struct MatchRankingContext {
 
 impl Default for MatchRankingContext {
     fn default() -> Self {
-        Self { config: RankingConfig::default(), h2h_pair_matches_today: 0 }
+        Self {
+            config: RankingConfig::default(),
+            h2h_pair_matches_today: 0,
+        }
     }
 }
 
@@ -468,13 +544,23 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
                 config.human.fixed.delta(input.outcome) + award
             }
             HumanMode::Fixed => config.human.fixed.delta(input.outcome),
-            HumanMode::Elo => elo_delta(&config.elo, input.outcome, input.own_trophies, input.opponent_trophies_for_pricing),
+            HumanMode::Elo => elo_delta(
+                &config.elo,
+                input.outcome,
+                input.own_trophies,
+                input.opponent_trophies_for_pricing,
+            ),
         };
     }
     match config.bot.mode {
         BotMode::Fixed => config.bot.fixed.delta(input.outcome),
         BotMode::Elo => {
-            let delta = elo_delta(&config.elo, input.outcome, input.own_trophies, input.opponent_trophies_for_pricing);
+            let delta = elo_delta(
+                &config.elo,
+                input.outcome,
+                input.own_trophies,
+                input.opponent_trophies_for_pricing,
+            );
             if config.bot.pricing == BotPricing::Mimic && delta < -80 {
                 -80
             } else {
@@ -484,7 +570,12 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
     }
 }
 
-pub fn elo_delta(config: &EloConfig, outcome: MatchOutcome, own_trophies: i64, opponent_trophies: i64) -> i64 {
+pub fn elo_delta(
+    config: &EloConfig,
+    outcome: MatchOutcome,
+    own_trophies: i64,
+    opponent_trophies: i64,
+) -> i64 {
     let expected =
         1.0 / (1.0 + 10f64.powf((opponent_trophies - own_trophies) as f64 / ELO_LOGISTIC_SCALE));
     let k = k_factor(&config.k_table, own_trophies) as f64;
@@ -560,7 +651,13 @@ pub struct H2hRatingState {
 
 impl H2hRatingState {
     pub fn new(start: i64) -> Self {
-        Self { rating: start, wins: 0, losses: 0, ties: 0, matches: 0 }
+        Self {
+            rating: start,
+            wins: 0,
+            losses: 0,
+            ties: 0,
+            matches: 0,
+        }
     }
 }
 
@@ -580,7 +677,10 @@ pub struct H2hKey {
 
 impl H2hKey {
     pub fn new(character_id: Uuid, alt_key: Uuid) -> Self {
-        Self { character_id, alt_key }
+        Self {
+            character_id,
+            alt_key,
+        }
     }
 }
 
@@ -600,8 +700,16 @@ pub fn apply_h2h_rating(
     let b_score = 1.0 - a_score;
     let expected_a = 1.0 / (1.0 + 10f64.powf((b.rating - a.rating) as f64 / ELO_LOGISTIC_SCALE));
     let expected_b = 1.0 - expected_a;
-    let ka = if a.matches < config.provisional_games { config.k_provisional } else { config.k } as f64;
-    let kb = if b.matches < config.provisional_games { config.k_provisional } else { config.k } as f64;
+    let ka = if a.matches < config.provisional_games {
+        config.k_provisional
+    } else {
+        config.k
+    } as f64;
+    let kb = if b.matches < config.provisional_games {
+        config.k_provisional
+    } else {
+        config.k
+    } as f64;
     let mut na = a;
     let mut nb = b;
     na.rating = (a.rating as f64 + ka * (a_score - expected_a)).round() as i64;
@@ -672,7 +780,10 @@ pub struct SeasonedH2hRatings<K: Ord = Uuid> {
 
 impl<K: Ord> Default for SeasonedH2hRatings<K> {
     fn default() -> Self {
-        Self { all_time: BTreeMap::new(), seasons: BTreeMap::new() }
+        Self {
+            all_time: BTreeMap::new(),
+            seasons: BTreeMap::new(),
+        }
     }
 }
 
@@ -994,7 +1105,10 @@ pub async fn reconcile_h2h_ratings_with_config(
                     )
                 }),
             );
-            let report = H2hReconcileReport { characters: ratings.all_time.len(), matches: rows.len() };
+            let report = H2hReconcileReport {
+                characters: ratings.all_time.len(),
+                matches: rows.len(),
+            };
 
             if !dry_run {
                 write_h2h_ratings(&mut conn, ratings, last_seen, season_last_seen).await?;
@@ -1017,7 +1131,9 @@ pub async fn lock_h2h_rating_transaction(
     Ok(())
 }
 
-async fn load_h2h_replay_rows(conn: &mut AsyncPgConnection) -> Result<Vec<H2hReplayRow>, anyhow::Error> {
+async fn load_h2h_replay_rows(
+    conn: &mut AsyncPgConnection,
+) -> Result<Vec<H2hReplayRow>, anyhow::Error> {
     let rows = diesel::sql_query(format!(
         "{H2H_REPLAY_ROWS_CTE} \
          SELECT season_id, character_id, alt_key, opponent_character_id, opponent_alt_key, \
@@ -1043,10 +1159,15 @@ impl H2hReplayRow {
 fn h2h_last_seen(rows: &[H2hReplayRow]) -> HashMap<H2hKey, DateTime<Utc>> {
     rows.iter()
         .flat_map(|r| [(r.key(), r.recorded_at), (r.opponent_key(), r.recorded_at)])
-        .fold(HashMap::<H2hKey, DateTime<Utc>>::new(), |mut acc, (id, at)| {
-            acc.entry(id).and_modify(|old| *old = (*old).max(at)).or_insert(at);
-            acc
-        })
+        .fold(
+            HashMap::<H2hKey, DateTime<Utc>>::new(),
+            |mut acc, (id, at)| {
+                acc.entry(id)
+                    .and_modify(|old| *old = (*old).max(at))
+                    .or_insert(at);
+                acc
+            },
+        )
 }
 
 fn h2h_season_last_seen(rows: &[H2hReplayRow]) -> HashMap<(Uuid, H2hKey), DateTime<Utc>> {
@@ -1058,10 +1179,15 @@ fn h2h_season_last_seen(rows: &[H2hReplayRow]) -> HashMap<(Uuid, H2hKey), DateTi
                 ((season_id, r.opponent_key()), r.recorded_at),
             ]
         })
-        .fold(HashMap::<(Uuid, H2hKey), DateTime<Utc>>::new(), |mut acc, (key, at)| {
-            acc.entry(key).and_modify(|old| *old = (*old).max(at)).or_insert(at);
-            acc
-        })
+        .fold(
+            HashMap::<(Uuid, H2hKey), DateTime<Utc>>::new(),
+            |mut acc, (key, at)| {
+                acc.entry(key)
+                    .and_modify(|old| *old = (*old).max(at))
+                    .or_insert(at);
+                acc
+            },
+        )
 }
 
 async fn write_h2h_ratings(
@@ -1070,8 +1196,12 @@ async fn write_h2h_ratings(
     last_seen: HashMap<H2hKey, DateTime<Utc>>,
     season_last_seen: HashMap<(Uuid, H2hKey), DateTime<Utc>>,
 ) -> Result<(), anyhow::Error> {
-    diesel::sql_query("DELETE FROM arena_h2h_ratings").execute(&mut *conn).await?;
-    diesel::sql_query("DELETE FROM arena_h2h_season_ratings").execute(&mut *conn).await?;
+    diesel::sql_query("DELETE FROM arena_h2h_ratings")
+        .execute(&mut *conn)
+        .await?;
+    diesel::sql_query("DELETE FROM arena_h2h_season_ratings")
+        .execute(&mut *conn)
+        .await?;
     for (key, state) in ratings.all_time {
         diesel::sql_query(
             "INSERT INTO arena_h2h_ratings \
@@ -1186,9 +1316,30 @@ mod tests {
     #[test]
     fn validation_rejects_bad_values() {
         let bad = RankingConfig {
-            bot: BotConfig { jitter: -1, fixed: FixedDeltas { win_2_0: 1, win_2_1: 2, loss_1_2: 1, loss_0_2: 0, tie: 0 }, ..BotConfig::default() },
-            elo: EloConfig { k_table: vec![[500, 0], [100, 10]], min_win: -1, max_loss: 1, ..EloConfig::default() },
-            h2h_rating: H2hRatingConfig { start: 0, k: 0, k_provisional: 0, provisional_games: -1, min_games_listed: -1 },
+            bot: BotConfig {
+                jitter: -1,
+                fixed: FixedDeltas {
+                    win_2_0: 1,
+                    win_2_1: 2,
+                    loss_1_2: 1,
+                    loss_0_2: 0,
+                    tie: 0,
+                },
+                ..BotConfig::default()
+            },
+            elo: EloConfig {
+                k_table: vec![[500, 0], [100, 10]],
+                min_win: -1,
+                max_loss: 1,
+                ..EloConfig::default()
+            },
+            h2h_rating: H2hRatingConfig {
+                start: 0,
+                k: 0,
+                k_provisional: 0,
+                provisional_games: -1,
+                min_games_listed: -1,
+            },
             h2h_reconcile_minutes: 1441,
             ..RankingConfig::default()
         };
@@ -1203,11 +1354,17 @@ mod tests {
     #[test]
     fn h2h_reconcile_minutes_accepts_disabled_and_bounded_values() {
         for minutes in [0, 1, 15, 1440] {
-            let cfg = RankingConfig { h2h_reconcile_minutes: minutes, ..RankingConfig::default() };
+            let cfg = RankingConfig {
+                h2h_reconcile_minutes: minutes,
+                ..RankingConfig::default()
+            };
             assert!(cfg.validate().is_ok(), "{minutes} should validate");
         }
         for minutes in [-1, 1441] {
-            let cfg = RankingConfig { h2h_reconcile_minutes: minutes, ..RankingConfig::default() };
+            let cfg = RankingConfig {
+                h2h_reconcile_minutes: minutes,
+                ..RankingConfig::default()
+            };
             assert!(
                 cfg.validate()
                     .unwrap_err()
@@ -1220,20 +1377,26 @@ mod tests {
     #[test]
     fn bot_defaults_fix_plus_one_minus_eighty() {
         let cfg = RankingConfig::default();
-        let win = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: win20(),
-            own_trophies: 800,
-            opponent_trophies_for_pricing: bot_pricing_trophies(&cfg, 800, 50, Uuid::nil(), 0),
-            h2h: false,
-            h2h_pair_matches_today: 0,
-        });
-        let loss = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: loss02(),
-            own_trophies: 800,
-            opponent_trophies_for_pricing: bot_pricing_trophies(&cfg, 800, 50, Uuid::nil(), 0),
-            h2h: false,
-            h2h_pair_matches_today: 0,
-        });
+        let win = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: win20(),
+                own_trophies: 800,
+                opponent_trophies_for_pricing: bot_pricing_trophies(&cfg, 800, 50, Uuid::nil(), 0),
+                h2h: false,
+                h2h_pair_matches_today: 0,
+            },
+        );
+        let loss = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: loss02(),
+                own_trophies: 800,
+                opponent_trophies_for_pricing: bot_pricing_trophies(&cfg, 800, 50, Uuid::nil(), 0),
+                h2h: false,
+                h2h_pair_matches_today: 0,
+            },
+        );
         assert_eq!((win, loss), (32, -20));
     }
 
@@ -1244,40 +1407,52 @@ mod tests {
         cfg.bot.mode = BotMode::Elo;
         let price = bot_pricing_trophies(&cfg, 800, 50, Uuid::nil(), 0);
         assert_eq!(price, 50);
-        let win = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: win20(),
-            own_trophies: 800,
-            opponent_trophies_for_pricing: price,
-            h2h: false,
-            h2h_pair_matches_today: 0,
-        });
-        let loss = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: loss02(),
-            own_trophies: 800,
-            opponent_trophies_for_pricing: price,
-            h2h: false,
-            h2h_pair_matches_today: 0,
-        });
+        let win = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: win20(),
+                own_trophies: 800,
+                opponent_trophies_for_pricing: price,
+                h2h: false,
+                h2h_pair_matches_today: 0,
+            },
+        );
+        let loss = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: loss02(),
+                own_trophies: 800,
+                opponent_trophies_for_pricing: price,
+                h2h: false,
+                h2h_pair_matches_today: 0,
+            },
+        );
         assert_eq!((win, loss), (1, -80));
     }
 
     #[test]
     fn h2h_flat_adds_award_to_normal_win_and_loss_under_daily_cap() {
         let cfg = RankingConfig::default();
-        let winner = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: win20(),
-            own_trophies: 100,
-            opponent_trophies_for_pricing: 300,
-            h2h: true,
-            h2h_pair_matches_today: 2,
-        });
-        let loser = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: loss02(),
-            own_trophies: 100,
-            opponent_trophies_for_pricing: 300,
-            h2h: true,
-            h2h_pair_matches_today: 2,
-        });
+        let winner = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: win20(),
+                own_trophies: 100,
+                opponent_trophies_for_pricing: 300,
+                h2h: true,
+                h2h_pair_matches_today: 2,
+            },
+        );
+        let loser = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: loss02(),
+                own_trophies: 100,
+                opponent_trophies_for_pricing: 300,
+                h2h: true,
+                h2h_pair_matches_today: 2,
+            },
+        );
         assert_eq!(winner, cfg.human.fixed.win_2_0 + cfg.human.flat_award);
         assert_eq!(loser, cfg.human.fixed.loss_0_2 + cfg.human.flat_award);
         assert!(winner > cfg.human.flat_award);
@@ -1288,30 +1463,39 @@ mod tests {
     #[test]
     fn h2h_flat_daily_cap_falls_back_to_plain_normal_delta() {
         let cfg = RankingConfig::default();
-        let after_cap = trophy_delta(&cfg, TrophyDeltaInput {
-            outcome: win20(),
-            own_trophies: 100,
-            opponent_trophies_for_pricing: 300,
-            h2h: true,
-            h2h_pair_matches_today: 3,
-        });
+        let after_cap = trophy_delta(
+            &cfg,
+            TrophyDeltaInput {
+                outcome: win20(),
+                own_trophies: 100,
+                opponent_trophies_for_pricing: 300,
+                h2h: true,
+                h2h_pair_matches_today: 3,
+            },
+        );
         assert_eq!(after_cap, cfg.human.fixed.win_2_0);
     }
 
     #[test]
     fn h2h_flat_zero_award_is_identical_to_plain_normal_delta() {
         let cfg = RankingConfig {
-            human: HumanConfig { flat_award: 0, ..HumanConfig::default() },
+            human: HumanConfig {
+                flat_award: 0,
+                ..HumanConfig::default()
+            },
             ..RankingConfig::default()
         };
         for outcome in [win20(), loss02()] {
-            let got = trophy_delta(&cfg, TrophyDeltaInput {
-                outcome,
-                own_trophies: 100,
-                opponent_trophies_for_pricing: 300,
-                h2h: true,
-                h2h_pair_matches_today: 0,
-            });
+            let got = trophy_delta(
+                &cfg,
+                TrophyDeltaInput {
+                    outcome,
+                    own_trophies: 100,
+                    opponent_trophies_for_pricing: 300,
+                    h2h: true,
+                    h2h_pair_matches_today: 0,
+                },
+            );
             assert_eq!(got, cfg.human.fixed.delta(outcome));
         }
     }
@@ -1326,7 +1510,10 @@ mod tests {
         assert_eq!(b.rating, 976);
         assert_eq!((a.wins, b.losses, a.matches, b.matches), (1, 1, 1, 1));
 
-        let veteran = H2hRatingState { matches: 10, ..H2hRatingState::new(1000) };
+        let veteran = H2hRatingState {
+            matches: 10,
+            ..H2hRatingState::new(1000)
+        };
         let (veteran, _) = apply_h2h_rating(&cfg, veteran, H2hRatingState::new(1000), win20());
         assert_eq!(veteran.rating, 1016);
     }
@@ -1346,7 +1533,10 @@ mod tests {
     #[test]
     fn h2h_detection_requires_two_human_peers_and_no_bot() {
         assert!(is_h2h_match(2, 2, false));
-        assert!(!is_h2h_match(2, 1, false), "solo plus unmarked extra fighter is not paired h2h");
+        assert!(
+            !is_h2h_match(2, 1, false),
+            "solo plus unmarked extra fighter is not paired h2h"
+        );
         assert!(!is_h2h_match(2, 2, true), "bot copies are never h2h");
         assert!(!is_h2h_match(3, 3, false), "only 1v1 h2h feeds this board");
     }
@@ -1444,35 +1634,74 @@ mod tests {
         let b = Uuid::from_u128(2);
         let c = Uuid::from_u128(3);
         let cfg = H2hRatingConfig::default();
-        let replayed = replay_h2h_ratings_by_season(&cfg, [
-            (Some(season), a, b, win20()),
-            (Some(season), b, c, win20()),
-            (None, c, a, win20()),
-        ]);
+        let replayed = replay_h2h_ratings_by_season(
+            &cfg,
+            [
+                (Some(season), a, b, win20()),
+                (Some(season), b, c, win20()),
+                (None, c, a, win20()),
+            ],
+        );
 
         assert_eq!(
             replayed.all_time[&a],
-            H2hRatingState { rating: 997, wins: 1, losses: 1, ties: 0, matches: 2 }
+            H2hRatingState {
+                rating: 997,
+                wins: 1,
+                losses: 1,
+                ties: 0,
+                matches: 2
+            }
         );
         assert_eq!(
             replayed.all_time[&b],
-            H2hRatingState { rating: 1002, wins: 1, losses: 1, ties: 0, matches: 2 }
+            H2hRatingState {
+                rating: 1002,
+                wins: 1,
+                losses: 1,
+                ties: 0,
+                matches: 2
+            }
         );
         assert_eq!(
             replayed.all_time[&c],
-            H2hRatingState { rating: 1001, wins: 1, losses: 1, ties: 0, matches: 2 }
+            H2hRatingState {
+                rating: 1001,
+                wins: 1,
+                losses: 1,
+                ties: 0,
+                matches: 2
+            }
         );
         assert_eq!(
             replayed.seasons[&season][&a],
-            H2hRatingState { rating: 1024, wins: 1, losses: 0, ties: 0, matches: 1 }
+            H2hRatingState {
+                rating: 1024,
+                wins: 1,
+                losses: 0,
+                ties: 0,
+                matches: 1
+            }
         );
         assert_eq!(
             replayed.seasons[&season][&b],
-            H2hRatingState { rating: 1002, wins: 1, losses: 1, ties: 0, matches: 2 }
+            H2hRatingState {
+                rating: 1002,
+                wins: 1,
+                losses: 1,
+                ties: 0,
+                matches: 2
+            }
         );
         assert_eq!(
             replayed.seasons[&season][&c],
-            H2hRatingState { rating: 974, wins: 0, losses: 1, ties: 0, matches: 1 }
+            H2hRatingState {
+                rating: 974,
+                wins: 0,
+                losses: 1,
+                ties: 0,
+                matches: 1
+            }
         );
     }
 
@@ -1484,9 +1713,8 @@ mod tests {
             "../../../migrations/2026-09-28-000000-0000_add_arena_match_results_h2h_flag/up.sql"
         );
 
-        const H2H_PER_ALT_MIGRATION_UP: &str = include_str!(
-            "../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql"
-        );
+        const H2H_PER_ALT_MIGRATION_UP: &str =
+            include_str!("../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql");
 
         const SCHEMA: [&str; 9] = [
             "CREATE TABLE arena_seasons ( \
@@ -1566,7 +1794,9 @@ mod tests {
             let mut conn = AsyncPgConnection::establish(&url)
                 .await
                 .expect("TEST_DATABASE_URL is set but unreachable");
-            conn.begin_test_transaction().await.expect("test transaction");
+            conn.begin_test_transaction()
+                .await
+                .expect("test transaction");
             let schema = format!("t{}", Uuid::new_v4().simple());
             diesel::sql_query(format!("CREATE SCHEMA {schema}"))
                 .execute(&mut conn)
@@ -1600,7 +1830,9 @@ mod tests {
             let mut conn = AsyncPgConnection::establish(&url)
                 .await
                 .expect("TEST_DATABASE_URL is set but unreachable");
-            conn.begin_test_transaction().await.expect("test transaction");
+            conn.begin_test_transaction()
+                .await
+                .expect("test transaction");
             let schema = format!("t{}", Uuid::new_v4().simple());
             diesel::sql_query(format!("CREATE SCHEMA {schema}"))
                 .execute(&mut conn)
@@ -1639,7 +1871,9 @@ mod tests {
         async fn seed_character(conn: &mut AsyncPgConnection, id: Uuid) {
             diesel::sql_query("INSERT INTO characters (id, character) VALUES ($1, $2)")
                 .bind::<diesel::sql_types::Uuid, _>(id)
-                .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name":"fighter","level":1}))
+                .bind::<diesel::sql_types::Jsonb, _>(
+                    serde_json::json!({"name":"fighter","level":1}),
+                )
                 .execute(conn)
                 .await
                 .unwrap();
@@ -1869,22 +2103,40 @@ mod tests {
             let report = reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
                 .await
                 .unwrap();
-            assert_eq!(report, H2hReconcileReport { characters: 3, matches: 2 });
+            assert_eq!(
+                report,
+                H2hReconcileReport {
+                    characters: 3,
+                    matches: 2
+                }
+            );
             let first_all = all_time(&mut conn).await;
             let first_seasons = seasonal(&mut conn).await;
-            assert_eq!(first_all.len(), 3, "paired h2h history should populate empty all-time");
+            assert_eq!(
+                first_all.len(),
+                3,
+                "paired h2h history should populate empty all-time"
+            );
             assert_eq!(
                 first_all.iter().map(|r| r.matches).sum::<i32>(),
                 4,
                 "two matches touch two humans each; the AI match is excluded"
             );
-            assert_eq!(first_seasons.len(), 4, "one old-season and one new-season match");
+            assert_eq!(
+                first_seasons.len(),
+                4,
+                "one old-season and one new-season match"
+            );
             assert!(
-                first_seasons.iter().any(|r| r.season_id == new && r.character_id == b),
+                first_seasons
+                    .iter()
+                    .any(|r| r.season_id == new && r.character_id == b),
                 "the boundary match belongs to the season starting at that second"
             );
             assert!(
-                first_seasons.iter().all(|r| !(r.season_id == new && r.character_id == a)),
+                first_seasons
+                    .iter()
+                    .all(|r| !(r.season_id == new && r.character_id == a)),
                 "the false paired=false AI match must not leak onto a season board"
             );
 
@@ -1941,13 +2193,20 @@ mod tests {
             let report = reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
                 .await
                 .unwrap();
-            assert_eq!(report, H2hReconcileReport { characters: 2, matches: 1 });
+            assert_eq!(
+                report,
+                H2hReconcileReport {
+                    characters: 2,
+                    matches: 1
+                }
+            );
             let rows = all_time(&mut conn).await;
             assert_eq!(rows.len(), 2);
             assert!(rows.iter().any(|r| r.character_id == a));
             assert!(rows.iter().any(|r| r.character_id == b));
             assert!(
-                rows.iter().all(|r| r.character_id != c && r.character_id != d),
+                rows.iter()
+                    .all(|r| r.character_id != c && r.character_id != d),
                 "paired=true cannot make an AI/non-h2h audit row enter replay"
             );
         }
@@ -1964,7 +2223,14 @@ mod tests {
             let reciprocal_b = Uuid::from_u128(4);
             let ai_human = Uuid::from_u128(5);
             let ai_copy = Uuid::from_u128(6);
-            for id in [paired_a, paired_b, reciprocal_a, reciprocal_b, ai_human, ai_copy] {
+            for id in [
+                paired_a,
+                paired_b,
+                reciprocal_a,
+                reciprocal_b,
+                ai_human,
+                ai_copy,
+            ] {
                 seed_character(&mut conn, id).await;
             }
 
@@ -1974,10 +2240,22 @@ mod tests {
 
             let reciprocal_gsid = Uuid::from_u128(31);
             seed_match_ticket_count(&mut conn, reciprocal_gsid, false, 2).await;
-            seed_pre_flag_audit(&mut conn, reciprocal_gsid, reciprocal_a, reciprocal_b, (2, 0))
-                .await;
-            seed_pre_flag_audit(&mut conn, reciprocal_gsid, reciprocal_b, reciprocal_a, (0, 2))
-                .await;
+            seed_pre_flag_audit(
+                &mut conn,
+                reciprocal_gsid,
+                reciprocal_a,
+                reciprocal_b,
+                (2, 0),
+            )
+            .await;
+            seed_pre_flag_audit(
+                &mut conn,
+                reciprocal_gsid,
+                reciprocal_b,
+                reciprocal_a,
+                (0, 2),
+            )
+            .await;
 
             let ai_gsid = Uuid::from_u128(32);
             seed_match_ticket_count(&mut conn, ai_gsid, false, 1).await;
@@ -1989,11 +2267,26 @@ mod tests {
             assert_eq!(
                 h2h_flags(&mut conn).await,
                 vec![
-                    H2hFlagRow { character_id: paired_a, is_h2h: true },
-                    H2hFlagRow { character_id: reciprocal_a, is_h2h: true },
-                    H2hFlagRow { character_id: reciprocal_b, is_h2h: true },
-                    H2hFlagRow { character_id: ai_human, is_h2h: false },
-                    H2hFlagRow { character_id: ai_copy, is_h2h: false },
+                    H2hFlagRow {
+                        character_id: paired_a,
+                        is_h2h: true
+                    },
+                    H2hFlagRow {
+                        character_id: reciprocal_a,
+                        is_h2h: true
+                    },
+                    H2hFlagRow {
+                        character_id: reciprocal_b,
+                        is_h2h: true
+                    },
+                    H2hFlagRow {
+                        character_id: ai_human,
+                        is_h2h: false
+                    },
+                    H2hFlagRow {
+                        character_id: ai_copy,
+                        is_h2h: false
+                    },
                 ],
                 "paired history and reciprocal two-ticket human history are h2h; solo AI stays out"
             );
@@ -2029,7 +2322,13 @@ mod tests {
             let report = reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
                 .await
                 .unwrap();
-            assert_eq!(report, H2hReconcileReport { characters: 2, matches: 1 });
+            assert_eq!(
+                report,
+                H2hReconcileReport {
+                    characters: 2,
+                    matches: 1
+                }
+            );
             assert_eq!(
                 all_time(&mut conn).await,
                 vec![
@@ -2066,7 +2365,9 @@ mod tests {
                 "INSERT INTO characters (id, character, source_alt_uuid) VALUES ($1, $2, $3)",
             )
             .bind::<diesel::sql_types::Uuid, _>(id)
-            .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name": live_name, "level": 40}))
+            .bind::<diesel::sql_types::Jsonb, _>(
+                serde_json::json!({"name": live_name, "level": 40}),
+            )
             .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(live_alt)
             .execute(conn)
             .await
@@ -2185,12 +2486,38 @@ mod tests {
             // (no stamp) counts for the alt live now, Ísdís.
             let ivan_side = (ivan_row, Some(ivan));
             let seph = (sephoris, Some(Uuid::from_u128(0x0b)));
-            seed_alt_match(&mut conn, Uuid::from_u128(1), ivan_side, seph, "2023-11-14 22:20:00+00", (1, 0)).await;
-            seed_alt_match(&mut conn, Uuid::from_u128(2), ivan_side, seph, "2023-11-14 22:22:00+00", (2, 0)).await;
-            seed_alt_match(&mut conn, Uuid::from_u128(3), (ivan_row, None), seph, "2023-11-14 22:30:00+00", (2, 0)).await;
+            seed_alt_match(
+                &mut conn,
+                Uuid::from_u128(1),
+                ivan_side,
+                seph,
+                "2023-11-14 22:20:00+00",
+                (1, 0),
+            )
+            .await;
+            seed_alt_match(
+                &mut conn,
+                Uuid::from_u128(2),
+                ivan_side,
+                seph,
+                "2023-11-14 22:22:00+00",
+                (2, 0),
+            )
+            .await;
+            seed_alt_match(
+                &mut conn,
+                Uuid::from_u128(3),
+                (ivan_row, None),
+                seph,
+                "2023-11-14 22:30:00+00",
+                (2, 0),
+            )
+            .await;
 
             let cfg = H2hRatingConfig::default();
-            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+                .await
+                .unwrap();
 
             let row = |character_id, alt_key, wins, losses| AltRatingRow {
                 character_id,
@@ -2210,8 +2537,10 @@ mod tests {
             );
 
             let board = h2h_board(&mut conn, Some(season), 1, 100).await.unwrap();
-            let named: Vec<(String, Uuid, i32)> =
-                board.iter().map(|e| (e.name.clone(), e.alt_key, e.matches)).collect();
+            let named: Vec<(String, Uuid, i32)> = board
+                .iter()
+                .map(|e| (e.name.clone(), e.alt_key, e.matches))
+                .collect();
             assert_eq!(
                 named,
                 vec![
@@ -2221,7 +2550,10 @@ mod tests {
                 ],
                 "a switched-out alt is named from its newest saved version, the live alt from the row"
             );
-            assert_eq!(board.iter().map(|e| e.rank).collect::<Vec<_>>(), vec![1, 2, 3]);
+            assert_eq!(
+                board.iter().map(|e| e.rank).collect::<Vec<_>>(),
+                vec![1, 2, 3]
+            );
             assert_eq!(board[0].level, 30, "the switched-out alt's own level");
 
             // The listing gate is per alt, too: at min 2 matches Ísdís (1) drops out
@@ -2253,32 +2585,69 @@ mod tests {
             seed_alt_character(&mut conn, row_r, Some(real_alt), "Real").await;
             seed_alt_character(&mut conn, row_o, Some(other_alt), "Other").await;
             // The test alt beats Real; Real beats Other.
-            seed_alt_match(&mut conn, Uuid::from_u128(1), (row_t, Some(test_alt)), (row_r, Some(real_alt)),
-                "2023-11-14 22:20:00+00", (2, 0)).await;
-            seed_alt_match(&mut conn, Uuid::from_u128(2), (row_r, Some(real_alt)), (row_o, Some(other_alt)),
-                "2023-11-14 22:30:00+00", (2, 0)).await;
+            seed_alt_match(
+                &mut conn,
+                Uuid::from_u128(1),
+                (row_t, Some(test_alt)),
+                (row_r, Some(real_alt)),
+                "2023-11-14 22:20:00+00",
+                (2, 0),
+            )
+            .await;
+            seed_alt_match(
+                &mut conn,
+                Uuid::from_u128(2),
+                (row_r, Some(real_alt)),
+                (row_o, Some(other_alt)),
+                "2023-11-14 22:30:00+00",
+                (2, 0),
+            )
+            .await;
             let cfg = H2hRatingConfig::default();
 
             // The control: unmarked, all three are rated.
-            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
-            assert_eq!(h2h_board(&mut conn, Some(season), 1, 100).await.unwrap().len(), 3);
-            let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
-            let real_unmarked = all_time.iter().find(|e| e.alt_key == real_alt).unwrap().clone();
-
-            diesel::sql_query("INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ($1, $1, 't')")
-                .bind::<diesel::sql_types::Uuid, _>(test_alt)
-                .execute(&mut conn)
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
                 .await
                 .unwrap();
+            assert_eq!(
+                h2h_board(&mut conn, Some(season), 1, 100)
+                    .await
+                    .unwrap()
+                    .len(),
+                3
+            );
+            let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
+            let real_unmarked = all_time
+                .iter()
+                .find(|e| e.alt_key == real_alt)
+                .unwrap()
+                .clone();
+
+            diesel::sql_query(
+                "INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ($1, $1, 't')",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(test_alt)
+            .execute(&mut conn)
+            .await
+            .unwrap();
             // Even before the rebuild, the board does not list the stale row.
             let stale = h2h_board(&mut conn, Some(season), 1, 100).await.unwrap();
             assert!(stale.iter().all(|e| e.alt_key != test_alt), "never listed");
 
-            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false).await.unwrap();
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+                .await
+                .unwrap();
             let rows = season_alt_rows(&mut conn, season).await;
-            assert!(rows.iter().all(|r| r.alt_key != test_alt), "no rating row at all");
+            assert!(
+                rows.iter().all(|r| r.alt_key != test_alt),
+                "no rating row at all"
+            );
             let real = rows.iter().find(|r| r.alt_key == real_alt).unwrap();
-            assert_eq!((real.wins, real.losses, real.matches), (1, 0, 1), "only the real fight counts");
+            assert_eq!(
+                (real.wins, real.losses, real.matches),
+                (1, 0, 1),
+                "only the real fight counts"
+            );
             let all_time = h2h_board(&mut conn, None, 1, 100).await.unwrap();
             assert_eq!(
                 all_time.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
@@ -2327,8 +2696,20 @@ mod tests {
                 rows,
                 vec![
                     // No alt id at all: keyed by the character id itself.
-                    AltRatingRow { character_id: low, alt_key: low, wins: 0, losses: 1, matches: 1 },
-                    AltRatingRow { character_id: high, alt_key: spacemunk, wins: 1, losses: 0, matches: 1 },
+                    AltRatingRow {
+                        character_id: low,
+                        alt_key: low,
+                        wins: 0,
+                        losses: 1,
+                        matches: 1
+                    },
+                    AltRatingRow {
+                        character_id: high,
+                        alt_key: spacemunk,
+                        wins: 1,
+                        losses: 0,
+                        matches: 1
+                    },
                 ],
                 "the canonical (lower-id) row must take the opponent's alt from the opponent's row"
             );
@@ -2366,10 +2747,12 @@ mod tests {
             .execute(&mut conn)
             .await
             .unwrap();
-            diesel::sql_query("INSERT INTO guilds VALUES ('g-live', 'Live Guild'), ('g-parked', 'Parked Guild')")
-                .execute(&mut conn)
-                .await
-                .unwrap();
+            diesel::sql_query(
+                "INSERT INTO guilds VALUES ('g-live', 'Live Guild'), ('g-parked', 'Parked Guild')",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
             diesel::sql_query("INSERT INTO guild_members VALUES ('g-live', $1)")
                 .bind::<diesel::sql_types::Uuid, _>(row)
                 .execute(&mut conn)
@@ -2414,13 +2797,16 @@ mod tests {
         let mut reached = None;
         for i in 1..=260 {
             let outcome = if i % 5 < 3 { win20() } else { loss02() };
-            let delta = trophy_delta(&cfg, TrophyDeltaInput {
-                outcome,
-                own_trophies: trophies,
-                opponent_trophies_for_pricing: trophies,
-                h2h: false,
-                h2h_pair_matches_today: 0,
-            });
+            let delta = trophy_delta(
+                &cfg,
+                TrophyDeltaInput {
+                    outcome,
+                    own_trophies: trophies,
+                    opponent_trophies_for_pricing: trophies,
+                    h2h: false,
+                    h2h_pair_matches_today: 0,
+                },
+            );
             trophies = (trophies + delta).max(0);
             if trophies >= 2500 {
                 reached = Some(i);

@@ -19,9 +19,7 @@ pub struct ExecuteAbility {
 pub fn looks_like_execute_ability(user_data: &[u8]) -> bool {
     user_data.get(1) == Some(&0x36)
         && user_data.len() >= 2 + 5 + 36
-        && user_data
-            .windows(5)
-            .any(|w| w == [56, 3, 37, 0x24, 0x00])
+        && user_data.windows(5).any(|w| w == [56, 3, 37, 0x24, 0x00])
 }
 
 /// Detect + decode a `RequestExecuteAbility` (37) in a carrier-54 c2s `user_data`.
@@ -47,13 +45,9 @@ pub fn parse_execute_ability(user_data: &[u8]) -> Option<ExecuteAbility> {
     // offsets. The semantic validation above comes from the decoder, so this scan is
     // independent of propId 0's integer bytes and cannot mistake an Avatar id for a
     // separator.
-    let role_offset = user_data
-        .windows(5 + 36)
-        .position(|window| {
-            window[..5] == [56, 3, 37, 0x24, 0x00]
-                && window[5..] == ability_uuid.as_bytes()[..]
-        })?
-        + 1;
+    let role_offset = user_data.windows(5 + 36).position(|window| {
+        window[..5] == [56, 3, 37, 0x24, 0x00] && window[5..] == ability_uuid.as_bytes()[..]
+    })? + 1;
     Some(ExecuteAbility {
         role_offset,
         ability_uuid,
@@ -94,7 +88,10 @@ pub fn parse_equip_consumables(user_data: &[u8]) -> Option<EquippedConsumable> {
     if uuid.is_empty() {
         return None;
     }
-    Some(EquippedConsumable { consumable_uuid: uuid, charges: nd.int(5).unwrap_or(0) })
+    Some(EquippedConsumable {
+        consumable_uuid: uuid,
+        charges: nd.int(5).unwrap_or(0),
+    })
 }
 
 /// True iff a carrier-`0x36` c2s frame is a `RequestConsumeConsumable` (63) — the
@@ -119,7 +116,8 @@ mod tests {
     /// `be 36 04 1f 70 77 0a 35 02 00 00 38 03 25 24 00 <uuid>`.
     fn op37_frame() -> Vec<u8> {
         let mut v = vec![
-            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A, 0x35, // marker+carrier + NetObjectInfo region
+            0xBE, 0x36, 0x04, 0x1F, 0x70, 0x77, 0x0A,
+            0x35, // marker+carrier + NetObjectInfo region
             0x02, 0x00, 0x00, // remaining LE bytes of p0 = 565
             0x38, // type (skip)
             0x03, // role = Autonomous (c2s)

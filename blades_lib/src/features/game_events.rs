@@ -309,10 +309,13 @@ pub const MAX_THEME_DAYS: i64 = 366;
 
 /// The quests of the rotation events whose instance begins on UTC day `day`.
 fn baseline_openers(library: &[EventDef], day: i64) -> impl Iterator<Item = Uuid> + '_ {
-    library.iter().filter(|d| d.is_rotating()).filter_map(move |d| {
-        let start = d.instance_start_at_or_before(day * SECS_PER_DAY + SECS_PER_DAY - 1)?;
-        (start.div_euclid(SECS_PER_DAY) == day).then_some(d.quest_id)
-    })
+    library
+        .iter()
+        .filter(|d| d.is_rotating())
+        .filter_map(move |d| {
+            let start = d.instance_start_at_or_before(day * SECS_PER_DAY + SECS_PER_DAY - 1)?;
+            (start.div_euclid(SECS_PER_DAY) == day).then_some(d.quest_id)
+        })
 }
 
 impl EventTheme {
@@ -473,9 +476,10 @@ impl<'a> ThemePlan<'a> {
 
     /// `(opening start, questId, themed?)` for every day of the window.
     pub fn openings(&self) -> impl Iterator<Item = (i64, Uuid, bool)> + '_ {
-        self.openers.iter().enumerate().map(|(i, (d, t))| {
-            ((self.first_day + i as i64) * SECS_PER_DAY, d.quest_id, *t)
-        })
+        self.openers
+            .iter()
+            .enumerate()
+            .map(|(i, (d, t))| ((self.first_day + i as i64) * SECS_PER_DAY, d.quest_id, *t))
     }
 
     fn end_day(&self) -> i64 {
@@ -639,7 +643,10 @@ fn open_scheduled<'a>(
         .iter()
         .filter_map(|def| {
             let start = def.active_instance_start(now_secs)?;
-            if plan.as_ref().is_some_and(|p| p.displaces(def, start, now_secs)) {
+            if plan
+                .as_ref()
+                .is_some_and(|p| p.displaces(def, start, now_secs))
+            {
                 return None;
             }
             Some(Scheduled::natural(def, start))
@@ -670,7 +677,11 @@ fn open_scheduled<'a>(
         out.truncate(MAX_CONCURRENT_EVENTS);
     }
     // The wire is ordered by start, whatever the selection was.
-    out.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| a.def.event_id.cmp(&b.def.event_id)));
+    out.sort_by(|a, b| {
+        a.start
+            .cmp(&b.start)
+            .then_with(|| a.def.event_id.cmp(&b.def.event_id))
+    });
     out
 }
 
@@ -719,7 +730,10 @@ pub fn upcoming_events_themed(
         .iter()
         .filter_map(|def| {
             let start = def.next_instance_start_after(now_secs)?;
-            if plan.as_ref().is_some_and(|p| p.displaces(def, start, start)) {
+            if plan
+                .as_ref()
+                .is_some_and(|p| p.displaces(def, start, start))
+            {
                 return None;
             }
             (start - now_secs <= lead_secs).then(|| def.instance(start))
@@ -846,7 +860,6 @@ mod tests {
         );
     }
 
-
     const ANCHOR: i64 = 1_663_214_400;
     const PERIOD: i64 = 39 * 86_400;
     const WINDOW: i64 = 172_800;
@@ -883,7 +896,10 @@ mod tests {
     fn the_wire_instance_is_stamped_with_its_own_window() {
         let d = def(1);
         let e = d.instance(ANCHOR + PERIOD);
-        assert_eq!(e.game_event_instance_id, format!("{}::{}", d.event_id, ANCHOR + PERIOD));
+        assert_eq!(
+            e.game_event_instance_id,
+            format!("{}::{}", d.event_id, ANCHOR + PERIOD)
+        );
         assert_eq!(e.start_time_secs, ANCHOR + PERIOD);
         assert_eq!(e.end_time_secs, ANCHOR + PERIOD + WINDOW);
         assert_eq!(e.r#type, "quest");
@@ -927,7 +943,12 @@ mod tests {
     fn an_annual_event_keeps_its_calendar_date_across_leap_years() {
         const DAY: i64 = 86_400;
         // 2026-10-24, 2027-10-24, 2028-10-24 (2028 is a leap year), 2029-10-24.
-        let oct24 = [1_792_800_000i64, 1_824_336_000, 1_855_958_400, 1_887_494_400];
+        let oct24 = [
+            1_792_800_000i64,
+            1_824_336_000,
+            1_855_958_400,
+            1_887_494_400,
+        ];
 
         let mut d = def(1);
         d.annual = true;
@@ -943,7 +964,11 @@ mod tests {
                 "year {i}: the instance must begin on 24 October"
             );
             // Shut in between: midsummer of the following year.
-            assert_eq!(d.active_instance_start(start + 240 * DAY), None, "year {i}: open in June");
+            assert_eq!(
+                d.active_instance_start(start + 240 * DAY),
+                None,
+                "year {i}: open in June"
+            );
         }
 
         // The same anchor under the old day-count rule drifts, which is what this
@@ -976,7 +1001,10 @@ mod tests {
             "a leap-day anchor must not skip a common year"
         );
         // 2028 has one again.
-        assert_eq!(d.active_instance_start(1_835_395_200 + 3600), Some(1_835_395_200));
+        assert_eq!(
+            d.active_instance_start(1_835_395_200 + 3600),
+            Some(1_835_395_200)
+        );
     }
 
     /// The committed rotation, against what retail's captures actually show.
@@ -1013,10 +1041,19 @@ mod tests {
 
         // One event per day-slot of the cycle, which is what produces the shape.
         let period = lib[0].recurrence.recurrence_interval;
-        assert_eq!(period as usize, lib.len(), "one event opens per day of the cycle");
+        assert_eq!(
+            period as usize,
+            lib.len(),
+            "one event opens per day of the cycle"
+        );
         let mut slots: Vec<i64> = lib
             .iter()
-            .map(|d| d.recurrence.start_time_secs.rem_euclid(period * SECS_PER_DAY) / SECS_PER_DAY)
+            .map(|d| {
+                d.recurrence
+                    .start_time_secs
+                    .rem_euclid(period * SECS_PER_DAY)
+                    / SECS_PER_DAY
+            })
             .collect();
         slots.sort_unstable();
         slots.dedup();
@@ -1030,7 +1067,10 @@ mod tests {
             let open = active_events(&lib, now).len();
             let soon = upcoming_events(&lib, now, WARNING_LEAD_SECS).len();
             assert_eq!(open, 2, "day {day}: {open} open, retail always showed 2");
-            assert_eq!(soon, 1, "day {day}: {soon} about to open, retail always showed 1");
+            assert_eq!(
+                soon, 1,
+                "day {day}: {soon} about to open, retail always showed 1"
+            );
         }
 
         // The window itself is retail's, in every one of the 105 sightings.
@@ -1058,13 +1098,29 @@ mod tests {
         d.instance_duration_secs = 7 * DAY;
 
         let anchor = 1_800_000_000i64;
-        assert_eq!(d.active_instance_start(anchor), Some(anchor), "open at the anchor");
-        assert_eq!(d.active_instance_start(anchor + 6 * DAY), Some(anchor), "still open on day 6");
-        assert_eq!(d.active_instance_start(anchor + 7 * DAY), None, "shut when the window ends");
+        assert_eq!(
+            d.active_instance_start(anchor),
+            Some(anchor),
+            "open at the anchor"
+        );
+        assert_eq!(
+            d.active_instance_start(anchor + 6 * DAY),
+            Some(anchor),
+            "still open on day 6"
+        );
+        assert_eq!(
+            d.active_instance_start(anchor + 7 * DAY),
+            None,
+            "shut when the window ends"
+        );
         // …and stays shut. A year, and five years, later.
         assert_eq!(d.active_instance_start(anchor + 365 * DAY), None);
         assert_eq!(d.active_instance_start(anchor + 5 * 365 * DAY), None);
-        assert_eq!(d.next_instance_start_after(anchor + 8 * DAY), None, "nothing follows it");
+        assert_eq!(
+            d.next_instance_start_after(anchor + 8 * DAY),
+            None,
+            "nothing follows it"
+        );
 
         // CONTROL: the same definition with a real interval DOES come back, so
         // the assertions above are about `recurrenceInterval: 0` and not about
@@ -1114,7 +1170,9 @@ mod never_serve_more_open_events_than_retail {
     fn a_day_with_three_open(lib: &[EventDef]) -> Option<i64> {
         let day = 86_400i64;
         let start = 1_789_000_000i64;
-        (0..400).map(|d| start + d * day).find(|&t| uncapped(lib, t) >= 3)
+        (0..400)
+            .map(|d| start + d * day)
+            .find(|&t| uncapped(lib, t) >= 3)
     }
 
     #[test]
@@ -1124,7 +1182,10 @@ mod never_serve_more_open_events_than_retail {
             "THE CONTROL: no day in the scanned year has three open, so the cap \
              would be untested and this test would prove nothing",
         );
-        assert!(uncapped(&lib, day) >= 3, "the calendar really does have three");
+        assert!(
+            uncapped(&lib, day) >= 3,
+            "the calendar really does have three"
+        );
         assert_eq!(
             active_events(&lib, day).len(),
             MAX_CONCURRENT_EVENTS,
@@ -1199,8 +1260,10 @@ mod never_serve_more_open_events_than_retail {
             if uncapped(&lib, now) > MAX_CONCURRENT_EVENTS {
                 contested += 1;
             }
-            let served: Vec<uuid::Uuid> =
-                active_events(&lib, now).iter().map(|e| e.quest_id).collect();
+            let served: Vec<uuid::Uuid> = active_events(&lib, now)
+                .iter()
+                .map(|e| e.quest_id)
+                .collect();
             for q in open_annual {
                 assert!(served.contains(&q), "day {d}: annual event {q} was evicted");
             }
@@ -1324,7 +1387,11 @@ mod themed_window {
                     differed_inside += 1;
                 }
             } else {
-                assert_eq!(json(&themed), json(&plain), "t={t}: changed outside the window");
+                assert_eq!(
+                    json(&themed),
+                    json(&plain),
+                    "t={t}: changed outside the window"
+                );
                 assert_eq!(
                     open_instances_themed(&lib, Some(&theme), t)
                         .iter()
@@ -1343,7 +1410,10 @@ mod themed_window {
         // Two years of hours less the 25 days skipped; includes October 2027,
         // because a window is one-off and does not come back a year later.
         assert_eq!(compared, (2 * 365 - 25) * 24, "hours compared");
-        assert!(differed_inside > 0, "THE CONTROL: the theme never changed the feed");
+        assert!(
+            differed_inside > 0,
+            "THE CONTROL: the theme never changed the feed"
+        );
 
         // And a theme with no events it can resolve is no theme at all.
         let empty = EventTheme {
@@ -1352,7 +1422,10 @@ mod themed_window {
         };
         for h in 0..(30 * 24) {
             let t = theme.start_secs - 5 * DAY + h * HOUR;
-            assert_eq!(json(&feed(&lib, Some(&empty), t)), json(&feed(&lib, None, t)));
+            assert_eq!(
+                json(&feed(&lib, Some(&empty), t)),
+                json(&feed(&lib, None, t))
+            );
         }
     }
 
@@ -1371,7 +1444,10 @@ mod themed_window {
                 .find(|e| e.quest_id == witch)
                 .map(|e| e.game_event_instance_id)
         };
-        assert!(served(None).is_some(), "CONTROL: the holiday is open on Halloween");
+        assert!(
+            served(None).is_some(),
+            "CONTROL: the holiday is open on Halloween"
+        );
         assert_eq!(served(Some(before)), served(None));
     }
 
@@ -1440,7 +1516,11 @@ mod themed_window {
             assert_eq!(soon.len(), 1, "t={t}: {} about to open", soon.len());
 
             let quests: BTreeSet<Uuid> = open.iter().chain(&soon).map(|e| e.quest_id).collect();
-            assert_eq!(quests.len(), 3, "t={t}: one quest is both open and announced");
+            assert_eq!(
+                quests.len(),
+                3,
+                "t={t}: one quest is both open and announced"
+            );
 
             // One opening per day: yesterday's and today's, then tomorrow's.
             // Outside the window a holiday instance may legitimately be on the
@@ -1454,7 +1534,10 @@ mod themed_window {
                 assert_eq!(starts, vec![today - DAY, today], "t={t}");
             } else {
                 let (from, to) = hidden_span(theme.first_day(), theme.end_day());
-                assert!(!(from..to).contains(&t), "t={t}: a holiday shown inside the window");
+                assert!(
+                    !(from..to).contains(&t),
+                    "t={t}: a holiday shown inside the window"
+                );
                 assert_eq!(starts, vec![today], "t={t}");
             }
             assert_eq!(soon[0].start_time_secs, today + DAY, "t={t}");
@@ -1492,7 +1575,10 @@ mod themed_window {
             let witches: Vec<_> = open.iter().filter(|e| e.quest_id == witch).collect();
             assert!(witches.len() <= 1, "t={t}: the witch is open twice");
             for e in witches {
-                assert_ne!(e.start_time_secs, holiday_start, "t={t}: the 8-day instance survived");
+                assert_ne!(
+                    e.start_time_secs, holiday_start,
+                    "t={t}: the 8-day instance survived"
+                );
                 witch_openings.insert(e.start_time_secs);
             }
             t += HOUR;
@@ -1643,7 +1729,10 @@ mod themed_window {
                 let enough = |c: i64| ceil_div(days, c) >= 2 * n as i64;
                 assert!(c >= 1, "days={days} n={n}");
                 assert!(c == 1 || enough(c), "days={days} n={n}: {c} is too sparse");
-                assert!(c >= days || !enough(c + 1), "days={days} n={n}: {c} is not the largest");
+                assert!(
+                    c >= days || !enough(c + 1),
+                    "days={days} n={n}: {c} is not the largest"
+                );
             }
         }
     }
@@ -1672,7 +1761,10 @@ mod themed_window {
             let mut t = from;
             while t < to {
                 for e in active_events_themed(&lib, theme, t) {
-                    starts.entry(e.quest_id).or_default().insert(e.start_time_secs);
+                    starts
+                        .entry(e.quest_id)
+                        .or_default()
+                        .insert(e.start_time_secs);
                 }
                 t += 6 * HOUR;
             }
@@ -1699,6 +1791,10 @@ mod themed_window {
 
         let rotating = lib.iter().filter(|d| d.is_rotating()).count() as i64;
         assert_eq!(rotating, 44, "the rotation pool");
-        assert_eq!(shortest_gap(&openings(None)), rotating, "CONTROL: untouched rotation");
+        assert_eq!(
+            shortest_gap(&openings(None)),
+            rotating,
+            "CONTROL: untouched rotation"
+        );
     }
 }

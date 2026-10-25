@@ -361,10 +361,10 @@ pub async fn freeze_standings(
     // final = raw_sum - min(0, lowest_prefix_sum).
     let cutoff = season.ends_at.min(super::arena_season::now_unix());
     let rows: Vec<Row> = diesel::sql_query(FREEZE_STANDINGS_SQL)
-    .bind::<diesel::sql_types::BigInt, _>(season.starts_at)
-    .bind::<diesel::sql_types::BigInt, _>(cutoff)
-    .get_results(conn)
-    .await?;
+        .bind::<diesel::sql_types::BigInt, _>(season.starts_at)
+        .bind::<diesel::sql_types::BigInt, _>(cutoff)
+        .get_results(conn)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -565,9 +565,18 @@ mod tests {
     fn an_award_belongs_only_to_the_alt_that_earned_it() {
         let (a, b) = (Uuid::from_u128(0xa), Uuid::from_u128(0xb));
         assert!(award_belongs_to_alt(Some(a), Some(a)));
-        assert!(!award_belongs_to_alt(Some(a), Some(b)), "another alt must not claim it");
-        assert!(!award_belongs_to_alt(Some(a), None), "nor a row that lost its alt id");
-        assert!(award_belongs_to_alt(None, Some(b)), "a legacy award stays claimable");
+        assert!(
+            !award_belongs_to_alt(Some(a), Some(b)),
+            "another alt must not claim it"
+        );
+        assert!(
+            !award_belongs_to_alt(Some(a), None),
+            "nor a row that lost its alt id"
+        );
+        assert!(
+            award_belongs_to_alt(None, Some(b)),
+            "a legacy award stays claimable"
+        );
         assert!(award_belongs_to_alt(None, None));
     }
 
@@ -591,7 +600,10 @@ mod tests {
                 .map(|w| w.kind.as_str())
                 .collect();
             assert!(kinds.contains(&"rank") && kinds.contains(&"arena_reached"));
-            assert!(kinds.contains(&"guild_rank"), "guild award of {alt} missing: {kinds:?}");
+            assert!(
+                kinds.contains(&"guild_rank"),
+                "guild award of {alt} missing: {kinds:?}"
+            );
         }
         assert!(awards.iter().all(|w| w.source_alt_uuid.is_some()));
     }
@@ -626,7 +638,10 @@ mod tests {
         assert_eq!(g[0].guild_id, "g1");
         assert_eq!(g[0].members, 2);
         // Both sit in the top-4 bracket: 30% each. A flat sum would say 150.
-        assert_eq!(g[0].trophies, 45, "0.30*100 + 0.30*50 = 45, not the flat 150");
+        assert_eq!(
+            g[0].trophies, 45,
+            "0.30*100 + 0.30*50 = 45, not the flat 150"
+        );
     }
 
     /// The bracket boundaries, walked one member at a time.

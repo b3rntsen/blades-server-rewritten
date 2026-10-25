@@ -67,7 +67,9 @@ impl StackableItems {
     /// response diff later (notably the Arena match-end card). The private storage
     /// entry stays encapsulated; callers only receive stable value pairs.
     pub fn counts(&self) -> impl Iterator<Item = (Uuid, u64)> + '_ {
-        self.0.iter().map(|(template, entry)| (*template, entry.count))
+        self.0
+            .iter()
+            .map(|(template, entry)| (*template, entry.count))
     }
 }
 
@@ -512,12 +514,21 @@ mod wire_camelcase_tests {
         let mut bp = BackpackUpdate::default();
         bp.removed_items.insert(uuid::Uuid::nil());
         let j = serde_json::to_string(&bp).unwrap();
-        assert!(j.contains("removedItems"), "BackpackUpdate not camelCase: {j}");
-        assert!(!j.contains("removed_items"), "BackpackUpdate still snake: {j}");
+        assert!(
+            j.contains("removedItems"),
+            "BackpackUpdate not camelCase: {j}"
+        );
+        assert!(
+            !j.contains("removed_items"),
+            "BackpackUpdate still snake: {j}"
+        );
         let mut lo = LoadoutUpdate::default();
         lo.unequipped_item_slots.insert(uuid::Uuid::nil());
         let lj = serde_json::to_string(&lo).unwrap();
-        assert!(lj.contains("equippedItems") && lj.contains("unequippedItemSlots"), "LoadoutUpdate not camelCase: {lj}");
+        assert!(
+            lj.contains("equippedItems") && lj.contains("unequippedItemSlots"),
+            "LoadoutUpdate not camelCase: {lj}"
+        );
     }
 
     /// #356: retail never served an empty `unequippedItemSlots` (0 of 3,669 loadout
@@ -537,13 +548,22 @@ mod wire_camelcase_tests {
     fn loadout_omits_empty_equipped_consumables() {
         let empty = Loadout::default();
         let j = serde_json::to_string(&empty).unwrap();
-        assert!(!j.contains("equippedConsumables"), "empty consumables must be omitted: {j}");
+        assert!(
+            !j.contains("equippedConsumables"),
+            "empty consumables must be omitted: {j}"
+        );
 
         let mut with = Loadout::default();
         with.equipped_consumables.push(uuid::Uuid::nil());
         let jw = serde_json::to_string(&with).unwrap();
-        assert!(jw.contains("equippedConsumables"), "non-empty consumables serialized: {jw}");
-        assert!(!jw.contains("equipped_consumables"), "must be camelCase: {jw}");
+        assert!(
+            jw.contains("equippedConsumables"),
+            "non-empty consumables serialized: {jw}"
+        );
+        assert!(
+            !jw.contains("equipped_consumables"),
+            "must be camelCase: {jw}"
+        );
 
         // Round-trips: a stored character JSON WITHOUT the field still deserializes
         // (the `#[serde(default)]`), so no migration is needed for existing rows.
@@ -562,10 +582,16 @@ mod wire_camelcase_tests {
         // Unchanged consumables → diff omits the key.
         let unchanged = lo.generate_client_update(&LoadoutChangeTracker::default());
         let j = serde_json::to_string(&unchanged).unwrap();
-        assert!(!j.contains("equippedConsumables"), "unchanged diff omits consumables: {j}");
+        assert!(
+            !j.contains("equippedConsumables"),
+            "unchanged diff omits consumables: {j}"
+        );
 
         // Changed → diff carries the full current list.
-        let tracker = LoadoutChangeTracker { consumables_changed: true, ..Default::default() };
+        let tracker = LoadoutChangeTracker {
+            consumables_changed: true,
+            ..Default::default()
+        };
         let changed = lo.generate_client_update(&tracker);
         assert_eq!(changed.equipped_consumables, Some(vec![uuid::Uuid::nil()]));
     }
@@ -602,14 +628,31 @@ mod item_grade_arcane_tier_tests {
     #[test]
     fn retail_grade_and_arcane_tier_survive_the_flattened_round_trip() {
         let eq: SingleEquippedItem = serde_json::from_str(RETAIL_GRADED_RING).unwrap();
-        assert_eq!(eq.item.grade, Some(4), "retail sent grade 4; we must keep it");
-        assert_eq!(eq.item.arcane_tier, Some(2), "retail sent arcaneTier 2; we must keep it");
+        assert_eq!(
+            eq.item.grade,
+            Some(4),
+            "retail sent grade 4; we must keep it"
+        );
+        assert_eq!(
+            eq.item.arcane_tier,
+            Some(2),
+            "retail sent arcaneTier 2; we must keep it"
+        );
 
         // ...and hand them back on the wire under retail's exact camelCase keys.
         let j = serde_json::to_string(&eq).unwrap();
-        assert!(j.contains(r#""grade":4"#), "grade must round-trip to the wire: {j}");
-        assert!(j.contains(r#""arcaneTier":2"#), "arcaneTier must round-trip: {j}");
-        assert!(!j.contains("arcane_tier"), "must be camelCase, not snake: {j}");
+        assert!(
+            j.contains(r#""grade":4"#),
+            "grade must round-trip to the wire: {j}"
+        );
+        assert!(
+            j.contains(r#""arcaneTier":2"#),
+            "arcaneTier must round-trip: {j}"
+        );
+        assert!(
+            !j.contains("arcane_tier"),
+            "must be camelCase, not snake: {j}"
+        );
     }
 
     /// The same round-trip through `Items`, which serializes a map as an ARRAY via
@@ -631,8 +674,14 @@ mod item_grade_arcane_tier_tests {
             },
         );
         let j = serde_json::to_string(&items).unwrap();
-        assert!(j.contains(r#""grade":6"#), "backpack item lost its grade: {j}");
-        assert!(j.contains(r#""arcaneTier":1"#), "backpack item lost its arcaneTier: {j}");
+        assert!(
+            j.contains(r#""grade":6"#),
+            "backpack item lost its grade: {j}"
+        );
+        assert!(
+            j.contains(r#""arcaneTier":1"#),
+            "backpack item lost its arcaneTier: {j}"
+        );
 
         let back: Items = serde_json::from_str(&j).unwrap();
         assert_eq!(back.0[&id].grade, Some(6));
@@ -657,8 +706,14 @@ mod item_grade_arcane_tier_tests {
             arcane_tier: None,
         };
         let j = serde_json::to_string(&gear).unwrap();
-        assert!(!j.contains("grade"), "absent grade must be omitted, not 0: {j}");
-        assert!(!j.contains("arcaneTier"), "absent arcaneTier must be omitted: {j}");
+        assert!(
+            !j.contains("grade"),
+            "absent grade must be omitted, not 0: {j}"
+        );
+        assert!(
+            !j.contains("arcaneTier"),
+            "absent arcaneTier must be omitted: {j}"
+        );
         // The pre-existing keys are untouched.
         assert!(j.contains(r#""temperingLevel":3"#), "{j}");
         assert!(j.contains(r#""durability":75.0"#), "{j}");
@@ -678,8 +733,14 @@ mod item_grade_arcane_tier_tests {
         let eq: SingleEquippedItem = serde_json::from_str(RETAIL_GRADED_RING).unwrap();
         assert_eq!(eq.item.grade, Some(4));
         // The capture omits both, so they land on their serde defaults.
-        assert_eq!(eq.item.tempering_level, 0, "retail sent no temperingLevel for a graded item");
-        assert_eq!(eq.item.durability, 0.0, "retail sent no durability for a graded item");
+        assert_eq!(
+            eq.item.tempering_level, 0,
+            "retail sent no temperingLevel for a graded item"
+        );
+        assert_eq!(
+            eq.item.durability, 0.0,
+            "retail sent no durability for a graded item"
+        );
     }
 
     /// Stored Postgres rows written before this change have no `grade`/`arcaneTier` keys.
@@ -705,8 +766,8 @@ mod item_wire_shape_tests {
         Item {
             item_template_id: Uuid::from_u128(1),
             grade: Some(4),
-            tempering_level: 7,     // set, and must NOT reach the wire
-            durability: 123.5,      // likewise
+            tempering_level: 7, // set, and must NOT reach the wire
+            durability: 123.5,  // likewise
             properties: ItemPropertiesAll::default(),
             arcane_tier: Some(2),
         }
@@ -730,8 +791,14 @@ mod item_wire_shape_tests {
     fn a_graded_item_never_carries_tempering_or_durability() {
         let v = serde_json::to_value(graded()).unwrap();
         assert_eq!(v["grade"], 4);
-        assert!(v.get("temperingLevel").is_none(), "graded item leaked temperingLevel: {v}");
-        assert!(v.get("durability").is_none(), "graded item leaked durability: {v}");
+        assert!(
+            v.get("temperingLevel").is_none(),
+            "graded item leaked temperingLevel: {v}"
+        );
+        assert!(
+            v.get("durability").is_none(),
+            "graded item leaked durability: {v}"
+        );
     }
 
     /// The other half of the same rule, and the control: ordinary gear must
@@ -741,7 +808,10 @@ mod item_wire_shape_tests {
         let v = serde_json::to_value(gear()).unwrap();
         assert_eq!(v["temperingLevel"], 10);
         assert_eq!(v["durability"], 675.0);
-        assert!(v.get("grade").is_none(), "ungraded gear invented a grade: {v}");
+        assert!(
+            v.get("grade").is_none(),
+            "ungraded gear invented a grade: {v}"
+        );
     }
 
     /// `arcaneTier` is omitted when absent and kept when present — it rides on
@@ -749,7 +819,12 @@ mod item_wire_shape_tests {
     #[test]
     fn arcane_tier_is_omitted_only_when_absent() {
         assert_eq!(serde_json::to_value(graded()).unwrap()["arcaneTier"], 2);
-        assert!(serde_json::to_value(gear()).unwrap().get("arcaneTier").is_none());
+        assert!(
+            serde_json::to_value(gear())
+                .unwrap()
+                .get("arcaneTier")
+                .is_none()
+        );
     }
 
     /// A round trip must not lose anything the wire still carries. The dropped
@@ -774,6 +849,9 @@ mod item_wire_shape_tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["id"], serde_json::json!(id));
         assert_eq!(arr[0]["grade"], 4);
-        assert!(arr[0].get("durability").is_none(), "flattened graded item leaked durability");
+        assert!(
+            arr[0].get("durability").is_none(),
+            "flattened graded item leaked durability"
+        );
     }
 }

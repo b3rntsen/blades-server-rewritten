@@ -43,7 +43,9 @@ fn latest_gear_rating(body: &[u8]) -> Option<(Uuid, u32)> {
     let batch: AnalyticsBatch = serde_json::from_slice(body).ok()?;
     batch.events.iter().rev().find_map(|event| {
         let payload = event.payload.as_ref()?;
-        let rating = u32::try_from(payload.gear_rating?).ok().filter(|r| *r > 0)?;
+        let rating = u32::try_from(payload.gear_rating?)
+            .ok()
+            .filter(|r| *r > 0)?;
         Some((payload.hero_uuid?, rating))
     })
 }
@@ -64,7 +66,9 @@ pub async fn blades_bgs_event_analytics(
 ) -> Json<Option<()>> {
     if let (Ok(session), Some(body)) = (session.get_session_or_error(), body) {
         if let Some((character_id, gear_rating)) = latest_gear_rating(&body) {
-            session.session.record_gear_rating(character_id, gear_rating);
+            session
+                .session
+                .record_gear_rating(character_id, gear_rating);
         }
     }
     Json(None)
@@ -136,7 +140,10 @@ mod tests {
         ]});
         assert_eq!(
             latest_gear_rating(body.to_string().as_bytes()),
-            Some((Uuid::parse_str("78f2b668-97ff-45d0-99fa-7343fd059480").unwrap(), 10))
+            Some((
+                Uuid::parse_str("78f2b668-97ff-45d0-99fa-7343fd059480").unwrap(),
+                10
+            ))
         );
     }
 
@@ -145,7 +152,9 @@ mod tests {
         assert_eq!(latest_gear_rating(b"not json"), None);
         assert_eq!(latest_gear_rating(br#"{"events": []}"#), None);
         assert_eq!(
-            latest_gear_rating(br#"{"events": [{"payload": {"hero_uuid": null, "gear_rating": 10}}]}"#),
+            latest_gear_rating(
+                br#"{"events": [{"payload": {"hero_uuid": null, "gear_rating": 10}}]}"#
+            ),
             None
         );
         assert_eq!(

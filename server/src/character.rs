@@ -367,7 +367,10 @@ async fn backfill_creation_allowance(
         // Already paid, or the ledger is not there yet. Either way: do not pay.
         Ok(false) => return false,
         Err(e) => {
-            log::debug!("creation allowance ledger unavailable for {}: {e}", existing.id);
+            log::debug!(
+                "creation allowance ledger unavailable for {}: {e}",
+                existing.id
+            );
             return false;
         }
     }
@@ -378,7 +381,10 @@ async fn backfill_creation_allowance(
         .execute(conn)
         .await
     {
-        log::warn!("creation allowance credited in ledger but not wallet for {}: {e}", existing.id);
+        log::warn!(
+            "creation allowance credited in ledger but not wallet for {}: {e}",
+            existing.id
+        );
         return false;
     }
     log::info!(
@@ -872,15 +878,24 @@ mod report193_creation_allowance_tests {
         let cost = shipped_cost();
         let (currency, amount) = parse_appearance_cost(&cost).unwrap();
         let mut wallet = starter_wallet(&cost);
-        wallet.debit(currency, amount).expect("the change is affordable");
+        wallet
+            .debit(currency, amount)
+            .expect("the change is affordable");
         assert_eq!(wallet.balance(currency), 0);
-        assert_eq!(wallet.balance(blades_lib::economy::GOLD), 0, "no gold either");
+        assert_eq!(
+            wallet.balance(blades_lib::economy::GOLD),
+            0,
+            "no gold either"
+        );
     }
 
     /// A broken or absent cost table must not mint currency.
     #[test]
     fn a_missing_cost_table_grants_nothing() {
-        assert_eq!(starter_wallet(&json!(null)).balance(blades_lib::economy::GEMS), 0);
+        assert_eq!(
+            starter_wallet(&json!(null)).balance(blades_lib::economy::GEMS),
+            0
+        );
         assert_eq!(
             starter_wallet(&json!({"characterCustomizationCost": {"amount": 50}}))
                 .balance(blades_lib::economy::GEMS),
@@ -907,7 +922,12 @@ mod report193_creation_allowance_tests {
         // Can already afford it: 43 of the 73 default-Argonian characters can,
         // and paying them would be a gem grant rather than an allowance.
         assert!(!owes_creation_allowance(Some(STARTER_VISUAL), 1, 50, 50));
-        assert!(!owes_creation_allowance(Some(STARTER_VISUAL), 1, 24_790, 50));
+        assert!(!owes_creation_allowance(
+            Some(STARTER_VISUAL),
+            1,
+            24_790,
+            50
+        ));
         // A progressed character is not a fresh one, whatever it is wearing.
         assert!(!owes_creation_allowance(Some(STARTER_VISUAL), 48, 0, 50));
         // No customization at all → not eligible; the bootstrap repair runs first.

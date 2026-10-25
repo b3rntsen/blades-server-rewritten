@@ -29,8 +29,8 @@ use log::debug;
 const DB_POOL_MAX: u32 = 10;
 
 mod abyss;
-mod alt_roll;
 mod admin;
+mod alt_roll;
 mod analytics;
 mod analytics_events;
 mod announcements;
@@ -46,6 +46,8 @@ mod credentials;
 mod daily_reward;
 mod dungeon;
 mod dungeon_update;
+#[cfg(test)]
+mod economy_audit;
 mod enchant_pity;
 mod error;
 mod event_quests;
@@ -70,8 +72,6 @@ pub mod schema;
 mod session;
 mod shop;
 mod shop_gen;
-#[cfg(test)]
-mod economy_audit;
 mod social;
 mod static_loader;
 mod status;

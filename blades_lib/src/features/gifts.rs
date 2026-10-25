@@ -20,10 +20,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::economy::{self, RewardChest, RewardGrant, RewardItem};
-use crate::user_data::CompleteInventory;
-use crate::game_data::GameDataItem;
 use crate::features::repair::RepairData;
+use crate::game_data::GameDataItem;
 use crate::static_data::GiftDef;
+use crate::user_data::CompleteInventory;
 use crate::user_data::{Item, ItemPropertiesAll};
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -234,8 +234,20 @@ mod tests {
 
     fn item_types() -> HashMap<Uuid, GameDataItem> {
         HashMap::from([
-            (EBONY_MAIL, GameDataItem { name: "Ebony Mail".into(), r#type: 3 }),
-            (POTION, GameDataItem { name: "Potion".into(), r#type: 1 }),
+            (
+                EBONY_MAIL,
+                GameDataItem {
+                    name: "Ebony Mail".into(),
+                    r#type: 3,
+                },
+            ),
+            (
+                POTION,
+                GameDataItem {
+                    name: "Potion".into(),
+                    r#type: 1,
+                },
+            ),
         ])
     }
 
@@ -257,15 +269,15 @@ mod tests {
                 GiftItem {
                     item_template_id: GEMS,
                     quantity: 50000,
-                arcane_tier: None,
-                enchanting: vec![],
-            },
+                    arcane_tier: None,
+                    enchanting: vec![],
+                },
                 GiftItem {
                     item_template_id: SIGIL,
                     quantity: 1000,
-                arcane_tier: None,
-                enchanting: vec![],
-            },
+                    arcane_tier: None,
+                    enchanting: vec![],
+                },
             ],
             chests: vec![],
             start_time: 1774584000,
@@ -360,8 +372,20 @@ mod report194_gear_instance_tests {
 
     fn types() -> HashMap<Uuid, GameDataItem> {
         HashMap::from([
-            (EBONY_MAIL, GameDataItem { name: "Ebony Mail".into(), r#type: 3 }),
-            (POTION, GameDataItem { name: "Potion".into(), r#type: 1 }),
+            (
+                EBONY_MAIL,
+                GameDataItem {
+                    name: "Ebony Mail".into(),
+                    r#type: 3,
+                },
+            ),
+            (
+                POTION,
+                GameDataItem {
+                    name: "Potion".into(),
+                    r#type: 1,
+                },
+            ),
         ])
     }
 
@@ -392,8 +416,14 @@ mod report194_gear_instance_tests {
             arcane_tier: Some(2),
             enchanting: vec![
                 ItemSingleProperty { id: FIRE, tier: 10 },
-                ItemSingleProperty { id: FORTIFY, tier: 10 },
-                ItemSingleProperty { id: RAVAGE, tier: 10 },
+                ItemSingleProperty {
+                    id: FORTIFY,
+                    tier: 10,
+                },
+                ItemSingleProperty {
+                    id: RAVAGE,
+                    tier: 10,
+                },
             ],
         }
     }
@@ -416,7 +446,12 @@ mod report194_gear_instance_tests {
     #[test]
     fn plain_gear_stays_plain() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 1, arcane_tier: None, enchanting: vec![] }]),
+            &gift(vec![GiftItem {
+                item_template_id: EBONY_MAIL,
+                quantity: 1,
+                arcane_tier: None,
+                enchanting: vec![],
+            }]),
             &types(),
             &repair(),
         );
@@ -443,8 +478,10 @@ mod report194_gear_instance_tests {
     /// Rows written before these fields existed still load.
     #[test]
     fn an_old_row_without_the_fields_still_loads() {
-        let back: Vec<GiftItem> =
-            serde_json::from_value(serde_json::json!([{"itemTemplateId": EBONY_MAIL, "quantity": 1}])).unwrap();
+        let back: Vec<GiftItem> = serde_json::from_value(
+            serde_json::json!([{"itemTemplateId": EBONY_MAIL, "quantity": 1}]),
+        )
+        .unwrap();
         assert_eq!(back[0].arcane_tier, None);
         assert!(back[0].enchanting.is_empty());
     }
@@ -456,7 +493,12 @@ mod report194_gear_instance_tests {
     #[test]
     fn gear_is_granted_as_an_instance_not_a_stackable() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 1, arcane_tier: None, enchanting: vec![] }]),
+            &gift(vec![GiftItem {
+                item_template_id: EBONY_MAIL,
+                quantity: 1,
+                arcane_tier: None,
+                enchanting: vec![],
+            }]),
             &types(),
             &repair(),
         );
@@ -478,7 +520,12 @@ mod report194_gear_instance_tests {
     #[test]
     fn a_consumable_stays_stackable() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: POTION, quantity: 5, arcane_tier: None, enchanting: vec![] }]),
+            &gift(vec![GiftItem {
+                item_template_id: POTION,
+                quantity: 5,
+                arcane_tier: None,
+                enchanting: vec![],
+            }]),
             &types(),
             &repair(),
         );
@@ -491,7 +538,12 @@ mod report194_gear_instance_tests {
     #[test]
     fn a_currency_is_still_a_currency() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: GEMS, quantity: 50_000, arcane_tier: None, enchanting: vec![] }]),
+            &gift(vec![GiftItem {
+                item_template_id: GEMS,
+                quantity: 50_000,
+                arcane_tier: None,
+                enchanting: vec![],
+            }]),
             &types(),
             &repair(),
         );
@@ -505,7 +557,12 @@ mod report194_gear_instance_tests {
     #[test]
     fn an_unknown_template_is_left_alone() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: UNKNOWN, quantity: 2, arcane_tier: None, enchanting: vec![] }]),
+            &gift(vec![GiftItem {
+                item_template_id: UNKNOWN,
+                quantity: 2,
+                arcane_tier: None,
+                enchanting: vec![],
+            }]),
             &types(),
             &repair(),
         );
@@ -518,7 +575,12 @@ mod report194_gear_instance_tests {
     #[test]
     fn a_quantity_of_gear_is_that_many_instances() {
         let reward = build_gift_reward(
-            &gift(vec![GiftItem { item_template_id: EBONY_MAIL, quantity: 3, arcane_tier: None, enchanting: vec![] }]),
+            &gift(vec![GiftItem {
+                item_template_id: EBONY_MAIL,
+                quantity: 3,
+                arcane_tier: None,
+                enchanting: vec![],
+            }]),
             &types(),
             &repair(),
         );
@@ -543,7 +605,13 @@ mod report194_gear_instance_tests {
             (14, false), // emote
         ] {
             let id = Uuid::from_u128(t as u128);
-            let table = HashMap::from([(id, GameDataItem { name: "x".into(), r#type: t })]);
+            let table = HashMap::from([(
+                id,
+                GameDataItem {
+                    name: "x".into(),
+                    r#type: t,
+                },
+            )]);
             assert_eq!(needs_instance(id, &table), instanced, "type {t}");
         }
     }
@@ -565,9 +633,27 @@ mod report194_legacy_promotion_tests {
 
     fn game_items() -> HashMap<Uuid, GameDataItem> {
         HashMap::from([
-            (EBONY_MAIL, GameDataItem { name: "Ebony Mail".into(), r#type: 3 }),
-            (RING, GameDataItem { name: "Ring".into(), r#type: 10 }),
-            (MATERIAL, GameDataItem { name: "Material".into(), r#type: 8 }),
+            (
+                EBONY_MAIL,
+                GameDataItem {
+                    name: "Ebony Mail".into(),
+                    r#type: 3,
+                },
+            ),
+            (
+                RING,
+                GameDataItem {
+                    name: "Ring".into(),
+                    r#type: 10,
+                },
+            ),
+            (
+                MATERIAL,
+                GameDataItem {
+                    name: "Material".into(),
+                    r#type: 8,
+                },
+            ),
         ])
     }
 
@@ -616,15 +702,23 @@ mod report194_legacy_promotion_tests {
             id
         });
 
-        assert_eq!(promoted.len(), 2, "the armour and the ring, not the material");
+        assert_eq!(
+            promoted.len(),
+            2,
+            "the armour and the ring, not the material"
+        );
         assert_eq!(inv.backpack.stackable_items.count(EBONY_MAIL), 0);
         assert_eq!(inv.backpack.stackable_items.count(RING), 0);
         // CONTROL: a material is a stackable and must stay one.
         assert_eq!(inv.backpack.stackable_items.count(MATERIAL), 7);
         assert_eq!(inv.backpack.items.0.len(), 3, "two armours and one ring");
-        assert!(inv.backpack.items.0.values().any(|i| {
-            i.item_template_id == EBONY_MAIL && i.durability == 453.0
-        }));
+        assert!(
+            inv.backpack
+                .items
+                .0
+                .values()
+                .any(|i| { i.item_template_id == EBONY_MAIL && i.durability == 453.0 })
+        );
     }
 
     /// The one place this differs from fork #329, which gave a promoted ring
@@ -676,8 +770,7 @@ mod report194_legacy_promotion_tests {
         let mut inv = inventory();
         inv.backpack.stackable_items.add(MATERIAL, 3);
         assert!(
-            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id)
-                .is_empty()
+            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id).is_empty()
         );
         assert_eq!(inv.backpack.stackable_items.count(MATERIAL), 3);
         assert!(inv.backpack.items.is_empty());
@@ -690,8 +783,7 @@ mod report194_legacy_promotion_tests {
         let unknown = Uuid::from_u128(0x99999999_8888_4777_8666_555555555555);
         inv.backpack.stackable_items.add(unknown, 1);
         assert!(
-            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id)
-                .is_empty()
+            promote_legacy_gift_gear(&game_items(), &repair_data(), &mut inv, fresh_id).is_empty()
         );
         assert_eq!(inv.backpack.stackable_items.count(unknown), 1);
     }

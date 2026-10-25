@@ -213,7 +213,10 @@ mod tests {
         assert!(!out.backpack.stackable_items.is_empty(), "stackables kept");
         assert!(out.backpack.items.is_empty(), "instanced gear dropped");
         assert!(out.treasury.chests().is_empty(), "treasury dropped");
-        assert_eq!(out.backpack_version, 7, "versions preserved for optimistic concurrency");
+        assert_eq!(
+            out.backpack_version, 7,
+            "versions preserved for optimistic concurrency"
+        );
     }
 
     /// `equippedItemsOnly=true` must NOT panic and must keep only the loadout; the
@@ -223,7 +226,10 @@ mod tests {
         let out = apply_inventory_filters(full_inventory(), false, true);
         assert_eq!(out.loadout.equipped_items.0.len(), 1, "loadout kept");
         assert!(out.backpack.items.is_empty(), "backpack gear dropped");
-        assert!(out.backpack.stackable_items.is_empty(), "backpack stackables dropped");
+        assert!(
+            out.backpack.stackable_items.is_empty(),
+            "backpack stackables dropped"
+        );
     }
 
     /// Both filters at once must not panic (the old assert crashed on either being true).

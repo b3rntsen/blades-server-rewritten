@@ -94,54 +94,421 @@ pub struct ArenaTier {
 }
 
 pub const ARENA_LADDER: [ArenaTier; 46] = [
-    ArenaTier { arena: 1, level: 1, required_trophies: 0, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel1" },
-    ArenaTier { arena: 1, level: 2, required_trophies: 50, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel2" },
-    ArenaTier { arena: 1, level: 3, required_trophies: 100, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel3" },
-    ArenaTier { arena: 1, level: 4, required_trophies: 150, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel4" },
-    ArenaTier { arena: 1, level: 5, required_trophies: 200, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel5" },
-    ArenaTier { arena: 1, level: 6, required_trophies: 250, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel6" },
-    ArenaTier { arena: 1, level: 7, required_trophies: 300, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel7" },
-    ArenaTier { arena: 1, level: 8, required_trophies: 350, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel8" },
-    ArenaTier { arena: 1, level: 9, required_trophies: 400, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena1_ArenaLevel9" },
-    ArenaTier { arena: 2, level: 1, required_trophies: 500, chests_once_reached: &[4], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel1" },
-    ArenaTier { arena: 2, level: 2, required_trophies: 550, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel2" },
-    ArenaTier { arena: 2, level: 3, required_trophies: 600, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel3" },
-    ArenaTier { arena: 2, level: 4, required_trophies: 650, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel4" },
-    ArenaTier { arena: 2, level: 5, required_trophies: 700, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel5" },
-    ArenaTier { arena: 2, level: 6, required_trophies: 750, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel6" },
-    ArenaTier { arena: 2, level: 7, required_trophies: 800, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel7" },
-    ArenaTier { arena: 2, level: 8, required_trophies: 850, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel8" },
-    ArenaTier { arena: 2, level: 9, required_trophies: 900, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena2_ArenaLevel9" },
-    ArenaTier { arena: 3, level: 1, required_trophies: 1000, chests_once_reached: &[4], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel1" },
-    ArenaTier { arena: 3, level: 2, required_trophies: 1050, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel2" },
-    ArenaTier { arena: 3, level: 3, required_trophies: 1100, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel3" },
-    ArenaTier { arena: 3, level: 4, required_trophies: 1150, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel4" },
-    ArenaTier { arena: 3, level: 5, required_trophies: 1200, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel5" },
-    ArenaTier { arena: 3, level: 6, required_trophies: 1250, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel6" },
-    ArenaTier { arena: 3, level: 7, required_trophies: 1300, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel7" },
-    ArenaTier { arena: 3, level: 8, required_trophies: 1350, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel8" },
-    ArenaTier { arena: 3, level: 9, required_trophies: 1400, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena3_ArenaLevel9" },
-    ArenaTier { arena: 4, level: 1, required_trophies: 1500, chests_once_reached: &[4, 4], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel1" },
-    ArenaTier { arena: 4, level: 2, required_trophies: 1550, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel2" },
-    ArenaTier { arena: 4, level: 3, required_trophies: 1600, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel3" },
-    ArenaTier { arena: 4, level: 4, required_trophies: 1650, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel4" },
-    ArenaTier { arena: 4, level: 5, required_trophies: 1700, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel5" },
-    ArenaTier { arena: 4, level: 6, required_trophies: 1750, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel6" },
-    ArenaTier { arena: 4, level: 7, required_trophies: 1800, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel7" },
-    ArenaTier { arena: 4, level: 8, required_trophies: 1850, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel8" },
-    ArenaTier { arena: 4, level: 9, required_trophies: 1900, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena4_ArenaLevel9" },
-    ArenaTier { arena: 5, level: 1, required_trophies: 2000, chests_once_reached: &[4, 4], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel1" },
-    ArenaTier { arena: 5, level: 2, required_trophies: 2050, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel2" },
-    ArenaTier { arena: 5, level: 3, required_trophies: 2100, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel3" },
-    ArenaTier { arena: 5, level: 4, required_trophies: 2150, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel4" },
-    ArenaTier { arena: 5, level: 5, required_trophies: 2200, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel5" },
-    ArenaTier { arena: 5, level: 6, required_trophies: 2250, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel6" },
-    ArenaTier { arena: 5, level: 7, required_trophies: 2300, chests_once_reached: &[], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel7" },
-    ArenaTier { arena: 5, level: 8, required_trophies: 2350, chests_once_reached: &[3], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel8" },
-    ArenaTier { arena: 5, level: 9, required_trophies: 2400, chests_once_reached: &[2], is_high_arena: false, can_drop_out: false, loot_table: "LootTable_Arena5_ArenaLevel9" },
-    ArenaTier { arena: 6, level: 1, required_trophies: 2500, chests_once_reached: &[5], is_high_arena: true, can_drop_out: true, loot_table: "LootTable_Arena6_ArenaLevel1" },
+    ArenaTier {
+        arena: 1,
+        level: 1,
+        required_trophies: 0,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel1",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 2,
+        required_trophies: 50,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel2",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 3,
+        required_trophies: 100,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel3",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 4,
+        required_trophies: 150,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel4",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 5,
+        required_trophies: 200,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel5",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 6,
+        required_trophies: 250,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel6",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 7,
+        required_trophies: 300,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel7",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 8,
+        required_trophies: 350,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel8",
+    },
+    ArenaTier {
+        arena: 1,
+        level: 9,
+        required_trophies: 400,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena1_ArenaLevel9",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 1,
+        required_trophies: 500,
+        chests_once_reached: &[4],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel1",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 2,
+        required_trophies: 550,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel2",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 3,
+        required_trophies: 600,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel3",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 4,
+        required_trophies: 650,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel4",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 5,
+        required_trophies: 700,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel5",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 6,
+        required_trophies: 750,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel6",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 7,
+        required_trophies: 800,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel7",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 8,
+        required_trophies: 850,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel8",
+    },
+    ArenaTier {
+        arena: 2,
+        level: 9,
+        required_trophies: 900,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena2_ArenaLevel9",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 1,
+        required_trophies: 1000,
+        chests_once_reached: &[4],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel1",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 2,
+        required_trophies: 1050,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel2",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 3,
+        required_trophies: 1100,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel3",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 4,
+        required_trophies: 1150,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel4",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 5,
+        required_trophies: 1200,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel5",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 6,
+        required_trophies: 1250,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel6",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 7,
+        required_trophies: 1300,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel7",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 8,
+        required_trophies: 1350,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel8",
+    },
+    ArenaTier {
+        arena: 3,
+        level: 9,
+        required_trophies: 1400,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena3_ArenaLevel9",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 1,
+        required_trophies: 1500,
+        chests_once_reached: &[4, 4],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel1",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 2,
+        required_trophies: 1550,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel2",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 3,
+        required_trophies: 1600,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel3",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 4,
+        required_trophies: 1650,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel4",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 5,
+        required_trophies: 1700,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel5",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 6,
+        required_trophies: 1750,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel6",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 7,
+        required_trophies: 1800,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel7",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 8,
+        required_trophies: 1850,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel8",
+    },
+    ArenaTier {
+        arena: 4,
+        level: 9,
+        required_trophies: 1900,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena4_ArenaLevel9",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 1,
+        required_trophies: 2000,
+        chests_once_reached: &[4, 4],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel1",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 2,
+        required_trophies: 2050,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel2",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 3,
+        required_trophies: 2100,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel3",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 4,
+        required_trophies: 2150,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel4",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 5,
+        required_trophies: 2200,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel5",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 6,
+        required_trophies: 2250,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel6",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 7,
+        required_trophies: 2300,
+        chests_once_reached: &[],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel7",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 8,
+        required_trophies: 2350,
+        chests_once_reached: &[3],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel8",
+    },
+    ArenaTier {
+        arena: 5,
+        level: 9,
+        required_trophies: 2400,
+        chests_once_reached: &[2],
+        is_high_arena: false,
+        can_drop_out: false,
+        loot_table: "LootTable_Arena5_ArenaLevel9",
+    },
+    ArenaTier {
+        arena: 6,
+        level: 1,
+        required_trophies: 2500,
+        chests_once_reached: &[5],
+        is_high_arena: true,
+        can_drop_out: true,
+        loot_table: "LootTable_Arena6_ArenaLevel1",
+    },
 ];
-
 
 /// One fixed item a ladder rung grants once, the first time it is reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,12 +545,42 @@ pub struct PromotionItem {
 /// The six templates carry `lootWeight: 0`: no random table ever drops them,
 /// so before this a player could not get the set at all.
 pub const PROMOTION_ITEMS: [PromotionItem; 6] = [
-    PromotionItem { threshold: 1000, template_uuid: "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b", name: "Blades Gauntlets", durability_centi: 32_500 },
-    PromotionItem { threshold: 1500, template_uuid: "38d48d68-684e-4394-996b-e0922b2a7f8a", name: "Blades Armor", durability_centi: 32_500 },
-    PromotionItem { threshold: 2000, template_uuid: "31e8ee1f-076b-46d9-b8ff-8d4f87faa244", name: "Blades Boots", durability_centi: 32_500 },
-    PromotionItem { threshold: 2000, template_uuid: "d454df43-e765-449f-9a4d-8e807c36d023", name: "Blades Shield", durability_centi: 32_500 },
-    PromotionItem { threshold: 2500, template_uuid: "9a7e526e-00c3-4ed5-8df4-b774bcc0c873", name: "Blades Sword", durability_centi: 24_375 },
-    PromotionItem { threshold: 2500, template_uuid: "f5159522-601a-4d4c-82d4-d059427c0c25", name: "Blades Helmet", durability_centi: 32_500 },
+    PromotionItem {
+        threshold: 1000,
+        template_uuid: "2e1fd199-7d1e-4ac1-b6a1-c51d3a92389b",
+        name: "Blades Gauntlets",
+        durability_centi: 32_500,
+    },
+    PromotionItem {
+        threshold: 1500,
+        template_uuid: "38d48d68-684e-4394-996b-e0922b2a7f8a",
+        name: "Blades Armor",
+        durability_centi: 32_500,
+    },
+    PromotionItem {
+        threshold: 2000,
+        template_uuid: "31e8ee1f-076b-46d9-b8ff-8d4f87faa244",
+        name: "Blades Boots",
+        durability_centi: 32_500,
+    },
+    PromotionItem {
+        threshold: 2000,
+        template_uuid: "d454df43-e765-449f-9a4d-8e807c36d023",
+        name: "Blades Shield",
+        durability_centi: 32_500,
+    },
+    PromotionItem {
+        threshold: 2500,
+        template_uuid: "9a7e526e-00c3-4ed5-8df4-b774bcc0c873",
+        name: "Blades Sword",
+        durability_centi: 24_375,
+    },
+    PromotionItem {
+        threshold: 2500,
+        template_uuid: "f5159522-601a-4d4c-82d4-d059427c0c25",
+        name: "Blades Helmet",
+        durability_centi: 32_500,
+    },
 ];
 
 /// The instance id of a promotion item for one character in one PvP season.
@@ -259,9 +656,7 @@ pub fn owned_promotion_item_ids(
     PROMOTION_ITEMS
         .iter()
         .map(|item| promotion_item_id(character_id, season_id, item))
-        .filter(|id| {
-            blades_lib::features::character_ops::owned_gear_item(inventory, id).is_some()
-        })
+        .filter(|id| blades_lib::features::character_ops::owned_gear_item(inventory, id).is_some())
         .collect()
 }
 
@@ -434,7 +829,12 @@ pub fn next_pvp_chest(
     } else {
         (PvpChestKind::Silver, None)
     };
-    PvpChestAward { chest_number, cycle_position, kind, rule }
+    PvpChestAward {
+        chest_number,
+        cycle_position,
+        kind,
+        rule,
+    }
 }
 
 /// `pvp_match_rewards.winner_loot_table` / `.loser_loot_table` — in the shipped
@@ -455,7 +855,11 @@ pub struct MatchOutcome {
 
 impl MatchOutcome {
     pub fn new(rounds_won: u8, rounds_lost: u8) -> Self {
-        MatchOutcome { rounds_won, rounds_lost, win: rounds_won > rounds_lost }
+        MatchOutcome {
+            rounds_won,
+            rounds_lost,
+            win: rounds_won > rounds_lost,
+        }
     }
 }
 
@@ -465,7 +869,6 @@ pub struct MatchReward {
     pub gold: i64,
     pub character_xp: i64,
 }
-
 
 /// The `rewardNewLevelArena` payload — populated **only** when this match pushed
 /// the player's `matchmakingPvpTrophies` high-water mark across one or more
@@ -547,13 +950,21 @@ const PROMOTION_GEMS_CURRENCY: &str = "470c8f58-a8dd-4c07-8c92-843b785e1139";
 
 /// The `rewardNewLevelArena` content for a high-water move — the chests and fixed
 /// stackables from every rung crossed, at the player's current character level.
-pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_level: u16) -> PromotionRewards {
+pub fn promotion_rewards(
+    old_high_water: i64,
+    new_high_water: i64,
+    character_level: u16,
+) -> PromotionRewards {
     use std::collections::BTreeMap;
 
     let crossed = tiers_crossed(old_high_water, new_high_water);
     let chests = crossed
         .iter()
-        .flat_map(|t| t.chests_once_reached.iter().map(move |&r| (r, character_level)))
+        .flat_map(|t| {
+            t.chests_once_reached
+                .iter()
+                .map(move |&r| (r, character_level))
+        })
         .collect::<Vec<_>>();
     let mut stackable_items = BTreeMap::new();
     let mut currencies = BTreeMap::new();
@@ -561,7 +972,8 @@ pub fn promotion_rewards(old_high_water: i64, new_high_water: i64, character_lev
     let mut items = Vec::new();
     for tier in &crossed {
         let fixed = super::arena_promotion_loot::stackables_for(tier.loot_table, character_level);
-        let fixed_currencies = super::arena_promotion_loot::currencies_for(tier.loot_table, character_level);
+        let fixed_currencies =
+            super::arena_promotion_loot::currencies_for(tier.loot_table, character_level);
         let fixed_items = PROMOTION_ITEMS
             .iter()
             .filter(|i| i.threshold == tier.required_trophies)
@@ -634,7 +1046,8 @@ pub fn match_reward(level: u16, outcome: MatchOutcome, arena: u8) -> MatchReward
     let a = (arena.clamp(1, 6) - 1) as usize;
     let rw = (outcome.rounds_won.min(2)) as usize;
 
-    let mut gold = cur.base_currency + cur.currency_bonus_per_round_won[rw] + cur.arena_currency_bonus[a];
+    let mut gold =
+        cur.base_currency + cur.currency_bonus_per_round_won[rw] + cur.arena_currency_bonus[a];
     let mut character_xp = xp.base_xp + xp.xp_bonus_per_round_won[rw] + xp.arena_xp_bonus[a];
     if outcome.win {
         if outcome.rounds_lost == 0 {
@@ -645,7 +1058,10 @@ pub fn match_reward(level: u16, outcome: MatchOutcome, arena: u8) -> MatchReward
             character_xp += xp.win_xp_bonus_2_to_1;
         }
     }
-    MatchReward { gold: gold.max(0), character_xp: character_xp.max(0) }
+    MatchReward {
+        gold: gold.max(0),
+        character_xp: character_xp.max(0),
+    }
 }
 
 /// `[Class 1]` The Elo K-factor for a player at `trophies` — the highest
@@ -674,7 +1090,11 @@ pub fn elo_result_score(outcome: MatchOutcome) -> f64 {
         return s.tie;
     }
     if outcome.win {
-        if outcome.rounds_lost == 0 { s.won_every_round } else { s.won_majority_of_rounds }
+        if outcome.rounds_lost == 0 {
+            s.won_every_round
+        } else {
+            s.won_majority_of_rounds
+        }
     } else if outcome.rounds_won == 0 {
         s.lost_every_round
     } else {
@@ -778,12 +1198,21 @@ mod tests {
 
     #[test]
     fn ladder_is_the_shipped_46_rung_table() {
-        assert_eq!(ARENA_LADDER.len(), 46, "5 arenas x 9 levels + the 1-level high arena");
+        assert_eq!(
+            ARENA_LADDER.len(),
+            46,
+            "5 arenas x 9 levels + the 1-level high arena"
+        );
         assert_eq!(ARENA_LADDER[0].required_trophies, 0);
         assert_eq!(ARENA_LADDER[ARENA_LADDER.len() - 1].required_trophies, 2500);
         // Strictly ascending thresholds — tier_for_trophies relies on this.
         for w in ARENA_LADDER.windows(2) {
-            assert!(w[1].required_trophies > w[0].required_trophies, "{:?} !> {:?}", w[1], w[0]);
+            assert!(
+                w[1].required_trophies > w[0].required_trophies,
+                "{:?} !> {:?}",
+                w[1],
+                w[0]
+            );
         }
         // Only arena 6 is the high arena, and only it can be dropped out of.
         for t in ARENA_LADDER.iter() {
@@ -799,20 +1228,20 @@ mod tests {
     fn tier_matches_every_retail_card() {
         // (matchmakingPvpTrophies, highestArenaReached, highestLevelArenaReached)
         let cards: &[(i64, u8, u8)] = &[
-            (0, 1, 1),     // flapdroid s167
-            (51, 1, 2),    // flapdroid s168
-            (142, 1, 3),   // flapdroid s394
-            (181, 1, 4),   // flapdroid s460
-            (200, 1, 5),   // flapdroid s127
-            (256, 1, 6),   // simi s607
-            (502, 2, 1),   // Taheen s398..s517
-            (506, 2, 1),   // Taheen s517
-            (518, 2, 1),   // Taheen s517
-            (579, 2, 2),   // Taheen s616
-            (725, 2, 5),   // Shoyr s544
-            (760, 2, 6),   // Shoyr s551..s709
-            (817, 2, 7),   // Flappety s470..s601
-            (847, 2, 7),   // Flappety s615
+            (0, 1, 1),   // flapdroid s167
+            (51, 1, 2),  // flapdroid s168
+            (142, 1, 3), // flapdroid s394
+            (181, 1, 4), // flapdroid s460
+            (200, 1, 5), // flapdroid s127
+            (256, 1, 6), // simi s607
+            (502, 2, 1), // Taheen s398..s517
+            (506, 2, 1), // Taheen s517
+            (518, 2, 1), // Taheen s517
+            (579, 2, 2), // Taheen s616
+            (725, 2, 5), // Shoyr s544
+            (760, 2, 6), // Shoyr s551..s709
+            (817, 2, 7), // Flappety s470..s601
+            (847, 2, 7), // Flappety s615
         ];
         for &(mtro, arena, level) in cards {
             let t = tier_for_trophies(mtro);
@@ -868,8 +1297,14 @@ mod tests {
         let names = |p: &PromotionRewards| p.items.iter().map(|i| i.name).collect::<Vec<_>>();
         // Arena 2 is chest-only in retail too.
         assert!(promotion_rewards(499, 500, 50).items.is_empty());
-        assert_eq!(names(&promotion_rewards(999, 1000, 50)), vec!["Blades Gauntlets"]);
-        assert_eq!(names(&promotion_rewards(1499, 1500, 50)), vec!["Blades Armor"]);
+        assert_eq!(
+            names(&promotion_rewards(999, 1000, 50)),
+            vec!["Blades Gauntlets"]
+        );
+        assert_eq!(
+            names(&promotion_rewards(1499, 1500, 50)),
+            vec!["Blades Armor"]
+        );
         assert_eq!(
             names(&promotion_rewards(1999, 2000, 50)),
             vec!["Blades Boots", "Blades Shield"]
@@ -879,9 +1314,16 @@ mod tests {
             vec!["Blades Sword", "Blades Helmet"]
         );
         // The chests the same rungs carry are unchanged.
-        assert_eq!(promotion_rewards(1999, 2000, 50).chests, vec![(4, 50), (4, 50)]);
+        assert_eq!(
+            promotion_rewards(1999, 2000, 50).chests,
+            vec![(4, 50), (4, 50)]
+        );
         // Each item rung is recorded in the idempotency ledger.
-        assert!(promotion_rewards(999, 1000, 50).loot_thresholds.contains(&1000));
+        assert!(
+            promotion_rewards(999, 1000, 50)
+                .loot_thresholds
+                .contains(&1000)
+        );
         // Two arenas crossed in one payout grant both arenas' pieces.
         assert_eq!(
             names(&promotion_rewards(990, 1510, 50)),
@@ -896,13 +1338,18 @@ mod tests {
         let p = promotion_rewards(0, 2500, 50);
         let mut got = p.items.iter().map(|i| i.template_uuid).collect::<Vec<_>>();
         got.sort();
-        let mut want = PROMOTION_ITEMS.iter().map(|i| i.template_uuid).collect::<Vec<_>>();
+        let mut want = PROMOTION_ITEMS
+            .iter()
+            .map(|i| i.template_uuid)
+            .collect::<Vec<_>>();
         want.sort();
         assert_eq!(got, want);
         for i in PROMOTION_ITEMS {
             uuid::Uuid::parse_str(i.template_uuid).unwrap();
             assert!(
-                ARENA_LADDER.iter().any(|t| t.level == 1 && t.required_trophies == i.threshold),
+                ARENA_LADDER
+                    .iter()
+                    .any(|t| t.level == 1 && t.required_trophies == i.threshold),
                 "{} must sit on an arena's first rung",
                 i.name
             );
@@ -935,7 +1382,10 @@ mod tests {
         let durable = promotion_items_to_grant(&promo, character, season, |id| owned.contains(id));
         assert_eq!(card, durable);
         assert_eq!(card.len(), 1);
-        assert_ne!(card[0].id, boots_id, "an owned id never appears on the card");
+        assert_ne!(
+            card[0].id, boots_id,
+            "an owned id never appears on the card"
+        );
         assert!(card_promotion_items(&promo, character, season, &owned, false).is_empty());
     }
 
@@ -947,11 +1397,23 @@ mod tests {
         let s2 = uuid::Uuid::from_u128(0x52);
         let boots = &PROMOTION_ITEMS[2];
         let shield = &PROMOTION_ITEMS[3];
-        assert_eq!(promotion_item_id(a, s1, boots), promotion_item_id(a, s1, boots));
-        assert_ne!(promotion_item_id(a, s1, boots), promotion_item_id(a, s1, shield));
-        assert_ne!(promotion_item_id(a, s1, boots), promotion_item_id(b, s1, boots));
+        assert_eq!(
+            promotion_item_id(a, s1, boots),
+            promotion_item_id(a, s1, boots)
+        );
+        assert_ne!(
+            promotion_item_id(a, s1, boots),
+            promotion_item_id(a, s1, shield)
+        );
+        assert_ne!(
+            promotion_item_id(a, s1, boots),
+            promotion_item_id(b, s1, boots)
+        );
         // A new season's re-grant is a NEW instance, never last season's id.
-        assert_ne!(promotion_item_id(a, s1, boots), promotion_item_id(a, s2, boots));
+        assert_ne!(
+            promotion_item_id(a, s1, boots),
+            promotion_item_id(a, s2, boots)
+        );
         let item = promotion_reward_item(a, s1, shield);
         let v = serde_json::to_value(&item).unwrap();
         assert_eq!(v["itemTemplateId"], "d454df43-e765-449f-9a4d-8e807c36d023");
@@ -1077,13 +1539,20 @@ mod tests {
             let loss1 = match_reward(level, MatchOutcome::new(1, 2), A1).gold;
             let win21 = match_reward(level, MatchOutcome::new(2, 1), A1).gold;
             let win20 = match_reward(level, MatchOutcome::new(2, 0), A1).gold;
-            assert!(loss0 < loss1 && loss1 < win21 && win21 < win20, "L{level} not ordered");
+            assert!(
+                loss0 < loss1 && loss1 < win21 && win21 < win20,
+                "L{level} not ordered"
+            );
         }
         // Fighting in a higher arena always pays more, at every round score.
         for arena in 1..6u8 {
             let lo = match_reward(86, MatchOutcome::new(2, 0), arena).gold;
             let hi = match_reward(86, MatchOutcome::new(2, 0), arena + 1).gold;
-            assert!(hi > lo, "arena {arena} -> {} pays no more: {lo} vs {hi}", arena + 1);
+            assert!(
+                hi > lo,
+                "arena {arena} -> {} pays no more: {lo} vs {hi}",
+                arena + 1
+            );
         }
     }
 
@@ -1101,13 +1570,19 @@ mod tests {
 
     #[test]
     fn five_hundred_cups_promotes_once_and_the_arena_is_sticky() {
-        assert_eq!((tier_for_trophies(499).arena, tier_for_trophies(499).level), (1, 9));
+        assert_eq!(
+            (tier_for_trophies(499).arena, tier_for_trophies(499).level),
+            (1, 9)
+        );
         let promoted = tier_for_trophies(500);
         assert_eq!((promoted.arena, promoted.level), (2, 1));
         let promo = promotion_rewards(499, 500, 86);
         assert_eq!(promo.chests, vec![(4, 86)]);
         // Retail's table pays 50; doubled by the owner-approved #390/#391 policy.
-        assert_eq!(promo.currencies, vec![("470c8f58-a8dd-4c07-8c92-843b785e1139", 100)]);
+        assert_eq!(
+            promo.currencies,
+            vec![("470c8f58-a8dd-4c07-8c92-843b785e1139", 100)]
+        );
         assert_eq!(promo.loot_thresholds, vec![500]);
 
         // The engine/persistence store max(live trophies, old high-water). A later
@@ -1122,14 +1597,22 @@ mod tests {
     /// promotion pays twice retail's Gems, at every arena that pays any.
     #[test]
     fn a_promotion_pays_double_the_retail_gems() {
-        assert_eq!(PROMOTION_GEMS_CURRENCY, blades_lib::economy::GEMS.to_string());
+        assert_eq!(
+            PROMOTION_GEMS_CURRENCY,
+            blades_lib::economy::GEMS.to_string()
+        );
         for tier in ARENA_LADDER.iter().filter(|t| t.arena >= 2 && t.level == 1) {
-            let retail: u64 = super::super::arena_promotion_loot::currencies_for(tier.loot_table, 86)
-                .iter()
-                .filter(|c| c.currency_uuid == PROMOTION_GEMS_CURRENCY)
-                .map(|c| c.quantity)
-                .sum();
-            assert!(retail > 0, "arena {} promotion pays retail Gems", tier.arena);
+            let retail: u64 =
+                super::super::arena_promotion_loot::currencies_for(tier.loot_table, 86)
+                    .iter()
+                    .filter(|c| c.currency_uuid == PROMOTION_GEMS_CURRENCY)
+                    .map(|c| c.quantity)
+                    .sum();
+            assert!(
+                retail > 0,
+                "arena {} promotion pays retail Gems",
+                tier.arena
+            );
             let promo = promotion_rewards(tier.required_trophies - 1, tier.required_trophies, 86);
             assert_eq!(
                 promo.currencies,
@@ -1139,10 +1622,19 @@ mod tests {
             );
         }
         // Crossing two paying rungs in one match pays both, each doubled.
-        let a2 = ARENA_LADDER.iter().find(|t| t.arena == 2 && t.level == 1).unwrap();
-        let a3 = ARENA_LADDER.iter().find(|t| t.arena == 3 && t.level == 1).unwrap();
+        let a2 = ARENA_LADDER
+            .iter()
+            .find(|t| t.arena == 2 && t.level == 1)
+            .unwrap();
+        let a3 = ARENA_LADDER
+            .iter()
+            .find(|t| t.arena == 3 && t.level == 1)
+            .unwrap();
         let both = promotion_rewards(a2.required_trophies - 1, a3.required_trophies, 86);
-        assert_eq!(both.currencies, vec![(PROMOTION_GEMS_CURRENCY, 2 * (50 + 100))]);
+        assert_eq!(
+            both.currencies,
+            vec![(PROMOTION_GEMS_CURRENCY, 2 * (50 + 100))]
+        );
     }
 
     #[test]
@@ -1200,7 +1692,11 @@ mod tests {
             }
             assert_eq!(
                 kind,
-                if position % 2 == 1 { PvpChestKind::Gold } else { PvpChestKind::Silver }
+                if position % 2 == 1 {
+                    PvpChestKind::Gold
+                } else {
+                    PvpChestKind::Silver
+                }
             );
         }
     }
@@ -1209,22 +1705,22 @@ mod tests {
     fn pvp_special_chests_respect_the_shipped_cooldowns() {
         let id = uuid::Uuid::nil();
         let elder_one_position = (1..=100)
-            .find(|&n| {
-                next_pvp_chest(id, n - 1, 0, 0, 0, 10).rule
-                    == Some(PvpChestRule::ElderOne)
-            })
+            .find(|&n| next_pvp_chest(id, n - 1, 0, 0, 0, 10).rule == Some(PvpChestRule::ElderOne))
             .unwrap();
         let blocked = next_pvp_chest(id, elder_one_position - 1, 100, 0, 0, 101);
-        assert!(matches!(blocked.kind, PvpChestKind::Silver | PvpChestKind::Gold));
+        assert!(matches!(
+            blocked.kind,
+            PvpChestKind::Silver | PvpChestKind::Gold
+        ));
 
         let legendary_position = (1..=100)
-            .find(|&n| {
-                next_pvp_chest(id, n - 1, 0, 0, 0, 10).rule
-                    == Some(PvpChestRule::Legendary)
-            })
+            .find(|&n| next_pvp_chest(id, n - 1, 0, 0, 0, 10).rule == Some(PvpChestRule::Legendary))
             .unwrap();
         let blocked = next_pvp_chest(id, legendary_position - 1, 0, 0, 100, 101);
-        assert!(matches!(blocked.kind, PvpChestKind::Silver | PvpChestKind::Gold));
+        assert!(matches!(
+            blocked.kind,
+            PvpChestKind::Silver | PvpChestKind::Gold
+        ));
     }
 
     // ------------------------------------------------------------------ Elo
@@ -1260,8 +1756,12 @@ mod tests {
         assert_eq!(elo_result_score(MatchOutcome::new(0, 2)), 0.0);
         // A 2-1 win is worth strictly less than a 2-0; a 1-2 loss strictly more
         // than a 0-2. Flat-K scoring cannot express either.
-        assert!(elo_result_score(MatchOutcome::new(2, 1)) < elo_result_score(MatchOutcome::new(2, 0)));
-        assert!(elo_result_score(MatchOutcome::new(1, 2)) > elo_result_score(MatchOutcome::new(0, 2)));
+        assert!(
+            elo_result_score(MatchOutcome::new(2, 1)) < elo_result_score(MatchOutcome::new(2, 0))
+        );
+        assert!(
+            elo_result_score(MatchOutcome::new(1, 2)) > elo_result_score(MatchOutcome::new(0, 2))
+        );
     }
 
     /// Every best-of-three round score, as `(rounds_won, rounds_lost)`.
@@ -1270,11 +1770,7 @@ mod tests {
     /// Is `observed` reachable for a player on `own` trophies against SOME legal
     /// opponent (trophies `0..=3000`) under `variant`? Returns the opponent
     /// rating and round score that does it, if any.
-    fn reachable(
-        observed: i64,
-        own: i64,
-        variant: ScoringVariant,
-    ) -> Option<(i64, (u8, u8))> {
+    fn reachable(observed: i64, own: i64, variant: ScoringVariant) -> Option<(i64, (u8, u8))> {
         for opp in 0..=3000i64 {
             for (w, l) in ROUND_SCORES {
                 if trophy_delta(MatchOutcome::new(w, l), own, opp, variant) == observed {
@@ -1322,7 +1818,10 @@ mod tests {
              not just the old constant"
         );
         let (opp, score) = hit.unwrap();
-        assert!(score.0 < score.1, "a -42 swing must come from a loss, got {score:?}");
+        assert!(
+            score.0 < score.1,
+            "a -42 swing must come from a loss, got {score:?}"
+        );
         assert!(
             (0..=OWN + MAX_PAIRING_GAP).contains(&opp),
             "implied opponent {opp} is outside any pairing the shipped matchmaker allows"
@@ -1451,15 +1950,35 @@ mod tests {
         assert_eq!(bot_opponent_trophies(588, 0), 588);
         assert_eq!(bot_opponent_trophies(588, -5), 588);
 
-        let win = MatchOutcome { rounds_won: 2, rounds_lost: 0, win: true };
-        let loss = MatchOutcome { rounds_won: 0, rounds_lost: 2, win: false };
+        let win = MatchOutcome {
+            rounds_won: 2,
+            rounds_lost: 0,
+            win: true,
+        };
+        let loss = MatchOutcome {
+            rounds_won: 0,
+            rounds_lost: 2,
+            win: false,
+        };
         let d = |o, opp| trophy_delta(o, 588, opp, ScoringVariant::Shipped);
         // Before: priced at the bot's live 0.
         assert_eq!((d(win, 0), d(loss, 0)), (3, -87));
         // After: a bot bracketed at 455 (Meryl Andra).
-        assert_eq!((d(win, bot_opponent_trophies(588, 455)), d(loss, bot_opponent_trophies(588, 455))), (29, -61));
+        assert_eq!(
+            (
+                d(win, bot_opponent_trophies(588, 455)),
+                d(loss, bot_opponent_trophies(588, 455))
+            ),
+            (29, -61)
+        );
         // After: an unrated bot — even match.
-        assert_eq!((d(win, bot_opponent_trophies(588, 0)), d(loss, bot_opponent_trophies(588, 0))), (45, -45));
+        assert_eq!(
+            (
+                d(win, bot_opponent_trophies(588, 0)),
+                d(loss, bot_opponent_trophies(588, 0))
+            ),
+            (45, -45)
+        );
     }
 
     #[test]
@@ -1477,12 +1996,18 @@ mod tests {
         }
 
         let rs = &j["elo_result_score"];
-        assert_eq!(rs["won_every_round"].as_f64(), Some(ELO_RESULT_SCORE.won_every_round));
+        assert_eq!(
+            rs["won_every_round"].as_f64(),
+            Some(ELO_RESULT_SCORE.won_every_round)
+        );
         assert_eq!(
             rs["won_majority_of_rounds"].as_f64(),
             Some(ELO_RESULT_SCORE.won_majority_of_rounds)
         );
-        assert_eq!(rs["lost_every_round"].as_f64(), Some(ELO_RESULT_SCORE.lost_every_round));
+        assert_eq!(
+            rs["lost_every_round"].as_f64(),
+            Some(ELO_RESULT_SCORE.lost_every_round)
+        );
         assert_eq!(
             rs["lost_majority_of_rounds"].as_f64(),
             Some(ELO_RESULT_SCORE.lost_majority_of_rounds)
@@ -1493,7 +2018,10 @@ mod tests {
         assert_eq!(cur.len(), PVP_SOFT_CURRENCY_RULES.len());
         assert_eq!(xp.len(), PVP_EXPERIENCE_RULES.len());
         for (row, c) in cur.iter().zip(PVP_SOFT_CURRENCY_RULES.iter()) {
-            assert_eq!(row["character_level"].as_u64(), Some(c.character_level as u64));
+            assert_eq!(
+                row["character_level"].as_u64(),
+                Some(c.character_level as u64)
+            );
             assert_eq!(row["base_currency"].as_i64(), Some(c.base_currency));
             assert_eq!(
                 row["win_currency_bonus_2_to_0"].as_i64(),
@@ -1507,9 +2035,15 @@ mod tests {
             }
         }
         for (row, c) in xp.iter().zip(PVP_EXPERIENCE_RULES.iter()) {
-            assert_eq!(row["character_level"].as_u64(), Some(c.character_level as u64));
+            assert_eq!(
+                row["character_level"].as_u64(),
+                Some(c.character_level as u64)
+            );
             assert_eq!(row["base_xp"].as_i64(), Some(c.base_xp));
-            assert_eq!(row["win_xp_bonus_2_to_0"].as_i64(), Some(c.win_xp_bonus_2_to_0));
+            assert_eq!(
+                row["win_xp_bonus_2_to_0"].as_i64(),
+                Some(c.win_xp_bonus_2_to_0)
+            );
             for (i, v) in c.arena_xp_bonus.iter().enumerate() {
                 assert_eq!(row["arena_xp_bonus"][i].as_f64(), Some(*v as f64));
             }
@@ -1539,7 +2073,8 @@ mod tests {
                 .expect("every shipped arena has a rung in the ladder");
             assert_eq!(
                 a.required_trophy_count, first_rung.required_trophies,
-                "{} entry threshold disagrees with the ladder", a.arena_key
+                "{} entry threshold disagrees with the ladder",
+                a.arena_key
             );
         }
     }

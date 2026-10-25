@@ -108,7 +108,12 @@ fn recipe_for_template(item_template_id: &Uuid) -> Option<&'static SalvageRecipe
 /// request).
 fn resolve(recipe_id: &Uuid, item_template_id: &Uuid) -> Option<&'static SalvageRecipe> {
     match recipe(recipe_id) {
-        Some(r) if r.input_item_template_id.is_none_or(|t| t == *item_template_id) => Some(r),
+        Some(r)
+            if r.input_item_template_id
+                .is_none_or(|t| t == *item_template_id) =>
+        {
+            Some(r)
+        }
         _ => recipe_for_template(item_template_id).or_else(|| recipe(recipe_id)),
     }
 }
@@ -216,7 +221,11 @@ mod tests {
         }
         assert_eq!(len(), 681, "the client ships 681 Salvaging recipes");
         for (rid, r) in &table().recipes {
-            assert_eq!(r.levels.len(), 11, "{rid}: one row per tempering level 0..=10");
+            assert_eq!(
+                r.levels.len(),
+                11,
+                "{rid}: one row per tempering level 0..=10"
+            );
             assert!(r.input_item_template_id.is_some(), "{rid}: no input item");
         }
     }
@@ -309,10 +318,7 @@ mod tests {
         let m = Uuid::from_u128(1);
         let r1 = Uuid::from_u128(10);
         let r2 = Uuid::from_u128(11);
-        let recipes = HashMap::from([
-            (r1, HashMap::from([(m, 2)])),
-            (r2, HashMap::from([(m, 3)])),
-        ]);
+        let recipes = HashMap::from([(r1, HashMap::from([(m, 2)])), (r2, HashMap::from([(m, 3)]))]);
         let reward = salvage_materials(&[r1, r2], &recipes);
         assert_eq!(reward.stackable_items[&m], 5);
     }

@@ -99,7 +99,7 @@ pub async fn collect_chest(
                 &loot_key,
                 &entry.inventory.0.item_templates(),
             )
-                .unwrap_or_default();
+            .unwrap_or_default();
             // The three best soul gems for a level 45-48 opener, whatever level the
             // chest was minted at (owner-approved deviation from retail, #388).
             blades_lib::features::beginner_economy::top_soul_gems(

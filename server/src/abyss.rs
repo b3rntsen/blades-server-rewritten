@@ -66,20 +66,20 @@ use blades_lib::{
     economy::{RewardGrant, apply_reward, consume_stackable, grant_chest},
     features::{abyss_kill_score, abyss_rewards, revive},
     server_state::{AbyssRun, AbyssSliceEntry},
-    user_data::{CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
-                CompleteWallet, DungeonGeneratedData, InventoryChangeTracker},
+    user_data::{
+        CompleteCharacterWithIdWithoutData, CompleteInventory, CompleteInventoryUpdate,
+        CompleteWallet, DungeonGeneratedData, InventoryChangeTracker,
+    },
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use rand::RngExt;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal,
-    models::CharacterDbEntryEconomy,
-    session::SessionLookedUpMaybe,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
     util::check_permission_for_character_and_get_it,
 };
 
@@ -188,9 +188,7 @@ const ABYSS_QUEST_ID: &str = "ab133000-0000-0000-0000-000000000000";
 /// Gold currency UUID (captured from both abyss and quest loot responses).
 const GOLD_CURRENCY_UUID: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
 
-#[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/abysses/current/start"
-)]
+#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/abysses/current/start")]
 pub async fn start_abyss(
     path: web::Path<Uuid>,
     body: Json<StartAbyssRequest>,
@@ -241,8 +239,13 @@ pub async fn start_abyss(
             // Retail served a quest-gated slice (Skeletons, Liches, Warlord, ...) only to
             // a character that had finished its quest — see [`retail_deep_floors`].
             let has_completed = completed_quest_gate(&entry.character.0.completed_quests);
-            let slices =
-                build_run_slices(static_abyss, seed, start_floor, player_level, &has_completed);
+            let slices = build_run_slices(
+                static_abyss,
+                seed,
+                start_floor,
+                player_level,
+                &has_completed,
+            );
 
             let run = AbyssRun {
                 slices,
@@ -509,9 +512,7 @@ struct UpdateAbyssResponse {
     inventory: CompleteInventoryUpdate,
 }
 
-#[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/abysses/current/update"
-)]
+#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/abysses/current/update")]
 pub async fn update_abyss(
     path: web::Path<Uuid>,
     body: Json<UpdateAbyssRequest>,
@@ -583,11 +584,8 @@ pub async fn update_abyss(
                 let abyss_dungeon_generated_data =
                     active_floor_generated_data(&app_state.game_data, run);
                 apply_combat_durability(&body.actions, &mut entry.inventory.0, &mut tracker);
-                let consumed = apply_item_consumption(
-                    &body.actions,
-                    &mut entry.inventory.0,
-                    &mut tracker,
-                );
+                let consumed =
+                    apply_item_consumption(&body.actions, &mut entry.inventory.0, &mut tracker);
                 // A revive is paid for by the server, not by a client-sent
                 // `item_consumed`: all 14 captured abyss revives come back with the
                 // Scroll of Revival at its new count (1802 -> 1800 -> 1796, the same
@@ -668,9 +666,7 @@ struct EndAbyssResponse {
     inventory: CompleteInventoryUpdate,
 }
 
-#[post(
-    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/abysses/current/end"
-)]
+#[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/abysses/current/end")]
 pub async fn end_abyss(
     path: web::Path<Uuid>,
     _body: Json<EndAbyssRequest>,
@@ -690,7 +686,11 @@ pub async fn end_abyss(
 
             // Update maximumAbyssLevelReached (the floorIndex = slice_index+1 of the last
             // completed slice; prod captures show it equals the highest floorIndex reached).
-            let max_floor = entry.server_state.0.abyss.as_ref()
+            let max_floor = entry
+                .server_state
+                .0
+                .abyss
+                .as_ref()
                 .and_then(|r| r.slices.iter().filter(|s| s.completed).last())
                 .map(|s| s.floor_index)
                 .unwrap_or(0);
@@ -865,7 +865,11 @@ fn pick_deep_dungeon(
                 .iter()
                 .filter_map(|(id, def)| {
                     let tier = static_abyss.dungeon_tier(def)?;
-                    let w = band.tier_weights.get(&tier.to_string()).copied().unwrap_or(0);
+                    let w = band
+                        .tier_weights
+                        .get(&tier.to_string())
+                        .copied()
+                        .unwrap_or(0);
                     if w > 0 { Some((*id, w)) } else { None }
                 })
                 .collect();
@@ -949,7 +953,9 @@ fn retail_deep_floors(
             for slice in &static_abyss.abyss_slices {
                 if slice.random_weight > 0.0
                     && (slice.min_level..=slice.max_level).contains(&difficulty)
-                    && slice.required_quest_id.is_none_or(|quest| has_completed(quest))
+                    && slice
+                        .required_quest_id
+                        .is_none_or(|quest| has_completed(quest))
                 {
                     let weight = eligible.entry(slice.dungeon_settings_id).or_insert(0.0);
                     *weight = weight.max(slice.random_weight);
@@ -958,8 +964,11 @@ fn retail_deep_floors(
             if eligible.is_empty() {
                 return None;
             }
-            let mut bag: Vec<(Uuid, f64)> =
-                eligible.iter().filter(|(id, _)| !dealt.contains(*id)).map(|(id, w)| (*id, *w)).collect();
+            let mut bag: Vec<(Uuid, f64)> = eligible
+                .iter()
+                .filter(|(id, _)| !dealt.contains(*id))
+                .map(|(id, w)| (*id, *w))
+                .collect();
             if bag.is_empty() {
                 dealt.clear();
                 bag = eligible.into_iter().collect();
@@ -1101,10 +1110,40 @@ fn slice_difficulty(floor: u32, initial_player_level: u32) -> u32 {
 /// retail EPL), measured from the 2026-06-07 retail job boards. The fallback when the
 /// static file lacks the table; a test keeps the two identical.
 const RETAIL_EPL_BY_LEVEL: [(u32, u32); 34] = [
-    (1, 1), (2, 2), (3, 4), (4, 7), (5, 7), (6, 7), (7, 10), (8, 10), (10, 12), (15, 17),
-    (17, 19), (18, 20), (19, 21), (20, 22), (21, 23), (22, 24), (23, 25), (24, 26), (25, 26),
-    (26, 28), (27, 30), (28, 31), (29, 32), (30, 33), (31, 34), (40, 45), (41, 46), (42, 47),
-    (43, 48), (57, 60), (62, 63), (79, 75), (86, 78), (100, 84),
+    (1, 1),
+    (2, 2),
+    (3, 4),
+    (4, 7),
+    (5, 7),
+    (6, 7),
+    (7, 10),
+    (8, 10),
+    (10, 12),
+    (15, 17),
+    (17, 19),
+    (18, 20),
+    (19, 21),
+    (20, 22),
+    (21, 23),
+    (22, 24),
+    (23, 25),
+    (24, 26),
+    (25, 26),
+    (26, 28),
+    (27, 30),
+    (28, 31),
+    (29, 32),
+    (30, 33),
+    (31, 34),
+    (40, 45),
+    (41, 46),
+    (42, 47),
+    (43, 48),
+    (57, 60),
+    (62, 63),
+    (79, 75),
+    (86, 78),
+    (100, 84),
 ];
 
 /// The `initialPlayerLevel` a run is started at: our estimate of the client's Effective
@@ -1275,15 +1314,19 @@ const TEST_IPL: u32 = 10;
 
 /// Convert a server-side `AbyssRun` to the wire shape.
 fn run_to_wire(run: &AbyssRun, character_level: u64) -> AbyssWire {
-    let slices = run.slices.iter().map(|s| AbyssSliceWire {
-        dungeon_settings_id: s.dungeon_settings_id,
-        difficulty_level: s.difficulty_level,
-        hardcore: s.hardcore,
-        slice_index: s.slice_index,
-        floor_index: s.floor_index,
-        completed: s.completed,
-        enemy_killed: s.enemy_killed,
-    }).collect();
+    let slices = run
+        .slices
+        .iter()
+        .map(|s| AbyssSliceWire {
+            dungeon_settings_id: s.dungeon_settings_id,
+            difficulty_level: s.difficulty_level,
+            hardcore: s.hardcore,
+            slice_index: s.slice_index,
+            floor_index: s.floor_index,
+            completed: s.completed,
+            enemy_killed: s.enemy_killed,
+        })
+        .collect();
 
     AbyssWire {
         slices,
@@ -1308,7 +1351,11 @@ fn run_to_wire(run: &AbyssRun, character_level: u64) -> AbyssWire {
 /// The ladder and its contents now come from the mined corpus in
 /// `blades_lib::features::abyss_rewards`, which also knows that the two chest
 /// rungs are deterministic and cut to the player's own level.
-fn build_future_rewards(score: f64, character_level: u64, run_seed: i64) -> Vec<AbyssFutureRewardWire> {
+fn build_future_rewards(
+    score: f64,
+    character_level: u64,
+    run_seed: i64,
+) -> Vec<AbyssFutureRewardWire> {
     abyss_rewards::next_future_reward(score, character_level, run_seed)
         .map(|(score, reward)| AbyssFutureRewardWire { score, reward })
         .into_iter()
@@ -1427,9 +1474,9 @@ fn collect_enemy_loot(
                     continue;
                 };
                 let floor_index = slice.floor_index;
-                let generated = generated_by_slice
-                    .entry(active_slice)
-                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed, character_level));
+                let generated = generated_by_slice.entry(active_slice).or_insert_with(|| {
+                    floor_generated_data(game_data, slice, run_seed, character_level)
+                });
                 let Some(generated) = generated.as_ref() else {
                     continue;
                 };
@@ -1463,15 +1510,13 @@ fn collect_enemy_loot(
                     collected.spawner_index,
                     collected.enemy_index,
                 );
-                if !run.killed_enemies.contains(&key)
-                    || run.collected_enemy_loot.contains(&key)
-                {
+                if !run.killed_enemies.contains(&key) || run.collected_enemy_loot.contains(&key) {
                     continue;
                 }
 
-                let generated = generated_by_slice
-                    .entry(active_slice)
-                    .or_insert_with(|| floor_generated_data(game_data, slice, run_seed, character_level));
+                let generated = generated_by_slice.entry(active_slice).or_insert_with(|| {
+                    floor_generated_data(game_data, slice, run_seed, character_level)
+                });
                 let Some(generated) = generated.as_ref() else {
                     continue;
                 };
@@ -1759,7 +1804,9 @@ fn never_ahead_kill_score(
     level_delta: i32,
 ) -> i64 {
     let flat_tail = static_abyss.kill_score(i32::MAX / 2);
-    static_abyss.kill_score(level_delta - CLIENT_EPL_MARGIN).min(flat_tail)
+    static_abyss
+        .kill_score(level_delta - CLIENT_EPL_MARGIN)
+        .min(flat_tail)
 }
 
 /// Score for `count` kills on `slice`, for a run started at `initial_player_level`.
@@ -1887,14 +1934,16 @@ fn end_run_reward(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blades_lib::static_data::{AbyssStaticData, AbyssFixedSlice, AbyssFutureRewardDef};
+    use blades_lib::static_data::{AbyssFixedSlice, AbyssFutureRewardDef, AbyssStaticData};
     use blades_lib::user_data::{Item, ItemPropertiesAll, SingleEquippedItem};
 
     fn test_static_abyss() -> AbyssStaticData {
-        let fixed: Vec<AbyssFixedSlice> = (1u32..=24).map(|i| AbyssFixedSlice {
-            dungeon_settings_id: Uuid::new_v4(),
-            difficulty_level: i,
-        }).collect();
+        let fixed: Vec<AbyssFixedSlice> = (1u32..=24)
+            .map(|i| AbyssFixedSlice {
+                dungeon_settings_id: Uuid::new_v4(),
+                difficulty_level: i,
+            })
+            .collect();
         let pool: Vec<Uuid> = (0..5).map(|_| Uuid::new_v4()).collect();
         AbyssStaticData {
             fixed_slices: fixed,
@@ -1938,14 +1987,26 @@ mod tests {
         let weak = Uuid::from_u128(0x0001);
         let tough = Uuid::from_u128(0x0009);
         let mut pool = std::collections::HashMap::new();
-        pool.insert(weak, AbyssDungeonDef {
-            handle: "Cave_Goblin".into(), environment: "Cave".into(),
-            monsters: vec!["Goblin".into()], is_boss: false, enemy_count: 3,
-        });
-        pool.insert(tough, AbyssDungeonDef {
-            handle: "Ayleid_Dragon".into(), environment: "Ayleid".into(),
-            monsters: vec!["Dragon".into()], is_boss: true, enemy_count: 1,
-        });
+        pool.insert(
+            weak,
+            AbyssDungeonDef {
+                handle: "Cave_Goblin".into(),
+                environment: "Cave".into(),
+                monsters: vec!["Goblin".into()],
+                is_boss: false,
+                enemy_count: 3,
+            },
+        );
+        pool.insert(
+            tough,
+            AbyssDungeonDef {
+                handle: "Ayleid_Dragon".into(),
+                environment: "Ayleid".into(),
+                monsters: vec!["Dragon".into()],
+                is_boss: true,
+                enemy_count: 1,
+            },
+        );
         sd.dungeon_pool = pool;
 
         let mut tiers = std::collections::HashMap::new();
@@ -1957,11 +2018,13 @@ mod tests {
         // Deepest band (41-150): only tier 9 has weight → always the dragon lair.
         sd.depth_bands = vec![
             AbyssDepthBand {
-                floor_min: 25, floor_max: 40,
+                floor_min: 25,
+                floor_max: 40,
                 tier_weights: [("1".to_string(), 100u32)].into_iter().collect(),
             },
             AbyssDepthBand {
-                floor_min: 41, floor_max: 150,
+                floor_min: 41,
+                floor_max: 150,
                 tier_weights: [("9".to_string(), 100u32)].into_iter().collect(),
             },
         ];
@@ -1973,7 +2036,14 @@ mod tests {
     /// The first three are whole `/start` responses (450 slices); the ipl-4 run is the
     /// nine floors that capture covered.
     const RETAIL_STARTS: [(u32, u32, &[u32], bool); 4] = [
-        (10, 1, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 24, 28, 34, 42, 50, 60, 70, 82, 94], true),
+        (
+            10,
+            1,
+            &[
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 24, 28, 34, 42, 50, 60, 70, 82, 94,
+            ],
+            true,
+        ),
         (11, 15, &[21, 25, 29, 35, 43, 51, 61, 71, 83, 95], true),
         (75, 90, &[], true),
         (4, 1, &[1, 2, 3, 4, 6, 8, 10, 14, 18], false),
@@ -2017,11 +2087,15 @@ mod tests {
             if floor < ipl {
                 return 1.0;
             }
-            let row = DIFFICULTY_OFFSETS[((floor - ipl) as usize).min(DIFFICULTY_OFFSETS.len() - 1)];
+            let row =
+                DIFFICULTY_OFFSETS[((floor - ipl) as usize).min(DIFFICULTY_OFFSETS.len() - 1)];
             sd.multiplier_for_offset(row as i32).0
         };
         for ipl in [1, 4, 9, 10, 13, 30, 60, 75] {
-            for slice in build_run_slices(&sd, 7, 1, ipl, &ALL_QUESTS).iter().take(80) {
+            for slice in build_run_slices(&sd, 7, 1, ipl, &ALL_QUESTS)
+                .iter()
+                .take(80)
+            {
                 let paid = sd
                     .multiplier_for_offset(slice.difficulty_level as i32 - ipl as i32)
                     .0;
@@ -2045,17 +2119,28 @@ mod tests {
 
         // Shallow deep-band (floors 25-40): only tier 1 weighted → the weak cave.
         for s in fresh.iter().filter(|s| (25..=40).contains(&s.floor_index)) {
-            assert_eq!(s.dungeon_settings_id, weak, "floor {} weak (tier 1)", s.floor_index);
+            assert_eq!(
+                s.dungeon_settings_id, weak,
+                "floor {} weak (tier 1)",
+                s.floor_index
+            );
         }
         // Deepest band (41+): only tier 9 weighted → the dragon lair.
         for s in fresh.iter().filter(|s| s.floor_index >= 41) {
-            assert_eq!(s.dungeon_settings_id, tough, "floor {} tough (tier 9)", s.floor_index);
+            assert_eq!(
+                s.dungeon_settings_id, tough,
+                "floor {} tough (tier 9)",
+                s.floor_index
+            );
         }
 
         // Determinism: a run resumed at floor 45 yields the SAME floor-45 content.
         let resumed = build_slices_from(&sd, seed, 150, 45, TEST_IPL, &ALL_QUESTS);
         assert_eq!(resumed[0].floor_index, 45);
-        assert_eq!(resumed[0].dungeon_settings_id, fresh[44].dungeon_settings_id);
+        assert_eq!(
+            resumed[0].dungeon_settings_id,
+            fresh[44].dungeon_settings_id
+        );
         assert_eq!(resumed[0].difficulty_level, fresh[44].difficulty_level);
     }
 
@@ -2065,13 +2150,23 @@ mod tests {
     fn dungeon_tier_prefix_fallback() {
         use blades_lib::static_data::{AbyssDungeonDef, AbyssMonsterTier};
         let mut sd = AbyssStaticData::default();
-        sd.monster_tiers.insert("goblin".into(), AbyssMonsterTier { tier: 1 });
-        sd.monster_tiers.insert("liches".into(), AbyssMonsterTier { tier: 8 });
+        sd.monster_tiers
+            .insert("goblin".into(), AbyssMonsterTier { tier: 1 });
+        sd.monster_tiers
+            .insert("liches".into(), AbyssMonsterTier { tier: 8 });
         let composite = AbyssDungeonDef {
-            monsters: vec!["GoblinSkeleton".into()], ..Default::default()
+            monsters: vec!["GoblinSkeleton".into()],
+            ..Default::default()
         };
-        assert_eq!(sd.dungeon_tier(&composite), Some(1), "prefix match → goblin tier");
-        let unknown = AbyssDungeonDef { monsters: vec!["AbyssEntrance".into()], ..Default::default() };
+        assert_eq!(
+            sd.dungeon_tier(&composite),
+            Some(1),
+            "prefix match → goblin tier"
+        );
+        let unknown = AbyssDungeonDef {
+            monsters: vec!["AbyssEntrance".into()],
+            ..Default::default()
+        };
         assert_eq!(sd.dungeon_tier(&unknown), None, "no prefix → None");
     }
 
@@ -2103,8 +2198,11 @@ mod tests {
         let slices = build_slices(&sd, seed, 30);
         // Floors 25–30 must all come from the pool (5 entries) in deterministic order
         for s in &slices[24..30] {
-            assert!(sd.random_pool.contains(&s.dungeon_settings_id),
-                "floor {} dungeon not in pool", s.floor_index);
+            assert!(
+                sd.random_pool.contains(&s.dungeon_settings_id),
+                "floor {} dungeon not in pool",
+                s.floor_index
+            );
         }
     }
 
@@ -2120,9 +2218,19 @@ mod tests {
         // Resume at floor 40.
         let resumed = build_slices_from(&sd, seed, 150, 40, TEST_IPL, &ALL_QUESTS);
         assert_eq!(resumed.len(), 150 - 39, "floors 40..=150");
-        assert_eq!(resumed[0].floor_index, 40, "first slice is the requested floor");
-        assert_eq!(resumed[0].slice_index, 39, "slice_index is absolute (floor-1)");
-        assert_eq!(resumed.last().unwrap().floor_index, 150, "runs to the top floor");
+        assert_eq!(
+            resumed[0].floor_index, 40,
+            "first slice is the requested floor"
+        );
+        assert_eq!(
+            resumed[0].slice_index, 39,
+            "slice_index is absolute (floor-1)"
+        );
+        assert_eq!(
+            resumed.last().unwrap().floor_index,
+            150,
+            "runs to the top floor"
+        );
 
         // The per-floor content matches a fresh full run at the same absolute floor.
         let fresh = build_slices_from(&sd, seed, 150, 1, TEST_IPL, &ALL_QUESTS);
@@ -2143,9 +2251,19 @@ mod tests {
             let served = build_run_slices(&sd, 12345, start, TEST_IPL, &ALL_QUESTS);
             assert_eq!(served.len(), 150, "start {start}: retail serves 150 floors");
             for (p, s) in served.iter().enumerate() {
-                assert_eq!(s.slice_index as usize, p, "start {start}: sliceIndex = position");
-                assert_eq!(s.floor_index, start + p as u32, "start {start}: floorIndex = N + position");
-                assert!(!s.completed && !s.enemy_killed, "start {start}: nothing pre-completed");
+                assert_eq!(
+                    s.slice_index as usize, p,
+                    "start {start}: sliceIndex = position"
+                );
+                assert_eq!(
+                    s.floor_index,
+                    start + p as u32,
+                    "start {start}: floorIndex = N + position"
+                );
+                assert!(
+                    !s.completed && !s.enemy_killed,
+                    "start {start}: nothing pre-completed"
+                );
             }
         }
     }
@@ -2155,7 +2273,10 @@ mod tests {
     #[test]
     fn the_first_served_slice_is_the_chosen_floor() {
         let sd = test_static_abyss();
-        assert_eq!(build_run_slices(&sd, 12345, 149, TEST_IPL, &ALL_QUESTS)[0].floor_index, 149);
+        assert_eq!(
+            build_run_slices(&sd, 12345, 149, TEST_IPL, &ALL_QUESTS)[0].floor_index,
+            149
+        );
     }
 
     /// Content is chosen per absolute floor: resuming does not reshuffle the dungeons.
@@ -2164,7 +2285,10 @@ mod tests {
         let sd = test_static_abyss();
         let resumed = build_run_slices(&sd, 12345, 78, TEST_IPL, &ALL_QUESTS);
         let fresh = build_run_slices(&sd, 12345, 1, TEST_IPL, &ALL_QUESTS);
-        assert_eq!(resumed[0].dungeon_settings_id, fresh[77].dungeon_settings_id);
+        assert_eq!(
+            resumed[0].dungeon_settings_id,
+            fresh[77].dungeon_settings_id
+        );
         assert_eq!(resumed[0].difficulty_level, fresh[77].difficulty_level);
     }
 
@@ -2214,8 +2338,8 @@ mod tests {
 
     /// The real `deploy/static/abyss.json`, deserialized exactly as the server does.
     fn real_static_abyss() -> AbyssStaticData {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../deploy/static/abyss.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/abyss.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         serde_json::from_str(&raw).expect("valid abyss.json")
     }
@@ -2268,15 +2392,19 @@ mod tests {
     #[test]
     fn per_floor_base_rewards_are_the_extracted_table() {
         let sd = real_static_abyss();
-        assert_eq!(sd.per_floor_rewards.entries.len(), 150, "150 rows, indices 0–149");
+        assert_eq!(
+            sd.per_floor_rewards.entries.len(),
+            150,
+            "150 rows, indices 0–149"
+        );
 
         // The five single-floor captures, as base rewards (observed payout / multiplier).
         for (floor_index, gold, xp) in [
-            (49u32, 402u64, 108u64),   // observed 402 / 108 at ×1
-            (90, 730, 190),            // observed 4380 / 1140 at ×6
-            (118, 954, 246),           // observed 5724 / 1476 at ×6, 3 runs
-            (147, 1186, 304),          // observed 7116 / 1824 at ×6
-            (149, 1202, 308),          // observed 7212 / 1848 at ×6, 3 runs
+            (49u32, 402u64, 108u64), // observed 402 / 108 at ×1
+            (90, 730, 190),          // observed 4380 / 1140 at ×6
+            (118, 954, 246),         // observed 5724 / 1476 at ×6, 3 runs
+            (147, 1186, 304),        // observed 7116 / 1824 at ×6
+            (149, 1202, 308),        // observed 7212 / 1848 at ×6, 3 runs
         ] {
             assert_eq!(
                 sd.base_rewards_for_floor(floor_index),
@@ -2295,7 +2423,11 @@ mod tests {
                 "row {i}"
             );
         }
-        assert_ne!(sd.base_rewards_for_floor(49), (394, 106), "not the off-by-one ramp");
+        assert_ne!(
+            sd.base_rewards_for_floor(49),
+            (394, 106),
+            "not the off-by-one ramp"
+        );
 
         // The old model claimed a flat 195 gold / 64 XP on EVERY floor.
         assert_ne!(sd.base_rewards_for_floor(1), (195, 64));
@@ -2324,7 +2456,10 @@ mod tests {
         ] {
             let (g, x) = sd.multiplier_for_offset(offset);
             assert_eq!(g, expected, "offset {offset} gold multiplier");
-            assert_eq!(x, expected, "offset {offset} xp multiplier — gold and xp are equal");
+            assert_eq!(
+                x, expected,
+                "offset {offset} xp multiplier — gold and xp are equal"
+            );
         }
         // Below offset 0: 1.0. Not a 0.5 penalty (the invented `{-5, 0.5, 0.5}` row this
         // file used to carry) and not a clamp up to the offset-0 row's ×1.25.
@@ -2337,7 +2472,11 @@ mod tests {
         }
         // Above the last breakpoint: plateau, not extrapolation.
         for offset in [15, 18, 40, 99, 400] {
-            assert_eq!(sd.multiplier_for_offset(offset), (6.0, 6.0), "offset {offset} plateaus");
+            assert_eq!(
+                sd.multiplier_for_offset(offset),
+                (6.0, 6.0),
+                "offset {offset} plateaus"
+            );
         }
     }
 
@@ -2372,8 +2511,21 @@ mod tests {
         // Case A — 15 floors, initialPlayerLevel 10, character level 7→8.
         let a = run_from(
             &[
-                (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8),
-                (9, 9), (10, 10), (11, 12), (12, 14), (13, 16), (14, 20), (15, 24),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 4),
+                (5, 5),
+                (6, 6),
+                (7, 7),
+                (8, 8),
+                (9, 9),
+                (10, 10),
+                (11, 12),
+                (12, 14),
+                (13, 16),
+                (14, 20),
+                (15, 24),
             ],
             10,
         );
@@ -2385,7 +2537,16 @@ mod tests {
         // 10,14) are NOT the floor indices, so this case fails for any model that keys
         // the multiplier on depth alone.
         let b = run_from(
-            &[(1, 1), (2, 2), (3, 3), (4, 4), (5, 6), (6, 8), (7, 10), (8, 14)],
+            &[
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 4),
+                (5, 6),
+                (6, 8),
+                (7, 10),
+                (8, 14),
+            ],
             4,
         );
         let rb = end_run_reward(&sd, &b);
@@ -2397,7 +2558,11 @@ mod tests {
         // 402 × 1.25 = 502.5, which is not what retail paid.
         let c = run_from(&[(49, 49)], 59);
         let rc = end_run_reward(&sd, &c);
-        assert_eq!(rc.currencies[&gold_uuid()], 402, "case C gold — unmultiplied");
+        assert_eq!(
+            rc.currencies[&gold_uuid()],
+            402,
+            "case C gold — unmultiplied"
+        );
         assert_eq!(rc.character_xp, 108, "case C XP — unmultiplied");
 
         // Case D — one floor, index 149, deep enough to plateau at ×6.
@@ -2418,7 +2583,11 @@ mod tests {
         assert_eq!(sd.multiplier_for_offset(0), (1.25, 1.25));
         assert_eq!(sd.base_rewards_for_floor(1), (18, 12));
         let r = end_run_reward(&sd, &run);
-        assert_eq!(r.currencies[&gold_uuid()], 23, "22.5 rounds up to 23, not down to 22");
+        assert_eq!(
+            r.currencies[&gold_uuid()],
+            23,
+            "22.5 rounds up to 23, not down to 22"
+        );
         assert_eq!(r.character_xp, 15, "15.0 exactly");
     }
 
@@ -2439,7 +2608,10 @@ mod tests {
             high.currencies[&gold_uuid()]
         );
         // The level-60 run is entirely below offset 0 → every floor pays its bare base.
-        let base_gold: u64 = floors.iter().map(|&(f, _)| sd.base_rewards_for_floor(f).0).sum();
+        let base_gold: u64 = floors
+            .iter()
+            .map(|&(f, _)| sd.base_rewards_for_floor(f).0)
+            .sum();
         assert_eq!(high.currencies[&gold_uuid()], base_gold);
     }
 
@@ -2449,8 +2621,21 @@ mod tests {
     fn a_floor_cleared_without_a_kill_pays_nothing() {
         let sd = real_static_abyss();
         let floors: Vec<(u32, u32)> = vec![
-            (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8),
-            (9, 9), (10, 10), (11, 12), (12, 14), (13, 16), (14, 20), (15, 24),
+            (1, 1),
+            (2, 2),
+            (3, 3),
+            (4, 4),
+            (5, 5),
+            (6, 6),
+            (7, 7),
+            (8, 8),
+            (9, 9),
+            (10, 10),
+            (11, 12),
+            (12, 14),
+            (13, 16),
+            (14, 20),
+            (15, 24),
         ];
         let full_reward = end_run_reward(&sd, &run_from(&floors, 10));
 
@@ -2469,19 +2654,28 @@ mod tests {
         // A run whose only completed floor had no kill pays nothing at all.
         let mut only_floor = run_from(&[(49, 49)], 59);
         only_floor.slices[0].enemy_killed = false;
-        assert!(end_run_reward(&sd, &only_floor).is_empty(), "no kill → no reward");
+        assert!(
+            end_run_reward(&sd, &only_floor).is_empty(),
+            "no kill → no reward"
+        );
 
         // Neither does a floor that had a kill but was never completed.
         let mut incomplete = run_from(&[(49, 49)], 59);
         incomplete.slices[0].completed = false;
-        assert!(end_run_reward(&sd, &incomplete).is_empty(), "not completed → no reward");
+        assert!(
+            end_run_reward(&sd, &incomplete).is_empty(),
+            "not completed → no reward"
+        );
     }
 
     /// An empty run pays nothing (unchanged behaviour, kept pinned).
     #[test]
     fn end_reward_zero_floors() {
         let sd = real_static_abyss();
-        assert!(end_run_reward(&sd, &run_from(&[], 25)).is_empty(), "no floors → no reward");
+        assert!(
+            end_run_reward(&sd, &run_from(&[], 25)).is_empty(),
+            "no floors → no reward"
+        );
     }
 
     /// A same-level kill scores 10, not 1. The handler used to add a flat
@@ -2504,7 +2698,11 @@ mod tests {
         assert_eq!(kills_score(&sd, Some(&slice), 40, false, None, 1), 10.0);
         // Three kills → 30, where the old code gave 3.
         assert_eq!(kills_score(&sd, Some(&slice), 40, false, None, 3), 30.0);
-        assert_eq!(kills_score(&sd, None, 40, false, None, 3), 0.0, "no slice → no score");
+        assert_eq!(
+            kills_score(&sd, None, 40, false, None, 3),
+            0.0,
+            "no slice → no score"
+        );
     }
 
     /// The kill-score tables are level-scaled in both directions and flat-tailed.
@@ -2529,8 +2727,14 @@ mod tests {
         assert_eq!(sd.kill_score(-3), 5);
         assert_eq!(sd.kill_score(-6), 2);
         // Past either table, the last entry repeats — never 0, never a panic.
-        assert_eq!(sd.kill_score(400), *sd.kill_scores.under_leveled_kill_score.last().unwrap());
-        assert_eq!(sd.kill_score(-400), *sd.kill_scores.over_leveled_kill_score.last().unwrap());
+        assert_eq!(
+            sd.kill_score(400),
+            *sd.kill_scores.under_leveled_kill_score.last().unwrap()
+        );
+        assert_eq!(
+            sd.kill_score(-400),
+            *sd.kill_scores.over_leveled_kill_score.last().unwrap()
+        );
         assert_eq!(sd.kill_score(-400), 1);
     }
 
@@ -2548,13 +2752,20 @@ mod tests {
         let chosen = sd.kill_score(-2);
         assert_eq!(chosen, 8, "over[-delta-1] = over[1]");
         assert!(
-            [0.33f64, 1.0, 2.0].iter().any(|m| (chosen as f64 * m - 16.0).abs() < 1e-9),
+            [0.33f64, 1.0, 2.0]
+                .iter()
+                .any(|m| (chosen as f64 * m - 16.0).abs() < 1e-9),
             "the chosen alignment reaches the observed 16.0"
         );
         let alternative = sd.kill_scores.over_leveled_kill_score[2];
-        assert_eq!(alternative, 5, "the alternative alignment would read over[2]");
+        assert_eq!(
+            alternative, 5,
+            "the alternative alignment would read over[2]"
+        );
         assert!(
-            ![0.33f64, 1.0, 2.0].iter().any(|m| (alternative as f64 * m - 16.0).abs() < 1e-9),
+            ![0.33f64, 1.0, 2.0]
+                .iter()
+                .any(|m| (alternative as f64 * m - 16.0).abs() < 1e-9),
             "and the alternative cannot reach 16.0 under any killScoreMultiplier — \
              which is why the capture discriminates between them"
         );
@@ -2564,9 +2775,16 @@ mod tests {
     /// Rust default is 20 too, so a stale data file cannot quietly restore the old value.
     #[test]
     fn slices_count_above_player_level_is_twenty() {
-        assert_eq!(real_static_abyss().scaling_backend.slices_count_above_player_level, 20);
         assert_eq!(
-            AbyssStaticData::default().scaling_backend.slices_count_above_player_level,
+            real_static_abyss()
+                .scaling_backend
+                .slices_count_above_player_level,
+            20
+        );
+        assert_eq!(
+            AbyssStaticData::default()
+                .scaling_backend
+                .slices_count_above_player_level,
             20,
             "the built-in default must not be the old 2 either"
         );
@@ -2599,14 +2817,31 @@ mod tests {
             );
         }
         for delta in -120..=120 {
-            assert_eq!(bare.kill_score(delta), real.kill_score(delta), "delta {delta}");
+            assert_eq!(
+                bare.kill_score(delta),
+                real.kill_score(delta),
+                "delta {delta}"
+            );
         }
 
         // And the identity case still lands on the captured total with no data at all.
         let run = run_from(
             &[
-                (1, 1), (2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8),
-                (9, 9), (10, 10), (11, 12), (12, 14), (13, 16), (14, 20), (15, 24),
+                (1, 1),
+                (2, 2),
+                (3, 3),
+                (4, 4),
+                (5, 5),
+                (6, 6),
+                (7, 7),
+                (8, 8),
+                (9, 9),
+                (10, 10),
+                (11, 12),
+                (12, 14),
+                (13, 16),
+                (14, 20),
+                (15, 24),
             ],
             10,
         );
@@ -2649,12 +2884,20 @@ mod tests {
         assert_eq!(combat.items.len(), 1);
         assert_eq!(combat.items[0].id, Uuid::nil());
         assert_eq!(combat.items[0].durability, 90.0);
-        assert!(matches!(req.actions[2], AbyssUpdateAction::EnemyLootCollected(_)));
+        assert!(matches!(
+            req.actions[2],
+            AbyssUpdateAction::EnemyLootCollected(_)
+        ));
         assert!(matches!(req.actions[3], AbyssUpdateAction::ItemConsumed(_)));
-        assert!(matches!(req.actions[4], AbyssUpdateAction::AbyssSliceCompleted(_)));
+        assert!(matches!(
+            req.actions[4],
+            AbyssUpdateAction::AbyssSliceCompleted(_)
+        ));
         assert!(matches!(req.actions[5], AbyssUpdateAction::Revive(_)));
         assert!(
-            !req.actions.iter().any(|a| matches!(a, AbyssUpdateAction::Unknown)),
+            !req.actions
+                .iter()
+                .any(|a| matches!(a, AbyssUpdateAction::Unknown)),
             "no real action may land in Unknown"
         );
         // An action type we have never seen still parses rather than 400-ing the body.
@@ -2724,8 +2967,7 @@ mod tests {
 
         let update = inventory.generate_client_update(&tracker);
         assert_eq!(
-            update.loadout.equipped_items.0[&slot].item.durability,
-            75.0,
+            update.loadout.equipped_items.0[&slot].item.durability, 75.0,
             "the client diff must carry the changed durability"
         );
     }
@@ -2846,9 +3088,16 @@ mod tests {
         }
         run.current_floor_index = 0;
 
-        apply_actions(&sd, &mut run, &parse_actions(serde_json::json!([kill(1), kill(2)])));
+        apply_actions(
+            &sd,
+            &mut run,
+            &parse_actions(serde_json::json!([kill(1), kill(2)])),
+        );
         assert!(run.slices[0].enemy_killed, "the kills are recorded");
-        assert!(!run.slices[0].completed, "but two kills do not clear the floor");
+        assert!(
+            !run.slices[0].completed,
+            "but two kills do not clear the floor"
+        );
         assert_eq!(run.current_floor_index, 0, "and do not advance it");
         assert!(
             end_run_reward(&sd, &run).is_empty(),
@@ -2860,7 +3109,10 @@ mod tests {
             &mut run,
             &parse_actions(serde_json::json!([{"type": "abyss_slice_completed", "time": 3}])),
         );
-        assert!(run.slices[0].completed, "the slice-completed action clears it");
+        assert!(
+            run.slices[0].completed,
+            "the slice-completed action clears it"
+        );
         assert_eq!(run.current_floor_index, 1, "and advances to the next floor");
         assert_eq!(
             end_run_reward(&sd, &run).currencies[&gold_uuid()],
@@ -2939,7 +3191,10 @@ mod tests {
                 serde_json::json!([kill(1), {"type": "abyss_slice_completed", "time": 2}]),
             ),
         );
-        assert_eq!(run.score, 10.0, "scored on floor 1's difficulty, not floor 2's");
+        assert_eq!(
+            run.score, 10.0,
+            "scored on floor 1's difficulty, not floor 2's"
+        );
         assert!(run.slices[0].enemy_killed && run.slices[0].completed);
         assert!(!run.slices[1].enemy_killed, "floor 2 got nothing");
         assert_eq!(run.current_floor_index, 1);
@@ -2979,7 +3234,10 @@ mod tests {
              "enemyIndex": 0, "xpReward": 999999.0, "time": 1},
         ]));
         apply_actions(&sd, &mut run, &actions);
-        assert_eq!(run.score, 10.0, "client-supplied xpReward must not reach the score");
+        assert_eq!(
+            run.score, 10.0,
+            "client-supplied xpReward must not reach the score"
+        );
     }
 
     /// Abyss corpse loot comes from the same capture-derived generated data the
@@ -2997,7 +3255,8 @@ mod tests {
         'dungeons: for dungeon_id in gd.dungeons.keys() {
             let mut slice = run.slices[0].clone();
             slice.dungeon_settings_id = *dungeon_id;
-            let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level) else {
+            let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level)
+            else {
                 continue;
             };
             for (spawn_group_id, spawners) in &generated.enemy_generated_data {
@@ -3055,8 +3314,7 @@ mod tests {
         assert_eq!(grants[0].items.len(), expected.item.0.len());
         for item in &grants[0].items {
             assert_eq!(
-                item.item.item_template_id,
-                expected.item.0[&item.id].item_template_id,
+                item.item.item_template_id, expected.item.0[&item.id].item_template_id,
                 "the generated item, not the request body, is granted"
             );
         }
@@ -3093,8 +3351,8 @@ mod tests {
     }
 
     fn game_data() -> blades_lib::game_data::GameData {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../deploy/static/parsed.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
         let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
         serde_json::from_str(&raw).expect("valid parsed.json")
     }
@@ -3146,15 +3404,14 @@ mod tests {
                 .keys()
                 .copied()
                 .collect();
-            assert!(!expected.is_empty(), "floor {floor} dungeon has spawn groups");
+            assert!(
+                !expected.is_empty(),
+                "floor {floor} dungeon has spawn groups"
+            );
 
-            let data = blades_lib::util::dungeon::generate_for_dungeon(
-                &gd,
-                &uuid,
-                difficulty as i64,
-                0,
-            )
-            .unwrap_or_else(|| panic!("floor {floor} generated data"));
+            let data =
+                blades_lib::util::dungeon::generate_for_dungeon(&gd, &uuid, difficulty as i64, 0)
+                    .unwrap_or_else(|| panic!("floor {floor} generated data"));
 
             let got: std::collections::HashSet<Uuid> =
                 data.enemy_generated_data.keys().copied().collect();
@@ -3166,7 +3423,10 @@ mod tests {
             // the stub hard-coded 1, so a deep floor would have been trivial.
             for enemies in data.enemy_generated_data.values() {
                 for e in enemies.iter().flatten() {
-                    assert_eq!(e.enemy_level, difficulty as i64, "floor {floor} enemy level");
+                    assert_eq!(
+                        e.enemy_level, difficulty as i64,
+                        "floor {floor} enemy level"
+                    );
                 }
             }
         }
@@ -3183,7 +3443,10 @@ mod tests {
         let floor1 = Uuid::parse_str("663053f0-3a46-4012-b004-6cb2e907f33c").unwrap();
 
         let f1 = &gd.dungeons[&floor1].spawn_info.enemy_spawn_groups;
-        assert!(f1.contains_key(&a) && f1.contains_key(&b), "floor 1 has both");
+        assert!(
+            f1.contains_key(&a) && f1.contains_key(&b),
+            "floor 1 has both"
+        );
 
         for (id, d) in &gd.dungeons {
             if *id == floor1 {
@@ -3208,7 +3471,8 @@ mod tests {
         assert_eq!(slices[0].floor_index, 78);
         // The guard that matters: whatever start_abyss serves must come from
         // slices[0], whose dungeon is NOT the floor-1 dungeon.
-        let floor1 = build_slices_from(&sd, 12345, 150, 1, TEST_IPL, &ALL_QUESTS)[0].dungeon_settings_id;
+        let floor1 =
+            build_slices_from(&sd, 12345, 150, 1, TEST_IPL, &ALL_QUESTS)[0].dungeon_settings_id;
         assert_ne!(
             slices[0].dungeon_settings_id, floor1,
             "a floor-78 resume must not be handed the floor-1 dungeon"
@@ -3469,7 +3733,11 @@ mod tests {
         let mut expected = abyss_rewards::ABYSS_LADDER.to_vec();
         expected.extend([810, 970]);
         assert_eq!(rungs, expected, "{server:?}");
-        assert_eq!(client_gauge(84, &floors), server, "paid on the client's own kill");
+        assert_eq!(
+            client_gauge(84, &floors),
+            server,
+            "paid on the client's own kill"
+        );
     }
 
     /// The wire shape the client needs on the response that pays 650: `reward` AND a
@@ -3493,7 +3761,10 @@ mod tests {
         let list = wire.as_array().expect("abyssFutureRewards is a list");
         assert_eq!(list.len(), 1, "{wire}");
         assert_eq!(list[0]["score"], serde_json::json!(810));
-        assert!(list[0]["reward"].as_object().is_some_and(|r| !r.is_empty()), "{wire}");
+        assert!(
+            list[0]["reward"].as_object().is_some_and(|r| !r.is_empty()),
+            "{wire}"
+        );
         // #424, Durin: after the first golden chest's two materials comes the second.
         assert_eq!(
             list[0]["reward"],
@@ -3527,15 +3798,19 @@ mod tests {
         for (_, _, _, groups) in floors {
             for group in *groups {
                 time += 1;
-                let showing = advertised(&run, u64::from(level)).expect("a next rung is always advertised");
+                let showing =
+                    advertised(&run, u64::from(level)).expect("a next rung is always advertised");
                 let before = run.granted_future_rewards.clone();
                 let action = parse_actions(serde_json::json!([{
                     "type": "enemy_killed", "spawnGroupId": group, "spawnerIndex": 0,
                     "enemyIndex": 0, "xpReward": 0.0, "time": time
                 }]));
                 if let Some(grant) = update(&mut run, &mut player, &action, &mut tracker) {
-                    let mut rungs: Vec<u32> =
-                        run.granted_future_rewards.difference(&before).copied().collect();
+                    let mut rungs: Vec<u32> = run
+                        .granted_future_rewards
+                        .difference(&before)
+                        .copied()
+                        .collect();
                     rungs.sort();
                     out.push((showing, rungs, grant));
                 }
@@ -3555,7 +3830,10 @@ mod tests {
     /// ids) blanked, so an advertisement and a payment compare on what they give.
     fn without_minted_ids(grant: &RewardGrant) -> RewardGrant {
         let mut grant = grant.clone();
-        grant.items.iter_mut().for_each(|item| item.id = Uuid::nil());
+        grant
+            .items
+            .iter_mut()
+            .for_each(|item| item.id = Uuid::nil());
         grant.chests.iter_mut().for_each(|chest| chest.id = None);
         grant
     }
@@ -3571,12 +3849,20 @@ mod tests {
     ) -> String {
         let mut kinds = String::new();
         for ((rung, shown), paid_rungs, grant) in paid {
-            assert_eq!(paid_rungs[0], *rung, "level {level}: the first rung paid is the advertised one");
+            assert_eq!(
+                paid_rungs[0], *rung,
+                "level {level}: the first rung paid is the advertised one"
+            );
             if paid_rungs.len() == 1 {
-                assert_eq!(without_minted_ids(grant), without_minted_ids(shown), "level {level}: rung {rung}");
+                assert_eq!(
+                    without_minted_ids(grant),
+                    without_minted_ids(shown),
+                    "level {level}: rung {rung}"
+                );
             }
             for r in paid_rungs.iter().filter(|r| **r >= 360) {
-                let one = abyss_rewards::future_reward_for_rung(*r, u64::from(level), seed).unwrap();
+                let one =
+                    abyss_rewards::future_reward_for_rung(*r, u64::from(level), seed).unwrap();
                 kinds.push(if is_golden_chest(&one) { 'G' } else { 'm' });
             }
         }
@@ -3595,15 +3881,32 @@ mod tests {
             let floors = served_run(ipl, 140, 10, DEEP_FLOOR_KILLS);
             assert_eq!((floors[0].0, floors[9].0), (140, 149));
             let server = replay(ipl, &floors);
-            assert_eq!(client_gauge(ipl, &floors), server, "level {level}: paid on the client's kill");
+            assert_eq!(
+                client_gauge(ipl, &floors),
+                server,
+                "level {level}: paid on the client's kill"
+            );
             for nonce in 0..16u64 {
                 let seed = generate_run_seed(Uuid::from_u128(0x424), nonce);
                 let paid = paid_with_adverts(level, ipl, seed, &floors);
-                let golden = paid.iter().filter(|(_, _, grant)| is_golden_chest(grant)).count();
+                let golden = paid
+                    .iter()
+                    .filter(|(_, _, grant)| is_golden_chest(grant))
+                    .count();
                 assert_eq!(golden, 2, "level {level} nonce {nonce}: {paid:?}");
-                let rungs: Vec<u32> = paid.iter().flat_map(|(_, r, _)| r.iter().copied()).collect();
-                assert!(rungs.contains(&810) && !rungs.contains(&1290), "level {level}: {rungs:?}");
-                assert_eq!(check_paid_as_advertised(level, seed, &paid), "GmmG", "level {level}: {rungs:?}");
+                let rungs: Vec<u32> = paid
+                    .iter()
+                    .flat_map(|(_, r, _)| r.iter().copied())
+                    .collect();
+                assert!(
+                    rungs.contains(&810) && !rungs.contains(&1290),
+                    "level {level}: {rungs:?}"
+                );
+                assert_eq!(
+                    check_paid_as_advertised(level, seed, &paid),
+                    "GmmG",
+                    "level {level}: {rungs:?}"
+                );
             }
         }
     }
@@ -3614,20 +3917,38 @@ mod tests {
     /// every response advertises one next rung, and each paid reward is the one shown.
     #[test]
     fn long_runs_cycle_golden_chest_then_two_materials_at_level_9_and_100() {
-        for (level, start, count, kills) in
-            [(9u32, 1u32, 60usize, MIXED_KILLS), (100, 149, 30, DEEP_FLOOR_KILLS)]
-        {
+        for (level, start, count, kills) in [
+            (9u32, 1u32, 60usize, MIXED_KILLS),
+            (100, 149, 30, DEEP_FLOOR_KILLS),
+        ] {
             let ipl = initial_player_level(&real_job_pools(), level);
             let floors = served_run(ipl, start, count, kills);
             assert_eq!(floors.len(), count, "level {level}: {count} floors served");
             let paid = paid_with_adverts(level, ipl, 0x5EED_424, &floors);
-            let rungs: Vec<u32> = paid.iter().flat_map(|(_, r, _)| r.iter().copied()).collect();
-            assert!(rungs.iter().any(|r| *r >= 1_770), "level {level}: the run reaches a third cycle: {rungs:?}");
+            let rungs: Vec<u32> = paid
+                .iter()
+                .flat_map(|(_, r, _)| r.iter().copied())
+                .collect();
+            assert!(
+                rungs.iter().any(|r| *r >= 1_770),
+                "level {level}: the run reaches a third cycle: {rungs:?}"
+            );
             let kinds = check_paid_as_advertised(level, 0x5EED_424, &paid);
-            let expected: String = "Gmm".repeat(kinds.len().div_ceil(3)).chars().take(kinds.len()).collect();
+            let expected: String = "Gmm"
+                .repeat(kinds.len().div_ceil(3))
+                .chars()
+                .take(kinds.len())
+                .collect();
             assert_eq!(kinds, expected, "level {level}: {rungs:?}");
-            let golden = paid.iter().filter(|(_, _, grant)| is_golden_chest(grant)).count();
-            assert_eq!(golden, kinds.matches('G').count(), "level {level}: golden chests actually paid");
+            let golden = paid
+                .iter()
+                .filter(|(_, _, grant)| is_golden_chest(grant))
+                .count();
+            assert_eq!(
+                golden,
+                kinds.matches('G').count(),
+                "level {level}: golden chests actually paid"
+            );
         }
     }
 
@@ -3679,9 +4000,16 @@ mod tests {
                 let mut tracker = InventoryChangeTracker::default();
                 let before = run.granted_future_rewards.len();
                 update(&mut run, &mut player, &kills(1), &mut tracker);
-                paid_at.extend(std::iter::repeat(kill_no).take(run.granted_future_rewards.len() - before));
+                paid_at.extend(
+                    std::iter::repeat(kill_no).take(run.granted_future_rewards.len() - before),
+                );
             }
-            update(&mut run, &mut player, &completed, &mut InventoryChangeTracker::default());
+            update(
+                &mut run,
+                &mut player,
+                &completed,
+                &mut InventoryChangeTracker::default(),
+            );
         }
         paid_at
     }
@@ -3708,7 +4036,11 @@ mod tests {
         // floor's LOWEST multiplier, which trails on its own (#468); the spawn-group
         // replay `replaying_the_retail_run_never_pays_ahead_of_retails_client` trails by 5.
         for (server, client) in paid_at.iter().zip(RETAIL_PAID_AT_KILL) {
-            assert!(server - client <= 13, "trailed retail by {} kills: {paid_at:?}", server - client);
+            assert!(
+                server - client <= 13,
+                "trailed retail by {} kills: {paid_at:?}",
+                server - client
+            );
         }
     }
 
@@ -3834,26 +4166,192 @@ mod tests {
     /// The first is character 78f2b668 at initialPlayerLevel 10 from floor 1 (65 kills,
     /// `/start` capture 12011); the second 97cf5fa6 at 75 from floor 90 (35087).
     const RETAIL_RUN_IPL10: [(u32, &str, u32, &[&str]); 16] = [
-        (1, "663053f0-3a46-4012-b004-6cb2e907f33c", 1, &["c41668b3-ad8b-42b4-ba5d-a0574039a3cc", "c41668b3-ad8b-42b4-ba5d-a0574039a3cc", "9a057ca6-5f8d-4700-8665-6c56de0e1103"]),
-        (2, "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0", 2, &["421ede71-4cf3-499c-aee3-ef83db34f22d", "d0ec4eee-089c-4909-ba6e-6cadcc453121", "d0ec4eee-089c-4909-ba6e-6cadcc453121"]),
-        (3, "1396d90c-c38e-47c6-a9da-6e98c49788e5", 3, &["e885f3eb-a828-47a6-b4a8-96eec96d17c7", "e885f3eb-a828-47a6-b4a8-96eec96d17c7"]),
-        (4, "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31", 4, &["0e302177-29b0-4808-8bb6-f429d1812102", "0e302177-29b0-4808-8bb6-f429d1812102", "0e302177-29b0-4808-8bb6-f429d1812102", "0e302177-29b0-4808-8bb6-f429d1812102", "0e302177-29b0-4808-8bb6-f429d1812102"]),
-        (5, "44e0d7cd-26a1-4183-996b-056a484a5e2e", 5, &["7597ec37-ca26-43ea-8aef-50cb2aed320b", "7597ec37-ca26-43ea-8aef-50cb2aed320b", "7597ec37-ca26-43ea-8aef-50cb2aed320b"]),
-        (6, "5cc26070-12ac-4adc-b55d-da6fed6934ee", 6, &["2d2a213f-dd06-49bb-8925-c370a2b2d766", "2d2a213f-dd06-49bb-8925-c370a2b2d766", "2d2a213f-dd06-49bb-8925-c370a2b2d766", "2d2a213f-dd06-49bb-8925-c370a2b2d766", "2d2a213f-dd06-49bb-8925-c370a2b2d766", "2d2a213f-dd06-49bb-8925-c370a2b2d766"]),
-        (7, "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d", 7, &["832b5f9a-6ce1-4391-829b-8457ad3172ff", "832b5f9a-6ce1-4391-829b-8457ad3172ff"]),
-        (8, "d30de853-68ca-4360-b060-81aaf182d940", 8, &["c45159d4-9630-457c-a703-9f74fdf4be7e", "c45159d4-9630-457c-a703-9f74fdf4be7e"]),
-        (9, "84e70169-4e8c-4820-936d-18976b871c8d", 9, &["d3f5848e-ba7f-4484-93be-52e15b2407ad", "89f7c6a9-bfaa-4191-8a3b-ffff433f1766", "cc150364-705d-4ae5-b5f4-9c0e46128f6a", "cc150364-705d-4ae5-b5f4-9c0e46128f6a", "cc150364-705d-4ae5-b5f4-9c0e46128f6a", "d3f5848e-ba7f-4484-93be-52e15b2407ad"]),
-        (10, "7924c82d-f6b3-4eb6-9edb-9b1349a1da84", 10, &["da988347-e455-43ce-b205-f48724631301", "da988347-e455-43ce-b205-f48724631301", "da988347-e455-43ce-b205-f48724631301"]),
-        (11, "ad7a91a8-c47e-47ab-b78f-f7559123a879", 12, &["409178a6-44a7-462b-aa96-bfd0b83e8df0", "409178a6-44a7-462b-aa96-bfd0b83e8df0", "409178a6-44a7-462b-aa96-bfd0b83e8df0", "409178a6-44a7-462b-aa96-bfd0b83e8df0", "409178a6-44a7-462b-aa96-bfd0b83e8df0", "409178a6-44a7-462b-aa96-bfd0b83e8df0"]),
-        (12, "73aa75cb-1109-4e96-b7a2-73e55aaa99a2", 14, &["cd20d169-2cf7-4490-825f-3342fbfa79ae", "cd20d169-2cf7-4490-825f-3342fbfa79ae", "cd20d169-2cf7-4490-825f-3342fbfa79ae"]),
-        (13, "0ec5e913-6074-4490-abaa-f1802827b007", 16, &["998b8cd8-75e2-4826-af97-253bd1ad378a", "998b8cd8-75e2-4826-af97-253bd1ad378a", "17fca83f-dfe0-484c-a1e8-6a96c104f621", "998b8cd8-75e2-4826-af97-253bd1ad378a", "17fca83f-dfe0-484c-a1e8-6a96c104f621", "998b8cd8-75e2-4826-af97-253bd1ad378a"]),
-        (14, "2c0e2b66-2642-409c-a7c9-2184c6c51c6c", 20, &["7d4e8432-9477-4642-a56d-80f88c62f817", "7d4e8432-9477-4642-a56d-80f88c62f817", "7d4e8432-9477-4642-a56d-80f88c62f817", "d6a0f996-661a-4a15-b0b7-9a9add22aa22", "7d4e8432-9477-4642-a56d-80f88c62f817", "7d4e8432-9477-4642-a56d-80f88c62f817", "7d4e8432-9477-4642-a56d-80f88c62f817"]),
-        (15, "28ffdb77-161e-49a4-897e-7a8f679264d6", 24, &["c39c5257-ce4f-4160-a992-1e3a523a253e", "c39c5257-ce4f-4160-a992-1e3a523a253e", "c39c5257-ce4f-4160-a992-1e3a523a253e", "6ad2e6c0-40ac-456c-b294-7422dafe0fb0", "c39c5257-ce4f-4160-a992-1e3a523a253e", "c39c5257-ce4f-4160-a992-1e3a523a253e", "6ad2e6c0-40ac-456c-b294-7422dafe0fb0"]),
-        (16, "4c793f15-aa4b-406f-be88-9689085fdc05", 28, &["eaf9d5f0-3ee3-4e9e-bac6-0f866a704d2a"]),
+        (
+            1,
+            "663053f0-3a46-4012-b004-6cb2e907f33c",
+            1,
+            &[
+                "c41668b3-ad8b-42b4-ba5d-a0574039a3cc",
+                "c41668b3-ad8b-42b4-ba5d-a0574039a3cc",
+                "9a057ca6-5f8d-4700-8665-6c56de0e1103",
+            ],
+        ),
+        (
+            2,
+            "4de80b69-fe4e-4ed5-a556-71e5b7c82ed0",
+            2,
+            &[
+                "421ede71-4cf3-499c-aee3-ef83db34f22d",
+                "d0ec4eee-089c-4909-ba6e-6cadcc453121",
+                "d0ec4eee-089c-4909-ba6e-6cadcc453121",
+            ],
+        ),
+        (
+            3,
+            "1396d90c-c38e-47c6-a9da-6e98c49788e5",
+            3,
+            &[
+                "e885f3eb-a828-47a6-b4a8-96eec96d17c7",
+                "e885f3eb-a828-47a6-b4a8-96eec96d17c7",
+            ],
+        ),
+        (
+            4,
+            "fe22c3c8-e4c9-491c-bd85-7c0ba9dc6b31",
+            4,
+            &[
+                "0e302177-29b0-4808-8bb6-f429d1812102",
+                "0e302177-29b0-4808-8bb6-f429d1812102",
+                "0e302177-29b0-4808-8bb6-f429d1812102",
+                "0e302177-29b0-4808-8bb6-f429d1812102",
+                "0e302177-29b0-4808-8bb6-f429d1812102",
+            ],
+        ),
+        (
+            5,
+            "44e0d7cd-26a1-4183-996b-056a484a5e2e",
+            5,
+            &[
+                "7597ec37-ca26-43ea-8aef-50cb2aed320b",
+                "7597ec37-ca26-43ea-8aef-50cb2aed320b",
+                "7597ec37-ca26-43ea-8aef-50cb2aed320b",
+            ],
+        ),
+        (
+            6,
+            "5cc26070-12ac-4adc-b55d-da6fed6934ee",
+            6,
+            &[
+                "2d2a213f-dd06-49bb-8925-c370a2b2d766",
+                "2d2a213f-dd06-49bb-8925-c370a2b2d766",
+                "2d2a213f-dd06-49bb-8925-c370a2b2d766",
+                "2d2a213f-dd06-49bb-8925-c370a2b2d766",
+                "2d2a213f-dd06-49bb-8925-c370a2b2d766",
+                "2d2a213f-dd06-49bb-8925-c370a2b2d766",
+            ],
+        ),
+        (
+            7,
+            "cc9c27fd-1917-4b0a-a62e-87cfb07e7c6d",
+            7,
+            &[
+                "832b5f9a-6ce1-4391-829b-8457ad3172ff",
+                "832b5f9a-6ce1-4391-829b-8457ad3172ff",
+            ],
+        ),
+        (
+            8,
+            "d30de853-68ca-4360-b060-81aaf182d940",
+            8,
+            &[
+                "c45159d4-9630-457c-a703-9f74fdf4be7e",
+                "c45159d4-9630-457c-a703-9f74fdf4be7e",
+            ],
+        ),
+        (
+            9,
+            "84e70169-4e8c-4820-936d-18976b871c8d",
+            9,
+            &[
+                "d3f5848e-ba7f-4484-93be-52e15b2407ad",
+                "89f7c6a9-bfaa-4191-8a3b-ffff433f1766",
+                "cc150364-705d-4ae5-b5f4-9c0e46128f6a",
+                "cc150364-705d-4ae5-b5f4-9c0e46128f6a",
+                "cc150364-705d-4ae5-b5f4-9c0e46128f6a",
+                "d3f5848e-ba7f-4484-93be-52e15b2407ad",
+            ],
+        ),
+        (
+            10,
+            "7924c82d-f6b3-4eb6-9edb-9b1349a1da84",
+            10,
+            &[
+                "da988347-e455-43ce-b205-f48724631301",
+                "da988347-e455-43ce-b205-f48724631301",
+                "da988347-e455-43ce-b205-f48724631301",
+            ],
+        ),
+        (
+            11,
+            "ad7a91a8-c47e-47ab-b78f-f7559123a879",
+            12,
+            &[
+                "409178a6-44a7-462b-aa96-bfd0b83e8df0",
+                "409178a6-44a7-462b-aa96-bfd0b83e8df0",
+                "409178a6-44a7-462b-aa96-bfd0b83e8df0",
+                "409178a6-44a7-462b-aa96-bfd0b83e8df0",
+                "409178a6-44a7-462b-aa96-bfd0b83e8df0",
+                "409178a6-44a7-462b-aa96-bfd0b83e8df0",
+            ],
+        ),
+        (
+            12,
+            "73aa75cb-1109-4e96-b7a2-73e55aaa99a2",
+            14,
+            &[
+                "cd20d169-2cf7-4490-825f-3342fbfa79ae",
+                "cd20d169-2cf7-4490-825f-3342fbfa79ae",
+                "cd20d169-2cf7-4490-825f-3342fbfa79ae",
+            ],
+        ),
+        (
+            13,
+            "0ec5e913-6074-4490-abaa-f1802827b007",
+            16,
+            &[
+                "998b8cd8-75e2-4826-af97-253bd1ad378a",
+                "998b8cd8-75e2-4826-af97-253bd1ad378a",
+                "17fca83f-dfe0-484c-a1e8-6a96c104f621",
+                "998b8cd8-75e2-4826-af97-253bd1ad378a",
+                "17fca83f-dfe0-484c-a1e8-6a96c104f621",
+                "998b8cd8-75e2-4826-af97-253bd1ad378a",
+            ],
+        ),
+        (
+            14,
+            "2c0e2b66-2642-409c-a7c9-2184c6c51c6c",
+            20,
+            &[
+                "7d4e8432-9477-4642-a56d-80f88c62f817",
+                "7d4e8432-9477-4642-a56d-80f88c62f817",
+                "7d4e8432-9477-4642-a56d-80f88c62f817",
+                "d6a0f996-661a-4a15-b0b7-9a9add22aa22",
+                "7d4e8432-9477-4642-a56d-80f88c62f817",
+                "7d4e8432-9477-4642-a56d-80f88c62f817",
+                "7d4e8432-9477-4642-a56d-80f88c62f817",
+            ],
+        ),
+        (
+            15,
+            "28ffdb77-161e-49a4-897e-7a8f679264d6",
+            24,
+            &[
+                "c39c5257-ce4f-4160-a992-1e3a523a253e",
+                "c39c5257-ce4f-4160-a992-1e3a523a253e",
+                "c39c5257-ce4f-4160-a992-1e3a523a253e",
+                "6ad2e6c0-40ac-456c-b294-7422dafe0fb0",
+                "c39c5257-ce4f-4160-a992-1e3a523a253e",
+                "c39c5257-ce4f-4160-a992-1e3a523a253e",
+                "6ad2e6c0-40ac-456c-b294-7422dafe0fb0",
+            ],
+        ),
+        (
+            16,
+            "4c793f15-aa4b-406f-be88-9689085fdc05",
+            28,
+            &["eaf9d5f0-3ee3-4e9e-bac6-0f866a704d2a"],
+        ),
     ];
-    const RETAIL_RUN_IPL75: [(u32, &str, u32, &[&str]); 1] = [
-        (90, "f00dea4c-025d-4233-a503-8ab28ef53c80", 100, &["16d2aa0a-70e4-4a6e-b423-a188b163beb9", "473b13bd-0e2a-4efe-9c72-be5746d1ba33", "473b13bd-0e2a-4efe-9c72-be5746d1ba33"]),
-    ];
+    const RETAIL_RUN_IPL75: [(u32, &str, u32, &[&str]); 1] = [(
+        90,
+        "f00dea4c-025d-4233-a503-8ab28ef53c80",
+        100,
+        &[
+            "16d2aa0a-70e4-4a6e-b423-a188b163beb9",
+            "473b13bd-0e2a-4efe-9c72-be5746d1ba33",
+            "473b13bd-0e2a-4efe-9c72-be5746d1ba33",
+        ],
+    )];
 
     /// Replay a captured run kill by kill, one `/update` per kill as retail sent them,
     /// and return `(kill number, rungs that update paid)` for every paying update.
@@ -3905,8 +4403,11 @@ mod tests {
                 }]));
                 reconcile(&mut run);
                 if update(&mut run, &mut player, &action, &mut tracker).is_some() {
-                    let mut rungs: Vec<u32> =
-                        run.granted_future_rewards.difference(&before).copied().collect();
+                    let mut rungs: Vec<u32> = run
+                        .granted_future_rewards
+                        .difference(&before)
+                        .copied()
+                        .collect();
                     rungs.sort();
                     paid.push((kill_no, rungs));
                 }
@@ -3952,7 +4453,10 @@ mod tests {
         let (early, lag) = early_and_lag(&server, &retail_paid);
         println!("ipl-10 retail replay: server {server:?}, worst lag {lag}");
         assert!(early.is_empty(), "paid before the client reached {early:?}");
-        assert!(lag <= MAX_LAG_KILLS, "a rung trailed the client by {lag} kills");
+        assert!(
+            lag <= MAX_LAG_KILLS,
+            "a rung trailed the client by {lag} kills"
+        );
     }
 
     /// The deep run: one kill crossed 35 and 50 at once (retail merged both into one
@@ -4035,7 +4539,14 @@ mod tests {
         build_run_slices(&real_static_abyss(), 0x294, start, ipl, &ALL_QUESTS)
             .iter()
             .take(count)
-            .map(|s| (s.floor_index, "f00dea4c-025d-4233-a503-8ab28ef53c80", s.difficulty_level, kills))
+            .map(|s| {
+                (
+                    s.floor_index,
+                    "f00dea4c-025d-4233-a503-8ab28ef53c80",
+                    s.difficulty_level,
+                    kills,
+                )
+            })
             .collect()
     }
 
@@ -4049,8 +4560,16 @@ mod tests {
 
     /// Every rung the server paid before the client's gauge reached it, and the worst
     /// number of kills a paid rung trailed the client by.
-    fn early_and_lag(server: &[(usize, Vec<u32>)], client: &[(usize, Vec<u32>)]) -> (Vec<u32>, usize) {
-        let reached = |rung: u32| client.iter().find(|(_, rungs)| rungs.contains(&rung)).map(|(k, _)| *k);
+    fn early_and_lag(
+        server: &[(usize, Vec<u32>)],
+        client: &[(usize, Vec<u32>)],
+    ) -> (Vec<u32>, usize) {
+        let reached = |rung: u32| {
+            client
+                .iter()
+                .find(|(_, rungs)| rungs.contains(&rung))
+                .map(|(k, _)| *k)
+        };
         let (mut early, mut lag) = (Vec::new(), 0);
         for (kill, rungs) in server {
             for rung in rungs {
@@ -4074,7 +4593,10 @@ mod tests {
         assert_eq!(ipl, 84, "retail's level-100 initialPlayerLevel");
         let floors = level_100_run_from_149(ipl);
         assert_eq!(floors[0].0, 149);
-        assert!(floors.iter().all(|f| f.2 == 100), "deep floors are difficulty 100: {floors:?}");
+        assert!(
+            floors.iter().all(|f| f.2 == 100),
+            "deep floors are difficulty 100: {floors:?}"
+        );
 
         let server = replay(ipl, &floors);
         assert_eq!(
@@ -4096,7 +4618,8 @@ mod tests {
         // `/end`: the floor's bonus is the one the client shows for it,
         // `GetGoldAndXPBonusMultipliers(149, epl)` = curve row 149 - epl, capped = x6.
         let sd = real_static_abyss();
-        let shown = sd.multiplier_for_offset(DIFFICULTY_OFFSETS[DIFFICULTY_OFFSETS.len() - 1] as i32);
+        let shown =
+            sd.multiplier_for_offset(DIFFICULTY_OFFSETS[DIFFICULTY_OFFSETS.len() - 1] as i32);
         assert_eq!(sd.multiplier_for_offset(100 - ipl as i32), shown);
         assert_eq!(shown.0, 6.0);
     }
@@ -4111,11 +4634,18 @@ mod tests {
         let floors = served_run(ipl, 87, 6, DEEP_FLOOR_KILLS);
         assert_eq!((floors[0].0, floors[0].2), (87, 90));
         let sd = real_static_abyss();
-        assert_eq!(sd.kill_score(90 - ipl as i32), 40, "the spike the server used to book");
+        assert_eq!(
+            sd.kill_score(90 - ipl as i32),
+            40,
+            "the spike the server used to book"
+        );
         let server = replay(ipl, &floors);
         let client = client_gauge(77, &floors);
         let (early, lag) = early_and_lag(&server, &client);
-        assert!(early.is_empty(), "paid ahead of the client: {early:?} (server {server:?}, client {client:?})");
+        assert!(
+            early.is_empty(),
+            "paid ahead of the client: {early:?} (server {server:?}, client {client:?})"
+        );
         assert!(lag <= MAX_LAG_KILLS, "lag {lag}");
     }
 
@@ -4153,7 +4683,10 @@ mod tests {
                 }
                 let server = replay(ipl, &floors);
                 let (early, _) = early_and_lag(&server, &client_gauge(ipl + 1, &floors));
-                assert!(early.is_empty(), "level {level}, start {start}: paid ahead {early:?}");
+                assert!(
+                    early.is_empty(),
+                    "level {level}, start {start}: paid ahead {early:?}"
+                );
             }
         }
     }
@@ -4175,7 +4708,10 @@ mod tests {
                         early.is_empty(),
                         "level {level}, start {start}, client EPL {epl}: paid ahead {early:?}"
                     );
-                    assert!(lag <= MAX_LAG_KILLS, "level {level}, start {start}, EPL {epl}: lag {lag}");
+                    assert!(
+                        lag <= MAX_LAG_KILLS,
+                        "level {level}, start {start}, EPL {epl}: lag {lag}"
+                    );
                 }
             }
         }
@@ -4193,7 +4729,10 @@ mod tests {
         assert!(floors.iter().all(|f| f.2 == 100));
         let server = replay(100, &floors);
         let client = client_gauge(84, &floors);
-        assert_eq!(server, vec![(4, vec![35]), (5, vec![50]), (7, vec![70]), (10, vec![95])]);
+        assert_eq!(
+            server,
+            vec![(4, vec![35]), (5, vec![50]), (7, vec![70]), (10, vec![95])]
+        );
         assert_eq!(client.get(0), Some(&(2, vec![35, 50])));
         for (kill, rungs) in &client {
             assert!(
@@ -4202,7 +4741,11 @@ mod tests {
             );
         }
         let sd = real_static_abyss();
-        assert_eq!(sd.multiplier_for_offset(0).0, 1.25, "what #468's /end paid per floor");
+        assert_eq!(
+            sd.multiplier_for_offset(0).0,
+            1.25,
+            "what #468's /end paid per floor"
+        );
     }
 
     /// The low end of the same estimate reproduces the captured low-level `/start`: a
@@ -4215,8 +4758,11 @@ mod tests {
         assert_eq!(ipl, 10);
         let served = build_run_slices(&real_static_abyss(), 7, 1, ipl, &ALL_QUESTS);
         let (_, _, head, _) = RETAIL_STARTS[0];
-        let difficulties: Vec<u32> =
-            served.iter().take(head.len()).map(|s| s.difficulty_level).collect();
+        let difficulties: Vec<u32> = served
+            .iter()
+            .take(head.len())
+            .map(|s| s.difficulty_level)
+            .collect();
         assert_eq!(difficulties, head.to_vec());
     }
 
@@ -4228,14 +4774,28 @@ mod tests {
     fn the_initial_player_level_estimate_tracks_the_captured_pairs() {
         let pools = real_job_pools();
         let pairs = [
-            (7, 10), (8, 11), (3, 4), (38, 40), (34, 38),
-            (66, 67), (79, 75), (81, 76), (93, 81), (100, 84),
+            (7, 10),
+            (8, 11),
+            (3, 4),
+            (38, 40),
+            (34, 38),
+            (66, 67),
+            (79, 75),
+            (81, 76),
+            (93, 81),
+            (100, 84),
         ];
         for (level, retail) in pairs {
             let estimate = initial_player_level(&pools, level) as i32;
             let retail = retail as i32;
-            assert!(retail - estimate <= CLIENT_EPL_MARGIN, "level {level}: estimate {estimate} under retail {retail}");
-            assert!(estimate - retail <= 3, "level {level}: estimate {estimate} over retail {retail}");
+            assert!(
+                retail - estimate <= CLIENT_EPL_MARGIN,
+                "level {level}: estimate {estimate} under retail {retail}"
+            );
+            assert!(
+                estimate - retail <= 3,
+                "level {level}: estimate {estimate} over retail {retail}"
+            );
         }
         assert_eq!(initial_player_level(&pools, 0), 1);
     }
@@ -4253,12 +4813,13 @@ mod tests {
             );
         }
         assert_eq!(initial_player_level(&serde_json::Value::Null, 100), 84);
-        let shipped: std::collections::BTreeMap<u32, u32> = pools["globals"]["initialEplByPlayerLevel"]
-            .as_object()
-            .unwrap()
-            .iter()
-            .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_u64()? as u32)))
-            .collect();
+        let shipped: std::collections::BTreeMap<u32, u32> =
+            pools["globals"]["initialEplByPlayerLevel"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_u64()? as u32)))
+                .collect();
         assert_eq!(shipped, RETAIL_EPL_BY_LEVEL.iter().copied().collect());
     }
 
@@ -4271,8 +4832,10 @@ mod tests {
         seeds: std::ops::Range<i64>,
         has_completed: &dyn Fn(Uuid) -> bool,
     ) -> std::collections::HashMap<&'static str, std::collections::HashMap<String, usize>> {
-        let mut mix: std::collections::HashMap<&'static str, std::collections::HashMap<String, usize>> =
-            Default::default();
+        let mut mix: std::collections::HashMap<
+            &'static str,
+            std::collections::HashMap<String, usize>,
+        > = Default::default();
         for &(ipl, start) in runs {
             for seed in seeds.clone() {
                 for s in build_run_slices(sd, seed, start, ipl, has_completed) {
@@ -4293,17 +4856,44 @@ mod tests {
     /// characters had the quest-gated content, and the families those runs were
     /// served, by floor band — measured from the 3,000 slices of their `/start`s.
     const RETAIL_GATED_RUNS: [(u32, u32); 20] = [
-        (40, 15), (40, 27), (45, 43), (45, 43), (57, 145), (59, 49), (64, 15), (67, 67),
-        (67, 89), (67, 89), (72, 35), (72, 35), (75, 90), (76, 145), (76, 145), (76, 149),
-        (79, 125), (81, 81), (81, 149), (84, 149),
+        (40, 15),
+        (40, 27),
+        (45, 43),
+        (45, 43),
+        (57, 145),
+        (59, 49),
+        (64, 15),
+        (67, 67),
+        (67, 89),
+        (67, 89),
+        (72, 35),
+        (72, 35),
+        (75, 90),
+        (76, 145),
+        (76, 145),
+        (76, 149),
+        (79, 125),
+        (81, 81),
+        (81, 149),
+        (84, 149),
     ];
     const RETAIL_MIX_80_148: [(&str, usize); 7] = [
-        ("Skeletons", 167), ("Atronach", 162), ("Dremora", 161), ("LichesOutcastNether", 136),
-        ("Liches", 107), ("AtronachDremora", 86), ("Warlord", 81),
+        ("Skeletons", 167),
+        ("Atronach", 162),
+        ("Dremora", 161),
+        ("LichesOutcastNether", 136),
+        ("Liches", 107),
+        ("AtronachDremora", 86),
+        ("Warlord", 81),
     ];
     const RETAIL_MIX_149_UP: [(&str, usize); 7] = [
-        ("Dremora", 321), ("Skeletons", 304), ("Atronach", 302), ("LichesOutcastNether", 270),
-        ("Liches", 207), ("AtronachDremora", 155), ("Warlord", 146),
+        ("Dremora", 321),
+        ("Skeletons", 304),
+        ("Atronach", 302),
+        ("LichesOutcastNether", 270),
+        ("Liches", 207),
+        ("AtronachDremora", 155),
+        ("Warlord", 146),
     ];
 
     fn share(mix: &std::collections::HashMap<String, usize>, family: &str) -> f64 {
@@ -4338,7 +4928,11 @@ mod tests {
             }
             // Retail's 80-148 had 4 stray slices of 1,204 (2 dragons at difficulty
             // 83-87, a troll, a lich-skeleton): nothing else beyond the seven families.
-            assert!(covered >= 0.98, "{band}: {:.3} outside retail's seven families: {ours:?}", 1.0 - covered);
+            assert!(
+                covered >= 0.98,
+                "{band}: {:.3} outside retail's seven families: {ours:?}",
+                1.0 - covered
+            );
         }
         assert!(
             !mix["149+"].keys().any(|f| f.starts_with("Dragon")),
@@ -4347,8 +4941,19 @@ mod tests {
         );
         // Below 80 retail was a broad mix; the same top families lead.
         let low = &mix["<80"];
-        for family in ["Atronach", "Skeletons", "Dremora", "Liches", "LichesOutcastNether", "Warlord"] {
-            assert!(share(low, family) >= 0.03, "<80 {family}: {:.3} ({low:?})", share(low, family));
+        for family in [
+            "Atronach",
+            "Skeletons",
+            "Dremora",
+            "Liches",
+            "LichesOutcastNether",
+            "Warlord",
+        ] {
+            assert!(
+                share(low, family) >= 0.03,
+                "<80 {family}: {:.3} ({low:?})",
+                share(low, family)
+            );
         }
     }
 
@@ -4367,23 +4972,45 @@ mod tests {
             let mut families: std::collections::HashMap<String, usize> = Default::default();
             for s in &served {
                 assert_eq!(s.difficulty_level, 100);
-                *families.entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone()).or_default() += 1;
+                *families
+                    .entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone())
+                    .or_default() += 1;
             }
             let n = |f: &str| *families.get(f).unwrap_or(&0);
             let liches = n("Liches") + n("LichesOutcastNether");
-            assert!(liches * 100 <= 30 * 150, "seed {seed}: {liches}/150 lich floors {families:?}");
-            assert!(n("Dremora") + n("AtronachDremora") >= 20, "seed {seed}: {families:?}");
-            assert!(n("Skeletons") >= 10 && n("Warlord") >= 5, "seed {seed}: {families:?}");
-            assert!(!families.keys().any(|f| f.starts_with("Dragon")), "seed {seed}: {families:?}");
+            assert!(
+                liches * 100 <= 30 * 150,
+                "seed {seed}: {liches}/150 lich floors {families:?}"
+            );
+            assert!(
+                n("Dremora") + n("AtronachDremora") >= 20,
+                "seed {seed}: {families:?}"
+            );
+            assert!(
+                n("Skeletons") >= 10 && n("Warlord") >= 5,
+                "seed {seed}: {families:?}"
+            );
+            assert!(
+                !families.keys().any(|f| f.starts_with("Dragon")),
+                "seed {seed}: {families:?}"
+            );
             // Past floor 150 it is no longer the 15-dungeon randomPool cycle.
-            assert!(served.iter().skip(2).any(|s| !random_pool.contains(&s.dungeon_settings_id)));
+            assert!(
+                served
+                    .iter()
+                    .skip(2)
+                    .any(|s| !random_pool.contains(&s.dungeon_settings_id))
+            );
             // The bag: 33 dungeons over 150 floors, each 3-6 times (retail: 1-6).
             let mut per_dungeon: std::collections::HashMap<Uuid, usize> = Default::default();
             for s in &served {
                 *per_dungeon.entry(s.dungeon_settings_id).or_default() += 1;
             }
             assert_eq!(per_dungeon.len(), 33, "seed {seed}");
-            assert!(per_dungeon.values().all(|c| (3..=6).contains(c)), "seed {seed}: {per_dungeon:?}");
+            assert!(
+                per_dungeon.values().all(|c| (3..=6).contains(c)),
+                "seed {seed}: {per_dungeon:?}"
+            );
         }
         // The reporter's runs are ONE floor each (start, a kill, /end), so floor 149
         // alone is what they meet. The designed band served it 31% lich dungeons and
@@ -4391,12 +5018,21 @@ mod tests {
         let mut first: std::collections::HashMap<String, usize> = Default::default();
         for seed in 0..1000i64 {
             let s = &build_run_slices(&sd, seed, 149, ipl, &ALL_QUESTS)[0];
-            *first.entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone()).or_default() += 1;
+            *first
+                .entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone())
+                .or_default() += 1;
         }
         let lich = share(&first, "Liches") + share(&first, "LichesOutcastNether");
-        assert!((0.22..=0.33).contains(&lich), "floor 149 liches {lich:.3}: {first:?}");
-        let dremora_atronach = share(&first, "Dremora") + share(&first, "Atronach") + share(&first, "AtronachDremora");
-        assert!((0.40..=0.51).contains(&dremora_atronach), "floor 149 {dremora_atronach:.3}: {first:?}");
+        assert!(
+            (0.22..=0.33).contains(&lich),
+            "floor 149 liches {lich:.3}: {first:?}"
+        );
+        let dremora_atronach =
+            share(&first, "Dremora") + share(&first, "Atronach") + share(&first, "AtronachDremora");
+        assert!(
+            (0.40..=0.51).contains(&dremora_atronach),
+            "floor 149 {dremora_atronach:.3}: {first:?}"
+        );
         assert!(!first.keys().any(|f| f.starts_with("Dragon")), "{first:?}");
     }
 
@@ -4414,11 +5050,18 @@ mod tests {
         for seed in 0..50i64 {
             let served = build_run_slices(&sd, seed, 1, ipl, &none);
             for (s, fixed) in served.iter().zip(&sd.fixed_slices) {
-                assert_eq!(s.dungeon_settings_id, fixed.dungeon_settings_id, "floor {}", s.floor_index);
+                assert_eq!(
+                    s.dungeon_settings_id, fixed.dungeon_settings_id,
+                    "floor {}",
+                    s.floor_index
+                );
             }
             let deep: std::collections::HashSet<Uuid> =
                 served[24..].iter().map(|s| s.dungeon_settings_id).collect();
-            assert_eq!(deep, random_pool, "seed {seed}: the ungated deep roster is retail's 15");
+            assert_eq!(
+                deep, random_pool,
+                "seed {seed}: the ungated deep roster is retail's 15"
+            );
         }
     }
 
@@ -4435,7 +5078,12 @@ mod tests {
         let mix = family_mix(&sd, &[(84, 149)], 0..20, &gate);
         let deep = &mix["149+"];
         assert!(share(deep, "Skeletons") > 0.2, "{deep:?}");
-        assert!(!deep.keys().any(|f| f.starts_with("Liches") || f == "Warlord"), "{deep:?}");
+        assert!(
+            !deep
+                .keys()
+                .any(|f| f.starts_with("Liches") || f == "Warlord"),
+            "{deep:?}"
+        );
     }
 
     /// Resuming does not reshuffle: the bag is walked from the first deep floor, so
@@ -4447,7 +5095,10 @@ mod tests {
             let resumed = build_slices_from(&sd, seed, 300, start, ipl, &ALL_QUESTS);
             let fresh = build_slices_from(&sd, seed, 300, 1, ipl, &ALL_QUESTS);
             for (r, f) in resumed.iter().zip(&fresh[(start - 1) as usize..]) {
-                assert_eq!((r.floor_index, r.dungeon_settings_id), (f.floor_index, f.dungeon_settings_id));
+                assert_eq!(
+                    (r.floor_index, r.dungeon_settings_id),
+                    (f.floor_index, f.dungeon_settings_id)
+                );
             }
         }
     }
@@ -4461,9 +5112,19 @@ mod tests {
         let gd = game_data();
         assert_eq!(sd.abyss_slices.len(), 161);
         for slice in sd.abyss_slices.iter().filter(|s| s.random_weight > 0.0) {
-            assert!(sd.dungeon_pool.contains_key(&slice.dungeon_settings_id), "{}", slice.name);
             assert!(
-                blades_lib::util::dungeon::generate_for_dungeon(&gd, &slice.dungeon_settings_id, 100, 0).is_some(),
+                sd.dungeon_pool.contains_key(&slice.dungeon_settings_id),
+                "{}",
+                slice.name
+            );
+            assert!(
+                blades_lib::util::dungeon::generate_for_dungeon(
+                    &gd,
+                    &slice.dungeon_settings_id,
+                    100,
+                    0
+                )
+                .is_some(),
                 "{} has no generated data",
                 slice.name
             );
@@ -4473,10 +5134,18 @@ mod tests {
             ("Stone_Atronach_2Rooms_AbyssDungeonSetting", 28),
             ("Cave_Troll_3Rooms_AbyssDungeonSetting", 95),
             ("Cave_Skeletons_2Rooms_AbyssDungeonSetting", 19),
-            ("Ayleid_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting", 87),
+            (
+                "Ayleid_DragonAncientFire_Boss_2Rooms_AbyssDungeonSetting",
+                87,
+            ),
             ("Test_Stone_Dremora_AbyssDungeonSetting", 100),
         ] {
-            let id = sd.dungeon_pool.iter().find(|(_, d)| d.handle == handle).map(|(id, _)| *id).unwrap();
+            let id = sd
+                .dungeon_pool
+                .iter()
+                .find(|(_, d)| d.handle == handle)
+                .map(|(id, _)| *id)
+                .unwrap();
             assert!(
                 sd.abyss_slices.iter().any(|s| s.dungeon_settings_id == id
                     && s.random_weight > 0.0
@@ -4525,13 +5194,17 @@ mod tests {
                     "enemyIndex": 0, "xpReward": 0.0, "time": time
                 }]));
                 update(&mut run, &mut player, &action, &mut tracker);
-                let mut fresh: Vec<u32> =
-                    run.granted_future_rewards.difference(&before).copied().collect();
+                let mut fresh: Vec<u32> = run
+                    .granted_future_rewards
+                    .difference(&before)
+                    .copied()
+                    .collect();
                 fresh.sort();
                 for rung in fresh {
                     paid.push((
                         rung,
-                        abyss_rewards::future_reward_for_rung(rung, u64::from(level), run.seed).unwrap(),
+                        abyss_rewards::future_reward_for_rung(rung, u64::from(level), run.seed)
+                            .unwrap(),
                     ));
                 }
             }
@@ -4550,11 +5223,16 @@ mod tests {
     #[test]
     fn two_runs_of_the_same_character_get_different_rewards() {
         let id = Uuid::parse_str(HAUDRAUF).unwrap();
-        let seeds: Vec<i64> = (0..64u64).map(|nonce| generate_run_seed(id, nonce)).collect();
+        let seeds: Vec<i64> = (0..64u64)
+            .map(|nonce| generate_run_seed(id, nonce))
+            .collect();
         let distinct: std::collections::HashSet<_> = seeds.iter().collect();
         assert_eq!(distinct.len(), seeds.len(), "every run gets its own seed");
         for seed in &seeds {
-            assert!(i32::try_from(*seed).is_ok(), "{seed} does not fit the client's int");
+            assert!(
+                i32::try_from(*seed).is_ok(),
+                "{seed} does not fit the client's int"
+            );
         }
         assert_ne!(generate_run_seed(id, 1), generate_run_seed(id, 2));
 
@@ -4565,7 +5243,11 @@ mod tests {
                 (template_of(&rung(35)), template_of(&rung(70)))
             })
             .collect();
-        assert!(draws.len() > 8, "64 runs drew only {} different (35, 70) pairs", draws.len());
+        assert!(
+            draws.len() > 8,
+            "64 runs drew only {} different (35, 70) pairs",
+            draws.len()
+        );
 
         // Negative control: the old per-character seed is one seed for every run.
         assert_eq!(generate_seed(id), generate_seed(id));
@@ -4585,11 +5267,20 @@ mod tests {
                 .map(|r| abyss_rewards::future_reward_for_rung(*r, 100, run.seed).unwrap())
                 .collect()
         };
-        let before = (ladder(&run), advertised(&run, 100), end_reward(&real_static_abyss(), &run, 100));
+        let before = (
+            ladder(&run),
+            advertised(&run, 100),
+            end_reward(&real_static_abyss(), &run, 100),
+        );
         let wire = serde_json::to_value(run_to_wire(&run, 100)).unwrap();
-        assert_eq!(wire["seed"], serde_json::json!(run.seed), "the client sees the run's seed");
+        assert_eq!(
+            wire["seed"],
+            serde_json::json!(run.seed),
+            "the client sees the run's seed"
+        );
 
-        let reloaded: AbyssRun = serde_json::from_value(serde_json::to_value(&run).unwrap()).unwrap();
+        let reloaded: AbyssRun =
+            serde_json::from_value(serde_json::to_value(&run).unwrap()).unwrap();
         assert_eq!(reloaded.seed, run.seed);
         let after = (
             ladder(&reloaded),
@@ -4626,13 +5317,24 @@ mod tests {
         for nonce in 0..40u64 {
             let (paid, end) = drive(100, ipl, generate_run_seed(id, nonce), &floors);
             let rungs: Vec<u32> = paid.iter().map(|(r, _)| *r).collect();
-            assert_eq!(rungs, vec![35, 50, 70, 95, 135, 190, 260, 360], "#471's schedule");
+            assert_eq!(
+                rungs,
+                vec![35, 50, 70, 95, 135, 190, 260, 360],
+                "#471's schedule"
+            );
             let at = |r: u32| &paid.iter().find(|(x, _)| *x == r).unwrap().1;
             assert_eq!(at(35).stackable_items.len(), 1, "rung 35 is one material");
             assert_eq!(at(50).chests.len(), 1);
-            assert_eq!((at(50).chests[0].tier, at(50).chests[0].level), (1, 100), "wooden chest, level 100");
+            assert_eq!(
+                (at(50).chests[0].tier, at(50).chests[0].level),
+                (1, 100),
+                "wooden chest, level 100"
+            );
             let seventy = template_of(at(70)).unwrap();
-            assert!(rung_70.contains(&seventy), "nonce {nonce}: rung 70 drew {seventy}");
+            assert!(
+                rung_70.contains(&seventy),
+                "nonce {nonce}: rung 70 drew {seventy}"
+            );
             assert!(!low_level_70.contains(&seventy));
             seventies.insert(seventy);
             assert!(!end.currencies.is_empty(), "/end pays the floors' gold");
@@ -4655,7 +5357,10 @@ mod tests {
         let id = Uuid::parse_str("78f2b668-97ff-45d0-99fa-7343fd059480").unwrap();
         for nonce in 0..20u64 {
             let (paid, end) = drive(7, ipl, generate_run_seed(id, nonce), &floors);
-            let seventy = paid.iter().find(|(r, _)| *r == 70).expect("the run reaches rung 70");
+            let seventy = paid
+                .iter()
+                .find(|(r, _)| *r == 70)
+                .expect("the run reaches rung 70");
             assert!(allowed.contains(&template_of(&seventy.1).unwrap()));
             let fifty = paid.iter().find(|(r, _)| *r == 50).unwrap();
             assert_eq!(fifty.1.chests[0].level, 7);
@@ -4683,18 +5388,31 @@ mod tests {
             let mut gem_ends = 0;
             for nonce in 0..64u64 {
                 let (_, end) = drive(43, ipl, generate_run_seed(id, nonce), &floors);
-                assert!(!end.currencies.is_empty(), "start {start}: /end pays the floors' gold");
-                assert_eq!(end.stackable_items.len(), 1, "start {start} nonce {nonce}: one package stack");
+                assert!(
+                    !end.currencies.is_empty(),
+                    "start {start}: /end pays the floors' gold"
+                );
+                assert_eq!(
+                    end.stackable_items.len(),
+                    1,
+                    "start {start} nonce {nonce}: one package stack"
+                );
                 let (template, count) = end.stackable_items.iter().next().unwrap();
                 if *template == grand {
                     gem_ends += 1;
                     // HauDrauf, #407: 3 to 7 (it was 1-3).
-                    assert!(abyss_rewards::END_SOUL_GEM_COUNT.contains(count), "start {start}: {count} Grand gems");
+                    assert!(
+                        abyss_rewards::END_SOUL_GEM_COUNT.contains(count),
+                        "start {start}: {count} Grand gems"
+                    );
                 }
                 assert_ne!(template.to_string(), abyss_rewards::TRANSCENDENT_SOUL_GEM);
                 assert_ne!(template.to_string(), GLORIOUS);
             }
-            assert!((20..=44).contains(&gem_ends), "start {start}: {gem_ends}/64 /ends paid soul gems");
+            assert!(
+                (20..=44).contains(&gem_ends),
+                "start {start}: {gem_ends}/64 /ends paid soul gems"
+            );
         }
     }
 
@@ -4709,11 +5427,18 @@ mod tests {
 
     /// Every rung and the `/end` a run pays, over 64 runs (seeds) of a character of
     /// `level` started at `start` and cleared floor by floor with `kills`.
-    fn payouts(level: u32, start: u32, count: usize, kills: &'static [&'static str]) -> Vec<Payout> {
+    fn payouts(
+        level: u32,
+        start: u32,
+        count: usize,
+        kills: &'static [&'static str],
+    ) -> Vec<Payout> {
         let ipl = initial_player_level(&real_job_pools(), level);
         let floors = served_run(ipl, start, count, kills);
         let id = Uuid::from_u128(0x383);
-        (0..64u64).map(|nonce| drive(level, ipl, generate_run_seed(id, nonce), &floors)).collect()
+        (0..64u64)
+            .map(|nonce| drive(level, ipl, generate_run_seed(id, nonce), &floors))
+            .collect()
     }
 
     /// FNV-1a over [`payouts`], rung by rung then `/end`. `to_value` sorts every map,
@@ -4721,8 +5446,9 @@ mod tests {
     /// that pay the same thing for the same seeds hash the same.
     fn payout_digest(runs: &[Payout]) -> u64 {
         let text = serde_json::to_value(runs).unwrap().to_string();
-        text.bytes()
-            .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+        text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+        })
     }
 
     /// The runs with every rung past 650 taken out — what a run paid before #424
@@ -4730,7 +5456,12 @@ mod tests {
     fn without_rungs_past_650(runs: &[Payout]) -> Vec<Payout> {
         let last = *abyss_rewards::ABYSS_LADDER.last().unwrap();
         runs.iter()
-            .map(|(rungs, end)| (rungs.iter().filter(|(r, _)| *r <= last).cloned().collect(), end.clone()))
+            .map(|(rungs, end)| {
+                (
+                    rungs.iter().filter(|(r, _)| *r <= last).cloned().collect(),
+                    end.clone(),
+                )
+            })
             .collect()
     }
 
@@ -4752,7 +5483,11 @@ mod tests {
         let runs = payouts(100, 149, 4, DEEP_FLOOR_KILLS);
         for run in &runs {
             let rungs: Vec<u32> = run.0.iter().map(|(r, _)| *r).collect();
-            assert_eq!(rungs, vec![35, 50, 70, 95, 135, 190, 260, 360], "#471's schedule");
+            assert_eq!(
+                rungs,
+                vec![35, 50, 70, 95, 135, 190, 260, 360],
+                "#471's schedule"
+            );
         }
         assert_eq!(payout_digest(&runs), LEVEL_100_FROM_149_DIGEST);
     }
@@ -4767,14 +5502,20 @@ mod tests {
     #[test]
     fn a_level_7_run_from_floor_1_is_unchanged_by_383() {
         let runs = payouts(7, 1, 30, MIXED_KILLS);
-        assert!(runs.iter().all(|r| rung_draw(r, 70).is_some()), "every run reaches rung 70");
+        assert!(
+            runs.iter().all(|r| rung_draw(r, 70).is_some()),
+            "every run reaches rung 70"
+        );
         // #424: these 30-floor runs pass 650, and now keep being paid past it...
         for (rungs, _) in &runs {
             let past: Vec<u32> = rungs.iter().map(|(r, _)| *r).filter(|r| *r > 650).collect();
             assert_eq!(past, vec![810, 970, 1130, 1290]);
         }
         // ...while everything up to 650 and `/end` pay exactly what they did before.
-        assert_eq!(payout_digest(&without_rungs_past_650(&runs)), LEVEL_7_FROM_1_DIGEST);
+        assert_eq!(
+            payout_digest(&without_rungs_past_650(&runs)),
+            LEVEL_7_FROM_1_DIGEST
+        );
         assert_eq!(payout_digest(&runs), LEVEL_7_FROM_1_DIGEST_WITH_424);
     }
     /// [`LEVEL_7_FROM_1_DIGEST`] with #424's rungs past 650 in it — re-pinned when they
@@ -4794,8 +5535,13 @@ mod tests {
     #[test]
     fn a_level_45_run_from_floor_149_is_unchanged_by_383() {
         let runs = payouts(45, 149, 4, DEEP_FLOOR_KILLS);
-        let mid = [NIGHTSHADE, CHAURUS_CHITIN, QUICKSILVER_INGOT, MALACHITE_INGOT]
-            .map(|u| Uuid::parse_str(u).unwrap());
+        let mid = [
+            NIGHTSHADE,
+            CHAURUS_CHITIN,
+            QUICKSILVER_INGOT,
+            MALACHITE_INGOT,
+        ]
+        .map(|u| Uuid::parse_str(u).unwrap());
         for run in &runs {
             let seventy = template_of(rung_draw(run, 70).expect("reaches rung 70")).unwrap();
             assert!(mid.contains(&seventy), "level 45 rung 70 drew {seventy}");
@@ -4831,7 +5577,9 @@ mod tests {
     /// `/end` material is 20, and at 45 every soul gem is one of the three best.
     #[test]
     fn abyss_runs_move_only_what_388_moves() {
-        use blades_lib::features::beginner_economy::{is_crafting_material, ABYSS_END_MATERIAL_STACK};
+        use blades_lib::features::beginner_economy::{
+            ABYSS_END_MATERIAL_STACK, is_crafting_material,
+        };
         let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
         for (level, start, count, kills, blind) in [
             (7u32, 1u32, 30usize, MIXED_KILLS, 0x70de_e0c6_4225_b2ac_u64),
@@ -4839,17 +5587,28 @@ mod tests {
             (100, 149, 4, DEEP_FLOOR_KILLS, 0xb599_e98b_9612_3a1a),
         ] {
             let runs = without_rungs_past_650(&payouts(level, start, count, kills));
-            assert_eq!(payout_digest_388_blind(&runs), blind, "level {level} from floor {start}");
+            assert_eq!(
+                payout_digest_388_blind(&runs),
+                blind,
+                "level {level} from floor {start}"
+            );
             let mut end_materials = 0;
             for (_, end) in &runs {
                 for (id, q) in &end.stackable_items {
                     if is_crafting_material(id) {
-                        assert_eq!(*q, ABYSS_END_MATERIAL_STACK, "level {level}: /end paid {q} of {id}");
+                        assert_eq!(
+                            *q, ABYSS_END_MATERIAL_STACK,
+                            "level {level}: /end paid {q} of {id}"
+                        );
                         end_materials += 1;
                     }
                 }
             }
-            assert!(end_materials > 0, "level {level}: no /end material in {} runs", runs.len());
+            assert!(
+                end_materials > 0,
+                "level {level}: no /end material in {} runs",
+                runs.len()
+            );
             if level == 45 {
                 let paid: Vec<Uuid> = runs
                     .iter()
@@ -4858,7 +5617,10 @@ mod tests {
                     .filter(|id| soul_gems.contains(id))
                     .collect();
                 assert!(!paid.is_empty(), "the runs pay soul gems");
-                assert!(paid.iter().all(|id| soul_gems[7..].contains(id)), "{paid:?}");
+                assert!(
+                    paid.iter().all(|id| soul_gems[7..].contains(id)),
+                    "{paid:?}"
+                );
             }
         }
     }
@@ -4892,7 +5654,11 @@ mod tests {
             (100, 149, 4, DEEP_FLOOR_KILLS, 0xbf70_0091_a7e2_266a),
         ] {
             let runs = without_rungs_past_650(&payouts(level, start, count, kills));
-            assert_eq!(payout_digest_407_blind(&runs), blind, "level {level} from floor {start}");
+            assert_eq!(
+                payout_digest_407_blind(&runs),
+                blind,
+                "level {level} from floor {start}"
+            );
             for (_, end) in &runs {
                 for (id, q) in &end.stackable_items {
                     if soul_gems.contains(id) {
@@ -4917,7 +5683,10 @@ mod tests {
             (100, 149, 4, DEEP_FLOOR_KILLS),
         ] {
             let runs = payouts(level, start, count, kills);
-            println!("407-blind level {level} from {start}: {:#018x}", payout_digest_407_blind(&runs));
+            println!(
+                "407-blind level {level} from {start}: {:#018x}",
+                payout_digest_407_blind(&runs)
+            );
         }
     }
 
@@ -4997,20 +5766,28 @@ mod tests {
         for nonce in 0..400u64 {
             let seed = generate_run_seed(id, nonce);
             for rung in [190u32, 490] {
-                pool_100.insert(serde_json::to_string(&abyss_rewards::future_reward_for_rung(rung, 100, seed)).unwrap());
+                pool_100.insert(
+                    serde_json::to_string(&abyss_rewards::future_reward_for_rung(rung, 100, seed))
+                        .unwrap(),
+                );
             }
         }
         let mut extra = std::collections::HashSet::new();
         for nonce in 0..400u64 {
             let seed = generate_run_seed(id, nonce);
             for rung in [190u32, 490] {
-                let g = serde_json::to_string(&abyss_rewards::future_reward_for_rung(rung, 49, seed)).unwrap();
+                let g =
+                    serde_json::to_string(&abyss_rewards::future_reward_for_rung(rung, 49, seed))
+                        .unwrap();
                 if !pool_100.contains(&g) {
                     extra.insert(g);
                 }
             }
         }
-        assert!(extra.len() <= 1, "level 49 at 190/490 paid more than level 100's pool + one Grand gem: {extra:?}");
+        assert!(
+            extra.len() <= 1,
+            "level 49 at 190/490 paid more than level 100's pool + one Grand gem: {extra:?}"
+        );
     }
 
     /// Report #383's retail end screens — level 92 and 95, floor 150, three kills;
@@ -5022,7 +5799,9 @@ mod tests {
     /// `/end` sometimes pays an enchanting ingredient and sometimes Transcendent gems.
     #[test]
     fn level_92_and_95_runs_from_floor_149_draw_the_retail_end_screens_pools() {
-        let ids = |list: &[&str]| -> Vec<Uuid> { list.iter().map(|u| Uuid::parse_str(u).unwrap()).collect() };
+        let ids = |list: &[&str]| -> Vec<Uuid> {
+            list.iter().map(|u| Uuid::parse_str(u).unwrap()).collect()
+        };
         let rung_35 = ids(&[
             "e7193116-d761-479b-8a20-5633737977f5", // Lumber
             "fd67bbc6-20f4-44a3-9614-28265ebb8c67", // Limestone
@@ -5051,7 +5830,10 @@ mod tests {
                 let rungs: Vec<u32> = run.0.iter().map(|(r, _)| *r).collect();
                 assert!(rungs.starts_with(&[35, 50, 70]), "level {level}: {rungs:?}");
                 let thirty_five = template_of(rung_draw(run, 35).unwrap()).unwrap();
-                assert!(rung_35.contains(&thirty_five), "level {level} rung 35 drew {thirty_five}");
+                assert!(
+                    rung_35.contains(&thirty_five),
+                    "level {level} rung 35 drew {thirty_five}"
+                );
                 let fifty = rung_draw(run, 50).unwrap();
                 // #398: from 49 the rung chest is the level-100 character's.
                 assert_eq!((fifty.chests[0].tier, fifty.chests[0].level), (1, 100));
@@ -5060,14 +5842,29 @@ mod tests {
                     .stackable_items
                     .keys()
                     .copied()
-                    .filter(|t| end_materials.contains(t) || *t == transcendent || elder_or_lower.contains(t))
+                    .filter(|t| {
+                        end_materials.contains(t)
+                            || *t == transcendent
+                            || elder_or_lower.contains(t)
+                    })
                     .collect();
-                assert_eq!(package.len(), 1, "level {level}: one top-band /end package: {:?}", run.1);
+                assert_eq!(
+                    package.len(),
+                    1,
+                    "level {level}: one top-band /end package: {:?}",
+                    run.1
+                );
                 enchanting += usize::from(end_materials.contains(&package[0]));
                 transcendent_ends += usize::from(package[0] == transcendent);
             }
-            assert!((12..=40).contains(&enchanting), "level {level}: /end enchanting on {enchanting}/64");
-            assert!(transcendent_ends >= 8, "level {level}: Transcendent on only {transcendent_ends}/64");
+            assert!(
+                (12..=40).contains(&enchanting),
+                "level {level}: /end enchanting on {enchanting}/64"
+            );
+            assert!(
+                transcendent_ends >= 8,
+                "level {level}: Transcendent on only {transcendent_ends}/64"
+            );
         }
     }
 
@@ -5090,7 +5887,11 @@ mod tests {
                     .iter()
                     .map(|(r, g)| format!("{r}={}", serde_json::to_value(g).unwrap()))
                     .collect();
-                println!("  n{nonce}: {} | end={}", line.join(" "), serde_json::to_value(&run.1).unwrap());
+                println!(
+                    "  n{nonce}: {} | end={}",
+                    line.join(" "),
+                    serde_json::to_value(&run.1).unwrap()
+                );
             }
         }
     }
@@ -5125,7 +5926,12 @@ mod tests {
                         0,
                     )
                 };
-                for enemy in data.iter().flat_map(|d| d.enemy_generated_data.values()).flatten().flatten() {
+                for enemy in data
+                    .iter()
+                    .flat_map(|d| d.enemy_generated_data.values())
+                    .flatten()
+                    .flatten()
+                {
                     corpses += 1;
                     let loot = enemy.merged_loot_table();
                     if !loot.stackable_items.is_empty() {
@@ -5134,14 +5940,22 @@ mod tests {
                     for id in loot.stackable_items.keys() {
                         *per_item.entry(*id).or_default() += 1;
                     }
-                    if let Some(g) = loot.currencies.get(&Uuid::parse_str(GOLD_CURRENCY_UUID).unwrap()) {
+                    if let Some(g) = loot
+                        .currencies
+                        .get(&Uuid::parse_str(GOLD_CURRENCY_UUID).unwrap())
+                    {
                         gold += g;
                         gold_corpses += 1;
                     }
                 }
             }
         }
-        (corpses, with_stacks, per_item, gold as f64 / gold_corpses.max(1) as f64)
+        (
+            corpses,
+            with_stacks,
+            per_item,
+            gold as f64 / gold_corpses.max(1) as f64,
+        )
     }
 
     /// Report #381: "in the Abyss there is always only Quicksilver, too much
@@ -5161,14 +5975,23 @@ mod tests {
         const QUICKSILVER: &str = "e80bee76-f92c-4005-9eff-20d1e8c64d24";
         const NIGHTSHADE: &str = "4d7420db-8042-4946-a43f-e0b3bd9bec81";
         const ATRONITE: &str = "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95";
-        let count = |m: &HashMap<Uuid, usize>, id: &str| *m.get(&Uuid::parse_str(id).unwrap()).unwrap_or(&0);
-        for (level, start, floors, gold_range) in
-            [(7u32, 1u32, 30usize, 50.0..=140.0), (43, 40, 30, 110.0..=190.0), (100, 149, 30, 180.0..=220.0)]
-        {
+        let count = |m: &HashMap<Uuid, usize>, id: &str| {
+            *m.get(&Uuid::parse_str(id).unwrap()).unwrap_or(&0)
+        };
+        for (level, start, floors, gold_range) in [
+            (7u32, 1u32, 30usize, 50.0..=140.0),
+            (43, 40, 30, 110.0..=190.0),
+            (100, 149, 30, 180.0..=220.0),
+        ] {
             // Retail's Abyss loot alone; the #383 bonus on top is measured below.
-            let (before, before_stacks, before_items, _) = corpse_loot_tally(level, start, floors, 16, false, false);
-            let (corpses, stacks, items, gold) = corpse_loot_tally(level, start, floors, 16, true, false);
-            let low_tier: usize = [PEARL, GARLIC, QUICKSILVER, NIGHTSHADE].iter().map(|id| count(&items, id)).sum();
+            let (before, before_stacks, before_items, _) =
+                corpse_loot_tally(level, start, floors, 16, false, false);
+            let (corpses, stacks, items, gold) =
+                corpse_loot_tally(level, start, floors, 16, true, false);
+            let low_tier: usize = [PEARL, GARLIC, QUICKSILVER, NIGHTSHADE]
+                .iter()
+                .map(|id| count(&items, id))
+                .sum();
             println!(
                 "L{level} from {start}: before {before_stacks}/{before} corpses paid stackables \
                  (Pearl {}, Garlic {}, Quicksilver {}, Nightshade {}); after {stacks}/{corpses} \
@@ -5179,13 +6002,28 @@ mod tests {
                 count(&before_items, NIGHTSHADE),
                 count(&items, ATRONITE),
             );
-            assert!(corpses > 200, "L{level}: {corpses} corpses is too few to measure");
+            assert!(
+                corpses > 200,
+                "L{level}: {corpses} corpses is too few to measure"
+            );
             // Control: the old path paid materials on a large share of corpses.
-            assert!(before_stacks * 100 >= before * 20, "L{level}: control {before_stacks}/{before}");
+            assert!(
+                before_stacks * 100 >= before * 20,
+                "L{level}: control {before_stacks}/{before}"
+            );
             // Retail: 12 of 284 (4%). Unseen groups draw the pooled abyss sets.
-            assert!(stacks * 100 <= corpses * 8, "L{level}: {stacks}/{corpses} corpses paid a stackable");
-            assert!(low_tier * 100 <= corpses, "L{level}: {low_tier} Pearl/Garlic/Quicksilver/Nightshade");
-            assert!(gold_range.contains(&gold), "L{level}: mean corpse gold {gold}");
+            assert!(
+                stacks * 100 <= corpses * 8,
+                "L{level}: {stacks}/{corpses} corpses paid a stackable"
+            );
+            assert!(
+                low_tier * 100 <= corpses,
+                "L{level}: {low_tier} Pearl/Garlic/Quicksilver/Nightshade"
+            );
+            assert!(
+                gold_range.contains(&gold),
+                "L{level}: mean corpse gold {gold}"
+            );
         }
     }
 
@@ -5204,8 +6042,11 @@ mod tests {
                     for (spawner, enemies) in spawners.iter().enumerate() {
                         for (index, enemy) in enemies.iter().enumerate() {
                             let loot = enemy.merged_loot_table();
-                            let mut paid: Vec<(Uuid, u64)> =
-                                loot.currencies.into_iter().chain(loot.stackable_items).collect();
+                            let mut paid: Vec<(Uuid, u64)> = loot
+                                .currencies
+                                .into_iter()
+                                .chain(loot.stackable_items)
+                                .collect();
                             paid.sort();
                             out.push((floor, *group, spawner, index, paid));
                         }
@@ -5216,13 +6057,20 @@ mod tests {
             out
         };
         assert!(corpses(11) == corpses(11), "same run, same corpses");
-        assert!(corpses(11) != corpses(12), "another run rolls its corpses afresh");
+        assert!(
+            corpses(11) != corpses(12),
+            "another run rolls its corpses afresh"
+        );
     }
 
     /// Item names from the APK ingredient table, for readable test output.
     fn ingredient_names() -> HashMap<Uuid, String> {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../blades_lib/src/ingredient_values.json");
-        let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../blades_lib/src/ingredient_values.json"
+        );
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         raw["_meta"]["names"]
             .as_object()
             .unwrap()
@@ -5252,7 +6100,7 @@ mod tests {
     /// draw and something retail paid at the character's level, never gear.
     fn abyss_bonus_tally(level: u32, start: u32) -> BonusTally {
         use blades_lib::util::dungeon::{
-            abyss_bonus_candidates, abyss_bonus_material, ENCHANTING_INGREDIENTS, TOWN_MATERIALS,
+            ENCHANTING_INGREDIENTS, TOWN_MATERIALS, abyss_bonus_candidates, abyss_bonus_material,
         };
         const PEARL: &str = "89ece62c-9ff6-470a-a152-d45ef4e0c222";
         const GARLIC: &str = "fbf96b07-e9aa-4157-8761-10179fa05138";
@@ -5262,12 +6110,21 @@ mod tests {
         let name = |id: &Uuid| names.get(id).cloned().unwrap_or_else(|| id.to_string());
         let pearl_garlic = [PEARL, GARLIC].map(|id| Uuid::parse_str(id).unwrap());
         let ipl = initial_player_level(&real_job_pools(), level);
-        let mut t =
-            BonusTally { corpses: 0, with_material: 0, bonus: 0, enchanting: 0, town: 0, per_item: HashMap::new() };
+        let mut t = BonusTally {
+            corpses: 0,
+            with_material: 0,
+            bonus: 0,
+            enchanting: 0,
+            town: 0,
+            per_item: HashMap::new(),
+        };
         for nonce in 0..64u64 {
             let seed = generate_run_seed(Uuid::from_u128(0x383), nonce);
             let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
-            assert_eq!(slices[0].floor_index, start, "L{level}: the run starts at floor {start}");
+            assert_eq!(
+                slices[0].floor_index, start,
+                "L{level}: the run starts at floor {start}"
+            );
             for slice in slices.iter().take(30) {
                 let before = floor_generated_data(&gd, slice, seed, 0).unwrap();
                 let after = floor_generated_data(&gd, slice, seed, level).unwrap();
@@ -5275,7 +6132,8 @@ mod tests {
                     for (spawner, enemies) in spawners.iter().enumerate() {
                         for (index, enemy) in enemies.iter().enumerate() {
                             t.corpses += 1;
-                            let was = before.enemy_generated_data[group][spawner][index].merged_loot_table();
+                            let was = before.enemy_generated_data[group][spawner][index]
+                                .merged_loot_table();
                             let now = enemy.merged_loot_table();
                             // The retail loot is untouched: same gold, same gear.
                             assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
@@ -5287,15 +6145,22 @@ mod tests {
                             assert_eq!(gear(&now), gear(&was), "L{level}: the bonus added gear");
                             // Retail's own stackables (#509's Atronite) are all still there.
                             for (id, q) in &was.stackable_items {
-                                assert!(now.stackable_items.get(id).is_some_and(|n| n >= q), "L{level}: lost {}", name(id));
+                                assert!(
+                                    now.stackable_items.get(id).is_some_and(|n| n >= q),
+                                    "L{level}: lost {}",
+                                    name(id)
+                                );
                             }
-                            t.with_material +=
-                                usize::from(now.stackable_items.keys().any(|id| materials.contains(id)));
+                            t.with_material += usize::from(
+                                now.stackable_items.keys().any(|id| materials.contains(id)),
+                            );
                             // The bonus is exactly what the pure draw says, and nothing else.
                             let mut added: Vec<(Uuid, u64)> = now
                                 .stackable_items
                                 .iter()
-                                .map(|(id, q)| (*id, q - was.stackable_items.get(id).copied().unwrap_or(0)))
+                                .map(|(id, q)| {
+                                    (*id, q - was.stackable_items.get(id).copied().unwrap_or(0))
+                                })
                                 .filter(|(_, q)| *q > 0)
                                 .collect();
                             added.sort();
@@ -5318,7 +6183,11 @@ mod tests {
                             );
                             assert_eq!(added, paid.into_iter().collect::<Vec<_>>(), "L{level}");
                             let Some((item, qty)) = drawn else { continue };
-                            assert!(materials.contains(&item), "L{level}: the bonus paid a non-material {}", name(&item));
+                            assert!(
+                                materials.contains(&item),
+                                "L{level}: the bonus paid a non-material {}",
+                                name(&item)
+                            );
                             t.bonus += 1;
                             *t.per_item.entry(item).or_default() += 1;
                             let is_enchanting = ENCHANTING_INGREDIENTS.contains(&item.as_u128());
@@ -5339,7 +6208,11 @@ mod tests {
                 }
             }
         }
-        assert!(t.corpses >= 3000, "L{level}: {} corpses is too few to measure", t.corpses);
+        assert!(
+            t.corpses >= 3000,
+            "L{level}: {} corpses is too few to measure",
+            t.corpses
+        );
         t
     }
 
@@ -5360,13 +6233,18 @@ mod tests {
         use blades_lib::util::dungeon::{ABYSS_BONUS_ENCHANTING_SHARE, ABYSS_BONUS_MATERIAL_SHARE};
         let names = ingredient_names();
         let name = |id: &Uuid| names.get(id).cloned().unwrap_or_else(|| id.to_string());
-        assert_eq!(level_100_run_from_149(84)[0].0, 149, "the deep run starts at floor 149");
+        assert_eq!(
+            level_100_run_from_149(84)[0].0,
+            149,
+            "the deep run starts at floor 149"
+        );
 
         for (level, start) in BONUS_RUNS {
             let t = abyss_bonus_tally(level, start);
             let share = t.bonus as f64 / t.corpses as f64;
             let enchanting_share = t.enchanting as f64 / t.bonus.max(1) as f64;
-            let mut top: Vec<(usize, String)> = t.per_item.iter().map(|(id, n)| (*n, name(id))).collect();
+            let mut top: Vec<(usize, String)> =
+                t.per_item.iter().map(|(id, n)| (*n, name(id))).collect();
             top.sort_by(|a, b| b.cmp(a));
             println!(
                 "L{level} from {start}: {} corpses; with a material {:.1}%; bonus {:.1}%, enchanting {:.1}% \
@@ -5375,9 +6253,15 @@ mod tests {
                 100.0 * t.with_material as f64 / t.corpses as f64,
                 100.0 * share,
                 100.0 * enchanting_share,
-                top.iter().take(10).map(|(n, s)| format!("{s} {n}")).collect::<Vec<_>>(),
+                top.iter()
+                    .take(10)
+                    .map(|(n, s)| format!("{s} {n}"))
+                    .collect::<Vec<_>>(),
             );
-            assert!((share - ABYSS_BONUS_MATERIAL_SHARE).abs() <= 0.03, "L{level}: bonus share {share}");
+            assert!(
+                (share - ABYSS_BONUS_MATERIAL_SHARE).abs() <= 0.03,
+                "L{level}: bonus share {share}"
+            );
             assert!(
                 (enchanting_share - ABYSS_BONUS_ENCHANTING_SHARE).abs() <= 0.05,
                 "L{level}: enchanting {enchanting_share}"
@@ -5405,9 +6289,18 @@ mod tests {
             );
             // The measurement means something: normal corpses drop materials often,
             // and not every time.
-            assert!(jc >= 5000 && qc >= 1000, "L{level}: too few normal corpses ({jc}, {qc})");
-            assert!((0.3..0.8).contains(&normal), "L{level}: normal-quest rate {normal}");
-            assert!((abyss - normal).abs() <= 0.03, "L{level}: Abyss {abyss} vs normal quests {normal}");
+            assert!(
+                jc >= 5000 && qc >= 1000,
+                "L{level}: too few normal corpses ({jc}, {qc})"
+            );
+            assert!(
+                (0.3..0.8).contains(&normal),
+                "L{level}: normal-quest rate {normal}"
+            );
+            assert!(
+                (abyss - normal).abs() <= 0.03,
+                "L{level}: Abyss {abyss} vs normal quests {normal}"
+            );
         }
     }
 
@@ -5420,14 +6313,22 @@ mod tests {
     /// [`ABYSS_BONUS_TOWN_MATERIAL_WEIGHT`]: blades_lib::util::dungeon::ABYSS_BONUS_TOWN_MATERIAL_WEIGHT
     #[test]
     fn abyss_bonus_building_materials_are_halved_at_every_depth() {
-        use blades_lib::util::dungeon::{abyss_bonus_candidates, abyss_bonus_weight, TOWN_MATERIALS};
+        use blades_lib::util::dungeon::{
+            TOWN_MATERIALS, abyss_bonus_candidates, abyss_bonus_weight,
+        };
         let odds = |s: f64| s / (1.0 - s);
         for (level, start) in BONUS_RUNS {
             let candidates = abyss_bonus_candidates(i64::from(level), false);
-            let town_share = |weight: &dyn Fn(&blades_lib::util::dungeon::BonusCandidate) -> f64| {
-                let all: f64 = candidates.iter().map(weight).sum();
-                candidates.iter().filter(|c| TOWN_MATERIALS.contains(&c.0.as_u128())).map(weight).sum::<f64>() / all
-            };
+            let town_share =
+                |weight: &dyn Fn(&blades_lib::util::dungeon::BonusCandidate) -> f64| {
+                    let all: f64 = candidates.iter().map(weight).sum();
+                    candidates
+                        .iter()
+                        .filter(|c| TOWN_MATERIALS.contains(&c.0.as_u128()))
+                        .map(weight)
+                        .sum::<f64>()
+                        / all
+                };
             let retail = town_share(&|c| c.2 as f64);
             let t = abyss_bonus_tally(level, start);
             let measured = t.town as f64 / (t.bonus - t.enchanting) as f64;
@@ -5444,9 +6345,15 @@ mod tests {
             let expected = town_share(&abyss_bonus_weight);
             let n = (t.bonus - t.enchanting) as f64;
             let tolerance = 3.0 * (expected * (1.0 - expected) / n).sqrt();
-            assert!((measured - expected).abs() <= tolerance, "L{level}: {measured} vs {expected} ±{tolerance}");
+            assert!(
+                (measured - expected).abs() <= tolerance,
+                "L{level}: {measured} vs {expected} ±{tolerance}"
+            );
             let ratio = odds(measured) / odds(retail);
-            assert!((0.4..=0.6).contains(&ratio), "L{level}: town odds x{ratio}, not halved");
+            assert!(
+                (0.4..=0.6).contains(&ratio),
+                "L{level}: town odds x{ratio}, not halved"
+            );
         }
     }
 
@@ -5460,10 +6367,19 @@ mod tests {
             "faa3aeb3-9284-4d83-8981-1af00e3a6398", // Door Key
             "05a7d501-f096-41e9-8443-fd6a090d8425", // Revive Scroll
         ];
-        let not: Vec<Uuid> = NOT_MATERIALS.iter().map(|s| Uuid::parse_str(s).unwrap()).collect();
-        let set: std::collections::HashSet<Uuid> =
-            ingredient_names().into_keys().filter(|id| !not.contains(id)).collect();
-        assert!(set.len() >= 60, "the ingredient table lost its materials: {}", set.len());
+        let not: Vec<Uuid> = NOT_MATERIALS
+            .iter()
+            .map(|s| Uuid::parse_str(s).unwrap())
+            .collect();
+        let set: std::collections::HashSet<Uuid> = ingredient_names()
+            .into_keys()
+            .filter(|id| !not.contains(id))
+            .collect();
+        assert!(
+            set.len() >= 60,
+            "the ingredient table lost its materials: {}",
+            set.len()
+        );
         set
     }
 
@@ -5475,7 +6391,13 @@ mod tests {
         let mut out = (0, 0);
         for enemy in data.enemy_generated_data.values().flatten().flatten() {
             out.0 += 1;
-            out.1 += usize::from(enemy.merged_loot_table().stackable_items.keys().any(|id| materials.contains(id)));
+            out.1 += usize::from(
+                enemy
+                    .merged_loot_table()
+                    .stackable_items
+                    .keys()
+                    .any(|id| materials.contains(id)),
+            );
         }
         out
     }
@@ -5498,11 +6420,18 @@ mod tests {
             let boundary = crate::quest::jobs_gen::current_reset_boundary(&pools, now);
             for character in 0..48u128 {
                 let character_id = Uuid::from_u128(0x383_0000 + character);
-                let (board, _) =
-                    crate::quest::jobs_gen::generate(&pools, character_id, level as u16, day as i64, boundary, now);
+                let (board, _) = crate::quest::jobs_gen::generate(
+                    &pools,
+                    character_id,
+                    level as u16,
+                    day as i64,
+                    boundary,
+                    now,
+                );
                 for job in &board {
-                    let data = crate::quest::jobs_gen::generated_data_for_job(&gd, job, &scaling, 0)
-                        .expect("the job reference dungeon resolves");
+                    let data =
+                        crate::quest::jobs_gen::generated_data_for_job(&gd, job, &scaling, 0)
+                            .expect("the job reference dungeon resolves");
                     let (c, m) = material_corpses(&data, &materials);
                     jobs = (jobs.0 + c, jobs.1 + m);
                 }
@@ -5534,7 +6463,8 @@ mod tests {
         'dungeons: for dungeon_id in gd.dungeons.keys() {
             let mut slice = run.slices[0].clone();
             slice.dungeon_settings_id = *dungeon_id;
-            let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level) else {
+            let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level)
+            else {
                 continue;
             };
             for (group, spawners) in &generated.enemy_generated_data {
@@ -5567,7 +6497,13 @@ mod tests {
         ]));
         let grants = collect_enemy_loot(&gd, &mut run, &actions);
         assert_eq!(grants.len(), 1);
-        assert!(grants[0].stackable_items.get(&item).is_some_and(|q| *q >= qty), "{grants:?}");
+        assert!(
+            grants[0]
+                .stackable_items
+                .get(&item)
+                .is_some_and(|q| *q >= qty),
+            "{grants:?}"
+        );
         assert!(grants[0].items.is_empty(), "the bonus never pays gear");
     }
 
@@ -5579,14 +6515,20 @@ mod tests {
     /// gear and retail's own stackables are the same, the bonus is the only addition.
     #[test]
     fn abyss_runs_draw_each_effect_ingredient_equally() {
-        use blades_lib::util::dungeon::{abyss_bonus_as_paid, abyss_bonus_candidates, EFFECT_INGREDIENTS};
+        use blades_lib::util::dungeon::{
+            EFFECT_INGREDIENTS, abyss_bonus_as_paid, abyss_bonus_candidates,
+        };
         const DEATHBELL: &str = "8b7d0044-3a38-4ee0-af45-d2892b0f508d";
         let gd = game_data();
         let names = ingredient_names();
         let deathbell = Uuid::parse_str(DEATHBELL).unwrap();
         // `ingredient_values.json` still labels Deathbell "Beehive Husk".
         let name = |id: &Uuid| {
-            if *id == deathbell { "Deathbell".to_string() } else { names.get(id).cloned().unwrap_or_else(|| id.to_string()) }
+            if *id == deathbell {
+                "Deathbell".to_string()
+            } else {
+                names.get(id).cloned().unwrap_or_else(|| id.to_string())
+            }
         };
         for (level, start) in [(7u32, 1u32), (45, 149), (100, 149)] {
             let ipl = initial_player_level(&real_job_pools(), level);
@@ -5595,7 +6537,10 @@ mod tests {
             for nonce in 0..256u64 {
                 let seed = generate_run_seed(Uuid::from_u128(0x383e), nonce);
                 let slices = build_run_slices(&real_static_abyss(), seed, start, ipl, &ALL_QUESTS);
-                assert_eq!(slices[0].floor_index, start, "L{level}: the run starts at floor {start}");
+                assert_eq!(
+                    slices[0].floor_index, start,
+                    "L{level}: the run starts at floor {start}"
+                );
                 for slice in slices.iter().take(30) {
                     let before = floor_generated_data(&gd, slice, seed, 0).unwrap();
                     let after = floor_generated_data(&gd, slice, seed, level).unwrap();
@@ -5603,7 +6548,8 @@ mod tests {
                         for (spawner, enemies) in spawners.iter().enumerate() {
                             for (index, enemy) in enemies.iter().enumerate() {
                                 corpses += 1;
-                                let was = before.enemy_generated_data[group][spawner][index].merged_loot_table();
+                                let was = before.enemy_generated_data[group][spawner][index]
+                                    .merged_loot_table();
                                 let mut now = enemy.merged_loot_table();
                                 assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
                                 let gear = |l: &blades_lib::user_data::LootTableResult| {
@@ -5611,7 +6557,11 @@ mod tests {
                                     ids.sort();
                                     ids
                                 };
-                                assert_eq!(gear(&now), gear(&was), "L{level}: the bonus changed gear");
+                                assert_eq!(
+                                    gear(&now),
+                                    gear(&was),
+                                    "L{level}: the bonus changed gear"
+                                );
                                 // As the corpse pays it (#388).
                                 let drawn = abyss_bonus_as_paid(
                                     &slice.dungeon_settings_id,
@@ -5630,7 +6580,10 @@ mod tests {
                                         now.stackable_items.insert(item, left);
                                     }
                                 }
-                                assert_eq!(now.stackable_items, was.stackable_items, "L{level}: retail stackables moved");
+                                assert_eq!(
+                                    now.stackable_items, was.stackable_items,
+                                    "L{level}: retail stackables moved"
+                                );
                                 let Some((item, qty)) = drawn else { continue };
                                 if !EFFECT_INGREDIENTS.contains(&item.as_u128()) {
                                     continue;
@@ -5654,19 +6607,34 @@ mod tests {
                 .iter()
                 .map(|id| {
                     let id = Uuid::from_u128(*id);
-                    (name(&id), per_item.get(&id).copied().unwrap_or(0) as f64 / enchanting.max(1) as f64)
+                    (
+                        name(&id),
+                        per_item.get(&id).copied().unwrap_or(0) as f64 / enchanting.max(1) as f64,
+                    )
                 })
                 .collect();
             shares.sort_by(|a, b| a.0.cmp(&b.0));
             println!(
                 "L{level} from {start}: {corpses} corpses, {enchanting} enchanting bonus stacks: {:?}",
-                shares.iter().map(|(n, s)| format!("{n} {:.1}%", 100.0 * s)).collect::<Vec<_>>()
+                shares
+                    .iter()
+                    .map(|(n, s)| format!("{n} {:.1}%", 100.0 * s))
+                    .collect::<Vec<_>>()
             );
-            assert!(enchanting >= 1000, "L{level}: {enchanting} enchanting stacks is too few to measure");
+            assert!(
+                enchanting >= 1000,
+                "L{level}: {enchanting} enchanting stacks is too few to measure"
+            );
             for (n, s) in &shares {
-                assert!((s - 1.0 / 7.0).abs() <= 0.03, "L{level}: {n} is {s} of the enchanting bonus");
+                assert!(
+                    (s - 1.0 / 7.0).abs() <= 0.03,
+                    "L{level}: {n} is {s} of the enchanting bonus"
+                );
             }
-            assert!(per_item.get(&deathbell).is_some_and(|n| *n > 0), "L{level}: no Deathbell");
+            assert!(
+                per_item.get(&deathbell).is_some_and(|n| *n > 0),
+                "L{level}: no Deathbell"
+            );
         }
     }
 
@@ -5687,7 +6655,10 @@ mod tests {
         no_floor.slices[0].enemy_killed = false;
         no_floor.score = 30.0;
         let paid = end_reward(&sd, &no_floor, 66);
-        assert!(paid.currencies.is_empty() && paid.character_xp == 0, "no rewarded floor, no gold");
+        assert!(
+            paid.currencies.is_empty() && paid.character_xp == 0,
+            "no rewarded floor, no gold"
+        );
         assert_eq!(paid.stackable_items.len(), 1, "but the package is paid");
 
         let floors = run_from(&[(149, 100)], 84);
@@ -5722,14 +6693,29 @@ mod tests {
         let estimate = initial_player_level(&real_job_pools(), 20);
         assert_eq!(estimate, 22);
         let floors = served_run(estimate, 10, 12, MIXED_KILLS);
-        assert!(floors.iter().all(|f| f.2 < estimate), "all below the estimate: {floors:?}");
+        assert!(
+            floors.iter().all(|f| f.2 < estimate),
+            "all below the estimate: {floors:?}"
+        );
         let server = replay(estimate, &floors);
         let client = client_gauge(16, &floors);
-        assert_eq!(server.iter().flat_map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![35, 50]);
+        assert_eq!(
+            server
+                .iter()
+                .flat_map(|(_, r)| r.clone())
+                .collect::<Vec<_>>(),
+            vec![35, 50]
+        );
         let (early, lag) = early_and_lag(&server, &client);
         assert!(early.is_empty());
-        assert!(lag > MAX_LAG_KILLS, "lag {lag}: the gauge sat full that long");
-        assert!(unpaid(&server, &client).len() >= 4, "client {client:?} server {server:?}");
+        assert!(
+            lag > MAX_LAG_KILLS,
+            "lag {lag}: the gauge sat full that long"
+        );
+        assert!(
+            unpaid(&server, &client).len() >= 4,
+            "client {client:?} server {server:?}"
+        );
     }
 
     /// The fix: the run starts at the EPL the client's analytics reported. The served
@@ -5750,7 +6736,9 @@ mod tests {
                     let server = replay_with(ipl, true, &floors);
                     let client = client_gauge(reported, &floors);
                     let (early, lag) = early_and_lag(&server, &client);
-                    let case = format!("level {level}, EPL {reported}, start {start}: server {server:?} client {client:?}");
+                    let case = format!(
+                        "level {level}, EPL {reported}, start {start}: server {server:?} client {client:?}"
+                    );
                     assert!(early.is_empty(), "paid ahead {early:?} -- {case}");
                     assert_eq!(lag, 0, "lag {lag} -- {case}");
                     // At most the rung the client crossed on the last kills is still due.
@@ -5772,7 +6760,11 @@ mod tests {
             let floors = level_100_run_from_149(ipl);
             assert!(floors.iter().all(|f| f.2 == 100), "{floors:?}");
             let server = replay_with(ipl, true, &floors);
-            assert_eq!(server, client_gauge(reported, &floors), "reported EPL {reported}");
+            assert_eq!(
+                server,
+                client_gauge(reported, &floors),
+                "reported EPL {reported}"
+            );
             if reported + 7 <= 100 {
                 // Delta >= 7: the flat tail, 30 a kill, rungs 35..360 in twelve kills.
                 assert_eq!(server.len(), 7, "reported EPL {reported}: {server:?}");
@@ -5789,7 +6781,10 @@ mod tests {
     /// `NotifyOfPreviousRewards` (RVA 0x1C82A64) then shows one side notification per
     /// entry. One combat per kill (the replays here), so a rung the server pays `n`
     /// kills after the client reached it is toasted `n + 1` times.
-    fn client_toasts(server: &[(usize, Vec<u32>)], client: &[(usize, Vec<u32>)]) -> Vec<(u32, usize)> {
+    fn client_toasts(
+        server: &[(usize, Vec<u32>)],
+        client: &[(usize, Vec<u32>)],
+    ) -> Vec<(u32, usize)> {
         client
             .iter()
             .flat_map(|(reached, rungs)| rungs.iter().map(move |rung| (*reached, *rung)))
@@ -5821,19 +6816,28 @@ mod tests {
             "the near-level ramp"
         );
         let client = client_gauge(52, &floors);
-        assert!(client.len() >= 5, "the run climbs several rungs: {client:?}");
+        assert!(
+            client.len() >= 5,
+            "the run climbs several rungs: {client:?}"
+        );
 
         // NEGATIVE CONTROL: the margin the run used to be scored with toasts some rung
         // twice or more — the video.
         let trailing = replay_with(ipl, false, &floors);
         assert!(
-            client_toasts(&trailing, &client).iter().any(|(_, toasts)| *toasts > 1),
+            client_toasts(&trailing, &client)
+                .iter()
+                .any(|(_, toasts)| *toasts > 1),
             "the margin trails the client: server {trailing:?} client {client:?}"
         );
 
         let server = replay_with(ipl, true, &floors);
         assert_eq!(server, client, "every rung paid on the client's kill");
-        assert!(client_toasts(&server, &client).iter().all(|(_, toasts)| *toasts == 1));
+        assert!(
+            client_toasts(&server, &client)
+                .iter()
+                .all(|(_, toasts)| *toasts == 1)
+        );
     }
 
     /// Every character level, every reported EPL in the band around its estimate, and
@@ -5846,15 +6850,31 @@ mod tests {
         let pools = real_job_pools();
         for level in [9u32, 20, 48, 50, 66, 100] {
             let estimate = initial_player_level(&pools, level);
-            for reported in [estimate.saturating_sub(6).max(1), estimate.saturating_sub(3).max(1), estimate, estimate + 1, estimate + 4] {
+            for reported in [
+                estimate.saturating_sub(6).max(1),
+                estimate.saturating_sub(3).max(1),
+                estimate,
+                estimate + 1,
+                estimate + 4,
+            ] {
                 let ipl = run_initial_player_level(estimate, Some(reported));
                 assert!(is_client_epl(Some(reported), ipl));
-                for start in [1, ipl.saturating_sub(10).max(1), ipl.saturating_sub(3).max(1), ipl, ipl + 3, 149] {
+                for start in [
+                    1,
+                    ipl.saturating_sub(10).max(1),
+                    ipl.saturating_sub(3).max(1),
+                    ipl,
+                    ipl + 3,
+                    149,
+                ] {
                     for kills in [MIXED_KILLS, DEEP_FLOOR_KILLS] {
                         let floors = served_run(ipl, start, 10, kills);
                         let server = replay_with(ipl, true, &floors);
                         let client = client_gauge(reported, &floors);
-                        assert_eq!(server, client, "level {level}, EPL {reported}, start {start}");
+                        assert_eq!(
+                            server, client,
+                            "level {level}, EPL {reported}, start {start}"
+                        );
                     }
                 }
             }
@@ -5874,7 +6894,12 @@ mod tests {
         let mut control_early = Vec::new();
         for level in [20u32, 48, 50, 66, 94, 100] {
             let reported = initial_player_level(&pools, level);
-            for start in [reported.saturating_sub(3).max(1), reported, reported + 3, 149] {
+            for start in [
+                reported.saturating_sub(3).max(1),
+                reported,
+                reported + 3,
+                149,
+            ] {
                 for kills in [MIXED_KILLS, DEEP_FLOOR_KILLS] {
                     let floors = served_run(reported, start, 10, kills);
                     for drifted in [reported - 1, reported + 1] {
@@ -5919,7 +6944,10 @@ mod tests {
         let mut relaunched = run_from(&[(1, 52)], 52);
         relaunched.client_epl_reported = true;
         reconcile_client_epl(&mut relaunched, None);
-        assert!(!relaunched.client_epl_reported, "a relaunched client has not reported");
+        assert!(
+            !relaunched.client_epl_reported,
+            "a relaunched client has not reported"
+        );
     }
 
     /// A report outside the band is not the client's EPL: the run falls back to the
@@ -5932,13 +6960,19 @@ mod tests {
         assert!(!is_client_epl(None, ipl));
         // A run stored before #8 deserializes onto the margin.
         let mut legacy = serde_json::to_value(&run_from(&[(1, 22)], 22)).unwrap();
-        assert!(legacy.get("clientEplReported").is_none(), "false is not stored");
+        assert!(
+            legacy.get("clientEplReported").is_none(),
+            "false is not stored"
+        );
         legacy.as_object_mut().unwrap().remove("clientEplReported");
         let legacy: AbyssRun = serde_json::from_value(legacy).unwrap();
         assert!(!legacy.client_epl_reported);
         let mut reported = run_from(&[(1, 22)], 22);
         reported.client_epl_reported = true;
-        assert_eq!(serde_json::to_value(&reported).unwrap()["clientEplReported"], true);
+        assert_eq!(
+            serde_json::to_value(&reported).unwrap()["clientEplReported"],
+            true
+        );
     }
 
     #[test]
@@ -5948,7 +6982,11 @@ mod tests {
         assert_eq!(run_initial_player_level(22, Some(2)), 2);
         assert_eq!(run_initial_player_level(22, Some(42)), 42);
         assert_eq!(run_initial_player_level(22, Some(43)), 22, "too far above");
-        assert_eq!(run_initial_player_level(84, Some(1)), 84, "a level-100 EPL of 1 is a lie");
+        assert_eq!(
+            run_initial_player_level(84, Some(1)),
+            84,
+            "a level-100 EPL of 1 is a lie"
+        );
         assert_eq!(run_initial_player_level(84, Some(0)), 84);
     }
 }
@@ -6055,7 +7093,10 @@ mod update_body_shape_tests {
         .expect("the full captured action set must deserialize");
         assert_eq!(body.actions.len(), 6);
         assert!(
-            !body.actions.iter().any(|a| matches!(a, AbyssUpdateAction::Unknown)),
+            !body
+                .actions
+                .iter()
+                .any(|a| matches!(a, AbyssUpdateAction::Unknown)),
             "no captured action may fall into Unknown: {:?}",
             body.actions
         );

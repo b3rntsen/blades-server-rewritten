@@ -124,9 +124,10 @@ const MAX_END_RUNGS: u32 = 1_000;
 pub fn ladder() -> impl Iterator<Item = u32> {
     let measured = corpus().rungs.iter().map(|r| r.score);
     let last = corpus().rungs.last().map(|r| r.score);
-    measured.chain(last.into_iter().flat_map(|last| {
-        (1..=MAX_END_RUNGS).map(move |k| last + k * END_REWARDS_SCORE_DELTA)
-    }))
+    measured.chain(
+        last.into_iter()
+            .flat_map(|last| (1..=MAX_END_RUNGS).map(move |k| last + k * END_REWARDS_SCORE_DELTA)),
+    )
 }
 
 /// The rung definition that pays at `score`: a measured rung, or — for a score past
@@ -211,8 +212,10 @@ struct ObservedReward {
 fn corpus() -> &'static Corpus {
     static TABLE: std::sync::OnceLock<Corpus> = std::sync::OnceLock::new();
     TABLE.get_or_init(|| {
-        serde_json::from_str(ABYSS_FUTURE_REWARDS_RAW)
-            .unwrap_or_else(|_| Corpus { rungs: Vec::new(), end_package: EndPackage::default() })
+        serde_json::from_str(ABYSS_FUTURE_REWARDS_RAW).unwrap_or_else(|_| Corpus {
+            rungs: Vec::new(),
+            end_package: EndPackage::default(),
+        })
     })
 }
 
@@ -401,8 +404,11 @@ fn end_package_drawn(score: f64, character_level: u64, run_seed: i64) -> RewardG
         .collect();
     // The captures plus the #383 screenshots ([`screenshot_end_packages`]); `paid`
     // alone still sets the pooled capture rate below.
-    let observed: Vec<&EndObservation> =
-        paid.iter().copied().chain(screenshot_end_packages()).collect();
+    let observed: Vec<&EndObservation> = paid
+        .iter()
+        .copied()
+        .chain(screenshot_end_packages())
+        .collect();
     let pool = level_pool(&observed, character_level, |o| o.level);
     if pool.is_empty() {
         return grant;
@@ -538,7 +544,9 @@ fn is_soul_gem_stack(stacks: &HashMap<Uuid, u64>) -> bool {
 }
 
 fn is_soul_gem_package(o: &EndObservation) -> bool {
-    o.package.as_ref().is_some_and(|p| is_soul_gem_stack(&p.stackable_items))
+    o.package
+        .as_ref()
+        .is_some_and(|p| is_soul_gem_stack(&p.stackable_items))
 }
 
 /// 0 for Petty (SoulGem1) .. 9 for Transcendent (SoulGem10).
@@ -565,7 +573,9 @@ fn regrade_soul_gems(
     let mut out = HashMap::new();
     for (id, count) in stacks {
         let to = match soul_gem_grade(id) {
-            Some(grade) => Uuid::parse_str(SOUL_GEMS[grade.saturating_sub(shift as usize)]).unwrap(),
+            Some(grade) => {
+                Uuid::parse_str(SOUL_GEMS[grade.saturating_sub(shift as usize)]).unwrap()
+            }
             None => *id,
         };
         *out.entry(to).or_default() += count;
@@ -690,7 +700,10 @@ pub fn future_reward_for_rung(
 fn screenshot_results(rung: u32) -> &'static [LevelledResult] {
     static RUNG_35: std::sync::OnceLock<Vec<LevelledResult>> = std::sync::OnceLock::new();
     static RUNG_70: std::sync::OnceLock<Vec<LevelledResult>> = std::sync::OnceLock::new();
-    let seen = |level: u64, item: &str, count: u64| LevelledResult { level, reward: one_stack(item, count) };
+    let seen = |level: u64, item: &str, count: u64| LevelledResult {
+        level,
+        reward: one_stack(item, count),
+    };
     match rung {
         35 => RUNG_35.get_or_init(|| {
             vec![
@@ -721,7 +734,10 @@ fn screenshot_end_packages() -> &'static [EndObservation] {
     END.get_or_init(|| {
         [92u64, 95, 82]
             .into_iter()
-            .map(|level| EndObservation { level, package: Some(one_stack(TRANSCENDENT_SOUL_GEM, 4)) })
+            .map(|level| EndObservation {
+                level,
+                package: Some(one_stack(TRANSCENDENT_SOUL_GEM, 4)),
+            })
             .collect()
     })
 }
@@ -761,9 +777,16 @@ fn borrow_from_above<'a>(
     if pool_band >= own {
         return None;
     }
-    let above = observations.iter().map(|o| band(o.level)).filter(|b| *b > own).min()?;
-    let lent: Vec<&LevelledResult> =
-        observations.iter().copied().filter(|o| band(o.level) == above).collect();
+    let above = observations
+        .iter()
+        .map(|o| band(o.level))
+        .filter(|b| *b > own)
+        .min()?;
+    let lent: Vec<&LevelledResult> = observations
+        .iter()
+        .copied()
+        .filter(|o| band(o.level) == above)
+        .collect();
     let lowest = lent.iter().map(|o| o.level).min()?;
     Some((lent, lowest))
 }
@@ -810,8 +833,10 @@ fn rung_reward_drawn(rung: &Rung, at: u32, real_level: u64, run_seed: i64) -> Re
 
     let screenshots = screenshot_results(rung.score);
     let observations: Vec<&LevelledResult> = rung.results.iter().chain(screenshots).collect();
-    let mut pool: Vec<&LevelledResult> =
-        level_pool(&observations, character_level, |r| r.level).into_iter().copied().collect();
+    let mut pool: Vec<&LevelledResult> = level_pool(&observations, character_level, |r| r.level)
+        .into_iter()
+        .copied()
+        .collect();
     // A material rung the character's band never showed us borrows from the band
     // ABOVE rather than below (report #381) — see [`borrow_from_above`].
     let mut regrade_from: Option<u64> = None;
@@ -933,7 +958,10 @@ mod tests {
     fn rungs_past_650_step_by_the_end_delta() {
         let past: Vec<u32> = ladder().skip(ABYSS_LADDER.len()).take(3).collect();
         assert_eq!(past, vec![810, 970, 1130]);
-        assert!(future_reward_for_rung(811, 40, 1).is_none(), "811 is not a rung");
+        assert!(
+            future_reward_for_rung(811, 40, 1).is_none(),
+            "811 is not a rung"
+        );
         assert!(future_reward_for_rung(650 + 160 * MAX_END_RUNGS, 40, 1).is_some());
         assert!(future_reward_for_rung(650 + 160 * (MAX_END_RUNGS + 1), 40, 1).is_none());
     }
@@ -969,7 +997,10 @@ mod tests {
                         assert_eq!(paid, golden, "rung {rung}, level {level}: the golden chest");
                         continue;
                     }
-                    assert!(paid.chests.is_empty(), "rung {rung}, level {level}: a material, not a chest");
+                    assert!(
+                        paid.chests.is_empty(),
+                        "rung {rung}, level {level}: a material, not a chest"
+                    );
                     for item in &mut paid.items {
                         item.id = Uuid::nil();
                     }
@@ -982,7 +1013,12 @@ mod tests {
                 let golden_rungs: Vec<u32> = past
                     .iter()
                     .copied()
-                    .filter(|r| !future_reward_for_rung(*r, level, seed).unwrap().chests.is_empty())
+                    .filter(|r| {
+                        !future_reward_for_rung(*r, level, seed)
+                            .unwrap()
+                            .chests
+                            .is_empty()
+                    })
                     .collect();
                 assert_eq!(golden_rungs, vec![810, 1290, 1770, 2250], "level {level}");
             }
@@ -993,7 +1029,14 @@ mod tests {
     /// level 100's from 49 on (#398), as at 360.
     #[test]
     fn the_golden_chest_past_650_is_rung_360s() {
-        for (level, chest_level) in [(9u64, 9u64), (40, 40), (48, 48), (49, 100), (77, 100), (100, 100)] {
+        for (level, chest_level) in [
+            (9u64, 9u64),
+            (40, 40),
+            (48, 48),
+            (49, 100),
+            (77, 100),
+            (100, 100),
+        ] {
             let chest = future_reward_for_rung(810, level, 7).unwrap();
             assert_eq!(chest.chests.len(), 1);
             assert_eq!(chest.chests[0].tier, 3, "level {level}");
@@ -1132,8 +1175,13 @@ mod tests {
         let mut past_the_end = ABYSS_LADDER.to_vec();
         past_the_end.extend([810, 970]);
         assert_eq!(reached_rungs(1_129.0).collect::<Vec<_>>(), past_the_end);
-        assert_eq!(reached_rungs(f64::INFINITY).count(), ABYSS_LADDER.len() + MAX_END_RUNGS as usize);
-        for score in [0.0, 34.0, 35.0, 49.9, 50.0, 300.0, 650.0, 809.0, 810.0, 2_000.0] {
+        assert_eq!(
+            reached_rungs(f64::INFINITY).count(),
+            ABYSS_LADDER.len() + MAX_END_RUNGS as usize
+        );
+        for score in [
+            0.0, 34.0, 35.0, 49.9, 50.0, 300.0, 650.0, 809.0, 810.0, 2_000.0,
+        ] {
             let next = next_future_reward(score, 1, 1).map(|(s, _)| s);
             let last_reached = reached_rungs(score).last();
             if let Some(next) = next {
@@ -1162,15 +1210,25 @@ mod tests {
     ];
     /// Every soul gem, Petty to Transcendent.
     const ALL_SOUL_GEMS: [&str; 10] = [
-        "19ce1a65-057f-4f34-a0ed-27de7c085662", "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
-        "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029", "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
-        "3932e499-441e-4c6d-b671-9a03131ebe6f", "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
-        "a3351353-f613-4368-bac7-05783f857b07", "68d7941e-8c8d-47bf-9f66-becb058f1817",
-        "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb", "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+        "19ce1a65-057f-4f34-a0ed-27de7c085662",
+        "790a188b-3fa0-4f38-99d9-bc8d3675bc46",
+        "eca5bd64-5e5d-4d0d-bfa3-b6fd427be029",
+        "1ba210b4-8cca-4f2f-b942-8fab80a52fd8",
+        "3932e499-441e-4c6d-b671-9a03131ebe6f",
+        "a1d41da0-51e0-4a80-ba9a-b8e9046be27e",
+        "a3351353-f613-4368-bac7-05783f857b07",
+        "68d7941e-8c8d-47bf-9f66-becb058f1817",
+        "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+        "d94bab85-53d5-4c9c-a637-acd94fc66c98",
     ];
 
     fn single_stack(grant: &RewardGrant) -> (Uuid, u64) {
-        assert_eq!(grant.stackable_items.len(), 1, "one stack per draw: {:?}", grant.stackable_items);
+        assert_eq!(
+            grant.stackable_items.len(),
+            1,
+            "one stack per draw: {:?}",
+            grant.stackable_items
+        );
         let (k, v) = grant.stackable_items.iter().next().unwrap();
         (*k, *v)
     }
@@ -1185,8 +1243,14 @@ mod tests {
         for seed in 0..500i64 {
             let grant = future_reward_for_rung(70, 100, seed).unwrap();
             let (item, count) = single_stack(&grant);
-            assert!(allowed.contains(&item), "seed {seed}: level 100 drew {item}");
-            assert!((27..=35).contains(&count), "seed {seed}: {count} is outside retail's 27-35");
+            assert!(
+                allowed.contains(&item),
+                "seed {seed}: level 100 drew {item}"
+            );
+            assert!(
+                (27..=35).contains(&count),
+                "seed {seed}: {count} is outside retail's 27-35"
+            );
             seen.insert(item);
         }
         assert!(seen.contains(&uuid(NIGHTSHADE)) && seen.contains(&uuid(GIANTS_TOE)));
@@ -1202,15 +1266,27 @@ mod tests {
         let draws = 4000i64;
         let share = |level: u64, id: &str| {
             (0..draws)
-                .filter(|seed| single_stack(&future_reward_for_rung(70, level, *seed).unwrap()).0 == uuid(id))
+                .filter(|seed| {
+                    single_stack(&future_reward_for_rung(70, level, *seed).unwrap()).0 == uuid(id)
+                })
                 .count() as f64
                 / draws as f64
         };
         let (nightshade, toe) = (share(100, NIGHTSHADE), share(100, GIANTS_TOE));
         println!("rung 70, level 100: Nightshade {nightshade:.3}, Giant's Toe {toe:.3}");
-        assert!((0.50..=0.61).contains(&nightshade), "Nightshade {nightshade}, retail 5/9");
-        assert!((0.18..=0.27).contains(&toe), "Giant's Toe {toe}, retail 2/9");
-        assert_eq!(share(43, GIANTS_TOE), 0.0, "level 43 keeps its own retail pool");
+        assert!(
+            (0.50..=0.61).contains(&nightshade),
+            "Nightshade {nightshade}, retail 5/9"
+        );
+        assert!(
+            (0.18..=0.27).contains(&toe),
+            "Giant's Toe {toe}, retail 2/9"
+        );
+        assert_eq!(
+            share(43, GIANTS_TOE),
+            0.0,
+            "level 43 keeps its own retail pool"
+        );
         assert!((0.20..=0.30).contains(&share(43, NIGHTSHADE)));
     }
 
@@ -1229,10 +1305,17 @@ mod tests {
             let mut seen = std::collections::HashSet::new();
             for seed in 0..400i64 {
                 for rung in [190, 490] {
-                    let (item, _) = single_stack(&future_reward_for_rung(rung, level, seed).unwrap());
-                    assert!(!low.contains(&item), "level {level} rung {rung} drew {item}");
+                    let (item, _) =
+                        single_stack(&future_reward_for_rung(rung, level, seed).unwrap());
+                    assert!(
+                        !low.contains(&item),
+                        "level {level} rung {rung} drew {item}"
+                    );
                     if let Some(grade) = soul_gem_grade(&item) {
-                        assert!(grade <= 4, "level {level}: soul gem grade {grade} is not regraded");
+                        assert!(
+                            grade <= 4,
+                            "level {level}: soul gem grade {grade} is not regraded"
+                        );
                     }
                     seen.insert(item);
                 }
@@ -1284,7 +1367,11 @@ mod tests {
         // level-50 character's rung 260 is the level-66/81 Glass gear, not Hide.
         let gear = future_reward_for_rung(260, 50, 1).unwrap();
         let hide_helmet = uuid("4a9fd901-aaf8-40bd-941e-971febf4daf8");
-        assert!(gear.items.iter().all(|i| i.item.item_template_id != hide_helmet));
+        assert!(
+            gear.items
+                .iter()
+                .all(|i| i.item.item_template_id != hide_helmet)
+        );
     }
 
     /// #294: "at the end of a run, randomly up to 7 greater, glorious or
@@ -1309,23 +1396,46 @@ mod tests {
                 gems += 1;
                 if item == uuid(TRANSCENDENT_SOUL_GEM) {
                     transcendent += 1;
-                    assert!(END_SOUL_GEM_COUNT.contains(&count), "seed {seed}: {count} transcendent, #407: 3 to 7");
+                    assert!(
+                        END_SOUL_GEM_COUNT.contains(&count),
+                        "seed {seed}: {count} transcendent, #407: 3 to 7"
+                    );
                     counts.insert(count);
                 } else {
-                    assert!(paid_kinds.contains(&item), "seed {seed}: a gem retail never paid: {item}");
-                    assert!(END_SOUL_GEM_COUNT.contains(&count), "seed {seed}: {count} gems, #407: 3 to 7");
+                    assert!(
+                        paid_kinds.contains(&item),
+                        "seed {seed}: a gem retail never paid: {item}"
+                    );
+                    assert!(
+                        END_SOUL_GEM_COUNT.contains(&count),
+                        "seed {seed}: {count} gems, #407: 3 to 7"
+                    );
                 }
                 kinds.insert(item);
             }
         }
         let rate = f64::from(gems) / runs as f64;
-        assert!((0.57..=0.66).contains(&rate), "soul gems on {rate:.3} of level-100 /ends, retail 8/13");
-        assert_eq!(kinds.len(), 5, "the four retail gem kinds and Transcendent come up");
+        assert!(
+            (0.57..=0.66).contains(&rate),
+            "soul gems on {rate:.3} of level-100 /ends, retail 8/13"
+        );
+        assert_eq!(
+            kinds.len(),
+            5,
+            "the four retail gem kinds and Transcendent come up"
+        );
         // 3 of 8 gem stacks are #383's Transcendent ×4, and one of the other five in
         // five is upgraded to 4-7 Transcendent: 3/8 + 5/8 × 1/5 = 1/2.
         let upgraded = f64::from(transcendent) / f64::from(gems);
-        assert!((0.46..=0.54).contains(&upgraded), "transcendent on {upgraded:.3} of gem stacks");
-        assert_eq!(counts, END_SOUL_GEM_COUNT.collect(), "3 to 7 transcendent gems (#407)");
+        assert!(
+            (0.46..=0.54).contains(&upgraded),
+            "transcendent on {upgraded:.3} of gem stacks"
+        );
+        assert_eq!(
+            counts,
+            END_SOUL_GEM_COUNT.collect(),
+            "3 to 7 transcendent gems (#407)"
+        );
     }
 
     /// Every gem stack `/end` pays a character of `level` over `runs` seeds, as
@@ -1364,12 +1474,22 @@ mod tests {
             let (gems, n) = end_gems(level, runs);
             let counts: std::collections::BTreeSet<u64> = gems.iter().map(|g| g.1).collect();
             assert!(gems.iter().all(|g| g.0 == grand), "level {level}: {gems:?}");
-            assert_eq!(counts, END_SOUL_GEM_COUNT.collect(), "level {level}: 3 to 7 Grand (#407)");
+            assert_eq!(
+                counts,
+                END_SOUL_GEM_COUNT.collect(),
+                "level {level}: 3 to 7 Grand (#407)"
+            );
             let rate = n as f64 / runs as f64;
-            assert!((0.45..=0.55).contains(&rate), "level {level}: gems on {rate:.3} of runs");
+            assert!(
+                (0.45..=0.55).contains(&rate),
+                "level {level}: gems on {rate:.3} of runs"
+            );
             for seed in 0..2_000 {
                 let (item, _) = single_stack(&end_package(100.0, level, seed));
-                assert!(item == grand || materials.contains(&item), "level {level} seed {seed}: {item}");
+                assert!(
+                    item == grand || materials.contains(&item),
+                    "level {level} seed {seed}: {item}"
+                );
             }
         }
     }
@@ -1386,23 +1506,41 @@ mod tests {
         let kinds = [GRAND, GRAND + 1, GRAND + 2].map(|g| uuid(ALL_SOUL_GEMS[g]));
         for level in [45u64, 47, 48] {
             let (gems, n) = end_gems(level, 10_000);
-            assert!(gems.iter().all(|g| kinds.contains(&g.0)), "level {level}: {gems:?}");
+            assert!(
+                gems.iter().all(|g| kinds.contains(&g.0)),
+                "level {level}: {gems:?}"
+            );
             let counts: std::collections::BTreeSet<u64> = gems.iter().map(|g| g.1).collect();
-            assert_eq!(counts, END_SOUL_GEM_COUNT.collect(), "level {level}: 3 to 7 gems (#407)");
+            assert_eq!(
+                counts,
+                END_SOUL_GEM_COUNT.collect(),
+                "level {level}: 3 to 7 gems (#407)"
+            );
             let seen: std::collections::HashSet<Uuid> = gems.iter().map(|g| g.0).collect();
             assert_eq!(seen.len(), 3, "level {level}: all three kinds come up");
-            assert!((4_500..=5_500).contains(&n), "level {level}: {n} gem runs in 10000");
+            assert!(
+                (4_500..=5_500).contains(&n),
+                "level {level}: {n} gem runs in 10000"
+            );
         }
         let (at47, _) = end_gems(47, 10_000);
-        assert!(at47.contains(&(grand, 6)), "level 47: retail's Grand ×6 never comes up");
+        assert!(
+            at47.contains(&(grand, 6)),
+            "level 47: retail's Grand ×6 never comes up"
+        );
         for level in [57u64, 58] {
             let single_grand = (0..400i64).any(|seed| {
                 [190u32, 490].iter().any(|rung| {
-                    future_reward_for_rung(*rung, level, seed).unwrap().stackable_items
+                    future_reward_for_rung(*rung, level, seed)
+                        .unwrap()
+                        .stackable_items
                         == HashMap::from([(grand, 1)])
                 })
             });
-            assert!(single_grand, "level {level}: retail's single Grand never comes up");
+            assert!(
+                single_grand,
+                "level {level}: retail's single Grand never comes up"
+            );
         }
     }
 
@@ -1418,17 +1556,26 @@ mod tests {
             for seed in 0..400i64 {
                 for (id, count) in end_package(100.0, level, seed).stackable_items {
                     if all_gems.contains(&id) {
-                        assert!(END_SOUL_GEM_COUNT.contains(&count), "level {level} seed {seed}: {count} gems");
+                        assert!(
+                            END_SOUL_GEM_COUNT.contains(&count),
+                            "level {level} seed {seed}: {count} gems"
+                        );
                         *counts.entry(count).or_default() += 1;
                     }
                 }
             }
         }
-        assert_eq!(counts.keys().copied().collect::<Vec<_>>(), END_SOUL_GEM_COUNT.collect::<Vec<_>>());
+        assert_eq!(
+            counts.keys().copied().collect::<Vec<_>>(),
+            END_SOUL_GEM_COUNT.collect::<Vec<_>>()
+        );
         let stacks: u64 = counts.values().sum();
         for (count, n) in &counts {
             let share = *n as f64 / stacks as f64;
-            assert!((0.18..=0.22).contains(&share), "{count} gems on {share:.3} of {stacks} stacks");
+            assert!(
+                (0.18..=0.22).contains(&share),
+                "{count} gems on {share:.3} of {stacks} stacks"
+            );
         }
     }
 
@@ -1452,26 +1599,42 @@ mod tests {
                         "level {level} rung {rung} seed {seed}"
                     );
                 }
-                assert_eq!(end_package(100.0, level, seed), end_package(100.0, 100, seed));
+                assert_eq!(
+                    end_package(100.0, level, seed),
+                    end_package(100.0, 100, seed)
+                );
             }
             let ends: std::collections::HashSet<Uuid> = (0..2_000i64)
                 .flat_map(|seed| end_package(100.0, level, seed).stackable_items.into_keys())
                 .collect();
-            assert_eq!(ends, top_end, "level {level}: /end reaches every top-band package");
+            assert_eq!(
+                ends, top_end,
+                "level {level}: /end reaches every top-band package"
+            );
         }
         for glorious_or_better in [ALL_SOUL_GEMS[8], TRANSCENDENT_SOUL_GEM] {
-            assert!(top_end.contains(&uuid(glorious_or_better)), "{glorious_or_better} unreachable");
+            assert!(
+                top_end.contains(&uuid(glorious_or_better)),
+                "{glorious_or_better} unreachable"
+            );
         }
         let toe = |level: u64| {
-            (0..500i64).any(|seed| single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == giants_toe)
+            (0..500i64).any(|seed| {
+                single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == giants_toe
+            })
         };
         assert!(toe(49), "level 49 never draws Giant's Toe at rung 70");
         assert!(!toe(48), "level 48 keeps the level 34-57 rung-70 pool");
         let quicksilver = uuid("e80bee76-f92c-4005-9eff-20d1e8c64d24");
         let quick = |level: u64| {
-            (0..500i64).any(|seed| single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == quicksilver)
+            (0..500i64).any(|seed| {
+                single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == quicksilver
+            })
         };
-        assert!(quick(48) && !quick(49), "Quicksilver at rung 70 is the level 20-48 pool's");
+        assert!(
+            quick(48) && !quick(49),
+            "Quicksilver at rung 70 is the level 20-48 pool's"
+        );
     }
 
     /// Below 39 the re-graded retail stack still applies: a level-3 character is
@@ -1489,7 +1652,10 @@ mod tests {
         }
         // Re-grading is downward only, and leaves a material alone.
         let greater = HashMap::from([(uuid(ALL_SOUL_GEMS[5]), 4)]);
-        assert_eq!(regrade_soul_gems(&greater, 66, 43), HashMap::from([(uuid(ALL_SOUL_GEMS[3]), 4)]));
+        assert_eq!(
+            regrade_soul_gems(&greater, 66, 43),
+            HashMap::from([(uuid(ALL_SOUL_GEMS[3]), 4)])
+        );
         assert_eq!(regrade_soul_gems(&greater, 66, 80), greater);
         let lumber = HashMap::from([(uuid("f2ba4bb2-6a4a-4b4b-9d8e-2c2d4c5e6f70"), 9)]);
         assert_eq!(regrade_soul_gems(&lumber, 66, 3), lumber);
@@ -1502,7 +1668,14 @@ mod tests {
     #[test]
     fn a_grand_gem_can_come_beside_the_golden_chest_at_mid_levels() {
         let grand = uuid(ALL_SOUL_GEMS[GRAND]);
-        assert_eq!(corpus().rungs.iter().find(|r| r.score == 360).map(|r| r.tier), Some(Some(3)));
+        assert_eq!(
+            corpus()
+                .rungs
+                .iter()
+                .find(|r| r.score == 360)
+                .map(|r| r.tier),
+            Some(Some(3))
+        );
         for level in [39u64, 47, 58] {
             for rung in RUNGS_BESIDE_THE_GOLDEN_CHEST {
                 let mut hits = 0;
@@ -1513,13 +1686,19 @@ mod tests {
                         hits += 1;
                     }
                 }
-                assert!((700..=1300).contains(&hits), "rung {rung} level {level}: Grand on {hits}/3000");
+                assert!(
+                    (700..=1300).contains(&hits),
+                    "rung {rung} level {level}: Grand on {hits}/3000"
+                );
             }
         }
         for (rung, level) in [(190u32, 38u64), (490, 60), (490, 100), (135, 47), (650, 47)] {
             for seed in 0..1_000i64 {
                 let g = future_reward_for_rung(rung, level, seed).unwrap();
-                assert!(!g.stackable_items.contains_key(&grand), "rung {rung} level {level} paid Grand");
+                assert!(
+                    !g.stackable_items.contains_key(&grand),
+                    "rung {rung} level {level} paid Grand"
+                );
             }
         }
     }
@@ -1570,7 +1749,10 @@ mod tests {
         for level in [49u64, 59, 70, 100] {
             let share = end_enchanting_share(level, 20_000);
             println!("/end enchanting share, level {level}: {share:.4}");
-            assert!((0.35..=0.42).contains(&share), "level {level}: {share}, retail 5/13");
+            assert!(
+                (0.35..=0.42).contains(&share),
+                "level {level}: {share}, retail 5/13"
+            );
         }
     }
 
@@ -1592,19 +1774,35 @@ mod tests {
                 let chest = future_reward_for_rung(50, level, *seed).unwrap();
                 let rung70 = future_reward_for_rung(70, level, *seed).unwrap();
                 rung35.stackable_items == HashMap::from([(uuid(item), count)])
-                    && chest.chests.iter().any(|c| (c.tier, c.level) == (1, crate::features::loot_level::effective_loot_level_u64(level)))
-                    && seventy.is_none_or(|(i, n)| rung70.stackable_items == HashMap::from([(uuid(i), n)]))
+                    && chest.chests.iter().any(|c| {
+                        (c.tier, c.level)
+                            == (
+                                1,
+                                crate::features::loot_level::effective_loot_level_u64(level),
+                            )
+                    })
+                    && seventy.is_none_or(|(i, n)| {
+                        rung70.stackable_items == HashMap::from([(uuid(i), n)])
+                    })
                     && end_package(score, level, *seed).stackable_items == transcendent
             });
-            assert!(hit.is_some(), "level {level}: the retail end screen is never produced");
+            assert!(
+                hit.is_some(),
+                "level {level}: the retail end screen is never produced"
+            );
         }
         // Frost Salts is new to rung 35, and like Imp Stool and Honeycomb it is a
         // top-band result: the level 20-48 band does not draw it.
         for item in [FROST_SALTS, IMP_STOOL, HONEYCOMB] {
             let at = |level: u64| {
-                (0..2_000i64).any(|seed| single_stack(&future_reward_for_rung(35, level, seed).unwrap()).0 == uuid(item))
+                (0..2_000i64).any(|seed| {
+                    single_stack(&future_reward_for_rung(35, level, seed).unwrap()).0 == uuid(item)
+                })
             };
-            assert!(at(49) && at(100), "{item} unreachable at rung 35 from level 49");
+            assert!(
+                at(49) && at(100),
+                "{item} unreachable at rung 35 from level 49"
+            );
         }
         assert!(!(0..2_000i64).any(|seed| {
             single_stack(&future_reward_for_rung(35, 45, seed).unwrap()).0 == uuid(FROST_SALTS)
@@ -1615,8 +1813,14 @@ mod tests {
     #[test]
     fn the_end_package_needs_a_score_and_is_stable_per_run() {
         assert_eq!(end_package(0.0, 100, 1), RewardGrant::default());
-        assert_eq!(end_package(END_PACKAGE_MIN_SCORE - 0.01, 100, 1), RewardGrant::default());
-        assert_ne!(end_package(END_PACKAGE_MIN_SCORE, 100, 1), RewardGrant::default());
+        assert_eq!(
+            end_package(END_PACKAGE_MIN_SCORE - 0.01, 100, 1),
+            RewardGrant::default()
+        );
+        assert_ne!(
+            end_package(END_PACKAGE_MIN_SCORE, 100, 1),
+            RewardGrant::default()
+        );
         for seed in [1i64, -7, i64::MAX] {
             assert_eq!(end_package(50.0, 100, seed), end_package(50.0, 100, seed));
         }

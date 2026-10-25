@@ -1364,7 +1364,7 @@ fn stun_the_blocked_attacker(
     blocker_slot: usize,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    use super::state::{StatusEffectType, BASE_STAGGER_DURATION_SECS};
+    use super::state::{BASE_STAGGER_DURATION_SECS, StatusEffectType};
     let mut out = Vec::new();
     let viewers = combat.fighters.len();
     if attacker_slot >= viewers || combat.fighters[attacker_slot].is_dead() {
@@ -1719,7 +1719,9 @@ pub(super) fn resolve_ability_cast(
     // spell (`selfInterrupt: true`, 06 §1.8). Retail's order is op38 → op59 → op58
     // (s503 f3504269-71, s615 f4398740-42).
     if tag == AbilityTag::Maneuver {
-        out.extend(super::interrupts::self_interrupt_spells(combat, sender, now));
+        out.extend(super::interrupts::self_interrupt_spells(
+            combat, sender, now,
+        ));
     }
 
     // Emit the stat update (after the cast echo so the client sees the visual before
@@ -4380,7 +4382,7 @@ fn apply_status_conditioning(
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::damage::is_elemental;
-    use super::state::{condition_for_element, DamageType};
+    use super::state::{DamageType, condition_for_element};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
@@ -7568,9 +7570,9 @@ mod tests {
         // _isWithinBlockZone byte + structural separator
         frame.push(0x00); // blockZone (not decoded, any value)
         frame.push(0xcc); // separator
-                          // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
-                          // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
-                          // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
+        // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
+        // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
+        // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
         let (b8, b9, b10, b11): (u8, u8, u8, u8) = if held {
             (0xe1, 0xe2, 0x50, 0x43) // DOWN: bit0 of MSB = 1
         } else {
@@ -7654,7 +7656,7 @@ mod tests {
                 weight: Some(weight),
             };
             f.loadout.weapon_template = None; // synthetic profile → fallback cadence
-                                              // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
+            // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
             f.loadout.enchants = vec![];
             combat.fighters.push(f);
         }
@@ -9231,8 +9233,8 @@ mod cooldown_data_tests {
         assert!((ms("d07a8d30-9a1c-49b0-866d-97a8aa1534cf", 1) - 3.54).abs() < 1e-3); // Fireball
         assert!((ms("ce6b63e9-9f18-49c4-aee0-51f7985f9892", 1) - 8.09).abs() < 1e-2); // Power Attack
         assert!((ms("65ede044-d68a-4b2b-8f0c-02075ad133cc", 1) - 7.5).abs() < 1e-3); // Ward
-                                                                                     // The old table had Thunderstorm under a fabricated uuid, so it silently fell
-                                                                                     // back to 3 s; the real id now resolves.
+        // The old table had Thunderstorm under a fabricated uuid, so it silently fell
+        // back to 3 s; the real id now resolves.
         assert_ne!(
             ability_cooldown("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1),
             ABILITY_COOLDOWN
@@ -10646,9 +10648,11 @@ mod phase4_tests {
                 .count(),
             2,
         );
-        assert!(swing
-            .iter()
-            .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),);
+        assert!(
+            swing
+                .iter()
+                .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),
+        );
     }
 
     /// The X midpoint splits Left from Right; garbage coordinates classify to nothing
@@ -10964,13 +10968,15 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].consumables_used, 0);
 
         // op56 latches the equipped item.
-        assert!(on_c2s_input(
-            &mut combat,
-            0,
-            &make_equip_consumable_frame(obj, POTION, 6),
-            now
-        )
-        .is_empty());
+        assert!(
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_equip_consumable_frame(obj, POTION, 6),
+                now
+            )
+            .is_empty()
+        );
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(POTION)
@@ -11048,13 +11054,15 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].consumables_used, 0);
         assert_eq!(combat.fighters[0].stamina, 100);
 
-        assert!(on_c2s_input(
-            &mut combat,
-            0,
-            &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
-            now
-        )
-        .is_empty());
+        assert!(
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
+                now
+            )
+            .is_empty()
+        );
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(ULTIMATE_STAMINA)
@@ -11147,13 +11155,15 @@ mod phase4_tests {
         combat.fighters[0].regen_carry_magicka = 0.0;
         combat.last_regen_tick = now;
 
-        assert!(on_c2s_input(
-            &mut combat,
-            0,
-            &make_equip_consumable_frame(obj, EXTREME_MAGICKA, 100),
-            now
-        )
-        .is_empty());
+        assert!(
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_equip_consumable_frame(obj, EXTREME_MAGICKA, 100),
+                now
+            )
+            .is_empty()
+        );
 
         let consume = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
         let op64: Vec<_> = consume
@@ -11398,13 +11408,15 @@ mod phase4_tests {
         combat.phase = FlowState::BackendMatchCreated;
         let obj = combat.fighters[0].net_object_id;
         const POTION: &str = "819094ad-e749-4c02-9210-38c3bb1ec535";
-        assert!(on_c2s_input(
-            &mut combat,
-            0,
-            &make_equip_consumable_frame(obj, POTION, 3),
-            now
-        )
-        .is_empty());
+        assert!(
+            on_c2s_input(
+                &mut combat,
+                0,
+                &make_equip_consumable_frame(obj, POTION, 3),
+                now
+            )
+            .is_empty()
+        );
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(POTION)
@@ -11598,7 +11610,11 @@ mod phase4_tests {
         assert!(combat.fighters[0].block_phase(ends).is_some());
 
         // Retail's order: 39 Idle (the stagger ends), then 41 (the guard goes up).
-        assert_eq!(generic_state_count(&out, ActorStateType::Idle), 2, "Idle to both viewers");
+        assert_eq!(
+            generic_state_count(&out, ActorStateType::Idle),
+            2,
+            "Idle to both viewers"
+        );
         assert_eq!(gmid41_count(&out), 2, "41 to both viewers");
         let first_idle = out
             .iter()
@@ -11608,7 +11624,10 @@ mod phase4_tests {
             .iter()
             .position(|(_, f)| messages::user_message_gmid(f) == Some(41))
             .unwrap();
-        assert!(first_idle < first_41, "Idle before Blocking, as retail sends it");
+        assert!(
+            first_idle < first_41,
+            "Idle before Blocking, as retail sends it"
+        );
     }
 
     /// The control: a guard pressed AND released inside the stagger is not up
@@ -11618,8 +11637,18 @@ mod phase4_tests {
         let now = Instant::now();
         let mut combat = live_combat(now);
         assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
-        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now + Duration::from_millis(1_000));
-        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, true), now + Duration::from_millis(1_500));
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(true, 0.0, true),
+            now + Duration::from_millis(1_000),
+        );
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.0, true),
+            now + Duration::from_millis(1_500),
+        );
         let _ = drain_state_changes(&mut combat, now + Duration::from_millis(1_500));
 
         let ends = now + Duration::from_millis(2_050);
@@ -11628,7 +11657,11 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Idle);
         assert!(combat.fighters[0].block_phase(ends).is_none());
         assert_eq!(gmid41_count(&out), 0);
-        assert_eq!(generic_state_count(&out, ActorStateType::Idle), 2, "control: the drain path is live");
+        assert_eq!(
+            generic_state_count(&out, ActorStateType::Idle),
+            2,
+            "control: the drain path is live"
+        );
     }
 
     /// A stagger with no guard input at all ends in plain Idle (no phantom guard).
@@ -11651,8 +11684,18 @@ mod phase4_tests {
         let now = Instant::now();
         let mut combat = live_combat(now);
         assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
-        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now + Duration::from_millis(500));
-        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now + Duration::from_millis(1_000));
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(true, 0.0, true),
+            now + Duration::from_millis(500),
+        );
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(true, 0.0, false),
+            now + Duration::from_millis(1_000),
+        );
         let ends = now + Duration::from_millis(2_050);
         let _ = on_tick(&mut combat, ends, false);
         assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
@@ -11668,7 +11711,12 @@ mod phase4_tests {
         let now = Instant::now();
         let mut combat = live_combat(now);
         on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
-        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, false), now + Duration::from_millis(300));
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_act_frame(false, 0.0, false),
+            now + Duration::from_millis(300),
+        );
         assert!(!combat.fighters[0].guard_held);
 
         let stun = now + Duration::from_secs(30);
@@ -11700,7 +11748,12 @@ mod phase4_tests {
             let mut combat = live_combat(now);
             assert!(combat.fighters[0].apply_stagger_for(now, 2.0));
             if hold_guard {
-                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now + Duration::from_millis(1_500));
+                on_c2s_input(
+                    &mut combat,
+                    0,
+                    &make_act_frame(true, 0.0, true),
+                    now + Duration::from_millis(1_500),
+                );
             }
             let ends = now + Duration::from_millis(2_050);
             let _ = on_tick(&mut combat, ends, false);
@@ -13346,10 +13399,12 @@ mod shipped_effects_tests {
             2,
             "one Blind removal per viewer",
         );
-        assert!(!c.fighters[1]
-            .effects
-            .iter()
-            .any(|e| e.effect == StatusEffectType::Blind),);
+        assert!(
+            !c.fighters[1]
+                .effects
+                .iter()
+                .any(|e| e.effect == StatusEffectType::Blind),
+        );
         assert!(
             emit_status_removals(&mut c, now + Duration::from_millis(1)).is_empty(),
             "the cure was already acknowledged on the wire",
@@ -13542,10 +13597,11 @@ mod shipped_effects_tests {
         );
         assert!(c.fighters.iter().all(|f| f.effects.is_empty()));
         assert!(c.fighters.iter().all(|f| f.status_timers.is_empty()));
-        assert!(c
-            .fighters
-            .iter()
-            .all(|f| f.transient_resistances.is_empty()));
+        assert!(
+            c.fighters
+                .iter()
+                .all(|f| f.transient_resistances.is_empty())
+        );
         assert!(c.fighters.iter().all(|f| f.health_damage_carry == 0.0));
 
         let out = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL * 2);
@@ -13984,7 +14040,7 @@ mod shipped_effects_tests {
     /// living in the `Paralyze | Damage | Generic` arm was unreachable for them.
     #[test]
     fn the_stagger_field_is_carried_mostly_by_maneuvers() {
-        use super::super::gamedata::{ability_rank_clamped, AbilityKind, ABILITIES};
+        use super::super::gamedata::{ABILITIES, AbilityKind, ability_rank_clamped};
         let carriers: Vec<(&str, AbilityKind)> = ABILITIES
             .iter()
             .filter(|a| {
@@ -14652,9 +14708,9 @@ mod report_31_high_block_stun {
     use super::super::damage::flags;
     use super::super::loadout::starter;
     use super::super::state::{
-        AbilityTag, ActorStateType, BlockPhase, BotObservedState, BotOpponentSnapshot,
-        EquippedAbility, Fighter, FlowState, MatchCombat, StatusEffectType, WeaponProfile,
-        BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS,
+        AbilityTag, ActorStateType, BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS,
+        BlockPhase, BotObservedState, BotOpponentSnapshot, EquippedAbility, Fighter, FlowState,
+        MatchCombat, StatusEffectType, WeaponProfile,
     };
     use super::*;
 
@@ -15893,14 +15949,16 @@ mod report_31_high_block_stun {
         let now = Instant::now();
         let mut c = combat(now, 1);
         let gsid = c.game_session_id.clone();
-        assert!(super::bot_next_ready_ability(
-            &mut c.fighters[1],
-            &gsid,
-            1,
-            snapshot(BotObservedState::Idle),
-            now,
-        )
-        .is_none());
+        assert!(
+            super::bot_next_ready_ability(
+                &mut c.fighters[1],
+                &gsid,
+                1,
+                snapshot(BotObservedState::Idle),
+                now,
+            )
+            .is_none()
+        );
 
         let at = bot_decision_due(&mut c, 1, now);
         super::on_tick(&mut c, at, false);
@@ -18095,7 +18153,10 @@ mod status_removals_tests {
         let out = stun_the_blocked_attacker(&mut c, 0, 1, now);
         let secs = op51_staggered_secs(&out);
         assert!(!secs.is_empty(), "the stun is announced");
-        assert!(secs.iter().all(|s| (s - 2.0).abs() < 1e-4), "announced {secs:?}, held 2.0");
+        assert!(
+            secs.iter().all(|s| (s - 2.0).abs() < 1e-4),
+            "announced {secs:?}, held 2.0"
+        );
         assert!(c.fighters[0].is_staggered(at(now, 1.95)));
         assert!(!c.fighters[0].is_staggered(at(now, 2.05)));
     }
@@ -18108,7 +18169,10 @@ mod status_removals_tests {
         let out = stun_the_blocked_attacker(&mut c, 0, 1, now);
         let secs = op51_staggered_secs(&out);
         assert!(!secs.is_empty());
-        assert!(secs.iter().all(|s| (s - 2.5).abs() < 1e-4), "announced {secs:?}");
+        assert!(
+            secs.iter().all(|s| (s - 2.5).abs() < 1e-4),
+            "announced {secs:?}"
+        );
         assert!(c.fighters[0].is_staggered(at(now, 2.45)));
     }
 
@@ -19693,7 +19757,7 @@ mod report_231_artifact_regen_tick_tests {
     use std::time::Instant;
 
     use super::super::state::MatchCombat;
-    use super::{apply_regen_tick, HEALTH_REGEN_RATE_PER_S, REGEN_TICK_INTERVAL};
+    use super::{HEALTH_REGEN_RATE_PER_S, REGEN_TICK_INTERVAL, apply_regen_tick};
 
     fn live() -> (MatchCombat, Instant) {
         let now = Instant::now();
@@ -19801,7 +19865,8 @@ mod report_305_killing_swing {
             Some(arena_proto::NetDataValue::Byte(v)) => Some(*v as i64),
             _ => None,
         };
-        let lethal = matches!(p.get(4), Some(arena_proto::NetDataValue::ULong(w)) if (w >> 52) & 0x3FF == 0);
+        let lethal =
+            matches!(p.get(4), Some(arena_proto::NetDataValue::ULong(w)) if (w >> 52) & 0x3FF == 0);
         Some(F {
             ms,
             gmid: p.int(3)?,
@@ -19852,7 +19917,11 @@ mod report_305_killing_swing {
             }
             out.extend(super::drain_state_changes(&mut c, t));
             let ms = (t - now).as_millis();
-            frames.extend(out.iter().filter(|(v, _)| *v == 0).filter_map(|(_, b)| decode(ms, b)));
+            frames.extend(
+                out.iter()
+                    .filter(|(v, _)| *v == 0)
+                    .filter_map(|(_, b)| decode(ms, b)),
+            );
             if killed_at.is_none() && c.phase != FlowState::StateTimeout {
                 killed_at = Some(t);
             }
@@ -19872,28 +19941,44 @@ mod report_305_killing_swing {
         // 1. The killer's 52 → 43, and the 43 goes out AHEAD of the killing op50.
         let ft = at(&|x| x.gmid == 43 && x.obj == killer).ok_or("killer sent no 43")?;
         if ft > kill || f[ft].ms != kill_ms {
-            return Err(format!("killer 43 must precede the kill op50 in its tick (43 #{ft}, op50 #{kill})"));
+            return Err(format!(
+                "killer 43 must precede the kill op50 in its tick (43 #{ft}, op50 #{kill})"
+            ));
         }
-        let swing = f[..ft].iter().rposition(|x| x.gmid == 52 && x.obj == killer).ok_or("no 52")?;
-        if f[swing + 1..kill].iter().any(|x| x.obj == killer && (x.gmid == 39 || x.gmid == 44)) {
+        let swing = f[..ft]
+            .iter()
+            .rposition(|x| x.gmid == 52 && x.obj == killer)
+            .ok_or("no 52")?;
+        if f[swing + 1..kill]
+            .iter()
+            .any(|x| x.obj == killer && (x.gmid == 39 || x.gmid == 44))
+        {
             return Err("a killer reset between its 52 and the kill".into());
         }
         // 2. op29 + op79 RoundEnd: the NEXT tick, never the kill's own.
         let dead = at(&|x| x.gmid == 29 && x.obj == victim).ok_or("no op29")?;
-        let round_end = at(&|x| x.gmid == 79 && x.trigger.as_deref() == Some("RoundEnd")).ok_or("no RoundEnd")?;
+        let round_end = at(&|x| x.gmid == 79 && x.trigger.as_deref() == Some("RoundEnd"))
+            .ok_or("no RoundEnd")?;
         for (name, i) in [("op29", dead), ("RoundEnd", round_end)] {
             let gap = f[i].ms - kill_ms;
             if gap == 0 || gap > 2 * TICK.as_millis() {
-                return Err(format!("{name} {gap} ms after the kill; retail: the next tick"));
+                return Err(format!(
+                    "{name} {gap} ms after the kill; retail: the next tick"
+                ));
             }
         }
         // 3. The result: killer Idle (+ OpponentVictory) < PostRound(14) < op48, at
         //    ~216 ms, with nothing for the killer before it.
-        let idle = at(&|x| x.gmid == 39 && x.obj == killer && x.state == Some(ActorStateType::Idle as i64))
-            .ok_or("killer never returned to Idle")?;
+        let idle = at(&|x| {
+            x.gmid == 39 && x.obj == killer && x.state == Some(ActorStateType::Idle as i64)
+        })
+        .ok_or("killer never returned to Idle")?;
         let post = at(&|x| x.match_state == Some(14)).ok_or("no PostRound")?;
         let op48 = at(&|x| x.gmid == 48).ok_or("no op48")?;
-        if f[kill + 1..idle].iter().any(|x| x.obj == killer && matches!(x.gmid, 39 | 44 | 52 | 45)) {
+        if f[kill + 1..idle]
+            .iter()
+            .any(|x| x.obj == killer && matches!(x.gmid, 39 | 44 | 52 | 45))
+        {
             return Err("the killer's swing was interrupted before the result".into());
         }
         let idle_gap = f[idle].ms - kill_ms;
@@ -19901,27 +19986,44 @@ mod report_305_killing_swing {
         // Timed from the hit's due instant, which the tick grid may emit up to one
         // tick late; retail's own spread is p10 130 / p90 330 ms.
         if idle_gap + TICK.as_millis() < want || idle_gap > want + 2 * TICK.as_millis() {
-            return Err(format!("killer Idle {idle_gap} ms after the kill; retail p50 {want}"));
+            return Err(format!(
+                "killer Idle {idle_gap} ms after the kill; retail p50 {want}"
+            ));
         }
         if !(idle < post && post < op48 && f[post].ms == f[idle].ms && f[op48].ms == f[idle].ms) {
-            return Err(format!("result order Idle #{idle} < PostRound #{post} < op48 #{op48}, one tick"));
+            return Err(format!(
+                "result order Idle #{idle} < PostRound #{post} < op48 #{op48}, one tick"
+            ));
         }
-        let victory = at(&|x| x.gmid == 39 && x.obj == killer && x.state == Some(ActorStateType::OpponentVictory as i64));
+        let victory = at(&|x| {
+            x.gmid == 39
+                && x.obj == killer
+                && x.state == Some(ActorStateType::OpponentVictory as i64)
+        });
         match (deciding, victory) {
             (true, Some(v)) if idle < v && v < post => {}
-            (true, other) => return Err(format!("deciding kill: OpponentVictory between Idle and PostRound, got {other:?}")),
+            (true, other) => {
+                return Err(format!(
+                    "deciding kill: OpponentVictory between Idle and PostRound, got {other:?}"
+                ));
+            }
             (false, Some(_)) => return Err("OpponentVictory on a non-deciding kill".into()),
             (false, None) => {}
         }
         // 4. No Emote in the window: retail sends it ~3.4 s later.
-        if f.iter().any(|x| x.gmid == 39 && x.state == Some(ActorStateType::Emote as i64)) {
+        if f.iter()
+            .any(|x| x.gmid == 39 && x.state == Some(ActorStateType::Emote as i64))
+        {
             return Err("Emote inside the post-kill window".into());
         }
         Ok(())
     }
 
     fn objs(c: &MatchCombat) -> (i64, i64) {
-        (c.fighters[1].net_object_id as i64, c.fighters[0].net_object_id as i64)
+        (
+            c.fighters[1].net_object_id as i64,
+            c.fighters[0].net_object_id as i64,
+        )
     }
 
     #[test]
@@ -19972,11 +20074,23 @@ mod report_305_killing_swing {
             .filter_map(|(_, b)| decode(0, b))
             .collect();
         let t = now + super::FOLLOW_THROUGH_DELAY;
-        frames.push(F { ms: 50, gmid: 50, obj: victim, state: Some(1), match_state: None, trigger: None, lethal: true });
+        frames.push(F {
+            ms: 50,
+            gmid: 50,
+            obj: victim,
+            state: Some(1),
+            match_state: None,
+            trigger: None,
+            lethal: true,
+        });
         c.fighters[1].set_actor_state(ActorStateType::PlayerFollowThrough, t);
         let mut out = super::on_round_timeout(&mut c, 1, t);
         out.extend(super::drain_state_changes(&mut c, t));
-        frames.extend(out.iter().filter(|(v, _)| *v == 0).filter_map(|(_, b)| decode(50, b)));
+        frames.extend(
+            out.iter()
+                .filter(|(v, _)| *v == 0)
+                .filter_map(|(_, b)| decode(50, b)),
+        );
         assert!(
             retail_kill_shape(&frames, killer, victim, false).is_err(),
             "the old shape must fail the retail checker: {frames:#?}"
@@ -19997,15 +20111,28 @@ mod report_305_killing_swing {
                 let mut out = super::on_tick(&mut c, t, false);
                 out.extend(super::drain_state_changes(&mut c, t));
                 let ms = (t - now).as_millis();
-                frames.extend(out.iter().filter(|(v, _)| *v == 0).filter_map(|(_, b)| decode(ms, b)));
+                frames.extend(
+                    out.iter()
+                        .filter(|(v, _)| *v == 0)
+                        .filter_map(|(_, b)| decode(ms, b)),
+                );
             }
             (frames, c)
         };
         let (killer, victim) = objs(&c);
         assert_eq!(c.phase, FlowState::StateTimeout);
-        let hit = f.iter().position(|x| x.gmid == 50 && x.obj == victim).expect("the bot must hit");
-        let ft = f.iter().position(|x| x.gmid == 43 && x.obj == killer).expect("43");
-        assert!(ft < hit && f[ft].ms == f[hit].ms, "43 precedes the op50 in its tick: {f:#?}");
+        let hit = f
+            .iter()
+            .position(|x| x.gmid == 50 && x.obj == victim)
+            .expect("the bot must hit");
+        let ft = f
+            .iter()
+            .position(|x| x.gmid == 43 && x.obj == killer)
+            .expect("43");
+        assert!(
+            ft < hit && f[ft].ms == f[hit].ms,
+            "43 precedes the op50 in its tick: {f:#?}"
+        );
         assert!(
             f[hit..].iter().any(|x| x.gmid == 44 && x.obj == killer),
             "a non-lethal swing still recovers: {f:#?}"
@@ -20076,7 +20203,11 @@ mod report_332_storm_armor_tests {
             .filter(|(_, f)| messages::user_message_gmid(f) == Some(60))
             .map(|(v, f)| {
                 let nd = arena_proto::parse_netdata(&f[2..]);
-                (*v, nd.int(0).unwrap_or(-1), nd.string(4).unwrap_or("").to_string())
+                (
+                    *v,
+                    nd.int(0).unwrap_or(-1),
+                    nd.string(4).unwrap_or("").to_string(),
+                )
             })
             .collect()
     }
@@ -20092,7 +20223,11 @@ mod report_332_storm_armor_tests {
         let now = Instant::now();
         let mut c = live(now);
         let out = cast_blizzard(&mut c, now);
-        assert_eq!(c.fighters[0].negation_pools.len(), 1, "the ice is up: {out:?}");
+        assert_eq!(
+            c.fighters[0].negation_pools.len(),
+            1,
+            "the ice is up: {out:?}"
+        );
         let mut late_ticks = 0;
         let mut stops = 0;
         for k in 1..=50 {
@@ -20103,7 +20238,10 @@ mod report_332_storm_armor_tests {
                 late_ticks += count(&o, 66);
             }
         }
-        assert!(late_ticks > 0, "the 0-dps stream must run while the shield holds (6-10 s)");
+        assert!(
+            late_ticks > 0,
+            "the 0-dps stream must run while the shield holds (6-10 s)"
+        );
         assert_eq!(stops, 0, "no StopAbility while the shield holds");
     }
 
@@ -20127,7 +20265,10 @@ mod report_332_storm_armor_tests {
         let stops = stop_abilities(&o);
         assert_eq!(
             stops,
-            vec![(0, caster_obj, BLIZZARD.to_string()), (1, caster_obj, BLIZZARD.to_string())],
+            vec![
+                (0, caster_obj, BLIZZARD.to_string()),
+                (1, caster_obj, BLIZZARD.to_string())
+            ],
             "op60 StopAbility(Blizzard Armor) on the caster, to both viewers"
         );
         assert_eq!(
@@ -20143,7 +20284,10 @@ mod report_332_storm_armor_tests {
             after.extend(step(&mut c, at(now, 0.2 * k as f32 + 0.001)));
         }
         assert_eq!(count(&after, 66), 0, "no tick after the ice is gone");
-        assert!(stop_abilities(&after).is_empty(), "StopAbility is sent once");
+        assert!(
+            stop_abilities(&after).is_empty(),
+            "StopAbility is sent once"
+        );
     }
 
     /// Retail op60: `{0: casterObj, 1: 56 Avatar, 2: 1 Authority, 3: 60, 4: uuid}`.

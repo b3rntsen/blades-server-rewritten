@@ -32,14 +32,14 @@
 use std::time::Instant;
 
 use super::damage::{
-    flags, is_health_type, weapon_damage_family_value_for_weight, DamageModel, RetailDamageModel,
-    ELEMENT_AMP_MAX,
+    DamageModel, ELEMENT_AMP_MAX, RetailDamageModel, flags, is_health_type,
+    weapon_damage_family_value_for_weight,
 };
 use super::gamedata;
 use super::loadout;
 use super::state::{
-    health_for_level, paralyze_damage_threshold, ActiveSide, ActorStateType, DamageSource,
-    DamageType, Fighter, Loadout, ARENA_HEALTH_MULTIPLIER,
+    ARENA_HEALTH_MULTIPLIER, ActiveSide, ActorStateType, DamageSource, DamageType, Fighter,
+    Loadout, health_for_level, paralyze_damage_threshold,
 };
 use super::tables::Weight;
 
@@ -206,14 +206,30 @@ fn blank() -> Fighter {
 
 /// Blank with no gear — for isolating the raw weapon output.
 fn naked_blank() -> Fighter {
-    Fighter::new(1, 125, Loadout { level: S506_LEVEL, ..Default::default() }, Instant::now())
+    Fighter::new(
+        1,
+        125,
+        Loadout {
+            level: S506_LEVEL,
+            ..Default::default()
+        },
+        Instant::now(),
+    )
 }
 
 fn slash_of(rd: &super::damage::ResolvedDamage) -> f32 {
-    rd.components.iter().filter(|(t, _)| *t == DamageType::Slashing).map(|(_, v)| *v).sum()
+    rd.components
+        .iter()
+        .filter(|(t, _)| *t == DamageType::Slashing)
+        .map(|(_, v)| *v)
+        .sum()
 }
 fn poison_of(rd: &super::damage::ResolvedDamage) -> f32 {
-    rd.components.iter().filter(|(t, _)| *t == DamageType::Poison).map(|(_, v)| *v).sum()
+    rd.components
+        .iter()
+        .filter(|(t, _)| *t == DamageType::Poison)
+        .map(|(_, v)| *v)
+        .sum()
 }
 // ---------------------------------------------------------------------------
 // (0) The fixture really is derived from shipped data.
@@ -259,7 +275,10 @@ fn blank_armor_is_realisable_from_shipped_templates() {
     );
     // 144.0 tempered base − 30.18 armor = 113.82.
     let cut = super::tables::armor_reduction(144.0, ar);
-    assert!((144.0 - cut - S506_SLASH_BASE).abs() < 0.05, "144 − {cut} != {S506_SLASH_BASE}");
+    assert!(
+        (144.0 - cut - S506_SLASH_BASE).abs() < 0.05,
+        "144 − {cut} != {S506_SLASH_BASE}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -271,8 +290,20 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
     let m = RetailDamageModel;
     let lo = flappety_dagger();
     for &(count, recorded) in S506_COMBO_RAMP {
-        let side = if count % 2 == 0 { ActiveSide::Right } else { ActiveSide::Left };
-        let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, count, Instant::now());
+        let side = if count % 2 == 0 {
+            ActiveSide::Right
+        } else {
+            ActiveSide::Left
+        };
+        let rd = m.resolve_attack(
+            &lo,
+            &blank(),
+            DamageSource::Attack,
+            side,
+            1.0,
+            count,
+            Instant::now(),
+        );
         let got = slash_of(&rd);
         let tol = (recorded * 0.02).max(0.5);
         assert!(
@@ -283,16 +314,43 @@ fn s506_combo_ramp_reproduces_recorded_slashing() {
         );
     }
     let now = Instant::now();
-    let c0 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
-    let c1 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now));
-    assert!((c0 - 113.82).abs() < 0.05, "combo-0 anchor {c0:.2} != recorded 113.82");
+    let c0 = slash_of(&m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    ));
+    let c1 = slash_of(&m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Left,
+        1.0,
+        1,
+        now,
+    ));
+    assert!(
+        (c0 - 113.82).abs() < 0.05,
+        "combo-0 anchor {c0:.2} != recorded 113.82"
+    );
     // One step of the dagger's shipped `_comboDamageFactor`, added to 1 (02 §4.2).
     // Armor is a flat post-multiplier cut (01-D1), so combo-1 is NOT combo-0 × step.
     assert!(
         (c1 - 191.58).abs() < 0.05,
         "combo-1 {c1:.2} should be raw 144 × (1 + 0.54), then the flat armor cut"
     );
-    let c9 = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 9, now));
+    let c9 = slash_of(&m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        9,
+        now,
+    ));
     assert!(
         (c9 - c1).abs() < 0.05,
         "the combo is ONE step: depth 9 {c9:.2} must equal depth 1 {c1:.2}"
@@ -314,18 +372,47 @@ fn s506_middle_maneuver_lands_in_recorded_band() {
     let m = RetailDamageModel;
     let lo = flappety_dagger();
     let now = Instant::now();
-    let fresh = slash_of(&m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now));
+    let fresh = slash_of(&m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    ));
     for &rec in S506_MANEUVER_SLASH {
-        assert!(rec > fresh, "recorded maneuver {rec:.1} must exceed a plain swing {fresh:.1}");
+        assert!(
+            rec > fresh,
+            "recorded maneuver {rec:.1} must exceed a plain swing {fresh:.1}"
+        );
     }
     let plain = slash_of(&m.resolve_attack(
-        &lo, &blank(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.0, 0, now,
+        &lo,
+        &blank(),
+        DamageSource::WeaponManeuver,
+        ActiveSide::Middle,
+        1.0,
+        0,
+        now,
     ));
     let charged = slash_of(&m.resolve_attack(
-        &lo, &blank(), DamageSource::WeaponManeuver, ActiveSide::Middle, 1.8, 0, now,
+        &lo,
+        &blank(),
+        DamageSource::WeaponManeuver,
+        ActiveSide::Middle,
+        1.8,
+        0,
+        now,
     ));
-    assert!((plain - fresh).abs() < 0.05, "a bonus-less maneuver is the weapon hit");
-    assert!((charged - plain).abs() < 0.05, "a maneuver takes no swing factor");
+    assert!(
+        (plain - fresh).abs() < 0.05,
+        "a bonus-less maneuver is the weapon hit"
+    );
+    assert!(
+        (charged - plain).abs() < 0.05,
+        "a maneuver takes no swing factor"
+    );
     let _ = Weight::Versatile;
 }
 
@@ -339,16 +426,31 @@ fn s506_poison_base_and_amplification_ramp() {
     let lo = flappety_dagger();
 
     let now = Instant::now();
-    let fresh = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let fresh = m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     assert!(
         (poison_of(&fresh) - S506_POISON_BASE).abs() < 0.5,
         "DIVERGENCE (ENCHANT §4.3): fresh Poison {:.2} vs model base {S506_POISON_BASE}.",
         poison_of(&fresh),
     );
     // Phase 3.6: Poison has NO mirrored stat drain (only Frost→Stamina, Shock→Magicka).
-    let magicka: f32 =
-        fresh.components.iter().filter(|(t, _)| *t == DamageType::Magicka).map(|(_, v)| *v).sum();
-    assert_eq!(magicka, 0.0, "Poison does not drain Magicka (correction: the drain is per-element)");
+    let magicka: f32 = fresh
+        .components
+        .iter()
+        .filter(|(t, _)| *t == DamageType::Magicka)
+        .map(|(_, v)| *v)
+        .sum();
+    assert_eq!(
+        magicka, 0.0,
+        "Poison does not drain Magicka (correction: the drain is per-element)"
+    );
     assert!(
         (fresh.total - (slash_of(&fresh) + poison_of(&fresh))).abs() < 1e-2,
         "sum invariant: total == Slashing + Poison",
@@ -359,7 +461,15 @@ fn s506_poison_base_and_amplification_ramp() {
     for _ in 0..8 {
         tgt.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
-    let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let amped = m.resolve_attack(
+        &lo,
+        &tgt,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     let old_recorded_amped = 205.36; // §4.3 endpoint (seq 452 Poison), pre-PR-11 base table
     let ceiling = S506_POISON_BASE * ELEMENT_AMP_MAX;
     assert!(
@@ -381,7 +491,15 @@ fn s506_recorded_conditioned_poison_endpoint_was_205_36() {
     for _ in 0..8 {
         tgt.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
-    let amped = m.resolve_attack(&lo, &tgt, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let amped = m.resolve_attack(
+        &lo,
+        &tgt,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     assert!((poison_of(&amped) - 205.36).abs() < 0.05);
 }
 
@@ -409,8 +527,19 @@ fn s506_optimal_block_is_a_flat_budget() {
     def.blocking_side = ActiveSide::Right;
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
-    let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
+    let blocked = m.resolve_attack(
+        &lo,
+        &def,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
+    assert!(
+        blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0,
+        "optimal-block flag set"
+    );
     let expected_blocked_slash = 1.44;
     assert!(
         (slash_of(&blocked) - expected_blocked_slash).abs() < 0.01,
@@ -426,12 +555,31 @@ fn s506_optimal_block_is_a_flat_budget() {
     // A LOW guard (re-raised inside the 0.8 s cooldown): ×1 R, and NO wire flag.
     let mut low = def.clone();
     low.last_block_dropped_at = Some(now);
-    let l = m.resolve_attack(&lo, &low, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let l = m.resolve_attack(
+        &lo,
+        &low,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     assert!(l.blocked);
-    assert_eq!(l.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING), 0);
-    assert!((slash_of(&l) - 56.22).abs() < 0.01, "got {:.2}", slash_of(&l));
+    assert_eq!(
+        l.flags & (flags::WAS_LATE_BLOCKING | flags::WAS_OPTIMAL_BLOCKING),
+        0
+    );
+    assert!(
+        (slash_of(&l) - 56.22).abs() < 0.01,
+        "got {:.2}",
+        slash_of(&l)
+    );
     let low_poison = 28.045;
-    assert!((poison_of(&l) - low_poison).abs() < 0.01, "got {:.2}", poison_of(&l));
+    assert!(
+        (poison_of(&l) - low_poison).abs() < 0.01,
+        "got {:.2}",
+        poison_of(&l)
+    );
 }
 
 /// The RETAIL anchor the fork still cannot hit: seq 323's optimally blocked Slashing
@@ -449,8 +597,20 @@ fn s506_optimal_block_physical_matches_the_recorded_0_77() {
     def.blocking_side = ActiveSide::Right;
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
-    let b = m.resolve_attack(&flappety_dagger(), &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    assert!((slash_of(&b) - 0.77).abs() < 0.05, "got {:.2}", slash_of(&b));
+    let b = m.resolve_attack(
+        &flappety_dagger(),
+        &def,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
+    assert!(
+        (slash_of(&b) - 0.77).abs() < 0.05,
+        "got {:.2}",
+        slash_of(&b)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -472,7 +632,15 @@ fn s506_deep_combo_unclamped_and_kill_arithmetic() {
     for _ in 0..8 {
         amped.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
-    let big = m.resolve_attack(&lo, &amped, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
+    let big = m.resolve_attack(
+        &lo,
+        &amped,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        4,
+        now,
+    );
     // This used to assert the hit reproduced a "recorded" 674.66 (469.30 Slash +
     // 205.36 Poison). It does not any more, deliberately: the 469.30 event is
     // `StaggeredWeakness`-amplified and the wire indexes it as combo **2**, not 4, so
@@ -484,8 +652,16 @@ fn s506_deep_combo_unclamped_and_kill_arithmetic() {
         "a deep-combo hit still lands damage: {:.2}",
         big.total
     );
-    let health_sum: f32 = big.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
-    assert!((big.total - health_sum).abs() < 1e-3, "total == Σ health (no 25 % clamp)");
+    let health_sum: f32 = big
+        .components
+        .iter()
+        .filter(|(t, _)| is_health_type(*t))
+        .map(|(_, v)| *v)
+        .sum();
+    assert!(
+        (big.total - health_sum).abs() < 1e-3,
+        "total == Σ health (no 25 % clamp)"
+    );
 
     let mut victim = blank();
     victim.take_damage(victim.max_health + 500);
@@ -501,8 +677,14 @@ fn s506_deep_combo_unclamped_and_kill_arithmetic() {
 fn s506_paralyse_threshold_is_the_shipped_absolute_value() {
     // `ParalyzeRank1._damageToCauseParalyze` = 32.7, an ABSOLUTE damage figure.
     let r1 = paralyze_damage_threshold(1);
-    assert!((r1 - 32.7).abs() < 1e-3, "Paralyze R1 threshold {r1} != 32.7");
-    assert!(paralyze_damage_threshold(2) > r1, "the threshold rises with rank");
+    assert!(
+        (r1 - 32.7).abs() < 1e-3,
+        "Paralyze R1 threshold {r1} != 32.7"
+    );
+    assert!(
+        paralyze_damage_threshold(2) > r1,
+        "the threshold rises with rank"
+    );
     assert!(
         (super::state::paralyze_duration_secs(1) - 2.0).abs() < 1e-3,
         "Paralyze R1 duration is 2.0 s, not the invented 3.1",
@@ -532,17 +714,40 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
 
     let mut last_slash = 0.0;
     for step in 0..5u32 {
-        let side = if step % 2 == 0 { ActiveSide::Right } else { ActiveSide::Left };
+        let side = if step % 2 == 0 {
+            ActiveSide::Right
+        } else {
+            ActiveSide::Left
+        };
         let depth = attacker.begin_combo_swing(side);
         attacker.increment_combo(); // the hit connects
-        assert_eq!(depth, step, "alternating swings increment the combo each step");
-        let rd = m.resolve_attack(&lo, &blank(), DamageSource::Attack, side, 1.0, depth, Instant::now());
+        assert_eq!(
+            depth, step,
+            "alternating swings increment the combo each step"
+        );
+        let rd = m.resolve_attack(
+            &lo,
+            &blank(),
+            DamageSource::Attack,
+            side,
+            1.0,
+            depth,
+            Instant::now(),
+        );
         let s = slash_of(&rd);
         if step > 0 {
             assert!(s >= last_slash, "the combo ramp is monotonic (step {step})");
         }
-        let health_sum: f32 = rd.components.iter().filter(|(t, _)| is_health_type(*t)).map(|(_, v)| *v).sum();
-        assert!((rd.total - health_sum).abs() < 1e-3, "sum invariant on hit {step}");
+        let health_sum: f32 = rd
+            .components
+            .iter()
+            .filter(|(t, _)| is_health_type(*t))
+            .map(|(_, v)| *v)
+            .sum();
+        assert!(
+            (rd.total - health_sum).abs() < 1e-3,
+            "sum invariant on hit {step}"
+        );
         last_slash = s;
     }
     // The chain must actually RAMP — expressed against the table's own ceiling rather
@@ -570,7 +775,10 @@ fn s506_full_chain_through_engine_reproduces_ramp_and_resets_on_block() {
         depth_after,
         Instant::now(),
     ));
-    assert!((fresh - S506_SLASH_BASE).abs() < 0.05, "post-reset swing is 113.82, got {fresh:.2}");
+    assert!(
+        (fresh - S506_SLASH_BASE).abs() < 0.05,
+        "post-reset swing is 113.82, got {fresh:.2}"
+    );
 }
 
 /// A single place that prints EVERY derived anchor next to its recorded value, so a
@@ -583,15 +791,42 @@ fn s506_anchor_report() {
     let now = Instant::now();
     let mut rows: Vec<(&str, f32, f32)> = Vec::new();
 
-    let c0 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let c0 = m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     rows.push(("combo-0 Slashing", slash_of(&c0), 113.82));
     rows.push(("combo-0 Poison", poison_of(&c0), 67.20));
-    let c1 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Left, 1.0, 1, now);
+    let c1 = m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Left,
+        1.0,
+        1,
+        now,
+    );
     // The recorded 165.07 is not an anchor this stand-in can reproduce (see
     // `S506_COMBO_RAMP`); the row reports the model against its own formula.
-    println!("  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)", slash_of(&c1));
+    println!(
+        "  combo-1 Slashing: model {:.2}, recorded {S506_CHAINED_RECORDED:.2} (Versatile, not asserted)",
+        slash_of(&c1)
+    );
     rows.push(("combo-1 Slashing (model)", slash_of(&c1), 191.58));
-    let c4 = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
+    let c4 = m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        4,
+        now,
+    );
     // combo-4 has no recorded counterpart: the old 469.30 row is a
     // StaggeredWeakness-amplified combo-2 event. Reported against the one-step
     // formula so the row still shows the modelled value without implying a recording.
@@ -606,7 +841,15 @@ fn s506_anchor_report() {
     def.blocking_side = ActiveSide::Right;
     def.block_raised_at = Some(now);
     def.blocking_until = Some(now + std::time::Duration::from_secs(2));
-    let b = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let b = m.resolve_attack(
+        &lo,
+        &def,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     rows.push(("optimal-block Slashing (model)", slash_of(&b), 1.44));
     rows.push(("optimal-block Poison", poison_of(&b), 3.36));
 
@@ -614,22 +857,29 @@ fn s506_anchor_report() {
     for _ in 0..8 {
         amped.record_element_damage(DamageType::Poison, S506_POISON_BASE, now);
     }
-    let big = m.resolve_attack(&lo, &amped, DamageSource::Attack, ActiveSide::Right, 1.0, 4, now);
+    let big = m.resolve_attack(
+        &lo,
+        &amped,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        4,
+        now,
+    );
     rows.push(("conditioned Poison", poison_of(&big), 100.80));
     // "deep-combo total" (was 674.66) is dropped: it is 469.30 Slash + conditioned Poison,
     // and the 469.30 half is a StaggeredWeakness-amplified event the wire indexes as
     // combo 2. It was never a depth-4 anchor. The Poison half above is unaffected and
     // stays.
-    rows.push((
-        "deep-combo Slashing",
-        slash_of(&big),
-        191.58,
-    ));
+    rows.push(("deep-combo Slashing", slash_of(&big), 191.58));
 
     println!("\n  s506 anchor    | emitted  | recorded | delta");
     println!("  ---------------|----------|----------|-------");
     for (name, got, want) in &rows {
-        println!("  {name:<14} | {got:>8.2} | {want:>8.2} | {:+.2}", got - want);
+        println!(
+            "  {name:<14} | {got:>8.2} | {want:>8.2} | {:+.2}",
+            got - want
+        );
     }
     // Every anchor within 1.5 % of the recorded value (the block residual is the widest).
     for (name, got, want) in &rows {
@@ -637,7 +887,11 @@ fn s506_anchor_report() {
             assert!(*got <= 1.0, "{name}: emitted {got:.2}, recorded {want:.2}");
         } else {
             let err = (got - want).abs() / want;
-            assert!(err <= 0.015, "{name}: emitted {got:.2} vs recorded {want:.2} ({:.2} %)", err * 100.0);
+            assert!(
+                err <= 0.015,
+                "{name}: emitted {got:.2} vs recorded {want:.2} ({:.2} %)",
+                err * 100.0
+            );
         }
     }
 }
@@ -656,7 +910,11 @@ fn unarmored_target_takes_the_raw_tempered_base() {
         0,
         Instant::now(),
     );
-    assert!((slash_of(&rd) - 144.0).abs() < 0.05, "raw tempered base, got {:.2}", slash_of(&rd));
+    assert!(
+        (slash_of(&rd) - 144.0).abs() < 0.05,
+        "raw tempered base, got {:.2}",
+        slash_of(&rd)
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -682,7 +940,11 @@ fn unarmored_target_takes_the_raw_tempered_base() {
 // ---------------------------------------------------------------------------
 
 fn comp_of(rd: &super::damage::ResolvedDamage, ty: DamageType) -> f32 {
-    rd.components.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+    rd.components
+        .iter()
+        .filter(|(t, _)| *t == ty)
+        .map(|(_, v)| *v)
+        .sum()
 }
 
 /// Flappety's dagger with the Poison suffix swapped for `Weapon Frost Damage`
@@ -710,14 +972,29 @@ fn blank_optimal_blocking(now: Instant) -> Fighter {
 fn mirrored_drain_is_byte_identical_without_a_block() {
     let m = RetailDamageModel;
     let now = Instant::now();
-    let open =
-        m.resolve_attack(&flappety_frost_dagger(), &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let open = m.resolve_attack(
+        &flappety_frost_dagger(),
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
 
-    assert_eq!(open.flags & flags::WAS_OPTIMAL_BLOCKING, 0, "no guard is up");
+    assert_eq!(
+        open.flags & flags::WAS_OPTIMAL_BLOCKING,
+        0,
+        "no guard is up"
+    );
     // Exact pre-fix values, measured on main@1334cbd + #28 + #29.
     assert_eq!(
         open.components,
-        vec![(DamageType::Slashing, 113.82), (DamageType::Frost, 56.7), (DamageType::Stamina, 56.7)],
+        vec![
+            (DamageType::Slashing, 113.82),
+            (DamageType::Frost, 56.7),
+            (DamageType::Stamina, 56.7)
+        ],
         "the unblocked component list (order and values) must be unchanged",
     );
     assert_eq!(open.total, 170.52, "drains are excluded from `total`");
@@ -733,12 +1010,31 @@ fn mirrored_drain_mirrors_the_post_block_elemental() {
     let lo = flappety_frost_dagger();
     let now = Instant::now();
 
-    let open = m.resolve_attack(&lo, &blank(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
+    let open = m.resolve_attack(
+        &lo,
+        &blank(),
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
     let frost_open = comp_of(&open, DamageType::Frost);
 
     let def = blank_optimal_blocking(now);
-    let blocked = m.resolve_attack(&lo, &def, DamageSource::Attack, ActiveSide::Right, 1.0, 0, now);
-    assert!(blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0, "optimal-block flag set");
+    let blocked = m.resolve_attack(
+        &lo,
+        &def,
+        DamageSource::Attack,
+        ActiveSide::Right,
+        1.0,
+        0,
+        now,
+    );
+    assert!(
+        blocked.flags & flags::WAS_OPTIMAL_BLOCKING != 0,
+        "optimal-block flag set"
+    );
 
     let frost_blocked = comp_of(&blocked, DamageType::Frost);
     let stam_blocked = comp_of(&blocked, DamageType::Stamina);
@@ -756,5 +1052,8 @@ fn mirrored_drain_mirrors_the_post_block_elemental() {
     // The drain is NOT a health type, so the hit total is the blocked Slashing (at its
     // 5 % floor) plus the blocked elemental — the drain is not in it.
     let slash_blocked = comp_of(&blocked, DamageType::Slashing);
-    assert!((blocked.total - (slash_blocked + frost_blocked)).abs() < 1e-3, "`total` sums health types only");
+    assert!(
+        (blocked.total - (slash_blocked + frost_blocked)).abs() < 1e-3,
+        "`total` sums health types only"
+    );
 }

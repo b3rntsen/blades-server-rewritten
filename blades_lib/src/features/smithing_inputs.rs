@@ -97,7 +97,11 @@ mod tests {
             // Every output must also be what recipe_outputs mints for this recipe.
             let out = crate::features::recipe_outputs::output_for(rid)
                 .unwrap_or_else(|| panic!("{rid} missing from recipe_outputs"));
-            assert_eq!(r.output_item_template_id, Some(out.output_item_template_id), "{rid}");
+            assert_eq!(
+                r.output_item_template_id,
+                Some(out.output_item_template_id),
+                "{rid}"
+            );
         }
     }
 

@@ -355,7 +355,10 @@ fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
 /// without one, the collapsed catalogue shifted), then admin-authored windows on
 /// top. Every reader of "what is on sale" goes through here so the price check,
 /// the caps and `GET /catalogoverrides/globalshop` can never disagree.
-pub(crate) fn current_catalog(static_data: &blades_lib::static_data::StaticData, now: i64) -> Value {
+pub(crate) fn current_catalog(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+) -> Value {
     let replayed = replay_calendar(&static_data.global_shop_windows, now)
         .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
     apply_raised_window_caps(apply_authored(replayed, &static_data.global_shop_authored))
@@ -539,10 +542,7 @@ fn validate_purchase_prices(
 ///
 /// An entry without a window is kept (none ship today). Pricing, caps and purchase
 /// validation keep reading [`current_catalog`], so what can be bought is unchanged.
-pub(crate) fn served_catalog(
-    static_data: &blades_lib::static_data::StaticData,
-    now: i64,
-) -> Value {
+pub(crate) fn served_catalog(static_data: &blades_lib::static_data::StaticData, now: i64) -> Value {
     let mut catalog = current_catalog(static_data, now);
     if let Some(map) = catalog
         .get_mut("globalShopOverrides")
@@ -881,20 +881,17 @@ fn grant_from_offer_contents_with_enchanting(
                 !blades_lib::economy::template_skips_durability(entry.item_template_id, items);
             // A template that authors its own properties is never rolled (#8).
             let fixed = crate::fixed_templates::has_mandatory_properties(entry.item_template_id);
-            let rolled_grading = if !wears
-                && !fixed
-                && entry.grading.is_empty()
-                && entry.arcane_tier > 0
-            {
-                Some(roll_arcane_grading(
-                    entry.item_template_id,
-                    entry.arcane_tier,
-                    roll_nonce,
-                    items,
-                )?)
-            } else {
-                None
-            };
+            let rolled_grading =
+                if !wears && !fixed && entry.grading.is_empty() && entry.arcane_tier > 0 {
+                    Some(roll_arcane_grading(
+                        entry.item_template_id,
+                        entry.arcane_tier,
+                        roll_nonce,
+                        items,
+                    )?)
+                } else {
+                    None
+                };
             // Rings and jewellery never carry durability — absent on all 34,867
             // captured instances and absent from the table by design. Refusing
             // them for a "missing" entry is what kept 39 of the 51 unclassified
@@ -1058,7 +1055,11 @@ fn roll_arcane_grading(
 /// id, so a later alt is folded in too, or two alts with the same counts would
 /// walk one sequence (#387). `None` — every original — leaves the nonce as it
 /// always was.
-pub(crate) fn purchase_roll_nonce(bought_before: u64, character_id: Uuid, alt: Option<Uuid>) -> u64 {
+pub(crate) fn purchase_roll_nonce(
+    bought_before: u64,
+    character_id: Uuid,
+    alt: Option<Uuid>,
+) -> u64 {
     crate::alt_roll::fold_nonce(
         bought_before ^ (character_id.as_u128() as u64).rotate_left(29),
         alt,
@@ -2847,14 +2848,21 @@ mod offer_contents_fallback {
             .expect("Ebony Faerite Ring offer present");
         let authored = &contents.contents[0];
         assert_eq!(authored.item_template_id, EBONY_FAERITE_RING);
-        assert_eq!(authored.enchanting.len(), 3, "fixture must be the fixed-secondary offer");
+        assert_eq!(
+            authored.enchanting.len(),
+            3,
+            "fixture must be the fixed-secondary offer"
+        );
         assert!(
             !sd.enchanting.secondary_tables.is_empty(),
             "the prod path (reroll_sigil_jewelry) needs the real enchanting tables"
         );
         let props = |v: &[blades_lib::static_data::PropertyRef]| {
             v.iter()
-                .map(|p| blades_lib::user_data::ItemSingleProperty { id: p.id, tier: p.tier })
+                .map(|p| blades_lib::user_data::ItemSingleProperty {
+                    id: p.id,
+                    tier: p.tier,
+                })
                 .collect::<Vec<_>>()
         };
         for nonce in 0..200 {
@@ -2868,8 +2876,16 @@ mod offer_contents_fallback {
             .expect("Sigil jewelry offer grantable");
             let item = &reward.items[0].item;
             assert_eq!(item.item_template_id, EBONY_FAERITE_RING);
-            assert_eq!(item.properties.grading, props(&authored.grading), "purchase {nonce}");
-            assert_eq!(item.properties.enchanting, props(&authored.enchanting), "purchase {nonce}");
+            assert_eq!(
+                item.properties.grading,
+                props(&authored.grading),
+                "purchase {nonce}"
+            );
+            assert_eq!(
+                item.properties.enchanting,
+                props(&authored.enchanting),
+                "purchase {nonce}"
+            );
             assert_eq!(item.grade, Some(4), "grade = 1 + 1 + 2");
         }
     }
@@ -2936,7 +2952,10 @@ mod offer_contents_fallback {
             assert_eq!(reward.items.len(), 1);
             let item = &reward.items[0].item;
             assert_eq!(item.item_template_id, ring);
-            assert_eq!(item.grade, None, "nonce {nonce}: a fixed ring must not be graded");
+            assert_eq!(
+                item.grade, None,
+                "nonce {nonce}: a fixed ring must not be graded"
+            );
             assert!(
                 item.properties.grading.is_empty(),
                 "nonce {nonce}: {:?}",
@@ -3849,8 +3868,7 @@ mod report238_calendar_tests {
         let before = current_catalog(&sd, REPORT_400);
         let before_len = serde_json::to_string(&before).unwrap().len();
         assert!(
-            before["globalShopOverrides"].as_object().unwrap().len() > 500
-                && before_len > 300_000,
+            before["globalShopOverrides"].as_object().unwrap().len() > 500 && before_len > 300_000,
             "control: the full catalogue is what #400's client was fetching ({before_len} bytes)"
         );
 
@@ -3868,8 +3886,14 @@ mod report238_calendar_tests {
         }
         // Retail's measured ceiling is 79 offers / 46 KB. A little headroom for the
         // replay's window boundaries, but nowhere near the 546 / 320 KB served before.
-        assert!(max_offers <= 120, "up to {max_offers} offers served at once");
-        assert!(max_bytes <= 80_000, "up to {max_bytes} bytes served at once");
+        assert!(
+            max_offers <= 120,
+            "up to {max_offers} offers served at once"
+        );
+        assert!(
+            max_bytes <= 80_000,
+            "up to {max_bytes} bytes served at once"
+        );
     }
 
     /// Cutting the payload must not hide anything that is on sale: every offer the
@@ -3884,7 +3908,11 @@ mod report238_calendar_tests {
             let served = served["globalShopOverrides"].as_object().unwrap();
             for (id, e) in full["globalShopOverrides"].as_object().unwrap() {
                 if is_live(e, t) {
-                    assert_eq!(served.get(id), Some(e), "{id} is on sale at {t} but was not served");
+                    assert_eq!(
+                        served.get(id),
+                        Some(e),
+                        "{id} is on sale at {t} but was not served"
+                    );
                 }
             }
         }
@@ -3903,9 +3931,11 @@ mod report238_calendar_tests {
                 "prices": [{ "currencyId": SIGIL, "quantity": 5 }],
             }}
         });
-        assert!(served_catalog(&sd, REPORT_400)["globalShopOverrides"]
-            .get(TRANSCENDENT)
-            .is_none());
+        assert!(
+            served_catalog(&sd, REPORT_400)["globalShopOverrides"]
+                .get(TRANSCENDENT)
+                .is_none()
+        );
         assert_eq!(
             window_of(&served_catalog(&sd, start + 3_600)["globalShopOverrides"][TRANSCENDENT]),
             Some((start, end))
@@ -3934,7 +3964,10 @@ mod report353_store_prestige {
     #[test]
     fn the_fighters_trophy_pays_eighty() {
         let sd = shipped();
-        assert_eq!(product_town_xp(&sd, Uuid::parse_str(FIGHTERS_TROPHY_OFFER).unwrap()), 80);
+        assert_eq!(
+            product_town_xp(&sd, Uuid::parse_str(FIGHTERS_TROPHY_OFFER).unwrap()),
+            80
+        );
     }
 
     /// The other measured purchases, each paid exactly its `townXp` on retail.
@@ -3953,7 +3986,11 @@ mod report353_store_prestige {
             ("bb5631a5-e68d-4455-a01e-bc3080bcf054", 133), // 30428
             (FIGHTERS_TROPHY_OFFER, 80),                   // 51225
         ] {
-            assert_eq!(product_town_xp(&sd, Uuid::parse_str(product).unwrap()), retail_delta, "{product}");
+            assert_eq!(
+                product_town_xp(&sd, Uuid::parse_str(product).unwrap()),
+                retail_delta,
+                "{product}"
+            );
         }
     }
 
@@ -3977,7 +4014,10 @@ mod report353_store_prestige {
             // A product the store cannot grant was never bought, so it owes
             // nothing either way; every grantable one must agree exactly.
             let owed = product_town_xp(&sd, product);
-            assert!(owed == paid || paid == 0, "{product}: backfill {owed}, purchase {paid}");
+            assert!(
+                owed == paid || paid == 0,
+                "{product}: backfill {owed}, purchase {paid}"
+            );
             paying += usize::from(paid > 0);
         }
         assert!(paying >= 20, "the store's prestige-paying offers: {paying}");
@@ -3993,7 +4033,10 @@ mod report353_store_prestige {
             let is_decoration = |t: &Uuid| items.get(t).is_some_and(|i| i.r#type == 4);
             if c.contents.len() == 1 && is_decoration(&c.contents[0].item_template_id) {
                 decorations += 1;
-                assert!(product_town_xp(&sd, *product) > 0, "{product} sells a decoration for no prestige");
+                assert!(
+                    product_town_xp(&sd, *product) > 0,
+                    "{product} sells a decoration for no prestige"
+                );
             }
         }
         assert!(decorations >= 10, "{decorations}");
@@ -4012,13 +4055,16 @@ mod report353_store_prestige {
                 treasury_version: 1,
             },
             wallet: CompleteWallet::default(),
-            global_shop: GlobalShopState { global_shop_purchases: vec![] },
+            global_shop: GlobalShopState {
+                global_shop_purchases: vec![],
+            },
             reward: RewardGrant::default(),
             town: None,
         };
         assert!(serde_json::to_value(base()).unwrap().get("town").is_none());
         let mut paid = base();
-        paid.town = Some(serde_json::json!({"levelInfo": {"level": 10, "experiencePoints": 77352}}));
+        paid.town =
+            Some(serde_json::json!({"levelInfo": {"level": 10, "experiencePoints": 77352}}));
         assert_eq!(
             serde_json::to_value(paid).unwrap()["town"]["levelInfo"]["experiencePoints"],
             77352
@@ -4033,10 +4079,18 @@ mod report353_store_prestige {
         let src = include_str!("global_shop.rs");
         let start = src.find("pub async fn purchase_global_shop(").unwrap();
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
-        let credit = body.find("crate::town::credit_town_xp(").expect("the purchase pays the town");
+        let credit = body
+            .find("crate::town::credit_town_xp(")
+            .expect("the purchase pays the town");
         let count = body.find("record_purchase(").expect("counted");
-        assert!(credit < count, "pay the town first, then count the purchase");
-        assert!(body.contains("CharacterDbEntryTownEconomy::as_select()"), "the row must carry the town");
+        assert!(
+            credit < count,
+            "pay the town first, then count the purchase"
+        );
+        assert!(
+            body.contains("CharacterDbEntryTownEconomy::as_select()"),
+            "the row must carry the town"
+        );
     }
 }
 
@@ -4072,9 +4126,18 @@ mod report_386_captured_jewelry_rolls {
     /// exact set — GRADING ids, tiers and ENCHANTING. The "21 identical copies"
     /// in #386 were our server's purchases, not retail's.
     const RETAIL_THEMED_JEWELRY: [(&str, &str); 3] = [
-        ("579141c5-4960-4280-9b29-98b8a88f9dfe", "EbonyFaeriteRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm"),
-        ("dac59a1a-7f22-4306-9117-fa90d44aee3d", "EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch"),
-        ("fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8", "EbonyFaeriteNecklace_Armsman_FortMgcRegen"),
+        (
+            "579141c5-4960-4280-9b29-98b8a88f9dfe",
+            "EbonyFaeriteRing_PowerAttackDodgingStrikeQuickStrikes_AbsStm",
+        ),
+        (
+            "dac59a1a-7f22-4306-9117-fa90d44aee3d",
+            "EbonyFaeriteRing_FrostbiteIceSpikeBlizzardArmor_NoEnch",
+        ),
+        (
+            "fc8f44dd-d4cf-48b8-b8b2-77eaaa0643b8",
+            "EbonyFaeriteNecklace_Armsman_FortMgcRegen",
+        ),
     ];
     const CHAR_A: Uuid = Uuid::from_u128(0x489620db_7f90_4a03_bb7c_f7e92a9c73cb);
     const CHAR_B: Uuid = Uuid::from_u128(0xf7817aa6_5892_4794_871e_9b51a475a606);
@@ -4119,21 +4182,32 @@ mod report_386_captured_jewelry_rolls {
             captured_grant_for_product(sd, ARCANE_NECKLACE_OFFER).is_some(),
             "fixture: the offer must carry a captured grant, or this tests nothing"
         );
-        assert!(rolls_jewelry_per_purchase(sd, item_table(), ARCANE_NECKLACE_OFFER));
+        assert!(rolls_jewelry_per_purchase(
+            sd,
+            item_table(),
+            ARCANE_NECKLACE_OFFER
+        ));
 
         let necklace = Uuid::from_u128(0x54a7fc91_93e7_4908_a29a_0667d0b07179);
         let mut seen = HashSet::new();
         for n in 0..PURCHASES {
             let item = buy(ARCANE_NECKLACE_OFFER, CHAR_A, n);
             assert_eq!(item.item_template_id, necklace);
-            assert_eq!(item.arcane_tier, Some(2), "the Assured Imbuement tier survives");
+            assert_eq!(
+                item.arcane_tier,
+                Some(2),
+                "the Assured Imbuement tier survives"
+            );
             assert!(
                 item.properties.enchanting.is_empty(),
                 "retail's arcane necklace arrives un-enchanted (the capture has none)"
             );
             // Retail rings and necklaces are always graded, from their own slot.
             let grade = item.grade.expect("an arcane necklace is always graded");
-            assert_eq!(grade, item.properties.grading.iter().map(|p| p.tier).sum::<u64>());
+            assert_eq!(
+                grade,
+                item.properties.grading.iter().map(|p| p.tier).sum::<u64>()
+            );
             assert!(!item.properties.grading.is_empty());
             for p in &item.properties.grading {
                 assert!(
@@ -4179,9 +4253,21 @@ mod report_386_captured_jewelry_rolls {
                 out.sort_unstable();
                 out
             };
-            assert_eq!(sorted_props(&retail.properties.grading), auth(&authored.grading), "{name}: GRADING");
-            assert_eq!(sorted_props(&retail.properties.enchanting), auth(&authored.enchanting), "{name}: ENCHANTING");
-            assert_eq!(retail.grade, Some(authored.grading.iter().map(|p| p.tier).sum()), "{name}: grade");
+            assert_eq!(
+                sorted_props(&retail.properties.grading),
+                auth(&authored.grading),
+                "{name}: GRADING"
+            );
+            assert_eq!(
+                sorted_props(&retail.properties.enchanting),
+                auth(&authored.enchanting),
+                "{name}: ENCHANTING"
+            );
+            assert_eq!(
+                retail.grade,
+                Some(authored.grading.iter().map(|p| p.tier).sum()),
+                "{name}: grade"
+            );
         }
     }
 
@@ -4197,7 +4283,11 @@ mod report_386_captured_jewelry_rolls {
             .filter(|(_, c)| c.contents.iter().any(is_themed_jewelry))
             .map(|(id, _)| *id)
             .collect();
-        assert_eq!(themed.len(), 21, "the APK authors GRADING for 21 Sigil jewellery offers");
+        assert_eq!(
+            themed.len(),
+            21,
+            "the APK authors GRADING for 21 Sigil jewellery offers"
+        );
         for product in themed {
             let authored = &sd.global_shop_offer_contents[&product].contents[0];
             let want_grading: Vec<(Uuid, u64)> = {
@@ -4214,9 +4304,20 @@ mod report_386_captured_jewelry_rolls {
             for n in 0..200u64 {
                 let who = if n % 2 == 0 { CHAR_A } else { CHAR_B };
                 let item = buy(product, who, n / 2);
-                assert_eq!(item.item_template_id, authored.item_template_id, "{product}");
-                assert_eq!(sorted_props(&item.properties.grading), want_grading, "{product}: purchase {n}");
-                assert_eq!(sorted_props(&item.properties.enchanting), want_ench, "{product}: purchase {n}");
+                assert_eq!(
+                    item.item_template_id, authored.item_template_id,
+                    "{product}"
+                );
+                assert_eq!(
+                    sorted_props(&item.properties.grading),
+                    want_grading,
+                    "{product}: purchase {n}"
+                );
+                assert_eq!(
+                    sorted_props(&item.properties.enchanting),
+                    want_ench,
+                    "{product}: purchase {n}"
+                );
                 assert_eq!(item.grade, Some(want_grade), "{product}: purchase {n}");
                 assert_eq!(item.durability, 0.0, "jewellery never wears");
             }
@@ -4228,10 +4329,17 @@ mod report_386_captured_jewelry_rolls {
     #[test]
     fn two_characters_walk_different_sequences() {
         for product in [ARCANE_NECKLACE_OFFER] {
-            let a: Vec<String> = (0..20).map(|n| roll_key(&buy(product, CHAR_A, n))).collect();
-            let b: Vec<String> = (0..20).map(|n| roll_key(&buy(product, CHAR_B, n))).collect();
+            let a: Vec<String> = (0..20)
+                .map(|n| roll_key(&buy(product, CHAR_A, n)))
+                .collect();
+            let b: Vec<String> = (0..20)
+                .map(|n| roll_key(&buy(product, CHAR_B, n)))
+                .collect();
             let same = a.iter().zip(&b).filter(|(x, y)| x == y).count();
-            assert!(same <= 5, "{product}: {same}/20 purchases identical between two characters");
+            assert!(
+                same <= 5,
+                "{product}: {same}/20 purchases identical between two characters"
+            );
         }
         // Control: the same character buying the same n-th time is reproducible,
         // so the difference above is the character and not noise.
@@ -4249,17 +4357,31 @@ mod report_386_captured_jewelry_rolls {
         for raw in CAPTURED_ROLLED_JEWELRY {
             let product = Uuid::parse_str(raw).unwrap();
             let authored = &sd.global_shop_offer_contents[&product].contents[0];
-            assert!(captured_grant_for_product(sd, product).is_some(), "{raw}: fixture");
+            assert!(
+                captured_grant_for_product(sd, product).is_some(),
+                "{raw}: fixture"
+            );
             let mut seen = HashSet::new();
             for n in 0..PURCHASES {
                 let item = buy(product, CHAR_A, n);
                 assert_eq!(item.item_template_id, authored.item_template_id, "{raw}");
-                assert_eq!(item.arcane_tier, (authored.arcane_tier > 0).then_some(authored.arcane_tier), "{raw}");
-                assert_eq!(item.properties.enchanting.len(), authored.enchanting.len(), "{raw}");
+                assert_eq!(
+                    item.arcane_tier,
+                    (authored.arcane_tier > 0).then_some(authored.arcane_tier),
+                    "{raw}"
+                );
+                assert_eq!(
+                    item.properties.enchanting.len(),
+                    authored.enchanting.len(),
+                    "{raw}"
+                );
                 assert!(item.grade.is_some(), "{raw}: purchase {n} ungraded");
                 seen.insert(roll_key(&item));
             }
-            assert!(seen.len() > 1, "{raw}: one frozen item for {PURCHASES} purchases");
+            assert!(
+                seen.len() > 1,
+                "{raw}: one frozen item for {PURCHASES} purchases"
+            );
         }
     }
 
@@ -4278,7 +4400,10 @@ mod report_386_captured_jewelry_rolls {
         ] {
             let product = Uuid::parse_str(raw).unwrap();
             let captured = captured_grant_for_product(sd, product).expect("fixture: captured");
-            assert!(!rolls_jewelry_per_purchase(sd, item_table(), product), "{raw}");
+            assert!(
+                !rolls_jewelry_per_purchase(sd, item_table(), product),
+                "{raw}"
+            );
             for n in 0..5 {
                 let paid = purchase_reward(
                     sd,
@@ -4288,7 +4413,10 @@ mod report_386_captured_jewelry_rolls {
                     purchase_roll_nonce(n, CHAR_A, None),
                 )
                 .unwrap();
-                assert_eq!(&paid, captured, "{raw}: the capture must still be paid verbatim");
+                assert_eq!(
+                    &paid, captured,
+                    "{raw}: the capture must still be paid verbatim"
+                );
             }
         }
     }
@@ -4309,8 +4437,10 @@ mod report_386_captured_jewelry_rolls {
             let Some(slot) = item_table().get(&e.item_template_id).map(|i| i.r#type) else {
                 continue;
             };
-            if !matches!(slot, crate::jewelry_grade::RING | crate::jewelry_grade::NECKLACE)
-                || e.arcane_tier == 0
+            if !matches!(
+                slot,
+                crate::jewelry_grade::RING | crate::jewelry_grade::NECKLACE
+            ) || e.arcane_tier == 0
                 || !e.grading.is_empty()
             {
                 continue;
@@ -4328,7 +4458,10 @@ mod report_386_captured_jewelry_rolls {
                 );
             }
         }
-        assert!(checked >= 10, "fixture: arcane jewellery offers found: {checked}");
+        assert!(
+            checked >= 10,
+            "fixture: arcane jewellery offers found: {checked}"
+        );
     }
 }
 
@@ -4581,7 +4714,10 @@ mod report_387_legendary_chest_sequence {
     fn key(item: &blades_lib::user_data::Item) -> String {
         format!(
             "{}|{:?}|{:?}|{}",
-            item.item_template_id, item.properties.enchanting, item.properties.grading, item.tempering_level
+            item.item_template_id,
+            item.properties.enchanting,
+            item.properties.grading,
+            item.tempering_level
         )
     }
 
@@ -4612,7 +4748,10 @@ mod report_387_legendary_chest_sequence {
             let a = chests(start, start + 100, level);
             let b = chests(start + 100, start + 200, level);
             let same_place = a.iter().zip(&b).filter(|(x, y)| x == y).count();
-            assert!(same_place <= 2, "from {start} at {level}: {same_place} pieces repeat in place");
+            assert!(
+                same_place <= 2,
+                "from {start} at {level}: {same_place} pieces repeat in place"
+            );
             let first: HashSet<&String> = a.iter().collect();
             let shared = b.iter().filter(|k| first.contains(k)).count();
             // Only unenchanted Dragon armour and shields (two templates, one
@@ -4633,7 +4772,11 @@ mod report_387_legendary_chest_sequence {
             let pieces = chests(start, start + 200, 47);
             let distinct = pieces.iter().collect::<HashSet<_>>().len();
             let repeated = (pieces.len() - distinct) as f64 / pieces.len() as f64;
-            assert!(repeated <= 0.06, "from {start}: {:.1}% of pieces repeated", repeated * 100.0);
+            assert!(
+                repeated <= 0.06,
+                "from {start}: {:.1}% of pieces repeated",
+                repeated * 100.0
+            );
         }
     }
 
@@ -4643,15 +4786,28 @@ mod report_387_legendary_chest_sequence {
         let src = include_str!("global_shop.rs");
         let start = src.find("pub async fn purchase_global_shop(").unwrap();
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
-        let bought = body.find("let bought_before = entry").expect("the count is read");
+        let bought = body
+            .find("let bought_before = entry")
+            .expect("the count is read");
         let read = &body[bought..bought + body[bought..].find(';').unwrap()];
-        assert!(read.contains(".global_shop_purchases"), "lifetime count: {read}");
-        assert!(!read.contains("window"), "a window count restarts with every offer: {read}");
+        assert!(
+            read.contains(".global_shop_purchases"),
+            "lifetime count: {read}"
+        );
+        assert!(
+            !read.contains("window"),
+            "a window count restarts with every offer: {read}"
+        );
         assert!(body.contains("purchase_roll_nonce(bought_before, character_id, roll_alt)"));
         // #421: the store chests roll with the shipped treasury tables, so a
         // Golden chest from 49 is a level-100 Gold chest.
-        assert!(body.contains("Some(&globals.static_data.chest_loots)"), "the chest tables reach the roll");
-        let nonces: HashSet<u64> = (0..10_000).map(|n| purchase_roll_nonce(n, SEPHORIS, None)).collect();
+        assert!(
+            body.contains("Some(&globals.static_data.chest_loots)"),
+            "the chest tables reach the roll"
+        );
+        let nonces: HashSet<u64> = (0..10_000)
+            .map(|n| purchase_roll_nonce(n, SEPHORIS, None))
+            .collect();
         assert_eq!(nonces.len(), 10_000);
     }
 }
@@ -4685,7 +4841,9 @@ mod report_387_alts_roll_their_own {
                 .map(|i| {
                     format!(
                         "{}|{:?}|{:?}",
-                        i.item.item_template_id, i.item.properties.enchanting, i.item.properties.grading
+                        i.item.item_template_id,
+                        i.item.properties.enchanting,
+                        i.item.properties.grading
                     )
                 })
             })
@@ -4697,7 +4855,10 @@ mod report_387_alts_roll_their_own {
     #[test]
     fn the_originals_nonce_is_unchanged() {
         assert_eq!(purchase_roll_nonce(0, ROW, None), 3_787_163_076_896_478_058);
-        assert_eq!(purchase_roll_nonce(1_226, ROW, None), 3_787_163_076_896_479_136);
+        assert_eq!(
+            purchase_roll_nonce(1_226, ROW, None),
+            3_787_163_076_896_479_136
+        );
         for n in [0u64, 1, 717, 1_226, 99_999] {
             assert_eq!(
                 purchase_roll_nonce(n, ROW, None),
@@ -4718,8 +4879,16 @@ mod report_387_alts_roll_their_own {
             );
             assert!(a != b && a != o && b != o, "purchase {n}");
         }
-        let (a, b, o) = (chests(Some(ALT_A), 47), chests(Some(ALT_B), 47), chests(None, 47));
-        for (name, x, y) in [("A/B", &a, &b), ("A/original", &a, &o), ("B/original", &b, &o)] {
+        let (a, b, o) = (
+            chests(Some(ALT_A), 47),
+            chests(Some(ALT_B), 47),
+            chests(None, 47),
+        );
+        for (name, x, y) in [
+            ("A/B", &a, &b),
+            ("A/original", &a, &o),
+            ("B/original", &b, &o),
+        ] {
             let same_place = x.iter().zip(y).filter(|(p, q)| p == q).count();
             assert!(
                 same_place * 100 <= x.len() * 10,
@@ -4736,7 +4905,9 @@ mod report_387_alts_roll_their_own {
         let src = include_str!("global_shop.rs");
         let start = src.find("pub async fn purchase_global_shop(").unwrap();
         let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
-        let lock = body.find(".for_no_key_update()").expect("the row is locked");
+        let lock = body
+            .find(".for_no_key_update()")
+            .expect("the row is locked");
         let read = body
             .find("crate::alt_roll::for_character(&mut conn, character_id)")
             .expect("the alt is read");
@@ -4761,9 +4932,7 @@ mod report_387_alts_roll_their_own {
 #[cfg(test)]
 mod report_393_sigil_jewelry_property_count {
     use super::*;
-    use crate::jewelry_grade::{
-        JEWELRY_GRADES, JEWELRY_PROPERTY_COUNT_PERCENT, NECKLACE, RING,
-    };
+    use crate::jewelry_grade::{JEWELRY_GRADES, JEWELRY_PROPERTY_COUNT_PERCENT, NECKLACE, RING};
 
     /// SigilShop_Jewelry_EbonyFaeriteRing_Arcane02 - the reporter's ring.
     const RING_OFFER: Uuid = Uuid::from_u128(0x812ea9ef_c2af_406b_9b93_1897db4a6879);
@@ -4800,7 +4969,11 @@ mod report_393_sigil_jewelry_property_count {
     fn check(item: &blades_lib::user_data::Item, slot: u64) -> usize {
         let g = &item.properties.grading;
         let grade = item.grade.expect("arcane jewellery is always graded");
-        assert_eq!(grade, g.iter().map(|p| p.tier).sum::<u64>(), "grade = sum of tiers");
+        assert_eq!(
+            grade,
+            g.iter().map(|p| p.tier).sum::<u64>(),
+            "grade = sum of tiers"
+        );
         let tiers: Vec<u64> = g.iter().map(|p| p.tier).collect();
         let provided = JEWELRY_GRADES
             .iter()
@@ -4808,7 +4981,10 @@ mod report_393_sigil_jewelry_property_count {
             .unwrap_or_else(|| panic!("grade {grade} is not an APK grade"))
             .2;
         assert_eq!(tiers, provided, "grade {grade}: tiers {tiers:?}");
-        assert!(g.iter().all(|p| crate::jewelry_grade::slot_allows(slot, p.id)));
+        assert!(
+            g.iter()
+                .all(|p| crate::jewelry_grade::slot_allows(slot, p.id))
+        );
         let distinct: std::collections::HashSet<_> = g.iter().map(|p| p.id).collect();
         assert_eq!(distinct.len(), g.len(), "a property twice");
         g.len()
@@ -4957,9 +5133,15 @@ mod report_393_sigil_jewelry_property_count {
             }
         }
         eprintln!("Sigil jewels: {arcane} arcane, {themed} themed, {fixed} fixed");
-        assert_eq!(themed, 21, "the APK authors GRADING for 21 Sigil jewellery offers");
+        assert_eq!(
+            themed, 21,
+            "the APK authors GRADING for 21 Sigil jewellery offers"
+        );
         assert!(arcane > 0 && fixed > 0, "control: both other classes exist");
-        assert!(unclassified.is_empty(), "jewellery offers with no rule: {unclassified:?}");
+        assert!(
+            unclassified.is_empty(),
+            "jewellery offers with no rule: {unclassified:?}"
+        );
     }
 }
 

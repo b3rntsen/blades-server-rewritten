@@ -23,7 +23,7 @@ use blades_lib::{
     static_data::{EnchantingData, SecondaryEnchantTable},
     user_data::{Item, ItemSingleProperty},
 };
-use rand::{rngs::StdRng, Rng, RngExt, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use crate::jewelry_grade;

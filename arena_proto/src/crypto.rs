@@ -111,7 +111,11 @@ mod tests {
              6a43b8f41518a11cc387b669b2ee6586",
         )
         .unwrap();
-        assert_eq!(&buf[..], &expected[..], "ChaCha20Legacy zero-vector mismatch");
+        assert_eq!(
+            &buf[..],
+            &expected[..],
+            "ChaCha20Legacy zero-vector mismatch"
+        );
     }
 
     /// XOR is an involution: encrypt then decrypt returns the original.

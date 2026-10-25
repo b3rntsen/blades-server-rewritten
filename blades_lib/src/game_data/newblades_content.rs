@@ -64,7 +64,9 @@ impl NewbladesContent {
     }
 
     pub fn is_newblades_dungeon(&self, dungeon_id: &Uuid) -> bool {
-        self.content.iter().any(|c| c.dungeon_ids.contains(dungeon_id))
+        self.content
+            .iter()
+            .any(|c| c.dungeon_ids.contains(dungeon_id))
     }
 
     /// Every rule the registry must satisfy against the retail data it extends.
@@ -88,14 +90,20 @@ impl NewbladesContent {
             }
             for (key, text) in &c.loc {
                 if !text.starts_with(PREFIX) {
-                    return Err(format!("{}: loc {key} = {text:?} lacks the {PREFIX} prefix", c.id));
+                    return Err(format!(
+                        "{}: loc {key} = {text:?} lacks the {PREFIX} prefix",
+                        c.id
+                    ));
                 }
             }
             for q in &c.quest_ids {
                 // The client can only offer a quest whose template it knows, and
                 // parsed.json is the server's copy of that template list.
                 if !game_data.quests.contains_key(q) {
-                    return Err(format!("{}: quest {q} is not a client quest template", c.id));
+                    return Err(format!(
+                        "{}: quest {q} is not a client quest template",
+                        c.id
+                    ));
                 }
             }
             for d in &c.dungeon_ids {
@@ -105,14 +113,20 @@ impl NewbladesContent {
             }
             for (d, groups) in &c.extra_spawn_groups {
                 if !c.dungeon_ids.contains(d) {
-                    return Err(format!("{}: adds groups to {d}, which it does not own", c.id));
+                    return Err(format!(
+                        "{}: adds groups to {d}, which it does not own",
+                        c.id
+                    ));
                 }
                 let Some(dungeon) = game_data.dungeons.get(d) else {
                     return Err(format!("{}: dungeon {d} is not a client dungeon", c.id));
                 };
                 for g in groups.keys() {
                     if dungeon.spawn_info.enemy_spawn_groups.contains_key(g) {
-                        return Err(format!("{}: group {g} is already a retail group of {d}", c.id));
+                        return Err(format!(
+                            "{}: group {g} is already a retail group of {d}",
+                            c.id
+                        ));
                     }
                 }
             }
@@ -129,10 +143,12 @@ impl NewbladesContent {
             for (d, groups) in &c.extra_spawn_groups {
                 let dungeon = game_data.dungeons.get_mut(d).expect("validated");
                 for (g, quantity) in groups {
-                    dungeon
-                        .spawn_info
-                        .enemy_spawn_groups
-                        .insert(*g, GameDataEnemySpawnGroup { quantity: *quantity });
+                    dungeon.spawn_info.enemy_spawn_groups.insert(
+                        *g,
+                        GameDataEnemySpawnGroup {
+                            quantity: *quantity,
+                        },
+                    );
                     added += 1;
                 }
             }
@@ -155,7 +171,9 @@ pub fn load(
     };
     let reg: NewbladesContent =
         serde_json::from_str(&raw).map_err(|e| format!("{path:?} is not valid: {e}"))?;
-    let added = reg.apply(game_data).map_err(|e| format!("{path:?} refused: {e}"))?;
+    let added = reg
+        .apply(game_data)
+        .map_err(|e| format!("{path:?} refused: {e}"))?;
     Ok(Some((reg, added)))
 }
 
@@ -164,8 +182,10 @@ mod tests {
     use super::*;
 
     fn committed() -> NewbladesContent {
-        serde_json::from_str(include_str!("../../../deploy/static/newblades_content.json"))
-            .expect("newblades_content.json parses")
+        serde_json::from_str(include_str!(
+            "../../../deploy/static/newblades_content.json"
+        ))
+        .expect("newblades_content.json parses")
     }
 
     fn parsed() -> GameData {
@@ -205,14 +225,25 @@ mod tests {
         let mut gd = parsed();
         let d: Uuid = EQ18_DUNGEON.parse().unwrap();
         let before = gd.dungeons[&d].spawn_info.enemy_spawn_groups.len();
-        let total_before: usize = gd.dungeons.values().map(|x| x.spawn_info.enemy_spawn_groups.len()).sum();
+        let total_before: usize = gd
+            .dungeons
+            .values()
+            .map(|x| x.spawn_info.enemy_spawn_groups.len())
+            .sum();
         let reg = entry(&format!(
             r#"{{"id":"nb-t","status":"test","dungeonIds":["{EQ18_DUNGEON}"],
                 "extraSpawnGroups":{{"{EQ18_DUNGEON}":{{"00000000-0000-4000-8000-00000000d001":2}}}}}}"#
         ));
         assert_eq!(reg.apply(&mut gd), Ok(1));
-        assert_eq!(gd.dungeons[&d].spawn_info.enemy_spawn_groups.len(), before + 1);
-        let total_after: usize = gd.dungeons.values().map(|x| x.spawn_info.enemy_spawn_groups.len()).sum();
+        assert_eq!(
+            gd.dungeons[&d].spawn_info.enemy_spawn_groups.len(),
+            before + 1
+        );
+        let total_after: usize = gd
+            .dungeons
+            .values()
+            .map(|x| x.spawn_info.enemy_spawn_groups.len())
+            .sum();
         assert_eq!(total_after, total_before + 1, "no other dungeon changed");
     }
 
@@ -228,7 +259,10 @@ mod tests {
         assert!(err.contains("already a retail group"), "{err}");
         let d: Uuid = "924f1147-fd7f-4736-9e2d-f33fa942dbdd".parse().unwrap();
         let g: Uuid = "b98ac1b1-ab3d-4455-bf03-77a5be53a358".parse().unwrap();
-        assert_eq!(gd.dungeons[&d].spawn_info.enemy_spawn_groups[&g].quantity, 2, "unchanged");
+        assert_eq!(
+            gd.dungeons[&d].spawn_info.enemy_spawn_groups[&g].quantity, 2,
+            "unchanged"
+        );
     }
 
     #[test]
@@ -248,12 +282,19 @@ mod tests {
     #[test]
     fn ids_must_carry_the_nb_prefix_and_quests_must_be_client_templates() {
         let gd = parsed();
-        let bad_id = entry(r#"{"id":"draugr","status":"t","enemyDataIds":["67d9e5a6-191c-4c8f-863e-4c608d7cf3d3"]}"#);
+        let bad_id = entry(
+            r#"{"id":"draugr","status":"t","enemyDataIds":["67d9e5a6-191c-4c8f-863e-4c608d7cf3d3"]}"#,
+        );
         assert!(bad_id.validate(&gd).unwrap_err().contains("nb-"));
         let unknown = entry(
             r#"{"id":"nb-t","status":"t","questIds":["00000000-0000-4000-8000-000000000001"],"loc":{"X":"Newblades: x"}}"#,
         );
-        assert!(unknown.validate(&gd).unwrap_err().contains("not a client quest template"));
+        assert!(
+            unknown
+                .validate(&gd)
+                .unwrap_err()
+                .contains("not a client quest template")
+        );
     }
 
     #[test]
@@ -266,7 +307,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nbc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut gd = parsed();
-        assert_eq!(load(&dir.join("absent.json"), &mut gd).map(|r| r.is_none()), Ok(true));
+        assert_eq!(
+            load(&dir.join("absent.json"), &mut gd).map(|r| r.is_none()),
+            Ok(true)
+        );
         let bad = dir.join("bad.json");
         // Valid JSON, invalid content: adds to EQ18 but the id lacks "nb-".
         std::fs::write(&bad, format!(
@@ -275,8 +319,10 @@ mod tests {
         )).unwrap();
         assert!(load(&bad, &mut gd).is_err());
         let d: Uuid = EQ18_DUNGEON.parse().unwrap();
-        assert!(gd.dungeons[&d].spawn_info.enemy_spawn_groups.is_empty(), "nothing merged");
+        assert!(
+            gd.dungeons[&d].spawn_info.enemy_spawn_groups.is_empty(),
+            "nothing merged"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

@@ -170,7 +170,10 @@ fn collect_reward_for(
     // distinct captured chest-daily collect responses all omit `reward.chests` and
     // instead carry `items`, `stackableItems` and `currencies`.
     for (idx, chest) in payload.chests.iter().enumerate() {
-        let key = format!("daily:{reward_uid}:{roll_key}:{idx}:{}:{}", chest.tier, chest.level);
+        let key = format!(
+            "daily:{reward_uid}:{roll_key}:{idx}:{}:{}",
+            chest.tier, chest.level
+        );
         if let Some(mut loot) =
             chests::roll_loot(chest_loots, chest.tier as i64, chest.level, &key, owned)
         {
@@ -261,7 +264,8 @@ pub async fn collect_daily_reward(
                 // A later alt shares the live row's id, so it is folded in as
                 // well (#387); the original's key is unchanged.
                 let roll_alt = crate::alt_roll::for_character(&mut conn, character_id).await;
-                let roll_key = crate::alt_roll::fold_key(format!("{character_id}:{period}"), roll_alt);
+                let roll_key =
+                    crate::alt_roll::fold_key(format!("{character_id}:{period}"), roll_alt);
                 let mut collect_reward = collect_reward_for(
                     &daily_reward,
                     &globals.static_data.chest_loots,
@@ -338,7 +342,14 @@ mod collect_response_tests {
     /// Build the `reward` exactly as `collect_daily_reward` does, for one day's
     /// definition. Kept beside the handler so the two cannot drift silently.
     fn reward_for(payload: &blades_lib::features::daily_reward::DailyRewardPayload) -> RewardGrant {
-        collect_reward_for(payload, &loot_tables(), Uuid::from_u128(0xDA11A), "char:1", &Default::default(), 1)
+        collect_reward_for(
+            payload,
+            &loot_tables(),
+            Uuid::from_u128(0xDA11A),
+            "char:1",
+            &Default::default(),
+            1,
+        )
     }
 
     fn loot_tables() -> ChestLootTables {
@@ -440,7 +451,14 @@ mod collect_response_tests {
             .expect("scaled daily reward def deserializes");
 
         let status_payload = def.daily_reward_for_level(74);
-        let collect_reward = collect_reward_for(&status_payload, &loot_tables(), def.reward_uid, "char:1", &Default::default(), 1);
+        let collect_reward = collect_reward_for(
+            &status_payload,
+            &loot_tables(),
+            def.reward_uid,
+            "char:1",
+            &Default::default(),
+            1,
+        );
 
         assert_eq!(
             collect_reward.stackable_items,
@@ -499,7 +517,11 @@ mod collect_response_tests {
                 seen.insert(format!("{:?}{:?}", r.currencies, r.stackable_items));
             }
         }
-        assert!(seen.len() >= 15, "20 Sunday chests gave only {} distinct", seen.len());
+        assert!(
+            seen.len() >= 15,
+            "20 Sunday chests gave only {} distinct",
+            seen.len()
+        );
 
         // The same character's same period pays the same (status == collect).
         let a = collect_reward_for(&payload, &tables, uid, "c:7", &Default::default(), 1);
@@ -518,23 +540,35 @@ mod collect_response_tests {
         let uid: Uuid = "2c4ba1ff-517d-4a7f-b353-054d635ecd9e".parse().unwrap();
         for (tier, counts) in [(2u64, 1u64..=2), (3, 3..=7)] {
             let payload: blades_lib::features::daily_reward::DailyRewardPayload =
-                serde_json::from_value(serde_json::json!({ "chests": [{ "tier": tier, "level": 100 }] })).unwrap();
+                serde_json::from_value(
+                    serde_json::json!({ "chests": [{ "tier": tier, "level": 100 }] }),
+                )
+                .unwrap();
             let mut paid = 0;
             for n in 0..600 {
                 let key = format!("421:{n}");
                 let gems_of = |r: &RewardGrant| {
-                    let mut v: Vec<_> = r.stackable_items.iter().filter(|(id, _)| soul_gems.contains(id)).collect();
+                    let mut v: Vec<_> = r
+                        .stackable_items
+                        .iter()
+                        .filter(|(id, _)| soul_gems.contains(id))
+                        .collect();
                     v.sort();
                     format!("{v:?}")
                 };
                 let rest_of = |r: &RewardGrant| {
-                    let mut v: Vec<_> = r.stackable_items.iter().filter(|(id, _)| !soul_gems.contains(id)).collect();
+                    let mut v: Vec<_> = r
+                        .stackable_items
+                        .iter()
+                        .filter(|(id, _)| !soul_gems.contains(id))
+                        .collect();
                     v.sort();
                     let mut c: Vec<_> = r.currencies.iter().collect();
                     c.sort();
                     format!("{v:?}{c:?}")
                 };
-                let high = collect_reward_for(&payload, &tables, uid, &key, &Default::default(), 70);
+                let high =
+                    collect_reward_for(&payload, &tables, uid, &key, &Default::default(), 70);
                 for (id, q) in &high.stackable_items {
                     if soul_gems.contains(id) {
                         paid += 1;
@@ -552,8 +586,16 @@ mod collect_response_tests {
                     &Default::default(),
                 )
                 .unwrap();
-                assert_eq!(gems_of(&low), gems_of(&rolled), "tier {tier} chest {n} at 44");
-                assert_eq!(gems_of(&low).len() > 2, gems_of(&high).len() > 2, "frequency moved");
+                assert_eq!(
+                    gems_of(&low),
+                    gems_of(&rolled),
+                    "tier {tier} chest {n} at 44"
+                );
+                assert_eq!(
+                    gems_of(&low).len() > 2,
+                    gems_of(&high).len() > 2,
+                    "frequency moved"
+                );
                 assert_eq!(rest_of(&low), rest_of(&high), "only soul gems move");
             }
         }

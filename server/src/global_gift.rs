@@ -54,9 +54,14 @@ fn open_season_chests(
     let season_chests = std::mem::take(&mut reward.chests);
     let opener_level = i64::try_from(character_level).unwrap_or(i64::MAX);
     // From level 49, at the level-100 character's level (#398).
-    let character_level = blades_lib::features::loot_level::effective_loot_level_u64(character_level);
+    let character_level =
+        blades_lib::features::loot_level::effective_loot_level_u64(character_level);
     for (index, chest) in season_chests.into_iter().enumerate() {
-        let level = if chest.level == 0 { character_level } else { chest.level };
+        let level = if chest.level == 0 {
+            character_level
+        } else {
+            chest.level
+        };
         let key = format!("{key_prefix}:{}:{index}", chest.tier);
         if let Some(mut loot) = chests::roll_loot(tables, chest.tier as i64, level, &key, owned) {
             // A Silver, Gold, Elder or Legendary chest's soul gems at 45-100
@@ -286,7 +291,9 @@ pub async fn get_global_gift(
         if !season_store::award_belongs_to_alt(gift.source_alt_uuid, alt) {
             return Err(map_gift_err(GiftError::NotFound));
         }
-        let def = gift.gift_def().ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+        let def = gift
+            .gift_def()
+            .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
         return Ok(Json(GiftViewResponse {
             global_gift: GiftView {
                 global_gift_id: gift_id,
@@ -385,7 +392,9 @@ pub async fn claim_global_gift(
                         .load(&mut conn)
                         .await?
                         .into_iter()
-                        .filter(|award| season_store::award_belongs_to_alt(award.source_alt_uuid, alt))
+                        .filter(|award| {
+                            season_store::award_belongs_to_alt(award.source_alt_uuid, alt)
+                        })
                         .collect();
                     if awards.is_empty() {
                         return Err(map_gift_err(GiftError::NotFound));
@@ -521,7 +530,10 @@ pub async fn claim_global_gift(
     // An arena weapon gift (owner-approved #390/#391): one weapon instance, once,
     // to the alt that fought the milestone fight. The unlocked probe only routes;
     // the row is re-read under lock inside the transaction.
-    if arena_weapon_gift(&mut conn, gift_id, character_id).await.is_some() {
+    if arena_weapon_gift(&mut conn, gift_id, character_id)
+        .await
+        .is_some()
+    {
         let globals = app_state.get_ref().clone();
         return conn
             .transaction(move |mut conn| {
@@ -735,23 +747,44 @@ mod season_chest_tests {
         let mut paid = HashSet::new();
         for i in 0..40 {
             let mut reward = RewardGrant {
-                chests: vec![RewardChest { id: None, tier: 3, level: 0 }],
+                chests: vec![RewardChest {
+                    id: None,
+                    tier: 3,
+                    level: 0,
+                }],
                 ..Default::default()
             };
             let prefix = format!("arena-season:{i}:489620db");
             open_season_chests(&mut reward, &tables, 100, &HashSet::new(), &prefix);
-            assert!(reward.chests.is_empty(), "the season chest is opened, not granted");
+            assert!(
+                reward.chests.is_empty(),
+                "the season chest is opened, not granted"
+            );
             assert_eq!(reward.items.len(), 2, "a Gold chest pays two items");
             let gold = reward.currencies[&GOLD];
-            assert!(gold >= 8_069, "a level-100 season Gold chest paid {gold} gold");
-            let templates: Vec<Uuid> = reward.items.iter().map(|i| i.item.item_template_id).collect();
+            assert!(
+                gold >= 8_069,
+                "a level-100 season Gold chest paid {gold} gold"
+            );
+            let templates: Vec<Uuid> = reward
+                .items
+                .iter()
+                .map(|i| i.item.item_template_id)
+                .collect();
             paid.insert(format!("{gold}:{templates:?}"));
         }
-        assert!(paid.len() > 30, "40 season chests paid only {} distinct rewards", paid.len());
+        assert!(
+            paid.len() > 30,
+            "40 season chests paid only {} distinct rewards",
+            paid.len()
+        );
 
         // Control: what the level-0 roll paid.
         let low = chests::pick_loot(&tables, 3, 0, "arena-season:0:489620db:3:0").unwrap();
-        assert!(low.currencies[&GOLD] <= 4_655, "control: level 0 is a level-1 Gold chest");
+        assert!(
+            low.currencies[&GOLD] <= 4_655,
+            "control: level 0 is a level-1 Gold chest"
+        );
     }
 
     /// A chest that already carries a level keeps it.
@@ -759,10 +792,17 @@ mod season_chest_tests {
     fn a_season_chest_with_a_level_keeps_it() {
         let tables = committed();
         let mut reward = RewardGrant {
-            chests: vec![RewardChest { id: None, tier: 3, level: 5 }],
+            chests: vec![RewardChest {
+                id: None,
+                tier: 3,
+                level: 5,
+            }],
             ..Default::default()
         };
         open_season_chests(&mut reward, &tables, 100, &HashSet::new(), "k");
-        assert!(reward.currencies[&GOLD] < 8_069, "a level-5 chest pays level-5 gold");
+        assert!(
+            reward.currencies[&GOLD] < 8_069,
+            "a level-5 chest pays level-5 gold"
+        );
     }
 }

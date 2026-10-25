@@ -59,12 +59,8 @@ pub struct LevelUpData {
 impl LevelUpData {
     pub fn from_json(value: &serde_json::Value) -> Self {
         match serde_json::from_value::<HashMap<u32, LevelReward>>(value.clone()) {
-            Ok(rewards) => {
-                LevelUpData { rewards }
-            }
-            Err(_e) => {
-                LevelUpData::default()
-            }
+            Ok(rewards) => LevelUpData { rewards },
+            Err(_e) => LevelUpData::default(),
         }
     }
 
@@ -72,7 +68,6 @@ impl LevelUpData {
         self.rewards.get(&level)
     }
 }
-
 
 /// Why a level-up was refused.
 ///
@@ -113,7 +108,12 @@ impl LevelUpData {
 
     /// The highest level the table describes — retail's 100.
     pub fn max_level(&self) -> u16 {
-        self.rewards.keys().copied().max().unwrap_or(0).min(u32::from(u16::MAX)) as u16
+        self.rewards
+            .keys()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .min(u32::from(u16::MAX)) as u16
     }
 }
 
@@ -496,9 +496,7 @@ mod tests {
     fn attribute_points_still_stop_at_fifty() {
         let data = table();
         let mut ch = at(MAX_ATTRIBUTE_POINT_LEVEL, u64::MAX / 2);
-        ch.experience = data
-            .cost_of_next_level(MAX_ATTRIBUTE_POINT_LEVEL)
-            .unwrap();
+        ch.experience = data.cost_of_next_level(MAX_ATTRIBUTE_POINT_LEVEL).unwrap();
         let points = ch.stamina_attribute_points;
         apply_level_up(&mut ch, Attribute::Stamina, &data).unwrap();
         assert_eq!(ch.level, MAX_ATTRIBUTE_POINT_LEVEL + 1);
@@ -572,12 +570,25 @@ mod tests {
         let before_version = ch.version;
         let done = set_level(&mut ch, 80, &data).unwrap();
         assert_eq!((ch.level, ch.experience), (80, 0));
-        assert_eq!(ch.stamina_attribute_points + ch.magicka_attribute_points, 49);
-        assert!(ch.magicka_attribute_points >= 17, "the split follows the old proportion");
+        assert_eq!(
+            ch.stamina_attribute_points + ch.magicka_attribute_points,
+            49
+        );
+        assert!(
+            ch.magicka_attribute_points >= 17,
+            "the split follows the old proportion"
+        );
         assert!(!done.abilities_reset);
-        assert_eq!(ch.abilities, serde_json::json!({"a": 1}), "abilities survive a raise");
+        assert_eq!(
+            ch.abilities,
+            serde_json::json!({"a": 1}),
+            "abilities survive a raise"
+        );
         assert_eq!(ch.global_shop_offers, serde_json::json!([]));
-        assert!(ch.version > before_version, "the client must see a new version");
+        assert!(
+            ch.version > before_version,
+            "the client must see a new version"
+        );
         assert_eq!((done.from_level, done.from_experience), (48, 1234));
     }
 
@@ -607,7 +618,10 @@ mod tests {
             let mut ch = at(48, 99);
             assert_eq!(
                 set_level(&mut ch, bad, &data),
-                Err(SetLevelRefusal::OutOfRange { level: bad, max: data.max_level() })
+                Err(SetLevelRefusal::OutOfRange {
+                    level: bad,
+                    max: data.max_level()
+                })
             );
             assert_eq!((ch.level, ch.experience), (48, 99));
         }

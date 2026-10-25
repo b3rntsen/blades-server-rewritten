@@ -383,12 +383,8 @@ pub async fn get_social_loadout(
     let (requester_character_id, wanted_user_id, wanted_character_id) = path.into_inner();
 
     let mut conn = app_state.db_pool.get().await?;
-    check_permission_for_character_and_get_it(
-        &mut conn,
-        &session.session,
-        requester_character_id,
-    )
-    .await?;
+    check_permission_for_character_and_get_it(&mut conn, &session.session, requester_character_id)
+        .await?;
 
     let rows: Vec<CharacterDbEntryInventory> = {
         use schema::characters::dsl::*;
@@ -831,7 +827,11 @@ mod wire {
         assert_eq!(item["id"], item_id.to_string());
         assert_eq!(item["itemTemplateId"], template_id.to_string());
         assert_eq!(item["slot"], slot.to_string());
-        assert!(response["social"]["loadout"].get("equippedConsumables").is_none());
+        assert!(
+            response["social"]["loadout"]
+                .get("equippedConsumables")
+                .is_none()
+        );
     }
 
     /// A trailing or doubled comma must not become a blank id, and an

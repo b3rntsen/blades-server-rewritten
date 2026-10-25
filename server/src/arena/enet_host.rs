@@ -284,9 +284,12 @@ fn pump(
     let action = match host.service() {
         Ok(Some(Event::Connect { peer, .. })) => Act::Connect(peer.id(), peer.address()),
         Ok(Some(Event::Disconnect { peer, .. })) => Act::Disconnect(peer.id(), peer.address()),
-        Ok(Some(Event::Receive { peer, packet, .. })) => {
-            Act::Receive(peer.id(), peer.address(), peer.round_trip_time(), packet.data().to_vec())
-        }
+        Ok(Some(Event::Receive { peer, packet, .. })) => Act::Receive(
+            peer.id(),
+            peer.address(),
+            peer.round_trip_time(),
+            packet.data().to_vec(),
+        ),
         Ok(None) => return false,
         Err(e) => {
             warn!("arena-enet: service error: {e}");
@@ -483,11 +486,7 @@ fn handle_packet(
 
 /// Decode the fixed prefix of the retail plaintext op-0x38 key exchange.
 fn parse_key_exchange(data: &[u8]) -> Option<([u8; 6], [u8; 32])> {
-    if data.len() < 46
-        || data[0] != 0xBE
-        || data[1] != 0x38
-        || data[12] != 0x01
-        || data[13] != 0x20
+    if data.len() < 46 || data[0] != 0xBE || data[1] != 0x38 || data[12] != 0x01 || data[13] != 0x20
     {
         return None;
     }
@@ -539,7 +538,11 @@ mod tests {
         // The vanilla COMPRESSED bit (0x40) is NEVER left set after inbound translation,
         // for any header byte — that is the whole point (we run no decompressor).
         for b0 in 0u8..=0xFF {
-            assert_eq!(header_blades_to_vanilla(b0) & 0x40, 0, "COMPRESSED clear (b0={b0:#04x})");
+            assert_eq!(
+                header_blades_to_vanilla(b0) & 0x40,
+                0,
+                "COMPRESSED clear (b0={b0:#04x})"
+            );
         }
 
         // Session id (0x30) + peer-id high nibble (0x0F) are preserved; the flag bit
@@ -603,8 +606,16 @@ mod tests {
         );
 
         frame[1] = 0x36;
-        assert_eq!(parse_key_exchange(&frame), None, "encrypted game traffic is not a key exchange");
-        assert_eq!(parse_key_exchange(&frame[..45]), None, "a truncated exchange is rejected");
+        assert_eq!(
+            parse_key_exchange(&frame),
+            None,
+            "encrypted game traffic is not a key exchange"
+        );
+        assert_eq!(
+            parse_key_exchange(&frame[..45]),
+            None,
+            "a truncated exchange is rejected"
+        );
     }
 
     /// A rusty_enet test client: connect, then send/recv reliable channel-0 frames.
@@ -624,7 +635,10 @@ mod tests {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
             let mut host = Host::new(
                 BladesEnetSocket::new(sock),
-                HostSettings { peer_limit: 2, ..Default::default() },
+                HostSettings {
+                    peer_limit: 2,
+                    ..Default::default()
+                },
             )
             .unwrap();
             // Request 7 channels (ch0–6), matching the retail client's CONNECT
@@ -723,7 +737,10 @@ mod tests {
         let server_addr = server_sock.local_addr().unwrap();
         let mut server = Host::new(
             BladesEnetSocket::new(server_sock),
-            HostSettings { peer_limit: 4, ..Default::default() },
+            HostSettings {
+                peer_limit: 4,
+                ..Default::default()
+            },
         )
         .unwrap();
         let mut peer_at = HashMap::new();
@@ -767,7 +784,10 @@ mod tests {
                 break;
             }
         }
-        assert!(client.connected, "second ENet generation connects at the same address");
+        assert!(
+            client.connected,
+            "second ENet generation connects at the same address"
+        );
 
         let (_, new_pk) = gen_keypair();
         client.send_plain(&hs_c2s(&new_pk));
@@ -784,7 +804,11 @@ mod tests {
             Some(55),
             "the fresh plaintext key exchange receives a fresh server key/nonce reply"
         );
-        assert_eq!(registry.active_count(), 1, "the stuck old solo match was retired");
+        assert_eq!(
+            registry.active_count(),
+            1,
+            "the stuck old solo match was retired"
+        );
         assert!(!registry.has_fresh_connection_reservation(client.addr()));
     }
 
@@ -901,10 +925,12 @@ mod tests {
                 && arena_proto::parse_netdata(&m[2..]).int(5)
                     == Some(crate::arena::combat::state::MatchState::InRound as i64)
         }));
-        assert!(replacement
-            .inbox
-            .iter()
-            .any(|m| m.ends_with(b"StateTimeout")));
+        assert!(
+            replacement
+                .inbox
+                .iter()
+                .any(|m| m.ends_with(b"StateTimeout"))
+        );
         let peer = &registry.debug_list()[0].peers[0];
         assert_eq!(peer.rebind_count, 1);
         assert_eq!(peer.last_match_state_ack.as_deref(), Some("StateTimeout"));
@@ -933,7 +959,10 @@ mod tests {
         let server_addr = server_sock.local_addr().unwrap();
         let mut server = Host::new(
             BladesEnetSocket::new(server_sock),
-            HostSettings { peer_limit: 4, ..Default::default() },
+            HostSettings {
+                peer_limit: 4,
+                ..Default::default()
+            },
         )
         .unwrap();
         let mut peer_at = HashMap::new();
@@ -958,19 +987,32 @@ mod tests {
         let (_sk, pk) = gen_keypair();
         a.send_plain(&hs_c2s(&pk));
         pump_until!(!a.inbox.is_empty(), "the waiting player is admitted");
-        assert!(registry.is_active(&a.addr()), "A is bound to the half-full match");
+        assert!(
+            registry.is_active(&a.addr()),
+            "A is bound to the half-full match"
+        );
 
         // Inside the deadline nothing happens: the opponent may still be dialling.
         let early = registry.sweep_expired(allocated_at + CONNECT_DEADLINE / 2);
         release_reclaimed(&mut server, &mut peer_at, early);
         pump_until!(true, "pump");
-        assert!(!a.disconnected, "nobody is released while the opponent may still come");
+        assert!(
+            !a.disconnected,
+            "nobody is released while the opponent may still come"
+        );
 
         // Past it, the serve loop's housekeeping releases A.
         let late = registry.sweep_expired(allocated_at + CONNECT_DEADLINE + Duration::from_secs(1));
-        assert_eq!(late.len(), 1, "the one connected peer is handed back for disconnect");
+        assert_eq!(
+            late.len(),
+            1,
+            "the one connected peer is handed back for disconnect"
+        );
         release_reclaimed(&mut server, &mut peer_at, late);
-        pump_until!(a.disconnected, "the waiting client is disconnected, not left on Connecting");
+        pump_until!(
+            a.disconnected,
+            "the waiting client is disconnected, not left on Connecting"
+        );
         assert_eq!(
             a.disconnect_data,
             Some(disconnect_reason::NOT_ENOUGH_PLAYERS),
@@ -998,7 +1040,10 @@ mod tests {
         let server_addr = server_sock.local_addr().unwrap();
         let mut server = Host::new(
             BladesEnetSocket::new(server_sock),
-            HostSettings { peer_limit: 16, ..Default::default() },
+            HostSettings {
+                peer_limit: 16,
+                ..Default::default()
+            },
         )
         .unwrap();
         let mut peer_at = HashMap::new();
@@ -1071,8 +1116,15 @@ mod tests {
         a.send_plain(&hs_c2s(&pk_a));
         b.send_plain(&hs_c2s(&pk_b));
 
-        pump_io!(!a.inbox.is_empty() && !b.inbox.is_empty(), "both get handshake reply");
-        assert_eq!(a.inbox[0].len(), 55, "reply = BE 38 + conn(6) + dir(4) + 01 20 + spk(32) + 08 + nonce(8)");
+        pump_io!(
+            !a.inbox.is_empty() && !b.inbox.is_empty(),
+            "both get handshake reply"
+        );
+        assert_eq!(
+            a.inbox[0].len(),
+            55,
+            "reply = BE 38 + conn(6) + dir(4) + 01 20 + spk(32) + 08 + nonce(8)"
+        );
         assert_eq!(&a.inbox[0][0..2], &[0xBE, 0x38], "reply is op-0x38");
         // s2c layout: [0..2]=BE 38, [2..8]=conn, [8..12]=dir, [12..14]=01 20,
         // [14..46]=server pubkey, [46]=08, [47..55]=nonce.
@@ -1083,9 +1135,15 @@ mod tests {
             (spk, n)
         };
         let (spk_a, n_a) = parse(&a.inbox[0]);
-        a.crypto = Some(CryptoCtx { key: x25519_shared(&sk_a, &spk_a), nonce: n_a });
+        a.crypto = Some(CryptoCtx {
+            key: x25519_shared(&sk_a, &spk_a),
+            nonce: n_a,
+        });
         let (spk_b, n_b) = parse(&b.inbox[0]);
-        b.crypto = Some(CryptoCtx { key: x25519_shared(&sk_b, &spk_b), nonce: n_b });
+        b.crypto = Some(CryptoCtx {
+            key: x25519_shared(&sk_b, &spk_b),
+            nonce: n_b,
+        });
         assert!(registry.is_active(&a.addr()) && registry.is_active(&b.addr()));
         a.inbox.clear();
         b.inbox.clear();
@@ -1152,7 +1210,11 @@ mod tests {
         let dmg = b
             .inbox
             .iter()
-            .find(|m| m.len() > 2 && m[1] == 0x36 && arena_proto::parse_netdata(&m[2..]).int(3) == Some(50))
+            .find(|m| {
+                m.len() > 2
+                    && m[1] == 0x36
+                    && arena_proto::parse_netdata(&m[2..]).int(3) == Some(50)
+            })
             .expect("ReceiveDamage present");
         let packed = match arena_proto::parse_netdata(&dmg[2..]).props.get(&4) {
             Some(arena_proto::NetDataValue::ULong(v)) => *v,
@@ -1160,8 +1222,12 @@ mod tests {
         };
         // Health is bits 20-29 of the stat word, i.e. bits 52-61 of the full ULong —
         // NOT the low 10 bits of the high half, which is Magicka. [PackedStats]
-        let hp = ((packed >> crate::arena::combat::state::PackedStats::HEALTH_SHIFT) & 0x3ff) as u16;
-        assert!(hp > 0 && hp < 1023, "B's wire HP is a fraction below full after the swing (got {hp})");
+        let hp =
+            ((packed >> crate::arena::combat::state::PackedStats::HEALTH_SHIFT) & 0x3ff) as u16;
+        assert!(
+            hp > 0 && hp < 1023,
+            "B's wire HP is a fraction below full after the swing (got {hp})"
+        );
 
         // 5. A concedes. Drive the complete retail terminal walk, retire the match,
         // and gracefully disconnect both ENet peers exactly as `serve` does.
@@ -1185,7 +1251,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         assert_eq!(finished.len(), 2, "the first match retires both peers");
-        assert_eq!(registry.active_count(), 0, "the first match releases its slot");
+        assert_eq!(
+            registry.active_count(),
+            0,
+            "the first match releases its slot"
+        );
         let first_a_addr = a.addr();
         let first_b_addr = b.addr();
         for addr in finished {
@@ -1209,7 +1279,10 @@ mod tests {
             server.flush();
             std::thread::sleep(Duration::from_millis(1));
         }
-        assert!(a.disconnected && b.disconnected, "both clients return to the lobby");
+        assert!(
+            a.disconnected && b.disconnected,
+            "both clients return to the lobby"
+        );
 
         // 6. Allocate a second H2H match and reconnect both client hosts. Their UDP
         // source addresses must be byte-for-byte identical to match 1.
@@ -1224,7 +1297,10 @@ mod tests {
         assert_eq!(a.addr(), first_a_addr, "A reuses its UDP source address");
         assert_eq!(b.addr(), first_b_addr, "B reuses its UDP source address");
 
-        pump_io!(a.connected && b.connected, "both clients reconnect for match 2");
+        pump_io!(
+            a.connected && b.connected,
+            "both clients reconnect for match 2"
+        );
 
         let (sk_a2, pk_a2) = gen_keypair();
         let (sk_b2, pk_b2) = gen_keypair();
@@ -1235,9 +1311,15 @@ mod tests {
             "both clients get the second handshake reply"
         );
         let (spk_a2, n_a2) = parse(&a.inbox[0]);
-        a.crypto = Some(CryptoCtx { key: x25519_shared(&sk_a2, &spk_a2), nonce: n_a2 });
+        a.crypto = Some(CryptoCtx {
+            key: x25519_shared(&sk_a2, &spk_a2),
+            nonce: n_a2,
+        });
         let (spk_b2, n_b2) = parse(&b.inbox[0]);
-        b.crypto = Some(CryptoCtx { key: x25519_shared(&sk_b2, &spk_b2), nonce: n_b2 });
+        b.crypto = Some(CryptoCtx {
+            key: x25519_shared(&sk_b2, &spk_b2),
+            nonce: n_b2,
+        });
         assert!(registry.is_active(&a.addr()) && registry.is_active(&b.addr()));
         a.inbox.clear();
         b.inbox.clear();
@@ -1276,8 +1358,9 @@ mod tests {
         let step = Duration::from_millis(50);
         let bound = soak_match_bound(step) + Duration::from_secs(10);
         // Player fixture × bot fixture, spread over the prod sample and every edge build.
-        let pairs: Vec<(usize, usize)> =
-            (0..12).map(|i| ((i * 7) % fx.len(), (30 + i) % fx.len())).collect();
+        let pairs: Vec<(usize, usize)> = (0..12)
+            .map(|i| ((i * 7) % fx.len(), (30 + i) % fx.len()))
+            .collect();
         let mut summary = Vec::new();
 
         for (k, &(pa, pb)) in pairs.iter().enumerate() {
@@ -1292,7 +1375,10 @@ mod tests {
             let server_addr = server_sock.local_addr().unwrap();
             let mut server = Host::new(
                 BladesEnetSocket::new(server_sock),
-                HostSettings { peer_limit: 4, ..Default::default() },
+                HostSettings {
+                    peer_limit: 4,
+                    ..Default::default()
+                },
             )
             .unwrap();
             let mut peer_at = HashMap::new();
@@ -1322,7 +1408,10 @@ mod tests {
             let (mut spk, mut nonce) = ([0u8; 32], [0u8; 8]);
             spk.copy_from_slice(&reply[14..46]);
             nonce.copy_from_slice(&reply[47..55]);
-            c.crypto = Some(CryptoCtx { key: x25519_shared(&sk, &spk), nonce });
+            c.crypto = Some(CryptoCtx {
+                key: x25519_shared(&sk, &spk),
+                nonce,
+            });
             c.inbox.clear();
 
             let casts: Vec<String> = fx[pa]
@@ -1352,7 +1441,11 @@ mod tests {
                 server.flush();
                 c.drain();
                 for m in c.inbox.drain(..) {
-                    assert_eq!(m.first(), Some(&0xBE), "match {k}: a packet did not decrypt");
+                    assert_eq!(
+                        m.first(),
+                        Some(&0xBE),
+                        "match {k}: a packet did not decrypt"
+                    );
                     let nd = arena_proto::parse_netdata(&m[2..]);
                     if m[1] == 0x35 {
                         if let Some(s) = nd.int(5) {
@@ -1371,14 +1464,16 @@ mod tests {
                 }
                 let live = states.last() == Some(&(MatchState::InRound as u8));
                 if live && c.connected {
-                    rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    rng = rng
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     match (rng >> 33) % 12 {
                         0 | 1 => c.send_enc(0x84, 0x36),
                         2 if !casts.is_empty() => {
                             let uuid = &casts[((rng >> 40) as usize) % casts.len()];
-                            c.send_enc_payload(&crate::arena::combat::messages::request_execute_ability(
-                                564, uuid,
-                            ));
+                            c.send_enc_payload(
+                                &crate::arena::combat::messages::request_execute_ability(564, uuid),
+                            );
                         }
                         _ => {}
                     }
@@ -1393,14 +1488,20 @@ mod tests {
                     fx[pb].0
                 );
             }
-            assert!(retired, "match {k}: the registry retired the finished match");
+            assert!(
+                retired,
+                "match {k}: the registry retired the finished match"
+            );
             assert_eq!(registry.active_count(), 0, "match {k}: slot released");
             assert_eq!(
                 states.last(),
                 Some(&(MatchState::DisconnectingPlayersAfterMatch as u8)),
                 "match {k}: {states:?}"
             );
-            assert!(victory_card, "match {k}: the op49 victory card never arrived over ENet");
+            assert!(
+                victory_card,
+                "match {k}: the op49 victory card never arrived over ENet"
+            );
             assert!(damage > 0, "match {k}: no damage frame reached the client");
             summary.push(format!(
                 "{} vs {}: {:?} sim, {} damage frames, states {:?}",
@@ -1438,7 +1539,10 @@ mod post_match_disconnect_tests {
         // far above the code being guarded, and splitting on that cut the shipped
         // path out of the haystack entirely — the guard then passed by inspecting
         // nothing.
-        let code = src.split("\n#[cfg(test)]").next().expect("source has a body");
+        let code = src
+            .split("\n#[cfg(test)]")
+            .next()
+            .expect("source has a body");
 
         // Match on the METHOD CALL, not on a receiver name. The shipped line was
         // `host.peer_mut(pid).disconnect(0)`, which does not contain any particular
@@ -1455,7 +1559,8 @@ mod post_match_disconnect_tests {
         // trailing `(0)` means neither contains the other — so this counts bare calls
         // directly, whatever they are called on.
         assert_eq!(
-            code.matches(&bad).count(), 0,
+            code.matches(&bad).count(),
+            0,
             "a bare disconnect() in the shipped path discards unacknowledged packets — \
              it is what left report #163's client waiting for fragments that never came"
         );
