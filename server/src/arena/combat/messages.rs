@@ -3290,7 +3290,7 @@ mod tests {
     /// neither key (retail's match reward never carried items).
     #[test]
     fn a_reward_item_rides_reward_items_and_the_backpack_diff() {
-        let weapon = crate::arena::arena_fight_gift::weapon_instance(uuid::Uuid::from_u128(77));
+        let weapon = crate::arena::arena_fight_gift::weapon_instance(uuid::Uuid::from_u128(77), 0);
         let reward = MatchEndReward {
             backpack_version: 10,
             reward_items: vec![weapon.clone()],

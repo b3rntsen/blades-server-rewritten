@@ -2005,7 +2005,12 @@ impl MatchInstance {
                 && crate::arena::arena_fight_gift::weapon_due_on_card(
                     f.loadout.account_arena_fights,
                 ))
-            .then(|| crate::arena::arena_fight_gift::weapon_instance(uuid::Uuid::new_v4()));
+            .then(|| {
+                crate::arena::arena_fight_gift::weapon_instance(
+                    uuid::Uuid::new_v4(),
+                    crate::arena::arena_fight_gift::unix_now(),
+                )
+            });
             // One backpack mutation, one version bump — whether it carried promotion
             // stackables, the weapon, promotion items (when shown), or several.
             // Promotion items the card hides move only the DATABASE version
@@ -4928,10 +4933,8 @@ pub(in crate::arena::combat) mod tests {
         let w = &items[0];
         let template: uuid::Uuid = w["itemTemplateId"].as_str().unwrap().parse().unwrap();
         assert!(
-            crate::arena::arena_fight_gift::DIVINE_STALHRIM_WEAPONS
-                .iter()
-                .any(|d| d.0 == template),
-            "a Divine Stalhrim weapon"
+            crate::arena::arena_fight_gift::is_gift_weapon(template),
+            "one of the gift's weapons"
         );
         assert_eq!(w["arcaneTier"], 2, "Arcane II");
         assert_eq!(w["temperingLevel"], 0);
