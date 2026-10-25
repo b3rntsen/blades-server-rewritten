@@ -52,12 +52,21 @@ fn open_season_chests(
     key_prefix: &str,
 ) {
     let season_chests = std::mem::take(&mut reward.chests);
+    let opener_level = i64::try_from(character_level).unwrap_or(i64::MAX);
     // From level 49, at the level-100 character's level (#398).
     let character_level = blades_lib::features::loot_level::effective_loot_level_u64(character_level);
     for (index, chest) in season_chests.into_iter().enumerate() {
         let level = if chest.level == 0 { character_level } else { chest.level };
         let key = format!("{key_prefix}:{}:{index}", chest.tier);
         if let Some(mut loot) = chests::roll_loot(tables, chest.tier as i64, level, &key, owned) {
+            // A Silver or Gold chest's soul gems at 45-100 (owner-approved
+            // deviation from retail, #421).
+            blades_lib::features::chest_soul_gems::pay_chest_soul_gems(
+                &mut loot.stackable_items,
+                chest.tier as u64,
+                opener_level,
+                blades_lib::features::beginner_economy::key_seed(&key),
+            );
             for item in &mut loot.items {
                 item.id = Uuid::new_v4();
             }

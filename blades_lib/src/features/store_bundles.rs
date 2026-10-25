@@ -939,6 +939,13 @@ pub fn roll_bundle_with(
                     mix(seed ^ 0x9E6C_63D0_676A_9A99 ^ ordinal as u64),
                 );
             }
+            // Owner-approved deviation from retail, #421.
+            crate::features::chest_soul_gems::pay_chest_soul_gems(
+                &mut grant.stackable_items,
+                crate::features::chest_soul_gems::GOLD,
+                i64::try_from(buyer_level).unwrap_or(i64::MAX),
+                mix(seed ^ 0x0421_5701_6E35),
+            );
             return Some(grant);
         }
     }
@@ -1086,6 +1093,14 @@ pub fn roll_bundle_with(
             &mut grant.stackable_items,
             i64::try_from(buyer_level).unwrap_or(i64::MAX),
             mix(seed ^ 0x388_5047_6E35),
+        );
+        // A Gold chest's soul gems at 45-100 (owner-approved deviation from
+        // retail, #421): the store's Golden chest is the Gold chest, sold.
+        crate::features::chest_soul_gems::pay_chest_soul_gems(
+            &mut grant.stackable_items,
+            crate::features::chest_soul_gems::GOLD,
+            i64::try_from(buyer_level).unwrap_or(i64::MAX),
+            mix(seed ^ 0x0421_5701_6E35),
         );
     }
     for (ordinal, item) in items.into_iter().enumerate() {
@@ -2773,6 +2788,40 @@ mod tests {
             let r = store_golden(&t, 46, n);
             assert!(SOUL_GEMS[..7].iter().all(|id| !r.stackable_items.contains_key(id)), "L46 chest {n}");
         }
+    }
+
+    /// Report #421, owner decision d21: the store's Golden chest is the Gold chest,
+    /// so from buyer level 45 to 100 its soul gems, when it pays any, are Grand 60%
+    /// / Glorious 20% / Transcendent 20%, 3 to 7 of them, one kind a chest. At 44 it
+    /// is untouched: lower soul gems still come.
+    #[test]
+    fn a_store_golden_chest_at_45_to_100_pays_the_owners_soul_gems() {
+        let t = committed_chest_tables();
+        const ROLLS: u64 = 3000;
+        for level in [45u64, 70, 100] {
+            let (mut with_gems, mut kinds, mut counts) = (0u64, [0u64; 10], HashSet::new());
+            for n in 0..ROLLS {
+                let r = store_golden(&t, level, n);
+                let gems: Vec<(usize, u64)> =
+                    SOUL_GEMS.iter().enumerate().filter_map(|(k, id)| r.stackable_items.get(id).map(|q| (k, *q))).collect();
+                assert!(gems.len() <= 1, "L{level} chest {n}: {gems:?}");
+                for (k, q) in gems {
+                    with_gems += 1;
+                    kinds[k] += 1;
+                    counts.insert(q);
+                }
+            }
+            let share = with_gems as f64 / ROLLS as f64;
+            assert!((0.20..=0.45).contains(&share), "L{level}: {share:.3} of chests paid soul gems");
+            let of = |k: usize| kinds[k] as f64 / with_gems as f64;
+            assert_eq!(kinds[..7].iter().sum::<u64>(), 0, "L{level}: below Grand {kinds:?}");
+            assert!((0.53..=0.67).contains(&of(7)), "L{level}: Grand {:.3}", of(7));
+            assert!((0.14..=0.26).contains(&of(8)), "L{level}: Glorious {:.3}", of(8));
+            assert!((0.14..=0.26).contains(&of(9)), "L{level}: Transcendent {:.3}", of(9));
+            assert_eq!(counts, (3..=7).collect::<HashSet<u64>>(), "L{level}: counts");
+        }
+        let lower = (0..ROLLS).filter(|&n| SOUL_GEMS[..7].iter().any(|id| store_golden(&t, 44, n).stackable_items.contains_key(id))).count();
+        assert!(lower > 0, "L44: the Golden chest's own soul gems must be left alone");
     }
 
     /// THE REPORT (#378): "the contents of Gold and Elder chests are set too low".

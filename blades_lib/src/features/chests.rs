@@ -487,6 +487,11 @@ pub const TOP_BAND_GOLD_CHEST_LEVEL: u64 = 61;
 /// soul gems pays none). Everything else in the chest is left as composed. Silver
 /// is not touched: its 13 openings nearest 100 already show the band's kinds
 /// (Elevated, Grand, Glorious), one gem a chest.
+///
+/// When the chest is opened (or bought) by a level 45-100 character, the owner's
+/// #421 rule then sets the kind and count of these soul gems
+/// ([`crate::features::chest_soul_gems`]); this roll still decides whether the
+/// chest holds any.
 fn pay_top_band_gold_soul_gems(pool: &[ChestLootSample], grant: &mut RewardGrant, level: u64, nonce: u64) {
     use crate::features::store_bundles::{mix, SOUL_GEMS};
     if level < crate::features::loot_level::TOP_LOOT_FROM_LEVEL as u64 {
@@ -942,6 +947,68 @@ mod tests {
         for i in 0..ROLLS {
             let r = roll_loot(&t, 3, 45, &format!("421:{i}:3:45"), &HashSet::new()).unwrap();
             assert!(!r.stackable_items.contains_key(&SOUL_GEMS[8]) && !r.stackable_items.contains_key(&SOUL_GEMS[9]));
+        }
+    }
+
+    /// Report #421, owner decision d21: a Silver or Gold chest opened at level
+    /// 45-100 that holds soul gems pays Grand 60% / Glorious 20% / Transcendent 20%,
+    /// 1-2 of them in Silver and 3-7 in Gold. Which chests hold soul gems at all is
+    /// exactly what it was. The chest is rolled at the level it is minted at for the
+    /// opener (100 from 49, #398), then the opener's level picks the rule.
+    #[test]
+    fn a_silver_or_gold_chest_at_45_to_100_pays_the_owners_soul_gems() {
+        use crate::features::chest_soul_gems::pay_chest_soul_gems;
+        use crate::features::store_bundles::SOUL_GEMS;
+        use crate::features::loot_level::effective_loot_level_u64;
+        let t = committed();
+        const ROLLS: usize = 4000;
+        let soul_gems_of = |r: &RewardGrant| -> Vec<(usize, u64)> {
+            SOUL_GEMS.iter().enumerate().filter_map(|(k, id)| r.stackable_items.get(id).map(|n| (k, *n))).collect()
+        };
+        for (tier, counts_expected) in [(2i64, 1u64..=2), (3, 3..=7)] {
+            for level in [45i64, 70, 100] {
+                let chest_level = effective_loot_level_u64(level as u64);
+                let (mut with_gems, mut kinds, mut counts) = (0usize, [0usize; 10], HashSet::new());
+                for i in 0..ROLLS {
+                    let key = format!("421d21:{i}:{tier}:{level}");
+                    let before = roll_loot(&t, tier, chest_level, &key, &HashSet::new()).unwrap();
+                    let mut after = before.clone();
+                    pay_chest_soul_gems(&mut after.stackable_items, tier as u64, level, crate::features::beginner_economy::key_seed(&key));
+                    let (was, now) = (soul_gems_of(&before), soul_gems_of(&after));
+                    assert_eq!(was.is_empty(), now.is_empty(), "tier {tier} L{level} chest {i}: soul-gem frequency moved");
+                    // Nothing but the soul gems moves.
+                    let mut rest_before = before.clone();
+                    rest_before.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    let mut rest_after = after.clone();
+                    rest_after.stackable_items.retain(|id, _| !SOUL_GEMS.contains(id));
+                    assert_eq!(fingerprint(&rest_before), fingerprint(&rest_after));
+                    assert!(now.len() <= 1, "tier {tier} L{level}: {now:?}");
+                    for (k, n) in now {
+                        with_gems += 1;
+                        kinds[k] += 1;
+                        counts.insert(n);
+                    }
+                }
+                let share = with_gems as f64 / ROLLS as f64;
+                assert!((0.20..=0.45).contains(&share), "tier {tier} L{level}: {share:.3} held soul gems");
+                let of = |k: usize| kinds[k] as f64 / with_gems as f64;
+                assert_eq!(kinds[..7].iter().sum::<usize>(), 0, "tier {tier} L{level}: below Grand {kinds:?}");
+                assert!((0.54..=0.66).contains(&of(7)), "tier {tier} L{level}: Grand {:.3}", of(7));
+                assert!((0.15..=0.25).contains(&of(8)), "tier {tier} L{level}: Glorious {:.3}", of(8));
+                assert!((0.15..=0.25).contains(&of(9)), "tier {tier} L{level}: Transcendent {:.3}", of(9));
+                assert_eq!(counts, counts_expected.clone().collect::<HashSet<u64>>(), "tier {tier} L{level}: counts");
+            }
+        }
+        // Level 44, and Elder and Legendary at any level, are paid exactly as rolled.
+        for (tier, level) in [(2i64, 44i64), (3, 44), (4, 45), (4, 70), (4, 100), (5, 45), (5, 70), (5, 100)] {
+            let chest_level = effective_loot_level_u64(level as u64);
+            for i in 0..300 {
+                let key = format!("421d21-same:{i}:{tier}:{level}");
+                let before = roll_loot(&t, tier, chest_level, &key, &HashSet::new()).unwrap();
+                let mut after = before.clone();
+                pay_chest_soul_gems(&mut after.stackable_items, tier as u64, level, crate::features::beginner_economy::key_seed(&key));
+                assert_eq!(fingerprint(&before), fingerprint(&after), "tier {tier} L{level} chest {i} moved");
+            }
         }
     }
 
