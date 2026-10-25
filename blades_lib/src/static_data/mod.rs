@@ -224,6 +224,12 @@ pub struct EnchantingData {
     /// template's type, weapon type and equipment slot.
     #[serde(default)]
     pub templates: HashMap<Uuid, usize>,
+    /// Newblades tuning laid over these retail tables (`enchant_tuning.json`, tracker
+    /// #415). NOT APK data, so `enchanting.json` can never carry it: the loader fills
+    /// it from its own file, and the default reproduces retail exactly (plus the
+    /// owner-approved double-Ravage pity timer).
+    #[serde(skip)]
+    pub tuning: EnchantTuning,
 }
 
 impl EnchantingData {
@@ -231,6 +237,104 @@ impl EnchantingData {
         self.templates
             .get(item_template_id)
             .and_then(|&i| self.secondary_tables.get(i))
+    }
+
+    /// P(0), P(1), P(2) secondaries for a NON-arcane item served by `table`: the first
+    /// [`EnchantTuning::secondary_count_odds`] rule that matches the table, else the
+    /// table's own retail odds.
+    pub fn count_odds_for<'a>(&'a self, table: &'a SecondaryEnchantTable) -> &'a [f64] {
+        self.tuning
+            .secondary_count_odds
+            .iter()
+            .find(|r| r.matches(table))
+            .map_or(table.count_odds.as_slice(), |r| r.odds.as_slice())
+    }
+
+    /// The count odds an enchant roll uses: the item's arcane tier's when the catalog
+    /// has one (tier 1 = exactly one, tier 2 = exactly two), else
+    /// [`Self::count_odds_for`] the item's table.
+    pub fn roll_count_odds<'a>(
+        &'a self,
+        table: &'a SecondaryEnchantTable,
+        arcane_tier: Option<u64>,
+    ) -> &'a [f64] {
+        arcane_tier
+            .and_then(|t| self.arcane_tier_count_odds.get(&t))
+            .map_or_else(|| self.count_odds_for(table), Vec::as_slice)
+    }
+
+    /// Which odds class an item's enchant is rolled in: `"arcane<N>"` when the catalog
+    /// has count odds for its arcane tier, else `"normal"`. The double-Ravage pity
+    /// timer keeps one counter per class, because the class is the only thing that
+    /// changes the odds of the pair (the soul gem's grade sets the TIER, never the
+    /// count or the pool).
+    pub fn odds_class(&self, arcane_tier: Option<u64>) -> String {
+        match arcane_tier {
+            Some(t) if self.arcane_tier_count_odds.contains_key(&t) => format!("arcane{t}"),
+            _ => "normal".to_string(),
+        }
+    }
+}
+
+/// Newblades enchant tuning (`deploy/static/enchant_tuning.json`, tracker #415). Every
+/// field defaults to today's behaviour, so a missing or unreadable file changes
+/// nothing and undoing a change is deleting it.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct EnchantTuning {
+    /// Secondary-count odds per item type, replacing the retail table odds for the
+    /// tables a rule matches (first match wins). Empty = retail's own odds for every
+    /// table. Arcane tiers keep their fixed counts regardless.
+    pub secondary_count_odds: Vec<CountOddsRule>,
+    /// The double-Ravage (Magicka + Stamina) pity timer on weapon enchants.
+    pub double_ravage_pity: DoubleRavagePity,
+}
+
+/// One `secondaryCountOdds` rule: which secondary tables it covers and their odds.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CountOddsRule {
+    /// Free text for the reader of the file ("weapons", "rings"); never matched.
+    #[serde(default)]
+    pub label: String,
+    /// The table's `_itemType` (2 weapon, 3 armor, 9 shield, 10 ring, 11 necklace).
+    pub item_type: i64,
+    /// The table's `_weaponType`; absent = any.
+    #[serde(default)]
+    pub weapon_type: Option<i64>,
+    /// The table's `_equipmentSlot` (1 head, 3 body, 4 hands, 7 feet, ...); absent = any.
+    #[serde(default)]
+    pub equipment_slot: Option<i64>,
+    /// P(0), P(1), P(2) secondaries. Weights: they need not sum to 1.
+    pub odds: Vec<f64>,
+}
+
+impl CountOddsRule {
+    pub fn matches(&self, table: &SecondaryEnchantTable) -> bool {
+        table.item_type == Some(self.item_type)
+            && self.weapon_type.is_none_or(|w| table.weapon_type == Some(w))
+            && self.equipment_slot.is_none_or(|s| table.equipment_slot == Some(s))
+    }
+}
+
+/// Owner decision d17 (tracker #415): after `tries[class]` weapon enchants of one odds
+/// class without both Ravage Magicka and Ravage Stamina, the next one in that class is
+/// given both. Not retail; `enabled: false` turns it off.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DoubleRavagePity {
+    pub enabled: bool,
+    /// Misses allowed per odds class ([`EnchantingData::odds_class`]) before the pair
+    /// is forced. A class that is absent, or set to 0, is never forced.
+    pub tries: BTreeMap<String, u32>,
+}
+
+impl Default for DoubleRavagePity {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            tries: BTreeMap::from([("normal".to_string(), 630), ("arcane2".to_string(), 95)]),
+        }
     }
 }
 

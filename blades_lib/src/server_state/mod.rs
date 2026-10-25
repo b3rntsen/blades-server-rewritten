@@ -8,7 +8,7 @@
 //! reward can't be re-collected for infinite gold). Every field is `#[serde(default)]`
 //! so an empty `{}` (or a row that predates a new field) deserializes cleanly.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -220,6 +220,12 @@ pub struct ServerState {
     /// before the field load as `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub store_town_xp_backfilled: bool,
+    /// The double-Ravage pity timer (tracker #415, owner decision d17): weapon
+    /// enchants in a row without both Ravage Magicka and Ravage Stamina, per odds
+    /// class (`"normal"`, `"arcane2"`). A class leaves the map when the pair appears,
+    /// naturally or forced. Server-only, like the rest of this struct.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub enchant_pity_misses: BTreeMap<String, u32>,
 }
 
 #[cfg(test)]

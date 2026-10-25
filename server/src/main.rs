@@ -46,6 +46,7 @@ mod credentials;
 mod daily_reward;
 mod dungeon;
 mod dungeon_update;
+mod enchant_pity;
 mod error;
 mod event_quests;
 mod fixed_templates;

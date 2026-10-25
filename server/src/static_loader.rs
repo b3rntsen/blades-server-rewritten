@@ -236,7 +236,10 @@ pub fn load(dir: &Path) -> StaticData {
     let item_mod_recipes: HashMap<Uuid, ItemModRecipe> =
         read_json(&dir.join("item_mod_recipes.json"));
     // A missing file leaves enchanting on the captured-outcome fallback in craft.rs.
-    let enchanting: EnchantingData = read_json(&dir.join("enchanting.json"));
+    let mut enchanting: EnchantingData = read_json(&dir.join("enchanting.json"));
+    // Newblades tuning over the retail tables (tracker #415). Missing or invalid =
+    // the default: retail count odds, double-Ravage pity on at 630 / 95.
+    enchanting.tuning = read_json(&dir.join("enchant_tuning.json"));
     let jewelry_roll_ranges: blades_lib::static_data::JewelryRollRanges =
         read_json(&dir.join("jewelry_roll_ranges.json"));
     // The APK-extracted recipe -> CraftingType table. A missing file degrades to an
