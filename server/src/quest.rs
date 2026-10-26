@@ -3867,6 +3867,85 @@ pub(crate) mod jobs_gen {
         "dadd4e4e-7544-4680-9a73-84208c8ab7a2",
         "ea48eb54-672c-4b28-9c92-60463314ee0d",
     ];
+    /// Each champion's enemy family, so the client's AI matches the body it drives
+    /// (tracker #431: "most of the time the opponent doesn't fight").
+    ///
+    /// The client reads `duelBossId` as a `CharacterCompoundData` (the champion's
+    /// look and dialogue, `JobDuelBossList.DuelBossEntry`) and `bossEnemyFamilyId`
+    /// as the `EnemyData` that fights. We drew the family from [`ENEMY_FAMILIES`]
+    /// at random, so a Duelist's body usually ran a Bear's, Spriggan's or Wisp's
+    /// combat data, and stood there.
+    ///
+    /// MEASURED: all 46 Duels in the 2026-06-07 capture snapshot (222 `/quests`
+    /// bodies) carry one of the four Duelist families, and each champion always
+    /// carries the same one: 9 champions, 9 pairings, 0 exceptions. The Fighter
+    /// family (`3840913e…`) is not in [`ENEMY_FAMILIES`] at all.
+    pub(super) const DUEL_BOSS_FAMILIES: &[(&str, &str)] = &[
+        // Duelist_Light_Argonian_Female -> Duelist Fighter Family (5/5)
+        (
+            "01d82726-527f-4601-929c-182acd3fa9b7",
+            "3840913e-fff5-465e-a378-b82242bc7cec",
+        ),
+        // Duelist_Light_Breton_Male -> Duelist Swordmage Family (12/12)
+        (
+            "024b4f81-c7ef-4322-a547-ee863b4c02ad",
+            "878febe5-106b-4b48-972a-7debd771a079",
+        ),
+        // Duelist_Medium_WoodElf_Female -> Duelist Barbarian Family (4/4)
+        (
+            "282b51da-b334-4cab-90fd-ba7fbdea00f1",
+            "225d747b-9d24-4ffc-9ece-541728b4aef0",
+        ),
+        // Duelist_Medium_Orc_Male -> Duelist Barbarian Family (3/3)
+        (
+            "2f85c042-ab17-47f2-a4b2-385f8626034c",
+            "225d747b-9d24-4ffc-9ece-541728b4aef0",
+        ),
+        // Duelist_Heavy_Nord_Female -> Duelist Barbarian Family (2/2)
+        (
+            "33bbefc6-abb3-48e1-a233-96002d9ca98c",
+            "225d747b-9d24-4ffc-9ece-541728b4aef0",
+        ),
+        // Duelist_Light_Khajiit_Male -> Duelist Avenger Family (6/6)
+        (
+            "68a30f8a-dd30-4a41-a014-200f16a8ff89",
+            "20e856fc-9465-4ffe-8d0a-6118c2eed219",
+        ),
+        // Duelist_Medium_Imperial_Female -> Duelist Fighter Family (9/9)
+        (
+            "ad5bf23a-2899-40e1-b77b-dd0cb3555176",
+            "3840913e-fff5-465e-a378-b82242bc7cec",
+        ),
+        // Duelist_Heavy_HighElf_Male -> Duelist Swordmage Family (1/1)
+        (
+            "dadd4e4e-7544-4680-9a73-84208c8ab7a2",
+            "878febe5-106b-4b48-972a-7debd771a079",
+        ),
+        // Duelist_Heavy_Redguard_Male -> Duelist Avenger Family (4/4)
+        (
+            "ea48eb54-672c-4b28-9c92-60463314ee0d",
+            "20e856fc-9465-4ffe-8d0a-6118c2eed219",
+        ),
+    ];
+
+    /// The family a champion fights with ([`DUEL_BOSS_FAMILIES`]).
+    pub(super) fn duel_boss_family(duel_boss: &str) -> Option<&'static str> {
+        DUEL_BOSS_FAMILIES
+            .iter()
+            .find(|(boss, _)| *boss == duel_boss)
+            .map(|(_, family)| *family)
+    }
+
+    /// A Duel's `bossLevelDelta`: 8 in 46 of 46 retail Duels (an ordinary job
+    /// rolls 4-8).
+    pub(super) const DUEL_BOSS_LEVEL_DELTA: i64 = 8;
+
+    /// The highest level a Duelist family has a variant for: all four end at
+    /// `Duelist_*7`, levels 62-70 (`reference/game-defs/enemies.json`). Retail
+    /// capped the champion there: the five Duels at difficulty 71-77 all fielded
+    /// it at exactly 70, while the two fixed encounters kept the job's level.
+    pub(super) const DUEL_BOSS_MAX_LEVEL: i64 = 70;
+
     const GATHER_ITEMS: &[&str] = &[
         "0fab3016-8306-48ee-8268-d3f7bea7d9d2",
         "144a3de0-bc3b-45b4-858e-0c7864ffce52",
@@ -4380,8 +4459,10 @@ pub(crate) mod jobs_gen {
             data.item_generated_data.clear();
 
             // Retail levels the two fixed encounters at difficultyLevel and the
-            // boss at difficultyLevel + bossLevelDelta (43 and 51 in the sample).
-            let boss_level = enemy_level + get_i64(&setup, "bossLevelDelta", 0);
+            // boss at difficultyLevel + bossLevelDelta (43 and 51 in the sample),
+            // the boss capped at the Duelist families' last variant (#431).
+            let boss_level =
+                (enemy_level + get_i64(&setup, "bossLevelDelta", 0)).min(DUEL_BOSS_MAX_LEVEL);
             for (spawn_id, spawners) in &mut data.enemy_generated_data {
                 let level = if *spawn_id == JOB_BOSS_SPAWN_GROUP {
                     boss_level
@@ -4957,7 +5038,13 @@ pub(crate) mod jobs_gen {
         } else {
             rng.range_incl(2, 4)
         };
-        let boss_level_delta = rng.range_incl(4, 8);
+        // Still drawn for a Duel so no later roll moves; retail's Duel is always +8.
+        let drawn_boss_level_delta = rng.range_incl(4, 8);
+        let boss_level_delta = if job_type == 5 {
+            DUEL_BOSS_LEVEL_DELTA
+        } else {
+            drawn_boss_level_delta
+        };
         let secret_room = job_type != 5 && rng.below(2) == 1;
         // The families above are drawn for their place in the stream only; a
         // non-Duel job takes retail's families from a side stream (#337). A Duel
@@ -5048,6 +5135,11 @@ pub(crate) mod jobs_gen {
             5 => {
                 let duel = rng.pick(DUEL_BOSSES).copied().unwrap_or("");
                 job_setup.insert("duelBossId".into(), json!(duel));
+                // The champion fights with its own Duelist family (#431); the random
+                // family drawn above only holds its place in the stream.
+                if let Some(family) = duel_boss_family(duel) {
+                    job_setup.insert("bossEnemyFamilyId".into(), json!(family));
+                }
             }
             _ => {}
         }
@@ -6259,7 +6351,7 @@ mod report85_job_generated_data_tests {
         let boss_delta = duel["jobSetup"]["bossLevelDelta"].as_i64().unwrap();
         for (spawn_id, spawners) in &data.enemy_generated_data {
             let expected_level = if *spawn_id == jobs_gen::JOB_BOSS_SPAWN_GROUP {
-                difficulty + boss_delta
+                (difficulty + boss_delta).min(jobs_gen::DUEL_BOSS_MAX_LEVEL)
             } else {
                 difficulty
             };
@@ -9580,11 +9672,13 @@ mod report_237_duel_arena {
         assert_eq!(duel["difficultyLevel"], 70);
         assert_eq!(duel["seed"], -2_524_332_663_550_136_772_i64);
         assert_eq!(js["duelBossId"], "024b4f81-c7ef-4322-a547-ee863b4c02ad");
+        // #431: prod served this Breton Duelist with Skeever combat data
+        // (`31be99a6…`) at +7; it now fights as its own Swordmage family at +8.
         assert_eq!(
             js["bossEnemyFamilyId"],
-            "31be99a6-8557-4e9b-81e6-5503f900b7d2"
+            "878febe5-106b-4b48-972a-7debd771a079"
         );
-        assert_eq!(js["bossLevelDelta"], 7);
+        assert_eq!(js["bossLevelDelta"], 8);
         assert_eq!(js["rewardXp"], 1476); // retail's for difficulty 70 (#337); prod: 1543 at 76
         assert_eq!(js["rewardItemCount"], 0);
         assert_eq!(js["questName"]["key"], "UI.Jobs.Names.Duel.002");
@@ -9681,7 +9775,13 @@ mod report_279_job_difficulty {
                 levels.push(enemy.enemy_level);
             }
             assert!(!levels.is_empty(), "job has generated enemies");
-            assert_eq!(levels.iter().copied().min(), Some(difficulty));
+            // A Duel's champion stops at 70 (#431), below the job's own level from 63.
+            let floor = if job["jobSetup"]["jobType"] == 5 {
+                difficulty.min(jobs_gen::DUEL_BOSS_MAX_LEVEL)
+            } else {
+                difficulty
+            };
+            assert_eq!(levels.iter().copied().min(), Some(floor));
             assert!(
                 levels.iter().copied().max().unwrap() <= difficulty + boss_delta + 2,
                 "generated levels {levels:?} escaped the job's own softened difficulty"
@@ -11240,5 +11340,187 @@ mod report353_quest_town_xp_db {
             stored_town(&mut conn, ids.1).await,
             serde_json::from_str::<Value>(TOWN_BEFORE).unwrap()
         );
+    }
+}
+
+/// Report #431 (HauDrauf, L100): "The daily arena fight as a quest doesn't work
+/// properly. Most of the time the opponent doesn't fight." The Duel job's champion
+/// (`duelBossId`, a Duelist's body and dialogue) was handed a RANDOM
+/// `bossEnemyFamilyId` from the ordinary job families, and, above difficulty 62, a
+/// level no Duelist family has a variant for. His Duel `6ade1f0c-…` on 2026-10-26
+/// fielded the champion at 82 and was over 14 s after `/enter`.
+///
+/// Retail, 46 of 46 Duels in the 2026-06-07 capture snapshot: the family is the
+/// champion's own Duelist family, `bossLevelDelta` is 8, and the champion's level
+/// stops at 70.
+#[cfg(test)]
+mod report_431_duel_champion {
+    use super::jobs_gen;
+    use serde_json::Value;
+    use std::collections::{BTreeMap, BTreeSet};
+    use uuid::Uuid;
+
+    /// 2026-10-26 00:52 UTC, the day the report was filed.
+    const NOW: u64 = 1_793_033_545;
+
+    /// The pairings measured in the capture snapshot, copied out independently of
+    /// the table under test: (champion, family, Duels observed).
+    const RETAIL: [(&str, &str, u32); 9] = [
+        (
+            "01d82726-527f-4601-929c-182acd3fa9b7",
+            "3840913e-fff5-465e-a378-b82242bc7cec",
+            5,
+        ),
+        (
+            "024b4f81-c7ef-4322-a547-ee863b4c02ad",
+            "878febe5-106b-4b48-972a-7debd771a079",
+            12,
+        ),
+        (
+            "282b51da-b334-4cab-90fd-ba7fbdea00f1",
+            "225d747b-9d24-4ffc-9ece-541728b4aef0",
+            4,
+        ),
+        (
+            "2f85c042-ab17-47f2-a4b2-385f8626034c",
+            "225d747b-9d24-4ffc-9ece-541728b4aef0",
+            3,
+        ),
+        (
+            "33bbefc6-abb3-48e1-a233-96002d9ca98c",
+            "225d747b-9d24-4ffc-9ece-541728b4aef0",
+            2,
+        ),
+        (
+            "68a30f8a-dd30-4a41-a014-200f16a8ff89",
+            "20e856fc-9465-4ffe-8d0a-6118c2eed219",
+            6,
+        ),
+        (
+            "ad5bf23a-2899-40e1-b77b-dd0cb3555176",
+            "3840913e-fff5-465e-a378-b82242bc7cec",
+            9,
+        ),
+        (
+            "dadd4e4e-7544-4680-9a73-84208c8ab7a2",
+            "878febe5-106b-4b48-972a-7debd771a079",
+            1,
+        ),
+        (
+            "ea48eb54-672c-4b28-9c92-60463314ee0d",
+            "20e856fc-9465-4ffe-8d0a-6118c2eed219",
+            4,
+        ),
+    ];
+
+    fn pools() -> Value {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap()).unwrap()
+    }
+
+    fn game_data() -> blades_lib::game_data::GameData {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    fn duels(pools: &Value, levels: &[u16], characters: u128, weeks: u64) -> Vec<Value> {
+        let mut out = Vec::new();
+        for c in 1..=characters {
+            for week in 0..weeks {
+                let now = NOW + week * 7 * 86_400;
+                let boundary = jobs_gen::current_reset_boundary(pools, now);
+                for &level in levels {
+                    let character = Uuid::from_u128(c * 0x9E37_79B9);
+                    out.extend(
+                        jobs_gen::generate(pools, character, level, 0, boundary, now)
+                            .0
+                            .into_iter()
+                            .filter(|j| j["jobSetup"]["jobType"] == 5),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    /// The champion always fights with its own Duelist family.
+    #[test]
+    fn every_champion_fights_with_its_own_duelist_family() {
+        let retail: BTreeMap<&str, &str> = RETAIL.iter().map(|(b, f, _)| (*b, *f)).collect();
+        let mut seen = BTreeSet::new();
+        let all = duels(&pools(), &[12, 50, 100], 100, 10);
+        assert!(all.len() >= 1_000, "only {} Duels", all.len());
+        for duel in &all {
+            let s = &duel["jobSetup"];
+            let boss = s["duelBossId"].as_str().expect("duelBossId");
+            let family = s["bossEnemyFamilyId"].as_str().expect("bossEnemyFamilyId");
+            let want = retail
+                .get(boss)
+                .unwrap_or_else(|| panic!("champion {boss} never fought a retail Duel"));
+            assert_eq!(
+                family, *want,
+                "champion {boss} fields the wrong family: {duel}"
+            );
+            seen.insert(boss);
+        }
+        // Discriminating: every champion is exercised, not one lucky pairing.
+        assert_eq!(seen.len(), RETAIL.len(), "{seen:?}");
+    }
+
+    /// +8 over the job, never above the Duelist families' last variant; the two
+    /// fixed encounters keep the job's level.
+    #[test]
+    fn the_champion_is_eight_up_and_stops_at_seventy() {
+        let gd = game_data();
+        let scaling = crate::quest::shipped_scaling();
+        let (mut capped, mut uncapped) = (0, 0);
+        for duel in duels(&pools(), &[12, 40, 100], 40, 6) {
+            let d = duel["difficultyLevel"].as_i64().unwrap();
+            assert_eq!(duel["jobSetup"]["bossLevelDelta"], 8, "{duel}");
+            let data = jobs_gen::generated_data_for_job(&gd, &duel, &scaling, 0).expect("Duel");
+            for (spawn, spawners) in &data.enemy_generated_data {
+                let want = if *spawn == jobs_gen::JOB_BOSS_SPAWN_GROUP {
+                    (d + 8).min(70)
+                } else {
+                    d
+                };
+                for enemy in spawners.iter().flatten() {
+                    assert_eq!(enemy.enemy_level, want, "spawn {spawn} at difficulty {d}");
+                    assert_eq!(enemy.given_xp, scaling.given_xp(want));
+                }
+            }
+            if d + 8 > 70 {
+                capped += 1;
+            } else {
+                uncapped += 1;
+            }
+        }
+        // Both sides of the cap were checked, as retail had both (5 and 41 Duels).
+        assert!(
+            capped > 0 && uncapped > 0,
+            "capped {capped}, uncapped {uncapped}"
+        );
+    }
+
+    /// Ordinary jobs are untouched: they still roll a 4-8 delta and never field a
+    /// Duelist.
+    #[test]
+    fn ordinary_jobs_keep_their_families_and_deltas() {
+        let pools = pools();
+        let duelists: BTreeSet<&str> = RETAIL.iter().map(|(_, f, _)| *f).collect();
+        let mut deltas = BTreeSet::new();
+        for c in 1..=50u128 {
+            let boundary = jobs_gen::current_reset_boundary(&pools, NOW);
+            for job in jobs_gen::generate(&pools, Uuid::from_u128(c), 60, 0, boundary, NOW).0 {
+                let s = &job["jobSetup"];
+                if s["jobType"] == 5 {
+                    continue;
+                }
+                deltas.insert(s["bossLevelDelta"].as_i64().unwrap());
+                assert!(!duelists.contains(s["bossEnemyFamilyId"].as_str().unwrap()));
+            }
+        }
+        assert_eq!(deltas, (4..=8).collect(), "ordinary deltas changed");
     }
 }

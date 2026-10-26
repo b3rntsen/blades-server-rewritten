@@ -334,7 +334,9 @@ fn levels_below_49_are_unchanged() {
         ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),
         ("quests", 0x3f01_52cb_5eef_d622),
         ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
-        ("jobs", 0x0e71_0932_2f7b_96e5),
+        // #431 re-pins jobs: a Duel's champion is +8 over the job and capped at 70
+        // (was 0x0e71_0932_2f7b_96e5 with a 4-8 delta).
+        ("jobs", 0x3ea2_c5e9_ebc9_0216),
         // #421/#429 (2026-10-25) re-pin store: a Golden, Epic or Legendary chest
         // bought at 45-48 pays Grand 60% / Glorious 20% / Transcendent 20% (was
         // 0x6bfe_d561_3f10_831a). The treasury digest rolls without an opener level,
