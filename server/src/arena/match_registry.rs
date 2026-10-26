@@ -124,6 +124,10 @@ struct PlayerConn {
     /// Smoothed ENet RTT for this live peer. Stored on the connection until the
     /// authoritative fighter slot is known, then mirrored into the combat instance.
     rtt_ewma: Option<Duration>,
+    /// The ENet CONNECT `data` this connection opened with (see
+    /// `MatchRegistry::connect_data`). `None` on the psid harness path, which has
+    /// no ENet connect.
+    connect_data: Option<u32>,
 }
 
 /// A live match: up to `capacity` players sharing one authoritative instance and
@@ -399,6 +403,13 @@ pub struct MatchRegistry {
     pending: Mutex<HashMap<String, Uuid>>, // player_session_id -> game_session_id
     matches: Mutex<HashMap<Uuid, Match>>,  // game_session_id -> Match
     addr_index: Mutex<HashMap<SocketAddr, Uuid>>, // connected peer -> its match
+    /// The ENet CONNECT `data` word each connected address presented (#430). The
+    /// retail client puts a per-process value there and keeps it across its own
+    /// mid-match transport reconnects (s257: one value on all 13 connections of a
+    /// session, while the 6 bytes after `BE 38` are a constant shared by every
+    /// client). Held here from the ENet Connect event until op-0x38 admission
+    /// copies it onto the [`PlayerConn`]; dropped when the address disconnects.
+    connect_data: Mutex<HashMap<SocketAddr, u32>>,
     next_order: std::sync::atomic::AtomicU64, // monotonic match-allocation order
     pub max_matches: usize,
     /// When set, every admitted peer's per-match (key, nonce) is fire-and-forget
@@ -506,6 +517,7 @@ impl MatchRegistry {
             pending: Mutex::new(HashMap::new()),
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
+            connect_data: Mutex::new(HashMap::new()),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter: None,
@@ -523,6 +535,7 @@ impl MatchRegistry {
             pending: Mutex::new(HashMap::new()),
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
+            connect_data: Mutex::new(HashMap::new()),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter: None,
@@ -545,6 +558,7 @@ impl MatchRegistry {
             pending: Mutex::new(HashMap::new()),
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
+            connect_data: Mutex::new(HashMap::new()),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter,
@@ -735,6 +749,7 @@ impl MatchRegistry {
             last_match_state_ack: None,
             rebind_count: 0,
             rtt_ewma: None,
+            connect_data: None,
         });
         if m.players.len() >= m.capacity {
             m.reached_capacity = true;
@@ -792,6 +807,7 @@ impl MatchRegistry {
         // Submit this peer's key to the capture platform (fire-and-forget; no-op
         // when disabled) so the match's captured frames become decryptable.
         self.submit_key(&crypto, peer);
+        let connect_data = self.connect_data.lock().unwrap().get(&peer).copied();
         m.players.push(PlayerConn {
             addr: peer,
             player_session_id: String::new(), // bound later if/when the psid arrives
@@ -801,6 +817,7 @@ impl MatchRegistry {
             last_match_state_ack: None,
             rebind_count: 0,
             rtt_ewma: None,
+            connect_data,
         });
         if m.players.len() >= m.capacity {
             m.reached_capacity = true;
@@ -1070,33 +1087,82 @@ impl MatchRegistry {
         let m = matches
             .get_mut(&gsid)
             .expect("rebind candidate match exists");
-        m.players[player_idx].addr = peer;
-        m.players[player_idx].rebind_count = m.players[player_idx].rebind_count.saturating_add(1);
-        if let Some(slot) = m.peer_to_slot.remove(&old_peer) {
-            m.peer_to_slot.insert(peer, slot);
-        }
-        addr_index.remove(&old_peer);
-        addr_index.insert(peer, gsid);
         info!("match registry: encrypted peer rebind {old_peer} → {peer} in match {gsid}");
-        // A reliable command is reliable only within one ENet peer generation. The
-        // replacement PeerID has a new sequence space and cannot receive commands
-        // queued on the old peer, so replay the CURRENT numeric MatchState plus its
-        // flow trigger. This is deliberately a property UPDATE, not another object
-        // spawn: Unity retains its replicated objects across the transport recovery,
-        // and duplicate spawns can create a second opponent actor at a bad transform.
-        let fighter_slot = m.peer_to_slot.get(&peer).copied().unwrap_or(player_idx);
-        let mut replay = Vec::new();
-        let key = m.players[player_idx].crypto.key;
-        let nonce = m.players[player_idx].crypto.nonce;
-        for mut plaintext in m.instance.replay_current_state(fighter_slot) {
-            let channel = crate::arena::combat::messages::retail_channel(&plaintext);
-            chacha20_legacy_xor(&mut plaintext, &key, &nonce);
-            replay.push((channel, plaintext));
+        Some(migrate_player(m, &mut addr_index, player_idx, peer))
+    }
+
+    /// Record the ENet CONNECT `data` of a newly connected address and, when it is
+    /// the retail client's transport reconnect into a match it is still playing,
+    /// move that player's slot to the new address (#430).
+    ///
+    /// The retail client times its ENet peer out after a few seconds of silence and
+    /// reconnects from a NEW socket (new source port) while keeping the
+    /// application `Connection`: key, nonce, and the CONNECT `data` word. It sends
+    /// no second op-0x38, and nothing else either; it waits for the server. Retail
+    /// s257 (client port 58728 → 52036, gameLift 18.170.225.43) shows the server
+    /// speaking first on the new peer, two seconds after the connect, under the old
+    /// key. A server that waits for ciphertext (`rebind_encrypted_peer`) deadlocks
+    /// with that client until the old peer times out, which concedes the match.
+    ///
+    /// Identity: the CONNECT `data` (per client process, constant across its
+    /// reconnects) AND the source IP must both match exactly one connected player.
+    /// Neither alone is enough. An IP is shared by a household or a carrier NAT (the
+    /// #430 reporter's IP also carries another player's matches), and requiring the
+    /// IP stops a guessed 32-bit value from claiming a stranger's slot. `data == 0`
+    /// is never treated as identity.
+    ///
+    /// Left alone, because they are not reconnects: a match that has finished (a
+    /// re-queue from the same process carries the same `data`), and an IP that a
+    /// fresh reservation is waiting for (matchmaking just gave it a new match).
+    pub fn note_connect(&self, peer: SocketAddr, data: u32) -> Option<EncryptedPeerRebind> {
+        self.connect_data.lock().unwrap().insert(peer, data);
+        if data == 0 {
+            return None;
         }
-        Some(EncryptedPeerRebind {
-            old_addr: old_peer,
-            replay,
-        })
+        let mut addr_index = self.addr_index.lock().unwrap();
+        if addr_index.contains_key(&peer) {
+            return None;
+        }
+        let mut matches = self.matches.lock().unwrap();
+        if matches
+            .values()
+            .any(|m| m.accepts_new_connection() && m.expected_ip_to_slot.contains_key(&peer.ip()))
+        {
+            return None;
+        }
+        let mut candidate: Option<(Uuid, usize, SocketAddr)> = None;
+        for (gsid, m) in matches.iter() {
+            if m.instance.is_finished() {
+                continue;
+            }
+            for (player_idx, player) in m.players.iter().enumerate() {
+                if player.connect_data != Some(data)
+                    || player.addr.ip() != peer.ip()
+                    || player.addr == peer
+                {
+                    continue;
+                }
+                if candidate.is_some() {
+                    warn!("match registry: refusing ambiguous reconnect rebind for {peer}");
+                    return None;
+                }
+                candidate = Some((*gsid, player_idx, player.addr));
+            }
+        }
+        let (gsid, player_idx, old_peer) = candidate?;
+        let m = matches
+            .get_mut(&gsid)
+            .expect("reconnect candidate match exists");
+        info!(
+            "match registry: reconnect rebind {old_peer} → {peer} in match {gsid} \
+             (same ENet connect data {data:#010x})"
+        );
+        Some(migrate_player(m, &mut addr_index, player_idx, peer))
+    }
+
+    /// Forget the CONNECT `data` of an address whose ENet peer is gone.
+    pub fn forget_connect(&self, peer: &SocketAddr) {
+        self.connect_data.lock().unwrap().remove(peer);
     }
 
     /// Drop a peer from its match (disconnect). When the last player leaves, the
@@ -1739,6 +1805,43 @@ fn extract_fighter_slot_from_playerinfo(
     None
 }
 
+/// Move connected player `player_idx` of `m` to `peer`, keeping its crypto and
+/// fighter slot, and build the current-state replay its new ENet generation needs.
+fn migrate_player(
+    m: &mut Match,
+    addr_index: &mut HashMap<SocketAddr, Uuid>,
+    player_idx: usize,
+    peer: SocketAddr,
+) -> EncryptedPeerRebind {
+    let old_peer = m.players[player_idx].addr;
+    m.players[player_idx].addr = peer;
+    m.players[player_idx].rebind_count = m.players[player_idx].rebind_count.saturating_add(1);
+    if let Some(slot) = m.peer_to_slot.remove(&old_peer) {
+        m.peer_to_slot.insert(peer, slot);
+    }
+    addr_index.remove(&old_peer);
+    addr_index.insert(peer, m.game_session_id);
+    // A reliable command is reliable only within one ENet peer generation. The
+    // replacement PeerID has a new sequence space and cannot receive commands
+    // queued on the old peer, so replay the CURRENT numeric MatchState plus its
+    // flow trigger. This is deliberately a property UPDATE, not another object
+    // spawn: Unity retains its replicated objects across the transport recovery,
+    // and duplicate spawns can create a second opponent actor at a bad transform.
+    let fighter_slot = m.peer_to_slot.get(&peer).copied().unwrap_or(player_idx);
+    let mut replay = Vec::new();
+    let key = m.players[player_idx].crypto.key;
+    let nonce = m.players[player_idx].crypto.nonce;
+    for mut plaintext in m.instance.replay_current_state(fighter_slot) {
+        let channel = crate::arena::combat::messages::retail_channel(&plaintext);
+        chacha20_legacy_xor(&mut plaintext, &key, &nonce);
+        replay.push((channel, plaintext));
+    }
+    EncryptedPeerRebind {
+        old_addr: old_peer,
+        replay,
+    }
+}
+
 // The per-match state machine now lives in `crate::arena::combat::engine`
 // (`MatchInstance`), driven by the real captured protocol (the flow-control
 // stateName machine + authoritative combat). The placeholder FSM that used to
@@ -1811,6 +1914,106 @@ mod tests {
             0,
             "the count must fall when they leave"
         );
+    }
+
+    /// #430 identity rules for the connect-time reconnect rebind. The reporter's IP
+    /// (84.130.178.201) also carried another player's matches that week, so an IP
+    /// alone must never move a slot; the per-process ENet CONNECT `data` alone must
+    /// not either. Only both together, and never `data == 0`.
+    #[test]
+    fn reconnect_rebind_needs_the_same_connect_data_and_ip() {
+        const DATA: u32 = 0x76B7_F0F5; // retail s506's CONNECT data word
+        let reg = MatchRegistry::new(4);
+        assert!(reg.allocate_with_bots(
+            &["solo".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let old: SocketAddr = "84.130.178.201:54465".parse().unwrap();
+        assert!(
+            reg.note_connect(old, DATA).is_none(),
+            "first connect is no reconnect"
+        );
+        reg.admit_connection(old, &[3u8; 32]).expect("admitted");
+
+        let housemate: SocketAddr = "84.130.178.201:40000".parse().unwrap();
+        assert!(
+            reg.note_connect(housemate, 0x1234_5678).is_none(),
+            "same IP, another process: a housemate must not take the slot"
+        );
+        let stranger: SocketAddr = "10.99.0.48:38184".parse().unwrap();
+        assert!(
+            reg.note_connect(stranger, DATA).is_none(),
+            "same data from another IP is not proof"
+        );
+        assert!(reg.is_active(&old), "nothing moved");
+
+        let new: SocketAddr = "84.130.178.201:38184".parse().unwrap();
+        let rebind = reg
+            .note_connect(new, DATA)
+            .expect("the client's own reconnect");
+        assert_eq!(rebind.old_addr, old);
+        assert!(reg.is_active(&new));
+        assert!(!reg.is_active(&old));
+        assert!(
+            reg.peer_departed(&old, Instant::now()).is_empty(),
+            "the abandoned generation's timeout no longer touches the match"
+        );
+        assert_eq!(
+            reg.active_count(),
+            1,
+            "the match survives the old peer's timeout"
+        );
+        assert_eq!(reg.debug_list()[0].peers[0].rebind_count, 1);
+    }
+
+    #[test]
+    fn a_zero_connect_data_word_is_not_identity() {
+        let reg = MatchRegistry::new(4);
+        assert!(reg.allocate_with_bots(
+            &["solo".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let old: SocketAddr = "84.130.178.201:54465".parse().unwrap();
+        reg.note_connect(old, 0);
+        reg.admit_connection(old, &[3u8; 32]).expect("admitted");
+        let new: SocketAddr = "84.130.178.201:38184".parse().unwrap();
+        assert!(reg.note_connect(new, 0).is_none());
+        assert!(reg.is_active(&old));
+    }
+
+    /// The same process re-queuing carries the same CONNECT `data`. When
+    /// matchmaking has already reserved a fresh match for that IP, the new
+    /// connection belongs there (its op-0x38 follows), not in the old match.
+    #[test]
+    fn reconnect_rebind_leaves_a_requeue_to_its_fresh_match() {
+        const DATA: u32 = 0xABA5_AE1B; // retail s257
+        let ip: IpAddr = "84.130.178.201".parse().unwrap();
+        let reg = MatchRegistry::new(4);
+        assert!(reg.allocate_with_bots(
+            &["old".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let old = SocketAddr::new(ip, 54465);
+        reg.note_connect(old, DATA);
+        reg.admit_connection(old, &[3u8; 32]).expect("admitted");
+        assert!(reg.allocate_with_bots_and_peer_ips(
+            &["fresh".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4(),
+            1,
+            &[Some(ip)],
+            MatchRankingContext::default(),
+        ));
+        let new = SocketAddr::new(ip, 38184);
+        assert!(reg.note_connect(new, DATA).is_none());
+        assert!(reg.is_active(&old));
+        assert!(!reg.is_active(&new));
     }
 
     #[test]
