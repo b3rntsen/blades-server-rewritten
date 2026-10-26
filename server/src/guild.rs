@@ -2312,7 +2312,12 @@ struct GuildExchangeRow {
     donations: JsonDbWrapper<Vec<Donation>>,
     donation_sum: i64,
     creation_time: i64,
+    /// CLOSED: no longer listed and no longer accepts donations. Set when a
+    /// full request is collected, or when the character posts a newer request.
     redeemed: bool,
+    /// How much of `donation_sum` has been paid out to the requester. A collect
+    /// pays `donation_sum - redeemed_amount`, so no donation is paid twice.
+    redeemed_amount: i64,
 }
 
 /// Wire shape for a single guild exchange (used in list + create responses).
@@ -2487,6 +2492,7 @@ mod exchange_amount_tests {
             donation_sum: 0,
             creation_time: 1,
             redeemed: false,
+            redeemed_amount: 0,
         }
     }
 
@@ -3166,10 +3172,12 @@ pub async fn create_exchange(
         donation_sum: 0,
         creation_time: ts,
         redeemed: false,
+        redeemed_amount: 0,
     };
     let row = conn
         .transaction(move |conn| {
             async move {
+                close_open_requests(conn, character_id).await?;
                 use crate::schema::guild_exchanges;
                 diesel::insert_into(guild_exchanges::table)
                     .values(&row)
@@ -3445,6 +3453,9 @@ pub async fn donate_exchange(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GuildExchangeRedeemReward {
+    /// Retail answers a collect with nothing new as `"reward":{}` (106 of 143
+    /// captured collects), not an empty map.
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     stackable_items: std::collections::HashMap<Uuid, i64>,
 }
 
@@ -3461,9 +3472,66 @@ struct RedeemResponse {
     guild_exchange_redeem: GuildExchangeRedeemInfo,
 }
 
-/// `POST /guilds/current/exchanges/redeem` — redeem all of the session user's
-/// non-redeemed exchanges that have a donationSum > 0. Credits the requester the
-/// donated stackables and marks each exchange as redeemed.
+/// Close every request the character still has open. Retail lists at most one
+/// request per character (0 of 639 captured boards list a requester twice), and a
+/// partly filled request that the owner had collected was gone from the board once
+/// they posted the next one. Donations not yet collected stay collectable:
+/// [`collect_unpaid_donations`] does not look at `redeemed`.
+async fn close_open_requests(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<(), BladeApiError> {
+    use crate::schema::guild_exchanges::dsl as ge;
+    diesel::update(
+        ge::guild_exchanges
+            .filter(ge::requester_character_id.eq(character_id))
+            .filter(ge::redeemed.eq(false)),
+    )
+    .set(ge::redeemed.eq(true))
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Pay out a character's guild requests: the donations that arrived since the
+/// last collect, as `(itemTemplateId, amount)` per request.
+///
+/// A collect does NOT close a request that is still short — retail kept it on the
+/// board for the remaining donors and paid each later donation on a later collect
+/// (tracker #434; evidence on [`partial_collect_keeps_the_request_open`]). It
+/// closes once it is full. Closed requests are still read here, so donations that
+/// reached one before [`close_open_requests`] replaced it are paid, not lost.
+async fn collect_unpaid_donations(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<Vec<(Uuid, i64)>, BladeApiError> {
+    use crate::schema::guild_exchanges::dsl as ge;
+    let exchanges: Vec<GuildExchangeRow> = ge::guild_exchanges
+        .filter(ge::requester_character_id.eq(character_id))
+        .filter(ge::donation_sum.gt(ge::redeemed_amount))
+        .order((ge::creation_time.asc(), ge::id.asc()))
+        .select(GuildExchangeRow::as_select())
+        .for_no_key_update()
+        .load(conn)
+        .await?;
+    let mut payouts = Vec::new();
+    for ex in &exchanges {
+        payouts.push((ex.item_template_id, ex.donation_sum - ex.redeemed_amount));
+        diesel::update(ge::guild_exchanges.filter(ge::id.eq(&ex.id)))
+            .set((
+                ge::redeemed_amount.eq(ex.donation_sum),
+                ge::redeemed.eq(ex.redeemed || ex.donation_sum >= ex.requested_amount),
+            ))
+            .execute(conn)
+            .await?;
+    }
+    Ok(payouts)
+}
+
+/// `POST /guilds/current/exchanges/redeem` — collect what guildmates have donated
+/// to the session character's requests since the last collect
+/// ([`collect_unpaid_donations`]). The client calls it each time the guild
+/// exchange screen loads, right after `GET /exchanges`.
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/redeem"
 )]
@@ -3481,28 +3549,18 @@ pub async fn redeem_exchange(
 
     conn.transaction(move |conn| {
         async move {
-            // Load all non-redeemed exchanges for this user with sum > 0.
-            use crate::schema::guild_exchanges::dsl as ge;
-            let exchanges: Vec<GuildExchangeRow> = ge::guild_exchanges
-                .filter(ge::requester_character_id.eq(character_id))
-                .filter(ge::redeemed.eq(false))
-                .filter(ge::donation_sum.gt(0))
-                .select(GuildExchangeRow::as_select())
-                .for_no_key_update()
-                .load(conn)
-                .await?;
+            let payouts = collect_unpaid_donations(conn, character_id).await?;
 
             let mut entry = load_economy(conn, character_id, user_id).await?;
             let mut tracker = InventoryChangeTracker::default();
             let mut reward_stackables: std::collections::HashMap<Uuid, i64> =
                 std::collections::HashMap::new();
 
-            for ex in &exchanges {
-                let amount = ex.donation_sum as u64;
+            for (item_template_id, amount) in &payouts {
                 let reward = RewardGrant {
                     stackable_items: std::collections::HashMap::from([(
-                        ex.item_template_id,
-                        amount,
+                        *item_template_id,
+                        *amount as u64,
                     )]),
                     ..Default::default()
                 };
@@ -3513,20 +3571,14 @@ pub async fn redeem_exchange(
                     &mut entry.character.0,
                     &mut tracker,
                 );
-                *reward_stackables.entry(ex.item_template_id).or_insert(0) += ex.donation_sum;
+                *reward_stackables.entry(*item_template_id).or_insert(0) += *amount;
             }
-            entry.inventory.0.backpack_version += 1;
+            if !payouts.is_empty() {
+                entry.inventory.0.backpack_version += 1;
+            }
 
             let inventory_update = entry.inventory.0.generate_client_update(&tracker);
             write_economy(conn, entry).await?;
-
-            // Mark all redeemed.
-            for ex in &exchanges {
-                diesel::update(ge::guild_exchanges.filter(ge::id.eq(&ex.id)))
-                    .set(ge::redeemed.eq(true))
-                    .execute(conn)
-                    .await?;
-            }
 
             Ok::<_, BladeApiError>(Json(RedeemResponse {
                 inventory: inventory_update,
@@ -4310,5 +4362,202 @@ mod rejoin_after_leaving {
         assert_eq!(verdict, Err(JoinRefusal::UserRecentlyRemovedFromGuild));
         let err = join_refused(verdict.unwrap_err());
         assert_eq!(err.error_code(), 802);
+    }
+}
+
+/// Collecting a half-filled guild request (tracker #434).
+///
+/// HauDrauf asked for 10 Fire Salts, donated 5 at a time. After the first donor
+/// he collected the 5 — and the request was gone, so nobody could give the other
+/// 5. We closed a request on its first collect.
+///
+/// Retail kept it open. Captured (prod capture DB, character a9c46eca,
+/// 2026-06-17): request fe3567e0 at 5/10 → collect pays 5; at 10/10 the same
+/// request (same creationTime) → collect pays 5, not 10; then it is gone. The
+/// same shape for 38c987fd on 2026-05-24/25, and f9f1f31d's board still lists a
+/// 30/50 request fifteen minutes after collecting 30, where a second collect pays
+/// nothing.
+#[cfg(test)]
+mod partial_collect_keeps_the_request_open {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, SimpleAsyncConnection};
+
+    const REQUESTER: Uuid = Uuid::from_u128(0x4341);
+    const CHARACTER: Uuid = Uuid::from_u128(0x4342);
+    const FIRE_SALTS: Uuid = Uuid::from_u128(0xf1c5);
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — guild exchange collect NOT verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        // The real DDL, both migrations, so the test runs the shipped schema.
+        for ddl in [
+            include_str!("../../migrations/2026-06-20-020000-0000_add_guild_exchanges/up.sql"),
+            include_str!(
+                "../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"
+            ),
+        ] {
+            conn.batch_execute(ddl).await.unwrap();
+        }
+        Some(conn)
+    }
+
+    async fn request(conn: &mut AsyncPgConnection, id: &str, creation_time: i64) {
+        diesel::sql_query(
+            "INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                 requester_character_id, item_template_id, requested_amount, \
+                 max_donation_amount, creation_time) VALUES ($1, 'g', $2, $3, $4, 10, 5, $5)",
+        )
+        .bind::<diesel::sql_types::Text, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(REQUESTER)
+        .bind::<diesel::sql_types::Uuid, _>(CHARACTER)
+        .bind::<diesel::sql_types::Uuid, _>(FIRE_SALTS)
+        .bind::<diesel::sql_types::BigInt, _>(creation_time)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    /// What `donate_exchange` does to the row: add 5 to the sum.
+    async fn donate_five(conn: &mut AsyncPgConnection, id: &str) {
+        diesel::sql_query(
+            "UPDATE guild_exchanges SET donation_sum = donation_sum + 5 WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(id)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    async fn board(conn: &mut AsyncPgConnection) -> Vec<(String, i64)> {
+        load_exchanges(conn, "g")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.donation_sum))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn half_collected_request_stays_open_and_pays_each_donation_once() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, "salts", 100).await;
+        donate_five(&mut c, "salts").await;
+
+        // First collect: the 5 that are there.
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(paid, vec![(FIRE_SALTS, 5)]);
+        assert_eq!(
+            board(&mut c).await,
+            vec![("salts".to_string(), 5)],
+            "the request stays on the board at 5/10 for the second donor"
+        );
+
+        // Collecting again before anyone gives more pays nothing.
+        assert_eq!(
+            collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
+            vec![]
+        );
+
+        // The second donor fills it; the collect pays only the new 5.
+        donate_five(&mut c, "salts").await;
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(
+            paid,
+            vec![(FIRE_SALTS, 5)],
+            "the first 5 must not be paid again"
+        );
+        assert_eq!(board(&mut c).await, vec![], "full and collected: closed");
+        assert_eq!(
+            collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
+            vec![]
+        );
+    }
+
+    /// Control: a request filled before the first collect pays all of it at once
+    /// and closes, as before.
+    #[tokio::test]
+    async fn a_full_request_pays_in_one_collect_and_closes() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, "salts", 100).await;
+        donate_five(&mut c, "salts").await;
+        donate_five(&mut c, "salts").await;
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(paid, vec![(FIRE_SALTS, 10)]);
+        assert_eq!(board(&mut c).await, vec![]);
+    }
+
+    /// Posting a new request replaces the old one on the board, and a donation
+    /// that landed on the old one after its last collect is still paid.
+    #[tokio::test]
+    async fn a_new_request_replaces_the_old_without_losing_its_donations() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, "old", 100).await;
+        donate_five(&mut c, "old").await;
+        collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        donate_five(&mut c, "old").await; // 10/10, not yet collected
+
+        close_open_requests(&mut c, CHARACTER).await.unwrap();
+        request(&mut c, "new", 200).await;
+        assert_eq!(
+            board(&mut c).await,
+            vec![("new".to_string(), 0)],
+            "one request per character on the board"
+        );
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(paid, vec![(FIRE_SALTS, 5)], "the old request's second 5");
+    }
+
+    /// Rows closed before the migration were paid in full at the time; the
+    /// migration must not make them payable again.
+    #[tokio::test]
+    async fn requests_closed_before_the_migration_are_not_paid_again() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        diesel::sql_query("ALTER TABLE guild_exchanges DROP COLUMN redeemed_amount")
+            .execute(&mut c)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                 requester_character_id, item_template_id, donation_sum, redeemed) \
+                 VALUES ('closed', 'g', $1, $2, $3, 5, true)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(REQUESTER)
+        .bind::<diesel::sql_types::Uuid, _>(CHARACTER)
+        .bind::<diesel::sql_types::Uuid, _>(FIRE_SALTS)
+        .execute(&mut c)
+        .await
+        .unwrap();
+        c.batch_execute(include_str!(
+            "../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
+            vec![]
+        );
     }
 }

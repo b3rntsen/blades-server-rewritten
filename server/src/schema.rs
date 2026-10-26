@@ -306,6 +306,7 @@ diesel::table! {
         donation_sum -> Int8,
         creation_time -> Int8,
         redeemed -> Bool,
+        redeemed_amount -> Int8,
     }
 }
 

@@ -818,7 +818,9 @@ ON CONFLICT DO NOTHING"#,
     AltRowTable {
         // Open donation requests. Redeeming pays whoever holds the requester's
         // character id, which every alt shares — so before this, one alt could
-        // collect the items guildmates donated to another.
+        // collect the items guildmates donated to another. A closed request with
+        // donations not yet collected (#434: replaced by a newer request) still
+        // belongs to the alt, so it travels too, with what it has paid so far.
         key: "parkedGuildExchanges",
         by: AltRowKey::CharacterOrUser,
         park: r#"
@@ -826,20 +828,23 @@ UPDATE character_versions
    SET server_state = server_state || jsonb_build_object('parkedGuildExchanges',
          COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'requester_character_id' - 'requester_user_id')
                      FROM guild_exchanges x
-                    WHERE NOT x.redeemed
+                    WHERE (NOT x.redeemed OR x.donation_sum > x.redeemed_amount)
                       AND (x.requester_character_id = $2 OR x.requester_user_id = $3)),
                   '[]'::jsonb))
  WHERE id = $1"#,
         delete: "DELETE FROM guild_exchanges \
-                  WHERE NOT redeemed AND (requester_character_id = $1 OR requester_user_id = $2)",
+                  WHERE (NOT redeemed OR donation_sum > redeemed_amount) \
+                    AND (requester_character_id = $1 OR requester_user_id = $2)",
         restore: r#"
 INSERT INTO guild_exchanges
        (id, guild_id, requester_user_id, requester_character_id, item_template_id,
-        requested_amount, max_donation_amount, donations, donation_sum, creation_time, redeemed)
+        requested_amount, max_donation_amount, donations, donation_sum, creation_time, redeemed,
+        redeemed_amount)
 SELECT r.id, r.guild_id, $2, $1, r.item_template_id,
        COALESCE(r.requested_amount, 10), COALESCE(r.max_donation_amount, 5),
        COALESCE(r.donations, '[]'::jsonb), COALESCE(r.donation_sum, 0),
-       COALESCE(r.creation_time, 0), false
+       COALESCE(r.creation_time, 0), COALESCE(r.redeemed, false),
+       COALESCE(r.redeemed_amount, 0)
   FROM jsonb_array_elements($3) e,
        LATERAL jsonb_populate_record(NULL::guild_exchanges, e) r
  WHERE r.id IS NOT NULL AND r.guild_id IS NOT NULL AND r.item_template_id IS NOT NULL
@@ -893,9 +898,10 @@ ON CONFLICT DO NOTHING"#,
 /// The migrations that create every [`ALT_ROW_TABLES`] table, for test fixtures
 /// that exercise a switch: the real DDL, not a copy that could drift.
 #[cfg(test)]
-pub(crate) const ALT_ROW_TABLE_MIGRATIONS: [&str; 5] = [
+pub(crate) const ALT_ROW_TABLE_MIGRATIONS: [&str; 6] = [
     include_str!("../../migrations/2026-06-20-010000-0000_add_guilds/up.sql"),
     include_str!("../../migrations/2026-06-20-020000-0000_add_guild_exchanges/up.sql"),
+    include_str!("../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"),
     include_str!("../../migrations/2026-08-25-000000-0000_add_guild_applications_and_ranks/up.sql"),
     include_str!("../../migrations/2026-09-18-000000-0000_add_free_for_all/up.sql"),
     include_str!("../../migrations/2026-09-20-000000-0000_add_character_creation_allowance/up.sql"),
@@ -6600,8 +6606,9 @@ mod tests {
                          requester_character_id, item_template_id, donation_sum) \
                          VALUES ('open', 'ga', '{uid}', '{cid}', '{item}', 3); \
                      INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
-                         requester_character_id, item_template_id, donation_sum, redeemed) \
-                         VALUES ('done', 'ga', '{uid}', '{cid}', '{item}', 4, true); \
+                         requester_character_id, item_template_id, donation_sum, redeemed, \
+                         redeemed_amount) \
+                         VALUES ('done', 'ga', '{uid}', '{cid}', '{item}', 4, true, 4); \
                      INSERT INTO free_for_all_runs (id, opens_at, closes_at, gems) \
                          VALUES ('{run}', 1, 2, 100); \
                      INSERT INTO free_for_all_grants (run_id, character_id, gems, granted_at) \
