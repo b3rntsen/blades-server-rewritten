@@ -2357,8 +2357,10 @@ mod variant_repair_coverage_tests {
         let runs = production
             .matches("let currency_moved = process_dungeon_actions(")
             .count();
-        let repairs = production.matches("match repair_variant_mismatch(").count()
-            + production.matches("repair_variant_mismatch(&").count();
+        // Count call sites, not a formatting of them: rustfmt splitting a call's
+        // arguments onto their own lines (#415) must not read as a missing repair.
+        let repairs = production.matches("repair_variant_mismatch(").count()
+            - production.matches("fn repair_variant_mismatch(").count();
 
         assert!(
             runs >= 2,
