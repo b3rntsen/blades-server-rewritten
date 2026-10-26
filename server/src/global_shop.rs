@@ -361,7 +361,10 @@ pub(crate) fn current_catalog(
 ) -> Value {
     let replayed = replay_calendar(&static_data.global_shop_windows, now)
         .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
-    apply_raised_window_caps(apply_authored(replayed, &static_data.global_shop_authored))
+    uncap_sigil_materials(apply_raised_window_caps(apply_authored(
+        replayed,
+        &static_data.global_shop_authored,
+    )))
 }
 
 /// Per-window purchase caps raised above retail's, by product id.
@@ -416,6 +419,80 @@ fn apply_raised_window_caps(mut catalog: Value) -> Value {
             if windowed && lim.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0 {
                 lim["limit"] = Value::from(*cap);
             }
+        }
+    }
+    catalog
+}
+
+/// Sigil-shop MATERIAL offers sold without a purchase limit, by product id.
+///
+/// NOT RETAIL. Tracker #435 (HauDrauf, 2026-10): "Please remove the limit in the
+/// sigil shop for materials — players can decide for themselves what they buy with
+/// their sigils." Shipped under the owner's standing rule for HauDrauf's
+/// reversible common-good economy requests. To revert, empty this list.
+///
+/// Retail capped these per window in every one of their captured windows
+/// (`global_shop_windows.json`): the town materials and effect ingredients at 3,
+/// the copper and marble/bronze packs at 1. The Sigil shop's other materials
+/// (`SigilShop_Smithing_*` ingots, `SigilShop_Jewel_*` gems) and soul gems were
+/// already unlimited in retail's data and are not listed. Gear, jewellery, gold
+/// and the Ultimate offers keep their limits.
+///
+/// Uncapped by serving retail's own unlimited shape: every `maxPurchaseLimits`
+/// entry kept (so the APK's `perUserMaximum` cannot fill in for a missing tracking
+/// id) with `limit` 0, which is how the uncapped soul-gem and ingot offers arrive
+/// and which the client reads as unlimited (prod: one character bought the
+/// all-zero `SigilShop_SoulGem_Grand` 26 times in one window). The purchase
+/// handler reads the same catalogue, so its cap check agrees.
+pub(crate) const UNCAPPED_SIGIL_MATERIAL_OFFERS: &[&str] = &[
+    "396bc276-508f-4c01-a2d5-69b29519c6ce", // SigilShop_EffectIngredients_AllIngredients
+    "0ccaf37b-a829-404f-8b8d-e0de711b4f2c", // SigilShop_EffectIngredients_Deathbell
+    "5d4a230c-43c8-498f-9534-659fe9389476", // SigilShop_EffectIngredients_FireSalts
+    "3cb3c2ee-35e4-43b7-bf1d-03c45d65d9c1", // SigilShop_EffectIngredients_FrostSalts
+    "01b0466e-f11d-4f41-91be-93b5e904b0dd", // SigilShop_EffectIngredients_GlowDust
+    "b77ed0a4-b347-4d20-82d1-75ad32b90dfb", // SigilShop_EffectIngredients_Honeycomb
+    "f7807aca-96fe-4418-8000-372d01410eff", // SigilShop_EffectIngredients_ImpStool
+    "d0414c5f-b76c-457c-ba81-9ec3a74b77cf", // SigilShop_EffectIngredients_VoidSalts
+    "d02875da-c506-4006-aeb8-68b017f0a193", // SigilShop_TownMaterials_Copper_x20
+    "5c9d1ddb-b6fa-4d77-8537-a0b07c5414d1", // SigilShop_TownMaterials_Copper_x40
+    "bf528cf7-3499-48b9-84de-d3fcad55cdaa", // SigilShop_TownMaterials_Copper_x80
+    "802477ea-532a-4d1c-a6ca-0571a17c3b76", // SigilShop_TownMaterials_Copper_x160
+    "a08ecd27-5837-4481-853f-70aa88f02f47", // SigilShop_TownMaterials_Limestone_x25
+    "119bab2e-9b73-4193-a599-d43500e17530", // SigilShop_TownMaterials_Limestone_x50
+    "8fbf3b8a-6516-42a5-8d8d-6451f28e8d27", // SigilShop_TownMaterials_Limestone_x100
+    "92405a05-ac97-4547-90f1-3c963efca6df", // SigilShop_TownMaterials_Limestone_x200
+    "ac5fd3c2-574d-4d6b-9add-42190fd213a4", // SigilShop_TownMaterials_Lumber_x30
+    "81f7927b-48e4-47ee-a1b2-214f1e9ffdee", // SigilShop_TownMaterials_Lumber_x60
+    "7d103d6e-cfff-4f9c-af51-d4885e9a3aa8", // SigilShop_TownMaterials_Lumber_x120
+    "a83bf730-2681-4218-a6f5-63076a709817", // SigilShop_TownMaterials_Lumber_x240
+    "6c7bcf8c-ab89-486c-982f-b90c6cc55a8b", // SigilShop_TownMaterials_MarbleBronze_x50
+];
+
+/// Zero every purchase limit of each [`UNCAPPED_SIGIL_MATERIAL_OFFERS`] product
+/// (#435). The window, prices and tracking ids are left as retail served them.
+fn uncap_sigil_materials(mut catalog: Value) -> Value {
+    let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    else {
+        return catalog;
+    };
+    for product in UNCAPPED_SIGIL_MATERIAL_OFFERS {
+        let Some(entry) = map.get_mut(*product).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if let Some(limits) = entry
+            .get_mut("maxPurchaseLimits")
+            .and_then(Value::as_array_mut)
+        {
+            for lim in limits {
+                if lim.get("limit").is_some() {
+                    lim["limit"] = Value::from(0u64);
+                }
+            }
+        }
+        if entry.contains_key("maxPurchases") {
+            entry.insert("maxPurchases".into(), Value::from(0u64));
         }
     }
     catalog
@@ -3825,8 +3902,11 @@ mod report238_calendar_tests {
         for t in [REPORTED, REPORTED + 40 * DAY] {
             assert_eq!(
                 current_catalog(&sd, t),
-                // #394's raised caps apply on either path.
-                apply_raised_window_caps(shift_to_now(&sd.global_shop_overrides, t)),
+                // #394's raised caps and #435's uncapped materials apply on either path.
+                uncap_sigil_materials(apply_raised_window_caps(shift_to_now(
+                    &sd.global_shop_overrides,
+                    t
+                ))),
             );
         }
     }
@@ -5318,7 +5398,11 @@ mod raised_window_cap_tests {
     #[test]
     fn other_products_are_unchanged() {
         let sd = sd();
-        let raised: HashSet<&str> = RAISED_WINDOW_CAPS.iter().map(|(id, _)| *id).collect();
+        let raised: HashSet<&str> = RAISED_WINDOW_CAPS
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(UNCAPPED_SIGIL_MATERIAL_OFFERS.iter().copied())
+            .collect();
         for now in (BASE..BASE + 7 * 86_400).step_by(6 * 3_600) {
             let got = current_catalog(&sd, now);
             let want = unraised(&sd, now);
@@ -5360,5 +5444,133 @@ mod raised_window_cap_tests {
             Some(("window", 3, 3)),
             "{other}: still 3 per window"
         );
+    }
+}
+
+#[cfg(test)]
+mod report_435_sigil_materials_unlimited {
+    use super::*;
+
+    fn sd() -> blades_lib::static_data::StaticData {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        crate::static_loader::load(&dir)
+    }
+
+    const NOW: i64 = 1_783_000_000 + 400 * 86_400;
+    // Retail capped these at 3 and 1 per window.
+    const LIMESTONE_X50: &str = "119bab2e-9b73-4193-a599-d43500e17530";
+    const COPPER_X160: &str = "802477ea-532a-4d1c-a6ca-0571a17c3b76";
+    const FIRE_SALTS: &str = "5d4a230c-43c8-498f-9534-659fe9389476";
+    // Controls: a Sigil-priced weapon and gold pack, both 1 per window.
+    const EBONY_MACE: &str = "0fb021e6-72fa-4427-bf41-b689a51ce687";
+    const GOLD_20K: &str = "9fe91c76-2cb4-4b83-9306-d7d29cd16b75";
+
+    /// Buy `product` `n` times through the handler's own cap gate and counter;
+    /// returns the purchase number that was refused, if any.
+    fn buy(sd: &blades_lib::static_data::StaticData, product: &str, n: u64) -> Option<u64> {
+        let id = Uuid::parse_str(product).unwrap();
+        let lifetime = lifetime_purchase_cap(sd, id, NOW);
+        let window = window_purchase_cap(sd, id, NOW);
+        let mut state = blades_lib::server_state::ServerState::default();
+        for k in 1..=n {
+            if purchase_cap_reached(&state, id, lifetime, window.as_ref()).is_some() {
+                return Some(k);
+            }
+            record_purchase(
+                &mut state,
+                id,
+                current_product_purchase_tracking_ids(sd, id, NOW),
+            );
+        }
+        None
+    }
+
+    /// THE REPORT. Retail sold Sigil-shop materials 3 (or 1) per window; #435 asks
+    /// for no limit. 50 purchases in one window must all go through.
+    #[test]
+    fn a_material_offer_can_be_bought_past_its_old_window_limit() {
+        let sd = sd();
+        for product in [LIMESTONE_X50, COPPER_X160, FIRE_SALTS] {
+            assert_eq!(buy(&sd, product, 50), None, "{product}: refused before 50");
+        }
+    }
+
+    /// The client keeps its own sold-out check off the served limits, so the
+    /// payload must say unlimited too — in retail's own unlimited shape (every
+    /// limit 0, `maxPurchases` 0), the one its uncapped soul-gem and ingot offers
+    /// carried. Prod shows the client buying such an offer 26 times in a window.
+    #[test]
+    fn a_material_offer_is_served_with_every_limit_zero() {
+        let sd = sd();
+        let catalog = current_catalog(&sd, NOW);
+        for product in [LIMESTONE_X50, COPPER_X160, FIRE_SALTS] {
+            let e = &catalog["globalShopOverrides"][product];
+            let limits = e["maxPurchaseLimits"].as_array().expect("limits kept");
+            assert_eq!(limits.len(), 3, "{product}: every tracking id still named");
+            assert!(
+                limits.iter().all(|l| l["limit"] == 0),
+                "{product}: {limits:?}"
+            );
+            assert_eq!(e["maxPurchases"], 0, "{product}");
+        }
+    }
+
+    /// The list is exactly the Sigil-priced material offers retail capped: every
+    /// `SigilShop_TownMaterials_*` / `SigilShop_EffectIngredients_*` offer, and
+    /// nothing else (no gear, jewellery, gold, soul gems).
+    #[test]
+    fn the_table_is_every_capped_sigil_material_offer() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/global_shop_offer_contents.json"
+        );
+        let offers: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let mut want: Vec<&str> = offers["offers"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, o)| {
+                o["editorName"].as_str().is_some_and(|n| {
+                    n.starts_with("SigilShop_TownMaterials_")
+                        || n.starts_with("SigilShop_EffectIngredients_")
+                })
+            })
+            .map(|(id, _)| id.as_str())
+            .collect();
+        want.sort_unstable();
+        let mut got: Vec<&str> = UNCAPPED_SIGIL_MATERIAL_OFFERS.to_vec();
+        got.sort_unstable();
+        assert_eq!(got, want);
+
+        let sd = sd();
+        let retail = replay_calendar(&sd.global_shop_windows, NOW).unwrap();
+        for product in UNCAPPED_SIGIL_MATERIAL_OFFERS {
+            let e = &retail["globalShopOverrides"][*product];
+            assert!(
+                e["prices"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|p| p["currencyId"] == blades_lib::economy::SIGIL.to_string()),
+                "{product}: Sigil-priced"
+            );
+            assert!(
+                e["maxPurchaseLimits"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|l| l["limit"].as_u64().unwrap_or(0) > 0),
+                "{product}: retail capped it, or it has no business in this list"
+            );
+        }
+    }
+
+    /// THE CONTROL: other Sigil offers keep retail's limit.
+    #[test]
+    fn a_non_material_sigil_offer_is_still_limited() {
+        let sd = sd();
+        for product in [EBONY_MACE, GOLD_20K] {
+            assert_eq!(buy(&sd, product, 5), Some(2), "{product}: 1 per window");
+        }
     }
 }
