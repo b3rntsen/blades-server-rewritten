@@ -24,7 +24,10 @@ use diesel_async::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use crate::{
     BladeApiError, ServerGlobal,
@@ -119,9 +122,22 @@ struct LootCollectedUpdate {
     loot: RewardGrant,
 }
 
+/// Pay the container entry (or entries) an `item_loot_collected` names, at the
+/// stored generated amount, once each (#432).
+///
+/// Retail's client picks a container up one entry per action: 2,079 of 2,079
+/// captured `item_loot_collected` actions name exactly one entry, and 58% of
+/// containers got two or more actions in a run. We paid the whole container on
+/// every action, so a container with N entries paid N times its contents.
+///
+/// The same rule as a corpse (#328, [`take_named_corpse_loot`]): the request
+/// names the entry, the stored roll sets the amount. A container's generated data
+/// is read-only, so what has been taken is recorded in `collected` (persisted on
+/// the dungeon status) and left out of what the container still holds.
 fn item_loot_grant(
     item_loot: &LootCollectedUpdate,
     generated_data: &DungeonGeneratedData,
+    collected: &mut HashSet<String>,
 ) -> RewardGrant {
     let Some((spawn_group_id, spawn_group_index)) = item_loot
         .spawn_group_id
@@ -136,22 +152,31 @@ fn item_loot_grant(
         return item_loot.loot.clone();
     };
 
-    let mut loot = LootTableResult::default();
-    for result in item.loot_table_loot.values() {
-        loot.merge(result.clone());
-    }
+    let entry = |kind: &str, id: &Uuid| format!("{spawn_group_id}-{spawn_group_index}/{kind}/{id}");
 
-    RewardGrant {
-        currencies: loot.currencies,
-        stackable_items: loot.stackable_items,
-        items: loot
-            .item
-            .0
-            .into_iter()
-            .map(|(id, item)| RewardItem { id, item })
-            .collect(),
-        ..RewardGrant::default()
+    // What the container still holds: its generated contents less what was taken.
+    let mut left = LootTableResult::default();
+    for result in item.loot_table_loot.values() {
+        left.merge(result.clone());
     }
+    left.stackable_items
+        .retain(|id, _| !collected.contains(&entry("stackable", id)));
+    left.currencies
+        .retain(|id, _| !collected.contains(&entry("currency", id)));
+    left.item
+        .0
+        .retain(|id, _| !collected.contains(&entry("item", id)));
+
+    let grant = take_named_corpse_loot(&mut left, &item_loot.loot);
+    collected.extend(
+        grant
+            .stackable_items
+            .keys()
+            .map(|id| entry("stackable", id)),
+    );
+    collected.extend(grant.currencies.keys().map(|id| entry("currency", id)));
+    collected.extend(grant.items.iter().map(|item| entry("item", &item.id)));
+    grant
 }
 
 /// Take, from a corpse's stored loot, the ONE entry an `enemy_loot_collected`
@@ -793,6 +818,7 @@ async fn handle_event_dungeon_update(
                         level: 1,
                         version: 1,
                         collected_chests: Default::default(),
+                        collected_item_loot: Default::default(),
                     },
                     character: CompleteCharacterWithIdWithoutData {
                         id: character_id,
@@ -1142,7 +1168,12 @@ fn process_dungeon_actions(
                 // repeated `loot` body, which can report a single lumber even when the
                 // generated pile contains several (#104). Imported/legacy dungeon rows
                 // without matching itemGeneratedData retain the request fallback.
-                let reward = item_loot_grant(item_loot, generated_data);
+                // Only the entry the action names is paid, once (#432).
+                let reward = item_loot_grant(
+                    item_loot,
+                    generated_data,
+                    &mut dungeon_state.dungeon_status.collected_item_loot,
+                );
                 currency_moved |= !reward.currencies.is_empty();
                 apply_reward(
                     &reward,
@@ -1582,7 +1613,7 @@ mod tests {
             version: 0,
         };
 
-        let grant = item_loot_grant(&action, &generated);
+        let grant = item_loot_grant(&action, &generated, &mut HashSet::new());
         assert_eq!(grant.stackable_items.get(&lumber), Some(&6));
     }
 
@@ -1606,7 +1637,7 @@ mod tests {
             version: 0,
         };
 
-        let grant = item_loot_grant(&action, &generated);
+        let grant = item_loot_grant(&action, &generated, &mut HashSet::new());
         assert_eq!(grant.stackable_items.get(&lumber), Some(&2));
     }
 
@@ -1899,7 +1930,7 @@ mod tests {
             "the floor-pickup branch is hand-copying the grant again — that is how \
              `items` got dropped in #104. Pass the whole grant instead."
         );
-        assert!(branch.contains("item_loot_grant(item_loot, generated_data)"));
+        assert!(branch.contains("item_loot_grant("));
         assert!(
             branch.contains("&reward"),
             "the branch must pass the resolved whole grant to apply_reward"
@@ -2867,5 +2898,182 @@ mod report328_corpse_loot_tests {
         assert_eq!(all.stackable_items.get(&uuid(IRON)), Some(&5));
         assert_eq!(all.currencies.get(&uuid(GOLD)), Some(&7));
         assert!(stored.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod report432_container_loot_tests {
+    use super::*;
+    use blades_lib::user_data::CompleteInventory;
+
+    const CONTAINER: &str = "e7edb276-a04c-413f-80ab-69ffe304874f";
+    const LUMBER: &str = "e7193116-d761-479b-8a20-5633737977f5";
+    const IRON: &str = "4577fb2b-47f7-4112-b870-1479e2529b06";
+    const GOLD: &str = "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2";
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    fn pickup(entry: serde_json::Value) -> Vec<DungeonUpdateAction> {
+        serde_json::from_value::<DungeonUpdateRequest>(serde_json::json!({
+            "currentState": {"b64": ""},
+            "actions": [{
+                "type": "item_loot_collected", "spawnGroupId": CONTAINER,
+                "spawnGroupIndex": 0, "loot": entry, "time": 2
+            }]
+        }))
+        .unwrap()
+        .actions
+    }
+
+    fn character() -> CharacterDbEntryCharacterWalletInventory {
+        CharacterDbEntryCharacterWalletInventory {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            character: JsonDbWrapper(Default::default()),
+            data: JsonDbWrapper(Default::default()),
+            wallet: JsonDbWrapper(Default::default()),
+            inventory: JsonDbWrapper(CompleteInventory {
+                backpack: Default::default(),
+                loadout: Default::default(),
+                treasury: Default::default(),
+                overflow_treasury: Default::default(),
+                backpack_version: 1,
+                treasury_version: 0,
+            }),
+            server_state: JsonDbWrapper(Default::default()),
+        }
+    }
+
+    /// Report #432: a container (a floor pile, a sack, a harvested plant) holding
+    /// lumber x6, iron x3 and 10 gold.
+    ///
+    /// Retail's client picks a container up one entry per action: 2,079 of 2,079
+    /// captured `item_loot_collected` actions name exactly one entry, and 58% of
+    /// containers got two or more actions in a run. We paid the WHOLE container on
+    /// every one of them, so a container with N entries paid its contents N times.
+    ///
+    /// Each pickup is processed as its own request, with the dungeon state written
+    /// out and read back in between, as the handler persists it.
+    #[test]
+    fn a_container_pays_each_named_entry_once() {
+        let generated: DungeonGeneratedData = serde_json::from_value(serde_json::json!({
+            "enemyGeneratedData": {},
+            "itemGeneratedData": {CONTAINER: [{
+                "lootTableLoot": {
+                    "00000000-0000-0000-0000-000000000432": {
+                        "stackableItems": {LUMBER: 6, IRON: 1},
+                        "currencies": {GOLD: 10}
+                    },
+                    "00000000-0000-0000-0000-000000000433": {
+                        "stackableItems": {IRON: 2}
+                    }
+                }
+            }]},
+            "algorithmVersion": 1, "version": 0
+        }))
+        .unwrap();
+        let mut state: DungeonState = serde_json::from_value(serde_json::json!({
+            "dungeonStatus": {
+                "dungeonSettingsIds": [], "reviveCount": 0, "level": 5, "seed": 0,
+                "currentState": {"b64": ""}, "algorithmVersion": 1, "version": 1
+            }
+        }))
+        .unwrap();
+        let mut character = character();
+        let mut wallet = CompleteWallet::default();
+        let mut run = |actions: Vec<DungeonUpdateAction>| {
+            let mut tracker = InventoryChangeTracker::default();
+            let moved = process_dungeon_actions(
+                &actions,
+                &generated,
+                &mut state,
+                &mut character,
+                &mut wallet,
+                &mut tracker,
+                &|l| l,
+            );
+            // The next request reads the state back from the database.
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let mut reported: Vec<Uuid> = tracker
+                .modified_backpack
+                .stackable_items
+                .into_iter()
+                .collect();
+            reported.sort();
+            (reported, moved)
+        };
+
+        let (reported, moved) = run(pickup(serde_json::json!({"stackableItems": {LUMBER: 1}})));
+        assert_eq!(reported, vec![uuid(LUMBER)], "only the lumber is picked up");
+        assert!(!moved, "the gold is still in the container");
+
+        // The client names the entry; the stored amount is paid (both tables' iron).
+        let (reported, moved) = run(pickup(serde_json::json!({"stackableItems": {IRON: 1}})));
+        assert_eq!(reported, vec![uuid(IRON)]);
+        assert!(!moved);
+
+        let (reported, moved) = run(pickup(serde_json::json!({"currencies": {GOLD: 10}})));
+        assert!(reported.is_empty() && moved);
+
+        // A repeat of a taken entry pays nothing and reports nothing.
+        let (reported, moved) = run(pickup(serde_json::json!({"stackableItems": {LUMBER: 6}})));
+        assert!(
+            reported.is_empty() && !moved,
+            "a repeated pickup pays nothing"
+        );
+        let (_, moved) = run(pickup(serde_json::json!({"currencies": {GOLD: 10}})));
+        assert!(!moved, "a repeated gold pickup pays nothing");
+
+        // The total is the container's contents, each entry once.
+        let backpack = &character.inventory.0.backpack.stackable_items;
+        assert_eq!(backpack.count(uuid(LUMBER)), 6);
+        assert_eq!(backpack.count(uuid(IRON)), 3);
+        assert_eq!(wallet.balance(uuid(GOLD)), 10);
+    }
+
+    /// The same entry named twice inside ONE batch is paid once too: the tracking
+    /// is updated as each action is applied, not once per request.
+    #[test]
+    fn a_repeat_inside_one_batch_pays_nothing() {
+        let generated: DungeonGeneratedData = serde_json::from_value(serde_json::json!({
+            "enemyGeneratedData": {},
+            "itemGeneratedData": {CONTAINER: [{
+                "lootTableLoot": {"00000000-0000-0000-0000-000000000432": {
+                    "stackableItems": {LUMBER: 6, IRON: 3}
+                }}
+            }]},
+            "algorithmVersion": 1, "version": 0
+        }))
+        .unwrap();
+        let mut state: DungeonState = serde_json::from_value(serde_json::json!({
+            "dungeonStatus": {
+                "dungeonSettingsIds": [], "reviveCount": 0, "level": 5, "seed": 0,
+                "currentState": {"b64": ""}, "algorithmVersion": 1, "version": 1
+            }
+        }))
+        .unwrap();
+        let mut character = character();
+        let mut wallet = CompleteWallet::default();
+        let mut actions = pickup(serde_json::json!({"stackableItems": {LUMBER: 6}}));
+        actions.extend(pickup(serde_json::json!({"stackableItems": {LUMBER: 6}})));
+        actions.extend(pickup(serde_json::json!({"stackableItems": {IRON: 3}})));
+        process_dungeon_actions(
+            &actions,
+            &generated,
+            &mut state,
+            &mut character,
+            &mut wallet,
+            &mut InventoryChangeTracker::default(),
+            &|l| l,
+        );
+        let backpack = &character.inventory.0.backpack.stackable_items;
+        assert_eq!(backpack.count(uuid(LUMBER)), 6, "lumber paid once");
+        assert_eq!(
+            backpack.count(uuid(IRON)),
+            3,
+            "control: the other entry still pays"
+        );
     }
 }

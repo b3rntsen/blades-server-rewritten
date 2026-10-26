@@ -1054,6 +1054,7 @@ pub async fn enter_quest_dungeon(
                     ),
                     version: 1, //TODO: figure out where this version come from.
                     collected_chests: HashSet::default(),
+                    collected_item_loot: HashSet::default(),
                 };
 
                 {
@@ -2278,6 +2279,7 @@ async fn handle_event_dungeon_entry(
                 algorithm_version: 1,
                 current_state: body.current_state,
                 collected_chests: HashSet::default(),
+                collected_item_loot: HashSet::default(),
                 enemy_status: HashMap::default(),
                 seed: rand::random::<u32>() as i64,
                 level: enemy_level as u64,

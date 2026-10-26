@@ -225,6 +225,15 @@ pub struct DungeonStatus {
     // keeps that exact spelling, so old in-flight dungeon states deserialize
     // and preserve their already-collected chest.
     pub collected_chests: HashSet<String>,
+    /// Container entries (floor piles, sacks, plants) already picked up in this
+    /// run, one key per entry, so each is paid once (#432). Retail's client picks
+    /// a container up one entry per `item_loot_collected` action; without this
+    /// record every action paid the whole container again.
+    ///
+    /// `default` and skipped when empty, for the same reasons as
+    /// `collected_chests`: existing rows lack it, and retail never sent it.
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub collected_item_loot: HashSet<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -414,6 +423,12 @@ mod collected_chests_compat {
         let s: DungeonStatus =
             serde_json::from_str(raw).expect("a pre-existing dungeon status must load");
         assert!(s.collected_chests.is_empty());
+        assert!(s.collected_item_loot.is_empty());
+        let out = serde_json::to_value(&s).unwrap();
+        assert!(
+            out.get("collectedItemLoot").is_none(),
+            "an empty set is not sent: {out:?}"
+        );
     }
 
     /// Rows written after chest collection was added used a bare UUID. Index zero
