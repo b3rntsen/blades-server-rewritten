@@ -518,11 +518,11 @@ fn resolve_dungeon_settings_id(
 /// level-73 enemies worth 258 XP each on the quest row, but every kill paid 100 XP,
 /// every corpse was rolled at level 1, and every chest was a level-1 chest.
 ///
-/// `character_level` is the level of the character the run is for: from 49 its
+/// `character_level` is the level of the character the run is for: from 45 its
 /// corpse and container loot is the level-100 character's
 /// ([`blades_lib::features::loot_level::dungeon_loot_shift`]), with soul gems Grand
-/// at 49-60 ([`blades_lib::features::loot_level::cap_event_dungeon_soul_gems`],
-/// #398).
+/// at 45-60 ([`blades_lib::features::loot_level::cap_event_dungeon_soul_gems`],
+/// #398, #432).
 pub(crate) fn event_dungeon_data(
     game_data: &GameData,
     quest_id: Uuid,

@@ -390,7 +390,8 @@ fn size_end_soul_gems(stacks: &mut HashMap<Uuid, u64>, run_seed: i64) {
 
 /// [`end_package`] as drawn, before #388's soul gems.
 fn end_package_drawn(score: f64, character_level: u64, run_seed: i64) -> RewardGrant {
-    // From 49 everything is drawn as at level 100, its gem re-grading included (#398).
+    // From 45 (#432; 49 under #398) everything is drawn as at level 100, its gem
+    // re-grading included.
     let character_level = crate::features::loot_level::effective_loot_level_u64(character_level);
     let mut grant = RewardGrant::default();
     if score < END_PACKAGE_MIN_SCORE {
@@ -794,7 +795,7 @@ fn borrow_from_above<'a>(
 /// The single resolution of a rung's reward, shared by the advertisement and the
 /// grant. The draw is a function of the run seed and the rung only — never of
 /// the score that selected it — so advertising and paying cannot disagree.
-/// From level 49 a rung pays what it pays a level-100 character (#398) — its chest
+/// From level 45 (#432; 49 under #398) a rung pays what it pays a level-100 character — its chest
 /// at level 100, its stack from the level-100 pool — with one exception kept on
 /// purpose: a level 49-59 character still has #371's extra Grand Soul Gem among the
 /// results beside the golden chest, which level 100 does not. Paying exactly level
@@ -1026,13 +1027,15 @@ mod tests {
     }
 
     /// The golden chest past 650 is rung 360's: tier 3, at the character's level —
-    /// level 100's from 49 on (#398), as at 360.
+    /// level 100's from 45 on (#398 from 49; #432 from 45), as at 360.
     #[test]
     fn the_golden_chest_past_650_is_rung_360s() {
         for (level, chest_level) in [
             (9u64, 9u64),
             (40, 40),
-            (48, 48),
+            (44, 44),
+            (45, 100),
+            (48, 100),
             (49, 100),
             (77, 100),
             (100, 100),
@@ -1495,33 +1498,17 @@ mod tests {
     }
 
     /// The screenshot cases: retail's end screen paid Grand ×6 at level 47, and a
-    /// single Grand at levels 57 and 58. From 45 to 48 the `/end` stack is 1-7 of
-    /// Greater, Elevated or Grand ("up to 7 of every kind"), and since #388
-    /// (owner-approved deviation, 2026-10-16) Greater and Elevated are paid as
-    /// Grand, Glorious or Transcendent. From 49 `/end` is the top band's (report #383), and the
-    /// level-57/58 single Grand is paid by the rungs beside the golden chest.
+    /// single Grand at levels 57 and 58. From 45 (#432; 49 under #383/#398) `/end`
+    /// is the top band's, level 100's for the same seed, and the level-57/58 single
+    /// Grand is paid by the rungs beside the golden chest. Before #432, 45-48 drew
+    /// 1-7 Greater, Elevated or Grand ("up to 7 of every kind"), re-graded to the
+    /// three best by #388.
     #[test]
-    fn levels_45_to_48_are_paid_up_to_seven_and_the_screenshots_are_reachable() {
+    fn levels_45_to_48_are_paid_level_100s_end_and_the_screenshots_are_reachable() {
         let grand = uuid(ALL_SOUL_GEMS[GRAND]);
-        let kinds = [GRAND, GRAND + 1, GRAND + 2].map(|g| uuid(ALL_SOUL_GEMS[g]));
+        let at_100 = end_gems(100, 10_000);
         for level in [45u64, 47, 48] {
-            let (gems, n) = end_gems(level, 10_000);
-            assert!(
-                gems.iter().all(|g| kinds.contains(&g.0)),
-                "level {level}: {gems:?}"
-            );
-            let counts: std::collections::BTreeSet<u64> = gems.iter().map(|g| g.1).collect();
-            assert_eq!(
-                counts,
-                END_SOUL_GEM_COUNT.collect(),
-                "level {level}: 3 to 7 gems (#407)"
-            );
-            let seen: std::collections::HashSet<Uuid> = gems.iter().map(|g| g.0).collect();
-            assert_eq!(seen.len(), 3, "level {level}: all three kinds come up");
-            assert!(
-                (4_500..=5_500).contains(&n),
-                "level {level}: {n} gem runs in 10000"
-            );
+            assert_eq!(end_gems(level, 10_000), at_100, "level {level}");
         }
         let (at47, _) = end_gems(47, 10_000);
         assert!(
@@ -1583,14 +1570,15 @@ mod tests {
     /// level-100 character draws for the same seed — Giant's Toe at rung 70, the top
     /// band's soul gems at `/end` (Glorious, and the Transcendent upgrade). Chests
     /// take the character's level, and rungs 190/490 keep #371's extra Grand
-    /// (39-59). Level 48 is the control: it keeps the level 34-57 pool.
+    /// (39-59). #432 moved it to 45 (45 and 48 are checked with the rest); level 44
+    /// is the control: it keeps the level 34-57 pool.
     #[test]
-    fn from_level_49_every_reward_is_the_top_bands() {
+    fn from_level_45_every_reward_is_the_top_bands() {
         let giants_toe = uuid(GIANTS_TOE);
         let top_end: std::collections::HashSet<Uuid> = (0..2_000i64)
             .flat_map(|seed| end_package(100.0, 100, seed).stackable_items.into_keys())
             .collect();
-        for level in [49u64, 50, 54, 57, 59] {
+        for level in [45u64, 48, 49, 50, 54, 57, 59] {
             for seed in 0..500i64 {
                 for rung in [35u32, 70, 95, 135, 260, 650] {
                     assert_eq!(
@@ -1623,8 +1611,8 @@ mod tests {
                 single_stack(&future_reward_for_rung(70, level, seed).unwrap()).0 == giants_toe
             })
         };
-        assert!(toe(49), "level 49 never draws Giant's Toe at rung 70");
-        assert!(!toe(48), "level 48 keeps the level 34-57 rung-70 pool");
+        assert!(toe(45), "level 45 never draws Giant's Toe at rung 70");
+        assert!(!toe(44), "level 44 keeps the level 34-57 rung-70 pool");
         let quicksilver = uuid("e80bee76-f92c-4005-9eff-20d1e8c64d24");
         let quick = |level: u64| {
             (0..500i64).any(|seed| {
@@ -1632,7 +1620,7 @@ mod tests {
             })
         };
         assert!(
-            quick(48) && !quick(49),
+            quick(44) && !quick(45),
             "Quicksilver at rung 70 is the level 20-48 pool's"
         );
     }
@@ -1792,7 +1780,8 @@ mod tests {
             );
         }
         // Frost Salts is new to rung 35, and like Imp Stool and Honeycomb it is a
-        // top-band result: the level 20-48 band does not draw it.
+        // top-band result: the level 20-48 band does not draw it (from 45 a
+        // character is paid as 100, #432, so 44 is the control).
         for item in [FROST_SALTS, IMP_STOOL, HONEYCOMB] {
             let at = |level: u64| {
                 (0..2_000i64).any(|seed| {
@@ -1805,7 +1794,7 @@ mod tests {
             );
         }
         assert!(!(0..2_000i64).any(|seed| {
-            single_stack(&future_reward_for_rung(35, 45, seed).unwrap()).0 == uuid(FROST_SALTS)
+            single_stack(&future_reward_for_rung(35, 44, seed).unwrap()).0 == uuid(FROST_SALTS)
         }));
     }
 
