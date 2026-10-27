@@ -39,9 +39,14 @@ fn kind(id: &Uuid) -> Option<Kind> {
     }
 }
 
-/// The sizes each rule's stacks came in, per source.
+/// The sizes each rule's stacks came in, per source; and per source, how many
+/// stacks of each item were paid (`items`) out of how many stacks (`stacks`).
 #[derive(Default, Debug)]
-struct Seen(BTreeMap<(&'static str, Kind), Vec<u64>>);
+struct Seen(
+    BTreeMap<(&'static str, Kind), Vec<u64>>,
+    BTreeMap<(&'static str, Uuid), Vec<u64>>,
+    BTreeMap<&'static str, usize>,
+);
 
 impl Seen {
     fn add(&mut self, source: &'static str, stacks: &HashMap<Uuid, u64>) {
@@ -49,7 +54,22 @@ impl Seen {
             if let Some(k) = kind(id) {
                 self.0.entry((source, k)).or_default().push(*q);
             }
+            self.1.entry((source, *id)).or_default().push(*q);
+            *self.2.entry(source).or_default() += 1;
         }
+    }
+
+    /// The `id` stacks paid in `source`.
+    fn of(&self, source: &str, id: Uuid) -> &[u64] {
+        self.1
+            .iter()
+            .find(|((s, i), _)| *s == source && *i == id)
+            .map_or(&[], |(_, v)| v.as_slice())
+    }
+
+    /// Every source seen.
+    fn sources(&self) -> Vec<&'static str> {
+        self.2.keys().copied().collect()
     }
 
     fn add_dungeon(&mut self, d: &DungeonGeneratedData) {
@@ -64,6 +84,15 @@ impl Seen {
                 self.add("containers", &l.stackable_items);
             }
         }
+    }
+
+    /// [`Self::sizes`], for a source added under its own name.
+    fn of_kind(&self, source: &str, k: Kind) -> Vec<u64> {
+        self.1
+            .iter()
+            .filter(|((s, id), _)| *s == source && kind(id) == Some(k))
+            .flat_map(|(_, v)| v.iter().copied())
+            .collect()
     }
 
     fn sizes(&self, source: &str, k: Kind) -> &[u64] {
@@ -132,13 +161,21 @@ fn non_chest_sources(level: i64) -> Seen {
             }
         }
     }
-    for ((source, k), v) in abyss.0 {
-        let source = if source == "corpses" {
+    let rename = |source: &'static str| {
+        if source == "corpses" {
             "abyss corpses"
         } else {
             "abyss containers"
-        };
-        seen.0.entry((source, k)).or_default().extend(v);
+        }
+    };
+    for ((source, k), v) in abyss.0 {
+        seen.0.entry((rename(source), k)).or_default().extend(v);
+    }
+    for ((source, id), v) in abyss.1 {
+        seen.1.entry((rename(source), id)).or_default().extend(v);
+    }
+    for (source, n) in abyss.2 {
+        *seen.2.entry(rename(source)).or_default() += n;
     }
     for seed in 0..3_000i64 {
         let p = blades_lib::features::abyss_rewards::end_package(400.0, level as u64, seed);
@@ -198,6 +235,7 @@ fn chest_sources(level: i64) -> (Seen, Vec<usize>) {
                 level,
             );
             seen.add("chests", &r.stackable_items);
+            seen.add(TIER_NAMES[tier as usize], &r.stackable_items);
             if tier == 1 {
                 wooden_effect_stacks.push(
                     r.stackable_items
@@ -218,6 +256,7 @@ fn chest_sources(level: i64) -> (Seen, Vec<usize>) {
                 Some(&ctx.sd.chest_loots),
             ) {
                 seen.add("chests", &r.stackable_items);
+                seen.add("store chests", &r.stackable_items);
             }
         }
     }
@@ -246,12 +285,24 @@ fn rule_1_effect_ingredient_stacks_are_30_from_45() {
                 );
             }
         }
+        // In chests only a Wooden chest's are 30 (HauDrauf, msg 3018: "in
+        // Holztruhen ja"); Silver to Legendary and the store chests keep #388's.
         let (chests, _) = chest_sources(level);
-        let v = chests.sizes("chests", Kind::Effect);
+        let v = chests.of_kind("wooden", Kind::Effect);
         assert!(
             !v.is_empty() && v.iter().all(|q| *q == EFFECT_INGREDIENT_STACK),
-            "L{level} chests: {v:?}"
+            "L{level} wooden: {v:?}"
         );
+        // (Our Silver to Legendary and store chests pay no effect ingredient at
+        // 45-100 at all, so this guards the rule; the unit test in
+        // `high_level_materials` exercises it.)
+        for source in ["silver", "gold", "elder", "legendary", "store chests"] {
+            let v = chests.of_kind(source, Kind::Effect);
+            assert!(
+                v.iter().all(|q| MATERIAL_STACK_SIZES.contains(q)),
+                "L{level} {source}: {v:?}"
+            );
+        }
     }
 }
 
@@ -344,6 +395,21 @@ fn level_44_is_unchanged() {
             );
         }
     }
+    let sdp = |s: &Seen| {
+        s.sources()
+            .into_iter()
+            .map(|src| {
+                SEEDS_DYE_PELT
+                    .iter()
+                    .map(|id| s.of(src, *id).len())
+                    .sum::<usize>()
+            })
+            .sum::<usize>()
+    };
+    assert!(
+        sdp(&seen) > 0 && sdp(&chests) > 0,
+        "L44: Seeds/Dye/Pelt still paid"
+    );
     assert!(
         wooden.iter().any(|n| *n != 2),
         "L44 Wooden chests: {:?}",
@@ -436,3 +502,123 @@ static POTION_TABLE_POTIONS: std::sync::LazyLock<Vec<String>> = std::sync::LazyL
     }
     out
 });
+
+/// Per-tier source names for the chest census.
+const TIER_NAMES: [&str; 6] = ["", "wooden", "silver", "gold", "elder", "legendary"];
+
+const MOON_SUGAR: Uuid = Uuid::from_u128(0x0de08119_d316_4933_a5d3_8ef702d4efdc);
+const ECTOPLASM: Uuid = Uuid::from_u128(0xdba6adde_b1f3_4146_8155_91426652495a);
+const SEEDS_DYE_PELT: [Uuid; 3] = [
+    Uuid::from_u128(0xb94c2028_dba7_44bd_b6f9_6f85ab0195b6), // Seeds
+    Uuid::from_u128(0x6bd960ca_9af3_4b33_9ec0_5c06d50ad43e), // Dye
+    Uuid::from_u128(0x51f7612f_a797_4417_8a92_493b0aae7f45), // Pelt
+];
+
+/// Prints, per source at `ECONOMY_438_LEVEL` (default 100), how many of its stacks
+/// are Moon Sugar, Ectoplasm and Seeds/Dye/Pelt (`--ignored --nocapture`).
+#[test]
+#[ignore]
+fn print_moon_sugar_and_ectoplasm_rates() {
+    let level: i64 = std::env::var("ECONOMY_438_LEVEL")
+        .ok()
+        .and_then(|l| l.parse().ok())
+        .unwrap_or(100);
+    // Wooden chests by the level they are minted at: a 45-100 character's dungeon
+    // chests at the level-100 dungeon's (~78-84), daily and gift chests at 100.
+    let ctx = Ctx::load();
+    for chest_level in [78u64, 84, 90, 100] {
+        let payload: blades_lib::features::daily_reward::DailyRewardPayload =
+            serde_json::from_value(json!({ "chests": [{ "tier": 1, "level": chest_level }] }))
+                .unwrap();
+        let (mut moon, mut ecto) = (0, 0);
+        for n in 0..10_000 {
+            let r = crate::daily_reward::collect_reward_for(
+                &payload,
+                &ctx.sd.chest_loots,
+                Uuid::nil(),
+                &format!("438e:{n}"),
+                &HashSet::new(),
+                level,
+            );
+            moon += usize::from(r.stackable_items.contains_key(&MOON_SUGAR));
+            ecto += usize::from(r.stackable_items.contains_key(&ECTOPLASM));
+        }
+        println!(
+            "L{level} Wooden chest level {chest_level}: Moon Sugar in {moon}, Ectoplasm in {ecto} of 10000"
+        );
+    }
+    let (chests, _) = chest_sources(level);
+    for s in [non_chest_sources(level), chests] {
+        for source in s.sources() {
+            let n = s.2[source];
+            let sdp: usize = SEEDS_DYE_PELT
+                .iter()
+                .map(|id| s.of(source, *id).len())
+                .sum();
+            println!(
+                "L{level} {source}: {n} stacks, Moon Sugar {} {:?}, Ectoplasm {}, Seeds/Dye/Pelt {}",
+                s.of(source, MOON_SUGAR).len(),
+                {
+                    let mut q = s.of(source, MOON_SUGAR).to_vec();
+                    q.sort_unstable();
+                    q.dedup();
+                    q
+                },
+                s.of(source, ECTOPLASM).len(),
+                sdp,
+            );
+        }
+    }
+}
+
+/// Seeds, Dye and Pelt make way for Ectoplasm (HauDrauf, msg 3018): from 45 none of
+/// the three is paid anywhere, and Ectoplasm comes up in Wooden chests as often as
+/// Moon Sugar does there, at Moon Sugar's sizes; no other source gains it.
+#[test]
+fn rule_5_ectoplasm_replaces_seeds_dye_and_pelt_from_45() {
+    for level in [45i64, 100] {
+        let seen = non_chest_sources(level);
+        let (chests, _) = chest_sources(level);
+        for s in [&seen, &chests] {
+            for source in s.sources() {
+                for id in SEEDS_DYE_PELT {
+                    assert!(s.of(source, id).is_empty(), "L{level} {source}: {id} paid");
+                }
+                let gained = s.of(source, ECTOPLASM).len();
+                match source {
+                    "wooden" | "chests" => {}
+                    // Two story quests pay Ectoplasm as retail did.
+                    "quest rewards" => assert_eq!(gained, 20, "L{level}"),
+                    _ => assert_eq!(gained, 0, "L{level} {source}: Ectoplasm added"),
+                }
+            }
+        }
+        // Wooden chests at the levels a 45-100 character's are minted at.
+        let ctx = Ctx::load();
+        for chest_level in [84u64, 100] {
+            let payload: blades_lib::features::daily_reward::DailyRewardPayload =
+                serde_json::from_value(json!({ "chests": [{ "tier": 1, "level": chest_level }] }))
+                    .unwrap();
+            let (mut moon, mut ecto) = (0usize, 0usize);
+            for n in 0..4_000 {
+                let r = crate::daily_reward::collect_reward_for(
+                    &payload,
+                    &ctx.sd.chest_loots,
+                    Uuid::from_u128(0x438),
+                    &format!("438r5:{n}"),
+                    &HashSet::new(),
+                    level,
+                );
+                moon += usize::from(r.stackable_items.contains_key(&MOON_SUGAR));
+                if let Some(q) = r.stackable_items.get(&ECTOPLASM) {
+                    assert!(MATERIAL_STACK_SIZES.contains(q), "Ectoplasm x{q}");
+                    ecto += 1;
+                }
+            }
+            assert!(
+                moon.abs_diff(ecto) <= 120,
+                "L{level} chest level {chest_level}: Moon Sugar {moon}, Ectoplasm {ecto} of 4000"
+            );
+        }
+    }
+}

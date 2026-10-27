@@ -7,7 +7,10 @@
 //! Wooden chests always hold 2 stacks of them. That means the 7 ingredients, salts
 //! etc. The tempering materials go back to one, except in chests, where there are
 //! 1-3, Opal etc. The ingots are fine; only Dragon Bone and Dragon Scale go back
-//! to 1-7, as in the original."
+//! to 1-7, as in the original." His answers (msg 3018): the 30 in chests is for
+//! Wooden chests ("in Holztruhen ja"; read narrowly, every other chest keeps its
+//! sizes), and Seeds, Dye and Pelt may make way for Ectoplasm, which retail paid
+//! "about like Moon Sugar".
 //!
 //! Every number lives in this one module, so the whole rule set can be reverted by
 //! setting [`FROM_LEVEL`] above the level cap (or removing the calls to
@@ -102,13 +105,50 @@ pub const DRAGON_MATERIALS: [Uuid; 2] = [
 pub const DRAGON_STACK: RangeInclusive<u64> = 1..=7;
 
 // ---------------------------------------------------------------------------
+// 4. Seeds, Dye and Pelt make way for Ectoplasm
+// ---------------------------------------------------------------------------
+
+/// Seeds, Dye and Pelt: from [`FROM_LEVEL`] they are paid nowhere the rules
+/// cover. HauDrauf (#438, msg 3018): none of the three matters at the top levels,
+/// "wenn du kein Ektoplasma findest, kannst du es z. B. mit diesen Sachen ersetzen.
+/// Ektoplasma gab es ungefähr wie Mondzucker."
+pub const SEEDS_DYE_PELT: [Uuid; 3] = [
+    Uuid::from_u128(0xb94c2028_dba7_44bd_b6f9_6f85ab0195b6), // Seeds
+    Uuid::from_u128(0x6bd960ca_9af3_4b33_9ec0_5c06d50ad43e), // Dye
+    Uuid::from_u128(0x51f7612f_a797_4417_8a92_493b0aae7f45), // Pelt
+];
+
+/// Ectoplasm (an Alchemy Material, not one of the seven effect ingredients, so it
+/// is paid at Moon Sugar's size: #388's 5, 10 or 20).
+pub const ECTOPLASM: Uuid = Uuid::from_u128(0xdba6adde_b1f3_4146_8155_91426652495a);
+
+/// In how many Wooden-chest openings per 10,000 Ectoplasm is paid from
+/// [`FROM_LEVEL`]: Moon Sugar's own rate there ("ungefähr wie Mondzucker").
+///
+/// Measured on our generators for a level-100 opener
+/// (`report_438::print_moon_sugar_and_ectoplasm_rates`, 10,000 openings each):
+/// Moon Sugar in 1,645 / 1,656 / 1,639 Wooden chests minted at level 84 / 90 / 100
+/// (894 at 78). Among the sources the rules cover, Wooden chests are the only one
+/// paying Moon Sugar at 45-100: corpses (0 of 3,108 stacks), containers (0 of
+/// 12,165), the Abyss (0 of 13,599: corpses, containers, `/end`, rungs) and Silver
+/// to Legendary and store chests (0 of 14,014) pay none, so no Ectoplasm is added
+/// there and Seeds, Dye and Pelt simply stop. Story-quest rewards already pay
+/// Ectoplasm in two quests to Moon Sugar's one.
+pub const WOODEN_CHEST_ECTOPLASM_PER_10K: u64 = 1_650;
+
+// ---------------------------------------------------------------------------
 // Application
 // ---------------------------------------------------------------------------
 
-/// Whether `id` is a stack the #438 rules size: an effect ingredient, a tempering
-/// material, Dragon Bone or Dragon Scale.
+/// Whether `id` is a stack the #438 rules size, remove or add: an effect
+/// ingredient, a tempering material, Dragon Bone or Dragon Scale, Seeds, Dye, Pelt
+/// or Ectoplasm.
 pub fn names(id: &Uuid) -> bool {
-    is_effect_ingredient(id) || TEMPERING_MATERIALS.contains(id) || DRAGON_MATERIALS.contains(id)
+    is_effect_ingredient(id)
+        || TEMPERING_MATERIALS.contains(id)
+        || DRAGON_MATERIALS.contains(id)
+        || SEEDS_DYE_PELT.contains(id)
+        || *id == ECTOPLASM
 }
 
 fn is_effect_ingredient(id: &Uuid) -> bool {
@@ -119,8 +159,10 @@ fn draw(range: &RangeInclusive<u64>, seed: u64) -> u64 {
     range.start() + seed % (range.end() - range.start() + 1)
 }
 
-/// Resize every stack the rules name; `chest` picks the tempering size.
-fn resize(stacks: &mut HashMap<Uuid, u64>, chest: bool, seed: u64) {
+/// Resize every stack the rules name and take out Seeds, Dye and Pelt; `chest`
+/// picks the tempering size, `effect_30` whether effect ingredients become 30.
+fn resize(stacks: &mut HashMap<Uuid, u64>, chest: bool, effect_30: bool, seed: u64) {
+    stacks.retain(|id, _| !SEEDS_DYE_PELT.contains(id));
     for (id, qty) in stacks.iter_mut() {
         if *qty == 0 {
             continue;
@@ -128,7 +170,9 @@ fn resize(stacks: &mut HashMap<Uuid, u64>, chest: bool, seed: u64) {
         let item =
             mix(seed ^ (id.as_u128() as u64) ^ ((id.as_u128() >> 64) as u64).rotate_left(23));
         if is_effect_ingredient(id) {
-            *qty = EFFECT_INGREDIENT_STACK;
+            if effect_30 {
+                *qty = EFFECT_INGREDIENT_STACK;
+            }
         } else if TEMPERING_MATERIALS.contains(id) {
             *qty = if chest {
                 draw(&CHEST_TEMPERING_STACK, item)
@@ -145,14 +189,17 @@ fn resize(stacks: &mut HashMap<Uuid, u64>, chest: bool, seed: u64) {
 /// `/end` package or a rung) for a character of `level`.
 pub fn pay_rewards(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
     if applies(level) {
-        resize(stacks, false, seed);
+        resize(stacks, false, true, seed);
     }
 }
 
 /// A chest's stacks (treasury, daily, gift or store chest of `tier`) for an opener
-/// of `level`: tempering materials 1-3, and a Wooden chest holds exactly
-/// [`WOODEN_CHEST_EFFECT_INGREDIENT_STACKS`] effect-ingredient stacks -- the ones it
-/// rolled (lowest ids first), topped up with others drawn uniformly from the seven.
+/// of `level`: tempering materials 1-3, dragon 1-7, no Seeds, Dye or Pelt. A
+/// Wooden chest also holds exactly [`WOODEN_CHEST_EFFECT_INGREDIENT_STACKS`]
+/// effect-ingredient stacks of [`EFFECT_INGREDIENT_STACK`] -- the ones it rolled
+/// (lowest ids first), topped up with others drawn uniformly from the seven -- and
+/// Ectoplasm in [`WOODEN_CHEST_ECTOPLASM_PER_10K`] openings. Every other chest keeps
+/// its effect ingredients' sizes (HauDrauf, msg 3018: 30 "in Holztruhen ja").
 pub fn pay_chest(stacks: &mut HashMap<Uuid, u64>, tier: u64, level: i64, seed: u64) {
     if !applies(level) {
         return;
@@ -183,8 +230,13 @@ pub fn pay_chest(stacks: &mut HashMap<Uuid, u64>, tier: u64, level: i64, seed: u
             held.push(pick);
             k += 1;
         }
+        if mix(seed ^ 0x0438_EC70_91A5) % 10_000 < WOODEN_CHEST_ECTOPLASM_PER_10K {
+            stacks.entry(ECTOPLASM).or_insert_with(|| {
+                crate::features::beginner_economy::material_stack(seed, &ECTOPLASM)
+            });
+        }
     }
-    resize(stacks, true, seed);
+    resize(stacks, true, tier == 1, seed);
 }
 
 /// A seed for one loot result: its place in the dungeon and its currencies (which
@@ -212,10 +264,15 @@ pub fn pay_dungeon(data: &mut DungeonGeneratedData, level: i64) {
             for (b, enemy) in enemies.iter_mut().enumerate() {
                 let corpse = mix(group.as_u128() as u64 ^ ((a as u64) << 32) ^ b as u64);
                 let seed = result_seed(corpse, &enemy.spawn_group_loot);
-                resize(&mut enemy.spawn_group_loot.stackable_items, false, seed);
+                resize(
+                    &mut enemy.spawn_group_loot.stackable_items,
+                    false,
+                    true,
+                    seed,
+                );
                 for (table, loot) in &mut enemy.loot_table_loot {
                     let seed = result_seed(corpse ^ table.as_u128() as u64, loot);
-                    resize(&mut loot.stackable_items, false, seed);
+                    resize(&mut loot.stackable_items, false, true, seed);
                 }
             }
         }
@@ -226,7 +283,7 @@ pub fn pay_dungeon(data: &mut DungeonGeneratedData, level: i64) {
                 let place =
                     group.as_u128() as u64 ^ (a as u64).rotate_left(48) ^ table.as_u128() as u64;
                 let seed = result_seed(place, loot);
-                resize(&mut loot.stackable_items, false, seed);
+                resize(&mut loot.stackable_items, false, true, seed);
             }
         }
     }
@@ -250,6 +307,43 @@ mod tests {
             (DRAGON_BONES, 20),
             (LUMBER, 9),
         ])
+    }
+
+    #[test]
+    fn seeds_dye_and_pelt_make_way_for_ectoplasm_in_wooden_chests() {
+        let mut ecto = 0u64;
+        for seed in 0..20_000u64 {
+            for tier in 1..=5u64 {
+                let mut s = sample();
+                s.extend(SEEDS_DYE_PELT.map(|id| (id, 10)));
+                if tier == 1 {
+                    pay_chest(&mut s, tier, 45, seed);
+                    if let Some(q) = s.get(&ECTOPLASM) {
+                        assert!([5, 10, 20].contains(q), "Moon Sugar's size, not {q}");
+                        ecto += 1;
+                    }
+                } else if tier == 2 {
+                    pay_rewards(&mut s, 100, seed);
+                    assert!(!s.contains_key(&ECTOPLASM));
+                } else {
+                    pay_chest(&mut s, tier, 100, seed);
+                    assert!(!s.contains_key(&ECTOPLASM), "tier {tier}");
+                }
+                assert!(SEEDS_DYE_PELT.iter().all(|id| !s.contains_key(id)));
+            }
+            let mut low = HashMap::from([(SEEDS_DYE_PELT[0], 10)]);
+            pay_chest(&mut low, 1, 44, seed);
+            assert_eq!(
+                low,
+                HashMap::from([(SEEDS_DYE_PELT[0], 10)]),
+                "44 untouched"
+            );
+        }
+        let want = WOODEN_CHEST_ECTOPLASM_PER_10K * 2;
+        assert!(
+            ecto.abs_diff(want) * 100 <= want * 5,
+            "{ecto} of 20,000 vs {want}"
+        );
     }
 
     #[test]
@@ -305,12 +399,13 @@ mod tests {
                     .filter(|(id, _)| is_effect_ingredient(id))
                     .map(|(_, q)| *q)
                     .collect();
-                assert!(effect.iter().all(|q| *q == 30));
                 if tier == 1 {
+                    assert!(effect.iter().all(|q| *q == 30));
                     assert_eq!(effect.len(), 2, "seed {seed}");
                     assert!(s.contains_key(&FROST_SALTS), "the rolled stack is kept");
                 } else {
-                    assert_eq!(effect.len(), 1);
+                    // Only a Wooden chest's are 30 (msg 3018); the rest keep theirs.
+                    assert_eq!(effect, vec![10]);
                 }
             }
             // A Wooden chest that rolled none still holds two.
