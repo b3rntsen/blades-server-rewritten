@@ -4794,9 +4794,9 @@ pub(crate) mod jobs_gen {
     }
 
     /// How many levels above its own `difficultyLevel` a job's rewards are paid for
-    /// a character of `level` (#398): from level 49, the difference between the
+    /// a character of `level` (#398, #432): from level 45, the difference between the
     /// difficulty a level-100 character's board rolls for the same draw and this
-    /// one's. Zero below 49 and never negative.
+    /// one's. Zero below 45 and never negative.
     ///
     /// A job's difficulty is `initialEPL` plus an offset drawn inside one band of
     /// a `difficultyByLevel` row, and every shipped row is the same five bands
@@ -4976,7 +4976,7 @@ pub(crate) mod jobs_gen {
         // Reward curve, fitted to 802 distinct retail jobs mined out of 200
         // captured `/quests` bodies. See `report92_reward_curve` for the fit, the
         // spread, and the negative result that stopped it being exact.
-        // Gold is paid at the level-100 board's difficulty from level 49 (#398); the
+        // Gold is paid at the level-100 board's difficulty from level 45 (#432); the
         // XP is the job's own.
         let d = (difficulty + loot_shift(pools_def, job_type, level)).max(1) as u64;
         let reward_xp = job_reward_xp(difficulty); // #337: retail's table, exact
@@ -5331,8 +5331,8 @@ pub(crate) mod event_quests {
                 .level_scaling
                 .enemy_level(player_level);
             // Every stage of the event's dungeon (#323) and no other (#329), seeded
-            // per run, its loot the level-100 character's from level 49 with soul
-            // gems Grand at 49-60 (#398).
+            // per run, its loot the level-100 character's from level 45 with soul
+            // gems Grand at 45-60 (#398, #432).
             dungeon = blades_lib::util::quest::generate_for_event_dungeon_for_character(
                 game_data,
                 &dungeon_id,

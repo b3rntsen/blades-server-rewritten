@@ -89,8 +89,8 @@ fn is_false(value: &bool) -> bool {
 }
 
 impl DailyRewardDef {
-    /// The payload a character of `character_level` is paid: from level 49 the
-    /// level-100 character's, its chests included (#398) — except where that pays
+    /// The payload a character of `character_level` is paid: from level 45 (#432;
+    /// 49 under #398) the level-100 character's, its chests included — except where that pays
     /// LESS of the very same items, which keeps the larger count. Retail's Wednesday
     /// tier pays Lumber ×102 at 86-99 and ×92 at 100; a level-86 character keeps its
     /// 102 rather than lose ten (rewards are never narrowed without HauDrauf).
@@ -361,9 +361,18 @@ mod tests {
     #[test]
     fn level_scaled_static_payloads_match_retail_captures() {
         let sunday_chest = def("2c4ba1ff");
-        // Retail cut the chest to the character's level (86 at 86); from level 49 it
-        // is the level-100 character's chest (#398, HauDrauf).
-        for (level, chest_level) in [(1, 1), (15, 15), (48, 48), (49, 100), (86, 100), (100, 100)] {
+        // Retail cut the chest to the character's level (86 at 86); from level 45 it
+        // is the level-100 character's chest (#398 from 49, #432 from 45, HauDrauf).
+        for (level, chest_level) in [
+            (1, 1),
+            (15, 15),
+            (44, 44),
+            (45, 100),
+            (48, 100),
+            (49, 100),
+            (86, 100),
+            (100, 100),
+        ] {
             let payload = sunday_chest.daily_reward_for_level(level);
             assert_eq!(
                 payload.chests,

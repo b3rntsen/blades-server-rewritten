@@ -1,26 +1,33 @@
-//! Report #398 — "from level 49 there should be no difference to level 100".
+//! Report #398 — "from level 49 there should be no difference to level 100" —
+//! and #432, which moved it to 45.
 //!
 //! HauDrauf (2026-10-16): Gold chests at 45-48 paid low-value items; "from level 49,
 //! is everything at the highest level? From then on there should be no difference
 //! to level 100." His standing rule: Blades is done at 45, complete by 50, many
 //! stopped at 49, so everything must be obtainable by 49.
 //!
-//! Every level-keyed loot and reward source now rolls a level 49+ character as a
+//! HauDrauf (#432, 2026-10-26): "No more differences between levels 45 and 100,
+//! except in events with fixed rewards."
+//!
+//! Every level-keyed loot and reward source now rolls a level 45+ character as a
 //! level-100 one ([`blades_lib::features::loot_level`]). These tests pin both halves:
 //!
-//! * BELOW 49 NOTHING MOVED. [`levels_below_49_are_unchanged`] hashes every source
-//!   at levels 1-48 through the production paths; the digests were taken on
-//!   fork/main (6933e04c) before the change.
-//! * FROM 49 EVERY SOURCE IS LEVEL 100'S. For levels 49, 60 and 80 against 100, with
-//!   the same seeds: chests (treasury, daily, gift, store, Abyss rung, dungeon),
-//!   enemy and container loot (story quests, events, jobs, the Abyss bonus), event
-//!   rewards, job gold, daily rewards and the Abyss `/end` and rungs. Enemy levels
+//! * BELOW 45 NOTHING MOVED. [`levels_below_45_are_unchanged`] hashes every source
+//!   at levels 1-44 through the production paths; the digests were taken on
+//!   fork/main (54cfbccb) before #432.
+//! * FROM 45 EVERY SOURCE IS LEVEL 100'S. For levels 45, 46, 48, 49, 60 and 80
+//!   against 100, with the same seeds: chests (treasury, daily, gift, store, Abyss
+//!   rung, dungeon), enemy and container loot (story quests, events, jobs, the Abyss
+//!   bonus), job gold, daily rewards and the Abyss `/end` and rungs. Enemy levels
 //!   and XP are asserted UNCHANGED alongside.
-//! * EXCEPT EVENT SOUL GEMS AT 49-60, which stay Grand
+//! * EXCEPT AN EVENT'S FIXED REWARDS (milestones, final reward), which keep #398's
+//!   49: level 100's from 49 ([`event_rewards_from_49_are_level_100s`]), unchanged
+//!   at 45-48 ([`event_fixed_rewards_at_45_to_48_are_unchanged`]).
+//! * AND EVENT SOUL GEMS AT 45-60, which stay Grand
 //!   ([`blades_lib::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`], HauDrauf
 //!   2026-10-16): level 100's event rewards and event-dungeon loot with every
-//!   Glorious and Transcendent gem paid as Grand. Pinned at 49, 55 and 60 against
-//!   61 and 100.
+//!   Glorious and Transcendent gem paid as Grand. Pinned at 45-60 (rewards 49-60)
+//!   against 61 and 100.
 //!
 //! `part_a` (ignored) prints the report's numbers: `cargo test -p server
 //! report_398::part_a -- --ignored --nocapture`.
@@ -165,18 +172,13 @@ fn enemy_levels(d: &DungeonGeneratedData) -> Vec<(String, i64, u64)> {
 // Below 49: unchanged
 // ---------------------------------------------------------------------------
 
-/// Digests of every source at levels 1-48 through today's production paths. The
-/// pinned values were printed by the same loops on fork/main 6933e04c, before
-/// #398, through that commit's API (the job dungeon then took no loot shift; the
-/// event run was `generate_for_event_dungeon_with_seed`; the store chest was rolled
-/// at the raw level).
-#[test]
-fn levels_below_49_are_unchanged() {
+/// Digests of every source at `levels` through today's production paths, in the
+/// order [`levels_below_45_are_unchanged`] pins them.
+fn digests(levels: std::ops::RangeInclusive<i64>) -> Vec<(&'static str, u64)> {
     let ctx = Ctx::load();
     let gd = gd();
     let scaling = crate::quest::shipped_scaling();
-    let levels = 1..=48i64;
-    let mut got: Vec<(&str, u64)> = Vec::new();
+    let mut got: Vec<(&'static str, u64)> = Vec::new();
 
     let mut h = FNV0;
     let mut ids: Vec<&Uuid> = ctx.sd.event_quests.templates.keys().collect();
@@ -311,49 +313,108 @@ fn levels_below_49_are_unchanged() {
     }
     got.push(("treasury", h));
 
-    // #388 (owner-approved deviation from retail, 2026-10-16) moves sources below
-    // 49 on purpose, and each of its changes re-pins what it moves: containers
-    // holding 2 / 4 / 6 stacks (quests, event_dungeons, jobs); gems +20% and fixed
-    // Wooden / Silver chest gems (events, abyss_floor, quests, event_dungeons,
-    // jobs, treasury); the three best soul gems at 45-48 (events, daily,
-    // abyss_rewards, abyss_floor, quests, event_dungeons, store, treasury); crafting
-    // materials in 5, 10 or 20 (abyss_rewards, abyss_floor, quests,
-    // event_dungeons, jobs, store, treasury; not `events` while
-    // EVENT_LADDER_STACKS_FIXED is off, which pays exactly as before that change).
-    // #404 re-pins treasury: a Wooden chest that rolled no stackable but
-    // enchanting ingredients now takes a retail opening's stackables.
-    let pinned: [(&str, u64); 9] = [
-        ("events", 0x5351_4151_1ca6_22e9),
-        ("daily", 0x8d8e_2e5c_0659_5552),
-        // #407 (HauDrauf, 2026-10-17) re-pins abyss_rewards: `/end` soul gems are 3 to 7.
-        // #424 re-pins it: score 700 is advertised rung 810 where it had none (with
-        // that one advert masked the digest is #407's 0x1bd6_397f_a2cf_4dae) — and
-        // again when 810 became the second golden chest (it was 0x9aec_63b7_d1bf_01c4
-        // while 810 paid 650's pool).
-        ("abyss_rewards", 0x01bd_21b9_1821_72ee),
-        ("abyss_floor", 0xe6b6_8b3b_3337_a3b1),
-        ("quests", 0x3f01_52cb_5eef_d622),
-        ("event_dungeons", 0xebe6_e813_f4c4_1b2c),
-        ("jobs", 0x0e71_0932_2f7b_96e5),
-        // #421/#429 (2026-10-25) re-pin store: a Golden, Epic or Legendary chest
-        // bought at 45-48 pays Grand 60% / Glorious 20% / Transcendent 20% (was
-        // 0x6bfe_d561_3f10_831a). The treasury digest rolls without an opener level,
-        // so the rule (applied at open) leaves it unmoved.
-        ("store", 0x9307_ca6b_c265_a9ad),
-        ("treasury", 0x7aed_eaec_5032_d6b1),
-    ];
+    got
+}
+
+/// The event milestones and final rewards of every template at `levels`.
+fn event_fixed_rewards_digest(ctx: &Ctx, levels: std::ops::RangeInclusive<i64>) -> u64 {
+    let mut h = FNV0;
+    let mut ids: Vec<&Uuid> = ctx.sd.event_quests.templates.keys().collect();
+    ids.sort();
+    for l in levels {
+        for id in &ids {
+            let t = &ctx.sd.event_quests.templates[*id];
+            digest_of(&mut h, &t.rewards_for_level(l));
+            digest_of(&mut h, &t.final_reward_for_level(l));
+        }
+    }
+    h
+}
+
+/// Every source at levels 1-44 is what it was before #432 moved the paid-as-100
+/// threshold from 49 to 45.
+///
+/// RE-PINNED FOR #432 (HauDrauf, 2026-10-26: "No more differences between levels
+/// 45 and 100, except in events with fixed rewards"). Until then this test hashed
+/// levels 1-48 against fork/main 6933e04c (before #398), re-pinned through #388,
+/// #404, #407, #421, #424 and #429. 45-48 now pay as level 100 on purpose, so the
+/// range is 1-44 and these digests were printed by [`digests`] on fork/main
+/// 54cfbccb, BEFORE the #432 change: nothing below 45 moved. 45-48 are pinned by the
+/// level-100 tests below, and an event's fixed rewards at 45-48 by
+/// [`event_fixed_rewards_at_45_to_48_are_unchanged`].
+#[test]
+fn levels_below_45_are_unchanged() {
     assert_eq!(
-        got,
-        pinned.to_vec(),
-        "a source moved for a character below level 49"
+        digests(1..=44),
+        PINNED_BELOW_45.to_vec(),
+        "a source moved for a character below level 45"
+    );
+}
+
+const PINNED_BELOW_45: [(&str, u64); 9] = [
+    ("events", 0x5d87_480d_30be_15bb),
+    ("daily", 0x9383_a385_9613_ac82),
+    ("abyss_rewards", 0x6978_dbed_683e_0aee),
+    ("abyss_floor", 0xbda8_123f_7ab4_feb4),
+    ("quests", 0x2726_6fe1_0a09_8738),
+    ("event_dungeons", 0xbda4_5e54_3c7e_75fc),
+    ("jobs", 0x1455_a9aa_6819_838d),
+    ("store", 0x46d6_4f30_3642_1ea7),
+    ("treasury", 0xa1c5_590f_12ec_5edf),
+];
+
+/// HauDrauf #432: "... except in events with fixed rewards". An event's milestones
+/// and final reward at 45-48 are exactly what they were before #432 (their own
+/// level's, every soul gem Grand by #388): the 45-48 digest printed on fork/main
+/// 54cfbccb before the change. The 1-48 digest is also still the one this test
+/// file pinned for #398's `levels_below_49_are_unchanged` (0x5351_4151_1ca6_22e9).
+#[test]
+fn event_fixed_rewards_at_45_to_48_are_unchanged() {
+    let ctx = Ctx::load();
+    assert_eq!(
+        event_fixed_rewards_digest(&ctx, 45..=48),
+        PINNED_EVENT_FIXED_45_TO_48,
+        "an event's fixed rewards moved at 45-48"
+    );
+    assert_eq!(
+        event_fixed_rewards_digest(&ctx, 1..=48),
+        0x5351_4151_1ca6_22e9,
+        "an event's fixed rewards moved below 49"
+    );
+}
+
+const PINNED_EVENT_FIXED_45_TO_48: u64 = 0x6f1f_349b_ab8b_f2d3;
+
+/// Prints the digests the two tests above pin: `cargo test -p server
+/// report_398::print_digests -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn print_digests() {
+    let ctx = Ctx::load();
+    for (k, v) in digests(1..=44) {
+        println!("1-44 {k} {v:#018x}");
+    }
+    println!(
+        "events 45-48 {:#018x}",
+        event_fixed_rewards_digest(&ctx, 45..=48)
+    );
+    println!(
+        "events 1-48 {:#018x}",
+        event_fixed_rewards_digest(&ctx, 1..=48)
     );
 }
 
 // ---------------------------------------------------------------------------
-// From 49: level 100's
+// From 45: level 100's
 // ---------------------------------------------------------------------------
 
-const PAID_AS_100: [i64; 3] = [49, 60, 80];
+/// Levels paid as 100. 45, 46 and 48 since #432 (HauDrauf, 2026-10-26); 49, 60 and
+/// 80 since #398.
+const PAID_AS_100: [i64; 6] = [45, 46, 48, 49, 60, 80];
+
+/// Levels whose EVENT fixed rewards (milestones, final reward) are paid as 100:
+/// still from 49 (#432: "except in events with fixed rewards").
+const EVENT_FIXED_PAID_AS_100: [i64; 3] = [49, 60, 80];
 
 /// Level 100's event rewards, with its soul gems paid as `level`'s
 /// ([`cap_event_soul_gems`]: Grand at 49-60, untouched elsewhere).
@@ -381,7 +442,7 @@ fn event_rewards_at_100_for(
 fn event_rewards_from_49_are_level_100s() {
     let ctx = Ctx::load();
     for tmpl in ctx.sd.event_quests.templates.values() {
-        for l in PAID_AS_100 {
+        for l in EVENT_FIXED_PAID_AS_100 {
             let (milestones, last) = event_rewards_at_100_for(tmpl, l);
             assert_eq!(
                 serde_json::to_value(tmpl.rewards_for_level(l)).unwrap(),
@@ -405,8 +466,12 @@ fn event_rewards_from_49_are_level_100s() {
 /// reward, corpses and containers — is Grand, and at least one is (so the test
 /// cannot pass on an event that pays none). 61 and 100 still pay Glorious, and
 /// everything that is not a soul gem is level 100's at all five levels.
+///
+/// #432: an event DUNGEON at 45-48 is level 100's too, so it is pinned at 45 and 48
+/// with the same rule; its fixed rewards are not (see
+/// [`event_fixed_rewards_at_45_to_48_are_unchanged`]).
 #[test]
-fn event_soul_gems_at_49_to_60_are_grand_and_glorious_from_61() {
+fn event_soul_gems_at_45_to_60_are_grand_and_glorious_from_61() {
     let ctx = Ctx::load();
     let gd = gd();
     let scaling = crate::quest::shipped_scaling();
@@ -478,19 +543,25 @@ fn event_soul_gems_at_49_to_60_are_grand_and_glorious_from_61() {
         Value::Array(out)
     };
     let (rewards_100, dungeons_100) = (rewards_at(100), dungeons_at(100));
-    for (what, at_100, at) in [
+    for (what, at_100, at, grand_levels) in [
         (
             "rewards",
             &rewards_100,
             &rewards_at as &dyn Fn(i64) -> Value,
+            &[49i64, 55, 60][..],
         ),
-        ("dungeons", &dungeons_100, &dungeons_at),
+        (
+            "dungeons",
+            &dungeons_100,
+            &dungeons_at,
+            &[45, 48, 49, 55, 60],
+        ),
     ] {
         assert!(
             gems_of(at_100).contains_key(&glorious),
             "{what}: level 100 pays Glorious"
         );
-        for l in [49i64, 55, 60] {
+        for &l in grand_levels {
             let v = at(l);
             let gems = gems_of(&v);
             assert!(
@@ -521,7 +592,7 @@ fn event_soul_gems_at_49_to_60_are_grand_and_glorious_from_61() {
 }
 
 #[test]
-fn daily_rewards_from_49_are_level_100s() {
+fn daily_rewards_from_45_are_level_100s() {
     let ctx = Ctx::load();
     for d in &ctx.sd.daily_rewards {
         for l in PAID_AS_100 {
@@ -530,19 +601,22 @@ fn daily_rewards_from_49_are_level_100s() {
                 serde_json::to_value(d.daily_reward_for_level(100)).unwrap(),
             );
         }
-        for chest in d.daily_reward_for_level(49).chests {
-            assert_eq!(
-                chest.level, 100,
-                "a level-49 daily chest is a level-100 chest"
-            );
+        for l in [45u16, 49] {
+            for chest in d.daily_reward_for_level(l).chests {
+                assert_eq!(
+                    chest.level, 100,
+                    "a level-{l} daily chest is a level-100 chest"
+                );
+            }
         }
     }
 }
 
-/// No daily or event reward is worth less at 49-99 than at the character's own
-/// level: where level 100's pays less of the same thing, the larger count is kept.
+/// No daily or event reward is worth less at 45-99 (49-99 before #432) than at the
+/// character's own level: where level 100's pays less of the same thing, the
+/// larger count is kept.
 #[test]
-fn no_daily_or_event_reward_is_worth_less_from_49() {
+fn no_daily_or_event_reward_is_worth_less_from_45() {
     let ctx = Ctx::load();
     let p = prices();
     let value = |r: &HashMap<Uuid, u64>| -> u64 {
@@ -562,7 +636,7 @@ fn no_daily_or_event_reward_is_worth_less_from_49() {
         )
     };
     for d in &ctx.sd.daily_rewards {
-        for l in 49..=99u16 {
+        for l in 45..=99u16 {
             let paid = value(&d.daily_reward_for_level(l).stackable_items);
             assert!(
                 paid >= unmapped(d, l),
@@ -594,10 +668,10 @@ fn no_daily_or_event_reward_is_worth_less_from_49() {
     }
 }
 
-/// `/end` and every rung but 190 and 490, which keep #371's extra Grand gem at 49-59
+/// `/end` and every rung but 190 and 490, which keep #371's extra Grand gem at 39-59
 /// (see `rung_reward`): the same seed, the same reward.
 #[test]
-fn abyss_rewards_from_49_are_level_100s() {
+fn abyss_rewards_from_45_are_level_100s() {
     for seed in 0..200i64 {
         let seed = seed * 104_729;
         for l in PAID_AS_100 {
@@ -622,14 +696,16 @@ fn abyss_rewards_from_49_are_level_100s() {
     }
     // The rung chests are level-100 chests.
     for rung in [50u32, 360] {
-        let g = abyss_rewards::future_reward_for_rung(rung, 49, 7).unwrap();
-        assert_eq!(g.chests[0].level, 100, "rung {rung}");
+        for l in [45u64, 49] {
+            let g = abyss_rewards::future_reward_for_rung(rung, l, 7).unwrap();
+            assert_eq!(g.chests[0].level, 100, "rung {rung} level {l}");
+        }
     }
 }
 
 /// The Abyss bonus material (#383) is banded to the level the character is paid as.
 #[test]
-fn abyss_corpse_bonus_from_49_is_level_100s() {
+fn abyss_corpse_bonus_from_45_is_level_100s() {
     let gd = gd();
     let mut dungeons: Vec<&Uuid> = gd.dungeons.keys().collect();
     dungeons.sort();
@@ -652,7 +728,7 @@ fn abyss_corpse_bonus_from_49_is_level_100s() {
 /// Story quests: the same corpse, container and chest loot as level 100's; the
 /// enemies stay at the character's own enemy level and XP.
 #[test]
-fn story_quest_loot_from_49_is_level_100s_and_enemies_stay() {
+fn story_quest_loot_from_45_is_level_100s_and_enemies_stay() {
     let gd = gd();
     let scaling = crate::quest::shipped_scaling();
     let mut quests: Vec<&Uuid> = gd.quests.keys().collect();
@@ -686,10 +762,10 @@ fn story_quest_loot_from_49_is_level_100s_and_enemies_stay() {
     assert!(compared > 100, "only {compared} quest dungeons compared");
 }
 
-/// Events: loot as level 100's run of the same seed, soul gems Grand at 49-60;
+/// Events: loot as level 100's run of the same seed, soul gems Grand at 45-60;
 /// enemies at the row's level plus their group delta, as before.
 #[test]
-fn event_dungeon_loot_from_49_is_level_100s_and_enemies_stay() {
+fn event_dungeon_loot_from_45_is_level_100s_and_enemies_stay() {
     let ctx = Ctx::load();
     let gd = gd();
     let scaling = crate::quest::shipped_scaling();
@@ -700,7 +776,8 @@ fn event_dungeon_loot_from_49_is_level_100s_and_enemies_stay() {
             };
             for l in PAID_AS_100 {
                 let at = event_dungeon(&gd, &scaling, &dungeon, seed, l).unwrap();
-                // Level 100's loot, its soul gems Grand at 49-60 (HauDrauf, 2026-10-16).
+                // Level 100's loot, its soul gems Grand at 45-60 (HauDrauf, 2026-10-16;
+                // from 45 since #432).
                 let mut want = at_100.clone();
                 cap_event_dungeon_soul_gems(&mut want, l);
                 assert_eq!(loot_of(&at), loot_of(&want), "event {dungeon} level {l}");
@@ -765,7 +842,7 @@ fn job_difficulty_rows_are_translations_shared_by_every_type() {
 /// Jobs: the same gold and the same corpse and container loot as the level-100
 /// board's job of the same draw; the job's own difficulty, enemy levels and XP stay.
 #[test]
-fn job_rewards_from_49_are_level_100s_and_enemies_stay() {
+fn job_rewards_from_45_are_level_100s_and_enemies_stay() {
     let gd = gd();
     let pools = job_pools();
     for ch in 0..12u128 {
@@ -801,10 +878,11 @@ fn job_rewards_from_49_are_level_100s_and_enemies_stay() {
     }
 }
 
-/// Dungeon chests: a level 49+ character's chest is minted at the level a level-100
-/// character's chest from the same dungeon is (story quest, event, job).
+/// Dungeon chests: a level 45+ character's chest (49+ before #432) is minted at the
+/// level a level-100 character's chest from the same dungeon is (story quest,
+/// event, job).
 #[test]
-fn dungeon_chests_from_49_are_minted_at_level_100s_level() {
+fn dungeon_chests_from_45_are_minted_at_level_100s_level() {
     let scaling = crate::quest::shipped_scaling();
     let pools = job_pools();
     let paid = |l: i64, is_job: bool, level: u64| {
@@ -830,7 +908,7 @@ fn dungeon_chests_from_49_are_minted_at_level_100s_level() {
             }
         }
     }
-    for l in 1..49 {
+    for l in 1..45 {
         let e = scaling.enemy_level(l) as u64;
         assert_eq!(paid(l, false, e), e, "level {l} moved");
         assert_eq!(paid(l, true, e), e, "level {l} job moved");
@@ -910,7 +988,7 @@ fn story_dungeon_chests_are_minted_at_the_dungeons_enemy_level() {
 /// Store chests bought with gems, and season/gift chests: rolled at the level the
 /// buyer or claimant is paid as.
 #[test]
-fn store_and_gift_chests_from_49_are_level_100s() {
+fn store_and_gift_chests_from_45_are_level_100s() {
     let ctx = Ctx::load();
     let treasury = Some(&ctx.sd.chest_loots);
     for (p, _) in super::STORE_CHESTS {
