@@ -2398,6 +2398,12 @@ pub(crate) fn beginner_economy_completion(reward: &mut RewardGrant, level: i64, 
         &mut reward.stackable_items,
         quest_id.as_u128() as u64 ^ 0x388,
     );
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    blades_lib::features::high_level_materials::pay_rewards(
+        &mut reward.stackable_items,
+        level,
+        quest_id.as_u128() as u64 ^ 0x438,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -4531,6 +4537,8 @@ pub(crate) mod jobs_gen {
             i64::from(level),
             false,
         );
+        // Levels 45-100 (HauDrauf, #438).
+        blades_lib::features::high_level_materials::pay_dungeon(&mut data, i64::from(level));
         Some(data)
     }
 
@@ -4557,6 +4565,8 @@ pub(crate) mod jobs_gen {
                 i64::from(level),
                 false,
             );
+            // Levels 45-100 (HauDrauf, #438).
+            blades_lib::features::high_level_materials::pay_dungeon(data, i64::from(level));
         }
         Some(entry)
     }

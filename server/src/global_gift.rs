@@ -72,6 +72,13 @@ fn open_season_chests(
                 opener_level,
                 blades_lib::features::beginner_economy::key_seed(&key),
             );
+            // Levels 45-100 (HauDrauf, #438).
+            blades_lib::features::high_level_materials::pay_chest(
+                &mut loot.stackable_items,
+                chest.tier as u64,
+                opener_level,
+                blades_lib::features::beginner_economy::key_seed(&key) ^ 0x0438,
+            );
             for item in &mut loot.items {
                 item.id = Uuid::new_v4();
             }

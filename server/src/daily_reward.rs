@@ -152,7 +152,7 @@ fn remint_reward_items(reward: &mut RewardGrant) {
 /// `roll_key` names this character's collect of this period. Keying the chest on
 /// the weekday's `reward_uid` alone paid every character at one level the very
 /// same chest every week (#335).
-fn collect_reward_for(
+pub(crate) fn collect_reward_for(
     payload: &DailyRewardPayload,
     chest_loots: &blades_lib::features::chests::ChestLootTables,
     reward_uid: Uuid,
@@ -184,6 +184,13 @@ fn collect_reward_for(
                 chest.tier as u64,
                 character_level,
                 blades_lib::features::beginner_economy::key_seed(&key),
+            );
+            // Levels 45-100 (HauDrauf, #438).
+            blades_lib::features::high_level_materials::pay_chest(
+                &mut loot.stackable_items,
+                chest.tier as u64,
+                character_level,
+                blades_lib::features::beginner_economy::key_seed(&key) ^ 0x0438,
             );
             merge_reward(&mut reward, &loot);
         }
@@ -561,6 +568,9 @@ mod collect_response_tests {
                         .stackable_items
                         .iter()
                         .filter(|(id, _)| !soul_gems.contains(id))
+                        // And #438 (HauDrauf): from 45 the effect-ingredient,
+                        // tempering and dragon stacks are resized (report_438).
+                        .filter(|(id, _)| !blades_lib::features::high_level_materials::names(id))
                         .collect();
                     v.sort();
                     let mut c: Vec<_> = r.currencies.iter().collect();
@@ -596,7 +606,11 @@ mod collect_response_tests {
                     gems_of(&high).len() > 2,
                     "frequency moved"
                 );
-                assert_eq!(rest_of(&low), rest_of(&high), "only soul gems move");
+                assert_eq!(
+                    rest_of(&low),
+                    rest_of(&high),
+                    "only soul gems (and #438 stacks) move"
+                );
             }
         }
     }

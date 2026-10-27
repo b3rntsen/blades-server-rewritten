@@ -1077,6 +1077,13 @@ pub fn roll_store_chest(
             i64::try_from(character_level).unwrap_or(i64::MAX),
             mix(product_id.as_u128() as u64 ^ mix(nonce) ^ 0x0421_0429_5701_6E35),
         );
+        // Levels 45-100: tempering 1-3, effect ingredients 30, dragon 1-7 (#438).
+        crate::features::high_level_materials::pay_chest(
+            &mut grant.stackable_items,
+            tier,
+            i64::try_from(character_level).unwrap_or(i64::MAX),
+            mix(product_id.as_u128() as u64 ^ mix(nonce) ^ 0x0438_5701_C4E5),
+        );
     }
     Some(grant)
 }

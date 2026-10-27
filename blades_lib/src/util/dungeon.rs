@@ -1655,6 +1655,9 @@ pub fn generate_for_abyss_floor(
     // corpses' bonus gem is paid so where it is merged ([`abyss_bonus_as_paid`]).
     if let Some(level) = character_level {
         crate::features::beginner_economy::top_container_soul_gems(&mut data, level, false);
+        // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf,
+        // #438), the corpses' #383 bonus included.
+        crate::features::high_level_materials::pay_dungeon(&mut data, level);
     }
     Some(data)
 }
@@ -1869,6 +1872,10 @@ fn bonus_as_paid(
     let mut stack = HashMap::from([drawn]);
     crate::features::beginner_economy::top_soul_gems(&mut stack, level, seed);
     crate::features::beginner_economy::size_material_stacks(&mut stack, mix64(seed));
+    // Levels 45-100 (HauDrauf, #438): an effect ingredient 30, a tempering material
+    // 1, Dragon Bone or Scale 1-7. The floor's own pass ([`generate_for_abyss_floor`])
+    // pays the corpse the same way once the bonus has joined it.
+    crate::features::high_level_materials::pay_rewards(&mut stack, level, mix64(seed ^ 0x0438));
     stack.into_iter().next().unwrap_or(drawn)
 }
 

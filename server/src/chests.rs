@@ -115,6 +115,14 @@ pub async fn collect_chest(
                 i64::from(entry.character.0.level),
                 blades_lib::features::beginner_economy::key_seed(&loot_key),
             );
+            // Levels 45-100: tempering 1-3, effect ingredients 30 (two in a Wooden
+            // chest), dragon 1-7 (HauDrauf, #438).
+            blades_lib::features::high_level_materials::pay_chest(
+                &mut reward.stackable_items,
+                chest_tier.max(0) as u64,
+                i64::from(entry.character.0.level),
+                blades_lib::features::beginner_economy::key_seed(&loot_key) ^ 0x0438,
+            );
             for item in &mut reward.items {
                 item.id = Uuid::new_v4();
             }

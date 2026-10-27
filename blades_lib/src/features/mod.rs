@@ -17,6 +17,7 @@ pub mod event_materials;
 pub mod free_for_all;
 pub mod game_events;
 pub mod gifts;
+pub mod high_level_materials;
 pub mod global_shop;
 pub mod jewelry_grades;
 pub mod legendary_gear;

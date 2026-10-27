@@ -111,6 +111,8 @@ pub fn generate_quest_data(
         player_level,
         false,
     );
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    crate::features::high_level_materials::pay_dungeon(&mut generated_dungeon_data, player_level);
 
     Ok((quest, Some(generated_dungeon_data)))
 }
@@ -280,6 +282,8 @@ pub fn generate_for_event_dungeon_for_character(
     crate::features::loot_level::cap_event_dungeon_soul_gems(&mut data, character_level);
     // Grand at 45-48 (owner-approved deviation, #388).
     crate::features::beginner_economy::top_dungeon_soul_gems(&mut data, character_level, true);
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    crate::features::high_level_materials::pay_dungeon(&mut data, character_level);
     Some(data)
 }
 
