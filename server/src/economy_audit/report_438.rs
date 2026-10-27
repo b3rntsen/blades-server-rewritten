@@ -350,3 +350,89 @@ fn level_44_is_unchanged() {
         &wooden[..20]
     );
 }
+
+/// Potions (retail fix, #438): from 45 an enemy never drops a Minor, Light or Weak
+/// potion, as retail's enemies never did for characters 61-100; at 44 they still do.
+#[test]
+fn rule_4_no_tier_1_or_2_potions_from_enemies_from_45() {
+    use blades_lib::util::dungeon::LOW_TIER_POTIONS;
+    let gd = gd();
+    let scaling = crate::quest::shipped_scaling();
+    let mut quests: Vec<&Uuid> = gd.quests.keys().collect();
+    quests.sort();
+    let potions = |level: i64| {
+        let (mut low, mut other) = (0usize, 0usize);
+        for q in &quests {
+            for seed in 0..3u64 {
+                let Some(dungeon) = gd.quests[*q].dungeon_info.as_ref().map(|d| d.dungeon_uuid)
+                else {
+                    continue;
+                };
+                let Some(d) = blades_lib::util::dungeon::generate_for_dungeon_with_loot_shift(
+                    &gd,
+                    &dungeon,
+                    Some(seed),
+                    blades_lib::util::dungeon::EnemyLevels::Flat {
+                        level: scaling.enemy_level(level),
+                        given_xp: 0,
+                    },
+                    blades_lib::features::loot_level::dungeon_loot_shift(
+                        &scaling,
+                        level,
+                        scaling.enemy_level(level),
+                    ),
+                ) else {
+                    continue;
+                };
+                for e in d.enemy_generated_data.values().flatten().flatten() {
+                    for l in e.loot_table_loot.values() {
+                        for id in l.stackable_items.keys() {
+                            if LOW_TIER_POTIONS.contains(id) {
+                                low += 1;
+                            } else if POTION_TABLE_POTIONS.contains(&id.to_string()) {
+                                other += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (low, other)
+    };
+    let (low_44, other_44) = potions(44);
+    assert!(
+        low_44 > 0 && other_44 > 0,
+        "L44: {low_44} low, {other_44} other"
+    );
+    for level in [45i64, 100] {
+        let (low, other) = potions(level);
+        assert_eq!(low, 0, "L{level}: {low} tier-1/2 potions");
+        assert!(other > 0, "L{level}: no potions at all");
+    }
+}
+
+/// Every potion the two enemy potion tables (`dec6ae9d`, `6bda925f`) hold at tier
+/// 3-5, from `enemy_loot.json`.
+static POTION_TABLE_POTIONS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    let corpus: serde_json::Value =
+        serde_json::from_str(include_str!("../../../blades_lib/src/enemy_loot.json")).unwrap();
+    let mut out = Vec::new();
+    for t in [
+        "dec6ae9d-8acd-407b-9da6-3083be8353a9",
+        "6bda925f-81e9-4b4f-aaf6-628df05de8cd",
+    ] {
+        for r in corpus["tables"][t]["results"].as_array().unwrap() {
+            for k in r["loot"]["stackableItems"]
+                .as_object()
+                .into_iter()
+                .flatten()
+            {
+                let id: Uuid = k.0.parse().unwrap();
+                if !blades_lib::util::dungeon::LOW_TIER_POTIONS.contains(&id) {
+                    out.push(k.0.clone());
+                }
+            }
+        }
+    }
+    out
+});

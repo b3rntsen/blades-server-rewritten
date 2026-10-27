@@ -831,6 +831,72 @@ fn enemy_rng(
     )
 }
 
+/// The tier-1 and tier-2 potions the two pooled enemy potion tables hold
+/// (`dec6ae9d` all kinds, `6bda925f` Aversion to Poison): Minor and Light Healing,
+/// Magicka and Stamina, and Weak Aversion to Poison.
+pub const LOW_TIER_POTIONS: [Uuid; 7] = [
+    Uuid::from_u128(0x42a22694_40eb_4c34_a267_c9aef2d96f56), // Potion of Minor Stamina
+    Uuid::from_u128(0xd5ccf370_0795_4554_9dab_68ccbb97473d), // Potion of Minor Healing
+    Uuid::from_u128(0x2ce48871_b5c7_4deb_93b1_8e444098f753), // Potion of Minor Magicka
+    Uuid::from_u128(0xd826ea12_e583_47c1_a50f_4de608281735), // Potion of Light Healing
+    Uuid::from_u128(0x423fb9f0_a8fd_4b19_8701_b2bd92afdaaf), // Potion of Light Magicka
+    Uuid::from_u128(0x979f5025_b9b8_4b1e_b312_f96f294f97ae), // Potion of Light Stamina
+    Uuid::from_u128(0x2b554c83_e4ff_401d_a38a_871a4ef05241), // Weak Aversion to Poison
+];
+
+/// From this loot level an enemy never drops a [`LOW_TIER_POTIONS`] potion.
+///
+/// Retail fix (#438). The two enemy potion tables are pooled over every level
+/// (`levelKeyed: false`; observed over an enemy-level spread of 2), so they paid a
+/// level-100 character a Minor or Light potion in 102 of 805 potion stacks (12.7%).
+/// Retail's own enemy rolls for characters 61-100 (enemy level 57+) paid 72 potion
+/// stacks and not one of tier 1-2 (p ~ 6e-5 at 12.7%). Below this level nothing
+/// moves; at 45-100 the loot level is level 100's (#432), so 45-100 are covered.
+pub const NO_LOW_TIER_POTIONS_FROM_LOOT_LEVEL: i64 = 57;
+
+/// `drawn`, unless it is a [`LOW_TIER_POTIONS`] stack at a loot level of
+/// [`NO_LOW_TIER_POTIONS_FROM_LOOT_LEVEL`] or more: then one of the table's other
+/// potion results, by their observed weights, so the potion rate stays retail's.
+fn without_low_tier_potion<'a>(
+    rng: &mut LootRng,
+    results: &[&'a serde_json::Value],
+    drawn: &'a serde_json::Value,
+    loot_level: i64,
+) -> &'a serde_json::Value {
+    let low = |r: &serde_json::Value| {
+        r["loot"]["stackableItems"].as_object().is_some_and(|s| {
+            s.keys()
+                .any(|k| Uuid::parse_str(k).is_ok_and(|id| LOW_TIER_POTIONS.contains(&id)))
+        })
+    };
+    if loot_level < NO_LOW_TIER_POTIONS_FROM_LOOT_LEVEL || !low(drawn) {
+        return drawn;
+    }
+    let higher: Vec<&serde_json::Value> = results
+        .iter()
+        .copied()
+        .filter(|r| {
+            !low(r)
+                && r["loot"]["stackableItems"]
+                    .as_object()
+                    .is_some_and(|s| !s.is_empty())
+        })
+        .collect();
+    let total: u64 = higher.iter().filter_map(|r| r["n"].as_u64()).sum();
+    if total == 0 {
+        return drawn;
+    }
+    let mut pick = rng.next() % total;
+    for r in higher {
+        let n = r["n"].as_u64().unwrap_or(0);
+        if pick < n {
+            return r;
+        }
+        pick -= n;
+    }
+    drawn
+}
+
 /// Draw one entry from an array of `{..., "n": weight}` observations.
 fn draw_weighted<'a, V: std::borrow::Borrow<serde_json::Value>>(
     rng: &mut LootRng,
@@ -975,7 +1041,9 @@ fn roll_enemy_loot_with_context(
         // Known to neither corpus: retail keyed it on this enemy, so the key is
         // still sent, empty -- dropping the key would be a shape retail never sent.
         if let Some(results) = results {
-            if let Some(drawn) = draw_weighted(&mut rng, &results) {
+            if let Some(drawn) = draw_weighted(&mut rng, &results)
+                .map(|d| without_low_tier_potion(&mut rng, &results, d, enemy_level))
+            {
                 let loot = &drawn["loot"];
                 if let Some(stacks) = loot["stackableItems"].as_object() {
                     for (id, qty) in stacks {
