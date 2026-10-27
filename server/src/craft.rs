@@ -704,8 +704,14 @@ async fn start_craft(
         }
     };
 
-    let completed_at_ms =
-        now_ms() + craft_duration_ms(recipe_id, tempering_level, batch_size, duration_ms);
+    // Tracker #436: every craft runs at `TIMER_SCALE_PERCENT` of retail's duration.
+    let completed_at_ms = now_ms()
+        + blades_lib::economy::timer_scale::scale_ms(craft_duration_ms(
+            recipe_id,
+            tempering_level,
+            batch_size,
+            duration_ms,
+        ));
     let job = CraftJob {
         id: job_id,
         recipe_id,
@@ -6149,8 +6155,9 @@ mod tests {
             )
             .await
             .expect("forge craft starts");
+            // #436: the job runs at half of the APK's 600 s.
             let left = seconds_left(&started.craft);
-            assert!((595..=600).contains(&left), "600 s, got {left} s");
+            assert!((295..=300).contains(&left), "300 s, got {left} s");
             let row = stored(&mut conn, &s).await;
             assert_eq!(
                 row.server_state.0.craft_jobs[0].completed_at_ms,
@@ -6169,7 +6176,8 @@ mod tests {
             let mut conn = db!();
             let sd = static_data_from_deploy();
             let rd = repair_data_from_deploy();
-            for (level, want) in [(1u64, 900i64), (10, 17_400)] {
+            // #436: half of the APK's 900 s (tL 1) and 17,400 s (tL 10).
+            for (level, want) in [(1u64, 450i64), (10, 8_700)] {
                 let s = seed(&mut conn, 0).await;
                 let mut req = request(s.item_id, level);
                 req.recipe_id = uuid(TEMPER_RECIPE);

@@ -881,9 +881,10 @@ fn apply_upgrade_transition(
     if let Some(obj) = building.as_object_mut() {
         obj.insert("state".to_string(), json!("UPGRADING"));
         obj.insert("level".to_string(), json!(target_level));
+        // Tracker #436: the timer runs at `TIMER_SCALE_PERCENT` of retail's.
         obj.insert(
             "constructionEnd".to_string(),
-            json!(now + construction_time_ms),
+            json!(now + blades_lib::economy::timer_scale::scale_ms_u64(construction_time_ms)),
         );
     }
 }
@@ -1370,7 +1371,9 @@ fn insert_building(
                     // it on 50 of 50 placements (report #330). Dropping it made
                     // every second shop load with the first one's named NPC.
                     "npcIndex": npc_index,
-                    "constructionEnd": now + construction_time_ms,
+                    // Tracker #436: scaled like an upgrade's timer.
+                    "constructionEnd":
+                        now + blades_lib::economy::timer_scale::scale_ms_u64(construction_time_ms),
                     "customized": false,
                     // BUILDING, not UPGRADING. Retail distinguishes the two and the
                     // client picks its construction UI from them: all 33 captured
@@ -3451,7 +3454,8 @@ mod tests {
         apply_upgrade_transition(&mut building, 1, 1199911, 1_000_000);
         assert_eq!(building["state"], json!("UPGRADING"));
         assert_eq!(building["level"], json!(1));
-        assert_eq!(building["constructionEnd"], json!(1_000_000u64 + 1199911));
+        // #436: the timer runs at half of the 1,199,911 ms it was given.
+        assert_eq!(building["constructionEnd"], json!(1_000_000u64 + 599_955));
     }
 
     #[test]
@@ -3593,7 +3597,8 @@ mod tests {
         // BUILDING, not UPGRADING — see `placing_says_building_and_upgrading_says_upgrading`.
         // This asserted UPGRADING, which is how the wire stayed wrong.
         assert_eq!(b["state"], json!("BUILDING"));
-        assert_eq!(b["constructionEnd"], json!(6000));
+        // #436: placed at 1,000 with a 5,000 ms timer that now runs at half.
+        assert_eq!(b["constructionEnd"], json!(3500));
         assert_eq!(b["typeId"], json!(ty.to_string()));
     }
 
@@ -4814,6 +4819,80 @@ mod construction_rules {
         assert_eq!(
             CostError::LimitReached.to_api().status_code(),
             StatusCode::CONFLICT
+        );
+    }
+
+    /// Tracker #436: a building upgrade or placement started now ends at half of
+    /// retail's `upgradeMs[L]` / `constructionMs[n]`, and the gem skip price is
+    /// the price of that halved remaining time.
+    #[test]
+    fn report_436_a_building_started_now_ends_at_half_and_skips_at_its_price() {
+        use blades_lib::economy::skip_time::SkipTimeCostTable;
+        let table = upgrades();
+        let skip = SkipTimeCostTable::from_static(&table).expect("shipped skip table");
+        let now = 1_800_000_000_000u64;
+
+        // Upgrade: Alchemist to level 1 is 1,500 s on retail.
+        let cost = upgrade_cost(&table, u(ALCHEMIST), 1, Some(u(TIMBER))).unwrap();
+        assert_eq!(
+            cost.construction_time_ms, 1_500_000,
+            "retail data unchanged"
+        );
+        let mut t = town(&[(2, 2, &[(ALCHEMIST, 0, 0, "NORMAL")])]);
+        let bid = Uuid::from_u128(0);
+        apply_upgrade_transition(
+            find_building_mut(&mut t, bid).unwrap(),
+            1,
+            cost.construction_time_ms,
+            now,
+        );
+        let remaining = remaining_construction_ms(&t, bid, now);
+        assert_eq!(remaining, 750_000, "half of 1,500 s");
+
+        // The skip price is the price of the halved time, and lower than retail's.
+        let mut w = CompleteWallet::default();
+        w.credit(GEMS, 1_000);
+        let charged = charge_construction_speed_up(true, Some(&skip), &t, bid, now, &mut w)
+            .expect("affordable");
+        assert_eq!(charged, skip.cost_for_remaining_ms(750_000));
+
+        // Placement: a second Forge is 3,605 s on retail.
+        let mut t = town(&[(2, 2, &[(FORGE, 0, 1, "NORMAL")]), (2, 0, &[])]);
+        let place = placement_cost(&table, &t, u(FORGE), u(TIMBER)).unwrap();
+        assert_eq!(
+            place.construction_time_ms, 3_605_000,
+            "retail data unchanged"
+        );
+        let seg = Uuid::from_u128(1_001);
+        let new_bid = Uuid::new_v4();
+        insert_building(
+            &mut t,
+            seg,
+            new_bid,
+            u(FORGE),
+            u(TIMBER),
+            0,
+            0,
+            place.construction_time_ms,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            remaining_construction_ms(&t, new_bid, now),
+            1_802_500,
+            "half of 3,605 s"
+        );
+        // A 12-hour retail timer skipped at once cost 144 gems; started now it
+        // has 6 hours on it, which the same table prices at 72.
+        let mut t = town(&[(2, 2, &[(ALCHEMIST, 0, 0, "NORMAL")])]);
+        apply_upgrade_transition(find_building_mut(&mut t, bid).unwrap(), 1, 43_200_000, now);
+        assert_eq!(
+            skip.cost_for_remaining_ms(43_200_000),
+            vec![blades_lib::economy::Price::new(GEMS, 144)]
+        );
+        assert_eq!(
+            skip.cost_for_remaining_ms(remaining_construction_ms(&t, bid, now)),
+            vec![blades_lib::economy::Price::new(GEMS, 72)]
         );
     }
 
