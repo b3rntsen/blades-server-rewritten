@@ -18,9 +18,12 @@ the unzipped APK). Run from anywhere:
       /path/to/blades-capture/reference/game-defs/extract deploy/static/challenges.json
 
 Writes, per template: `name` (the asset name, for reviewers), `requiredPlayerLevel`
-and `lockedAtPlayerLevel` (0 = no bound, as in the asset), and `targetEnemyGroup`
-for a `DefeatChallengeData` that names an enemy group. Fails if a template has
-no asset in the APK.
+and `lockedAtPlayerLevel` (0 = no bound, as in the asset), `targetEnemyGroup`
+for a `DefeatChallengeData` that names an enemy group, and `requiredAbilities`
+(the selector's `_requiredAbilities`: retail offered the challenge only to a
+character holding every one of them, report #466 -- e.g. "use Skullcrusher" is
+`ChallengeSelector_RequiredAbilities_11-20_Skullcrusher`). Fails if a template
+has no asset in the APK.
 """
 import json
 import sys
@@ -56,6 +59,15 @@ for t in pool:
         t["targetEnemyGroup"] = target
     else:
         t.pop("targetEnemyGroup", None)
+    required = [
+        r["_abilityPointer"]["_uid"]["_id"]
+        for r in sel.get("_requiredAbilities") or []
+        if r["_abilityPointer"]["_uid"]["_id"] not in ("", "0")
+    ]
+    if required:
+        t["requiredAbilities"] = required
+    else:
+        t.pop("requiredAbilities", None)
 with open(path, "w") as f:
     json.dump(pool, f, indent=2, sort_keys=True)
     f.write("\n")

@@ -85,7 +85,12 @@ fn sync_rewards(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
 /// `level` (report #406: retail's `ChallengeSelector` level band), advancing the
 /// cursor. The server mints the fresh instance/objective UUIDs (this crate has
 /// no uuid-v4).
-fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
+fn refill(
+    state: &mut ChallengeState,
+    pool: &[ChallengeTemplate],
+    level: u16,
+    abilities: &serde_json::Value,
+) {
     state.active.retain(|c| c.status == ChallengeStatus::Active);
     if pool.is_empty() {
         return;
@@ -93,8 +98,14 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
     sync_rewards(state, pool);
     let free = ACTIVE_CHALLENGE_COUNT.saturating_sub(state.active.len());
     let held: Vec<Uuid> = state.active.iter().map(|c| c.template_id).collect();
-    let (picked, cursor) =
-        challenges::pick_templates(pool, state.cursor % pool.len(), level, &held, free);
+    let (picked, cursor) = challenges::pick_templates(
+        pool,
+        state.cursor % pool.len(),
+        level,
+        abilities,
+        &held,
+        free,
+    );
     state.cursor = cursor;
     let (secs, ms) = (now_secs(), now_ms());
     for idx in picked {
@@ -112,10 +123,15 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
 /// and has not started (report #406), so [`refill`] replaces them. Only on the
 /// list call, whose response is the client's whole set: a challenge retired
 /// anywhere else would still be on the client's screen.
-fn retire_out_of_band(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
+fn retire_out_of_band(
+    state: &mut ChallengeState,
+    pool: &[ChallengeTemplate],
+    level: u16,
+    abilities: &serde_json::Value,
+) {
     state
         .active
-        .retain(|c| !challenges::retire_out_of_band(c, pool, level));
+        .retain(|c| !challenges::retire_out_of_band(c, pool, level, abilities));
 }
 
 #[derive(Serialize)]
@@ -149,8 +165,9 @@ pub async fn get_challenges(
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
             let pool = &globals.static_data.challenge_templates;
             let level = entry.character.0.level;
-            retire_out_of_band(&mut entry.server_state.0.challenges, pool, level);
-            refill(&mut entry.server_state.0.challenges, pool, level);
+            let abilities = &entry.character.0.abilities;
+            retire_out_of_band(&mut entry.server_state.0.challenges, pool, level, abilities);
+            refill(&mut entry.server_state.0.challenges, pool, level, abilities);
             let active = entry.server_state.0.challenges.active.clone();
             let character = entry.character.0.clone();
             write_back(&mut conn, entry).await?;
@@ -326,6 +343,7 @@ async fn resolve(
                 &mut entry.server_state.0.challenges,
                 &globals.static_data.challenge_templates,
                 level,
+                &entry.character.0.abilities,
             );
 
             let character = entry.character.0.clone();
@@ -404,7 +422,7 @@ mod tests {
                 GEM_CATEGORY_ID
             );
         }
-        refill(&mut state, &pool, 30);
+        refill(&mut state, &pool, 30, &serde_json::Value::Null);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         assert!(
             state
@@ -422,6 +440,85 @@ mod tests {
             "fe6ca800-ea7e-4fd7-a0ef-d1547da6ec5b" => Some("31be99a6-8557-4e9b-81e6-5503f900b7d2"),
             _ => None,
         }
+    }
+
+    /// #466: HauDrauf (level 100) has not learned Skullcrusher, Power Attack or
+    /// Harrying Bash, and was still asked to use them. Retail's selectors
+    /// (`ChallengeSelector_RequiredAbilities_11-20_Skullcrusher` ...) offered a
+    /// "use ability X" challenge only to a character holding X. His ability map
+    /// is prod's (2026-11-10), trimmed to what matters: abilities he holds.
+    #[test]
+    fn report_466_ability_challenges_go_only_to_characters_holding_the_ability() {
+        const SKULLCRUSHER: &str = "c112c956-eaac-4d7d-878e-32cd7d1e5209";
+        const SKULLCRUSHER_CHALLENGE: Uuid =
+            Uuid::from_u128(0xf99b8abf_8b87_4825_b966_46af328d642b);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pool = crate::static_loader::load(&dir).challenge_templates;
+        let gated: Vec<&ChallengeTemplate> = pool
+            .iter()
+            .filter(|t| !t.required_abilities.is_empty())
+            .collect();
+        assert_eq!(
+            gated.len(),
+            4,
+            "the four PerformAbility templates are gated"
+        );
+        let haudrauf = serde_json::json!({
+            "1e7f0dd6-6015-4f65-b811-3246e407e330": 1,
+            "cdab44fb-6ff6-4701-a4ec-d19cce79e49f": 1,
+            "d07a8d30-9a1c-49b0-866d-97a8aa1534cf": 6,
+            "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13": 1,
+        });
+        let mut with_skullcrusher = haudrauf.clone();
+        with_skullcrusher[SKULLCRUSHER] = serde_json::json!(1);
+
+        let offered = |abilities: &serde_json::Value| -> std::collections::HashSet<Uuid> {
+            let mut seen = std::collections::HashSet::new();
+            for cursor in 0..pool.len() {
+                let mut state = ChallengeState {
+                    active: vec![],
+                    cursor,
+                    points: 0,
+                };
+                refill(&mut state, &pool, 100, abilities);
+                assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
+                seen.extend(state.active.iter().map(|c| c.template_id));
+            }
+            seen
+        };
+        let his = offered(&haudrauf);
+        for t in &gated {
+            assert!(!his.contains(&t.template_id), "offered {:?}", t.template_id);
+        }
+        // Control: the same character with Skullcrusher learned is offered it.
+        assert!(offered(&with_skullcrusher).contains(&SKULLCRUSHER_CHALLENGE));
+
+        // One he already holds, untouched, is retired and replaced on the next list.
+        let mut state = ChallengeState {
+            active: vec![],
+            cursor: pool
+                .iter()
+                .position(|t| t.template_id == SKULLCRUSHER_CHALLENGE)
+                .unwrap(),
+            points: 0,
+        };
+        refill(&mut state, &pool, 100, &with_skullcrusher);
+        assert!(
+            state
+                .active
+                .iter()
+                .any(|c| c.template_id == SKULLCRUSHER_CHALLENGE)
+        );
+        retire_out_of_band(&mut state, &pool, 100, &haudrauf);
+        refill(&mut state, &pool, 100, &haudrauf);
+        assert!(
+            state
+                .active
+                .iter()
+                .all(|c| c.template_id != SKULLCRUSHER_CHALLENGE),
+            "retired"
+        );
+        assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
     }
 
     /// #406: for every level 1..=100, every enemy challenge the server can hand
@@ -446,7 +543,7 @@ mod tests {
                     cursor,
                     points: 0,
                 };
-                refill(&mut state, &pool, level);
+                refill(&mut state, &pool, level, &serde_json::Value::Null);
                 assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT, "level {level}");
                 for c in &state.active {
                     let t = pool
@@ -524,8 +621,8 @@ mod tests {
             cursor: 11,
             points: 36,
         };
-        retire_out_of_band(&mut state, &pool, 77);
-        refill(&mut state, &pool, 77);
+        retire_out_of_band(&mut state, &pool, 77, &serde_json::Value::Null);
+        refill(&mut state, &pool, 77, &serde_json::Value::Null);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         let ids: Vec<Uuid> = state.active.iter().map(|c| c.id).collect();
         assert!(
@@ -568,12 +665,12 @@ mod tests {
             cursor: 6,
             points: 0,
         };
-        retire_out_of_band(&mut state, &pool, 65);
+        retire_out_of_band(&mut state, &pool, 65, &serde_json::Value::Null);
         assert!(
             state.active.is_empty(),
             "all four are out of band at 65 and untouched"
         );
-        refill(&mut state, &pool, 65);
+        refill(&mut state, &pool, 65, &serde_json::Value::Null);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         for c in &state.active {
             let t = pool

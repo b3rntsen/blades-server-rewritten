@@ -163,6 +163,9 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredAbilities": [
+      "ce6b63e9-9f18-49c4-aee0-51f7985f9892"
+    ],
     "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
@@ -391,6 +394,9 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredAbilities": [
+      "69ffa3fd-deb7-4824-bab6-ac6450f19676"
+    ],
     "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {
@@ -714,6 +720,9 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredAbilities": [
+      "69ffa3fd-deb7-4824-bab6-ac6450f19676"
+    ],
     "requiredPlayerLevel": 21,
     "reward": {
       "currencies": {
@@ -809,6 +818,9 @@
       },
       "type": "Backend.DefaultObjective"
     },
+    "requiredAbilities": [
+      "c112c956-eaac-4d7d-878e-32cd7d1e5209"
+    ],
     "requiredPlayerLevel": 11,
     "reward": {
       "currencies": {

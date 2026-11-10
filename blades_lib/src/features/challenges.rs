@@ -114,6 +114,13 @@ pub struct ChallengeTemplate {
     /// (`Challenge_DefeatSkeever_4` → Skeevers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_enemy_group: Option<Uuid>,
+    /// Retail's `ChallengeSelector._requiredAbilities`: the abilities a character
+    /// must hold to be offered the challenge (report #466). Every
+    /// `Challenge_PerformAbility_*` names its own ability here
+    /// (`ChallengeSelector_RequiredAbilities_11-20_Skullcrusher`), so "use
+    /// Skullcrusher 10 times" went only to a character who had learned it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_abilities: Vec<Uuid>,
 }
 
 /// The challenges the APK marks `BaseChallengeData._oneTimeOnly` — all fifteen
@@ -165,6 +172,27 @@ impl ChallengeTemplate {
             && level >= self.required_player_level
             && (self.locked_at_player_level == 0 || level < self.locked_at_player_level)
     }
+
+    /// Whether retail offered this challenge to a character of `level` holding
+    /// `abilities` (the character's `abilities` map, ability id -> rank): its
+    /// level band ([`Self::offered_at`]) and every one of its
+    /// [`Self::required_abilities`] learned (report #466: HauDrauf, without
+    /// Skullcrusher, was asked to use it).
+    pub fn offered_to(&self, level: u16, abilities: &serde_json::Value) -> bool {
+        self.offered_at(level)
+            && self
+                .required_abilities
+                .iter()
+                .all(|id| holds_ability(abilities, id))
+    }
+}
+
+/// Whether the character's `abilities` map (ability id -> rank) holds `id` at
+/// rank 1 or more.
+pub fn holds_ability(abilities: &serde_json::Value, id: &Uuid) -> bool {
+    abilities
+        .get(id.to_string())
+        .is_some_and(|rank| rank.as_f64().is_none_or(|r| r > 0.0))
 }
 
 /// A live per-character challenge instance — persisted in `server_state` and returned
@@ -249,6 +277,7 @@ pub fn pick_templates(
     pool: &[ChallengeTemplate],
     cursor: usize,
     level: u16,
+    abilities: &serde_json::Value,
     held: &[Uuid],
     free: usize,
 ) -> (Vec<usize>, usize) {
@@ -260,7 +289,7 @@ pub fn pick_templates(
         }
         let idx = (cursor + step) % pool.len();
         let t = &pool[idx];
-        if t.offered_at(level)
+        if t.offered_to(level, abilities)
             && !held.contains(&t.template_id)
             && !picked.iter().any(|&i| pool[i].template_id == t.template_id)
         {
@@ -282,13 +311,18 @@ pub fn pick_templates(
 /// (level 65) has carried `Challenge_DefeatSkeever_4` since 2026-09-25. One
 /// with progress is kept, so nothing earned is taken away. A template no longer
 /// in the pool is kept too: there is nothing to judge it by.
-pub fn retire_out_of_band(c: &ChallengeInstance, pool: &[ChallengeTemplate], level: u16) -> bool {
+pub fn retire_out_of_band(
+    c: &ChallengeInstance,
+    pool: &[ChallengeTemplate],
+    level: u16,
+    abilities: &serde_json::Value,
+) -> bool {
     c.status == ChallengeStatus::Active
         && c.progress <= 0.0
         && pool
             .iter()
             .find(|t| t.template_id == c.template_id)
-            .is_some_and(|t| !t.offered_at(level))
+            .is_some_and(|t| !t.offered_to(level, abilities))
 }
 
 /// Clamp a client-reported absolute progress to `[0, quota]`.
@@ -320,6 +354,7 @@ mod tests {
             required_player_level: 0,
             locked_at_player_level: 0,
             target_enemy_group: None,
+            required_abilities: Vec::new(),
         }
     }
 
@@ -484,8 +519,14 @@ mod tests {
         let pool = shipped_pool();
         for level in 1..=100u16 {
             for cursor in 0..pool.len() {
-                let (picked, next) =
-                    pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+                let (picked, next) = pick_templates(
+                    &pool,
+                    cursor,
+                    level,
+                    &serde_json::Value::Null,
+                    &[],
+                    ACTIVE_CHALLENGE_COUNT,
+                );
                 assert_eq!(
                     picked.len(),
                     ACTIVE_CHALLENGE_COUNT,
@@ -525,16 +566,26 @@ mod tests {
         c.required_player_level = 15;
         c.locked_at_player_level = 20;
         let pool = vec![a, b, c];
-        let (picked, next) = pick_templates(&pool, 0, 30, &[Uuid::from_u128(1)], 4);
+        let (picked, next) = pick_templates(
+            &pool,
+            0,
+            30,
+            &serde_json::Value::Null,
+            &[Uuid::from_u128(1)],
+            4,
+        );
         assert_eq!(
             picked,
             vec![1],
             "a is held and c is out of band: the set stays short"
         );
         assert_eq!(next, 2, "resume after the last template taken");
-        let (picked, _) = pick_templates(&pool, 2, 17, &[], 4);
+        let (picked, _) = pick_templates(&pool, 2, 17, &serde_json::Value::Null, &[], 4);
         assert_eq!(picked, vec![2, 0, 1]);
-        assert_eq!(pick_templates(&[], 0, 17, &[], 4), (vec![], 0));
+        assert_eq!(
+            pick_templates(&[], 0, 17, &serde_json::Value::Null, &[], 4),
+            (vec![], 0)
+        );
     }
 
     /// #406: LLoyd's held set on prod (2026-10-17). The zero-progress Skeever
@@ -554,25 +605,35 @@ mod tests {
             c
         };
         let skeever = held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 0.0);
-        assert!(retire_out_of_band(&skeever, &pool, LLOYD_LEVEL));
-        assert!(!retire_out_of_band(&skeever, &pool, 17), "in band at 17");
+        assert!(retire_out_of_band(
+            &skeever,
+            &pool,
+            LLOYD_LEVEL,
+            &serde_json::Value::Null
+        ));
+        assert!(
+            !retire_out_of_band(&skeever, &pool, 17, &serde_json::Value::Null),
+            "in band at 17"
+        );
         assert!(retire_out_of_band(
             &held(0x8925740e_046b_4e7a_b418_a17bd83e035c, 0.0),
             &pool,
-            LLOYD_LEVEL
+            LLOYD_LEVEL,
+            &serde_json::Value::Null
         ));
         assert!(
             !retire_out_of_band(
                 &held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 3.0),
                 &pool,
-                LLOYD_LEVEL
+                LLOYD_LEVEL,
+                &serde_json::Value::Null
             ),
             "progress is kept"
         );
         let mut unknown = skeever.clone();
         unknown.template_id = Uuid::from_u128(0xdead);
         assert!(
-            !retire_out_of_band(&unknown, &pool, LLOYD_LEVEL),
+            !retire_out_of_band(&unknown, &pool, LLOYD_LEVEL, &serde_json::Value::Null),
             "no template, no judgement"
         );
     }
@@ -635,7 +696,14 @@ mod tests {
         for level in 0..=100u16 {
             assert!(!tutorial.offered_at(level), "offered at {level}");
             for cursor in 0..pool.len() {
-                let (picked, _) = pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+                let (picked, _) = pick_templates(
+                    &pool,
+                    cursor,
+                    level,
+                    &serde_json::Value::Null,
+                    &[],
+                    ACTIVE_CHALLENGE_COUNT,
+                );
                 assert!(
                     picked
                         .iter()
@@ -658,10 +726,19 @@ mod tests {
             .unwrap();
         let mut held =
             ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
-        assert!(retire_out_of_band(&held, &pool, 77), "Dwalin, level 77");
-        assert!(retire_out_of_band(&held, &pool, 1), "and at level 1");
+        assert!(
+            retire_out_of_band(&held, &pool, 77, &serde_json::Value::Null),
+            "Dwalin, level 77"
+        );
+        assert!(
+            retire_out_of_band(&held, &pool, 1, &serde_json::Value::Null),
+            "and at level 1"
+        );
         held.progress = 1.0;
-        assert!(!retire_out_of_band(&held, &pool, 77), "progress is kept");
+        assert!(
+            !retire_out_of_band(&held, &pool, 77, &serde_json::Value::Null),
+            "progress is kept"
+        );
     }
 
     #[test]
