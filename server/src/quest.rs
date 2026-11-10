@@ -1314,6 +1314,155 @@ mod report152_stale_story_loot_tests {
     }
 }
 
+/// Rotate and (re)generate the character's town-job board for the current reset
+/// window, persisting every job the board shows as a `quests` row. Returns the
+/// board, its pool timers and the job rows pruned (for `deletedQuestIds`).
+///
+/// The character carries `lastJobsResetTime`; when it predates the current
+/// daily-reset boundary the difficulty cycle advances, the previous window's
+/// untouched rows are pruned and the boundary is stored. Within a window the same
+/// jobs return (deterministic seed), so a re-fetch is idempotent.
+///
+/// Tracker #465 (HauDrauf, 2026-11-04): the jobs already completed in the CURRENT
+/// window are left off the board on every fetch, including the first fetch after
+/// the reset. A `/complete` that crosses 05:00 UTC rolls the new window's board
+/// (it reads the clock, not `lastJobsResetTime`), so a player who keeps playing
+/// through the reset completes new-window jobs before any `/quests` advances
+/// `lastJobsResetTime`. That first `/quests` used to treat the completed set as
+/// empty and put every one of those jobs back -- the gem-paying featured and boss
+/// jobs among them -- and a second `/complete` of the same row pays nothing.
+/// Prod, 2026-11-04: job d8c0ed5a completed 05:03 UTC, no `/quests` until 14:12,
+/// completed again 14:26 for an empty reward. Job ids are seeded on the reset
+/// boundary, so a completed row from an earlier window can never match one of
+/// this window's ids; reading all completed rows is exact.
+async fn rotate_job_board_in_tx(
+    conn: &mut diesel_async::AsyncPgConnection,
+    job_pools_def: &Value,
+    game_data: &blades_lib::game_data::GameData,
+    scaling: &blades_lib::static_data::QuestLevelScaling,
+    character: &mut CharacterDbEntryCharacterAlone,
+    now: u64,
+) -> Result<(Vec<Value>, Value, Vec<Uuid>), diesel::result::Error> {
+    let character_id_var = character.id;
+    let mut deleted_quest_ids = Vec::new();
+    let reset_boundary = jobs_gen::current_reset_boundary(job_pools_def, now);
+    let needs_regen = character.character.0.last_jobs_reset_time < reset_boundary;
+
+    let completed_job_ids: std::collections::HashSet<Uuid> = {
+        use crate::schema::quests;
+        quests::table
+            .filter(quests::character_id.eq(character_id_var))
+            .select(QuestDbEntry::as_select())
+            .load(conn)
+            .await?
+            .into_iter()
+            .filter(|q| jobs_gen::is_job_row(&q.info.0) && q.info.0.completed)
+            .map(|q| q.id)
+            .collect()
+    };
+
+    // Advance the difficulty cycle BEFORE rolling (tracker #313): every later
+    // fetch in this window — and /accept and /complete — rolls from the
+    // stored index, so the first roll must use that same value or the
+    // board's difficulties would shift on the second fetch.
+    if needs_regen {
+        character.character.0.job_difficulty_cycle_index = jobs_gen::next_cycle_index(
+            job_pools_def,
+            character.character.0.job_difficulty_cycle_index,
+        );
+    }
+    let (jobs, job_pools) = jobs_gen::generate_replenished(
+        job_pools_def,
+        character_id_var,
+        character.character.0.level,
+        character.character.0.job_difficulty_cycle_index,
+        reset_boundary,
+        now,
+        &completed_job_ids,
+    );
+
+    if needs_regen {
+        // Drop the previous window's JOB rows (marked by the sentinel
+        // gldQuestId) so stale, un-accepted jobs don't linger. Jobs carried into
+        // a dungeon keep a real dungeon_state and are left alone, and so are
+        // this window's completed jobs (#465): they are the window's memory of
+        // what was already played, and pruning them would put them back on the
+        // next fetch. Whatever goes is reported as `deletedQuestIds`.
+        let keep: std::collections::HashSet<Uuid> = jobs
+            .iter()
+            .filter_map(|j| j.get("questId").and_then(|v| v.as_str()))
+            .filter_map(|s| Uuid::parse_str(s).ok())
+            .chain(jobs_gen::window_job_ids(
+                job_pools_def,
+                character_id_var,
+                reset_boundary,
+                completed_job_ids.len() as u64,
+            ))
+            .collect();
+        {
+            use crate::schema::quests;
+            let stale: Vec<Uuid> = quests::table
+                .filter(quests::character_id.eq(character_id_var))
+                .filter(quests::dungeon_state.is_null())
+                .select(QuestDbEntry::as_select())
+                .load(conn)
+                .await?
+                .into_iter()
+                .filter(|q| jobs_gen::is_job_row(&q.info.0))
+                .map(|q| q.id)
+                .filter(|id| !keep.contains(id))
+                .collect();
+            if !stale.is_empty() {
+                diesel::delete(
+                    quests::table
+                        .filter(quests::character_id.eq(character_id_var))
+                        .filter(quests::id.eq_any(&stale)),
+                )
+                .execute(conn)
+                .await?;
+                deleted_quest_ids.extend(stale.iter().copied());
+            }
+        }
+        // Persist the rotation scalars on the character (the cycle index
+        // was advanced above, before the roll).
+        character.character.0.last_jobs_reset_time = reset_boundary;
+        {
+            use crate::schema::characters;
+            diesel::update(characters::table)
+                .filter(characters::id.eq(character_id_var))
+                .set(&*character)
+                .execute(conn)
+                .await?;
+        }
+    }
+
+    // Upsert EVERY job the board is about to show — not only on a window reset.
+    // A replacement job minted by `generate_replenished` between resets (after a
+    // job was completed) is on the board too, and the client enters it by id:
+    // with no row behind it, `…/dungeons/current/enter` 404'd and the quest never
+    // started (tracker #279, 2026-09-29 12:57). Idempotent: `do_nothing` on an
+    // existing row, so an entered job's dungeon_state is never touched.
+    for job in &jobs {
+        if let Some(entry) = jobs_gen::job_quest_db_entry_for(
+            job,
+            character_id_var,
+            game_data,
+            scaling,
+            job_pools_def,
+            character.character.0.level,
+        ) {
+            use crate::schema::quests;
+            insert_into(quests::table)
+                .values(&entry)
+                .on_conflict((quests::id, quests::character_id))
+                .do_nothing()
+                .execute(conn)
+                .await?;
+        }
+    }
+    Ok((jobs, job_pools, deleted_quest_ids))
+}
+
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests")]
 pub async fn get_quests(
     session: SessionLookedUpMaybe,
@@ -1351,125 +1500,16 @@ pub async fn get_quests(
                 util::get_only_single_character_and_check_permission(character, &session.session)?;
 
             // ---- Town jobs: rotate + (re)generate for the current reset window ----
-            // The character carries `lastJobsResetTime`; when it predates the current
-            // daily-reset boundary we roll a fresh set of jobs, advance the difficulty
-            // cycle, and persist the generated JOB entries as `quests` rows so the
-            // follow-up /objectives + /complete routes can resolve their questIds.
-            // Within a window the same jobs return (deterministic seed), so a
-            // re-fetch is idempotent.
-            let reset_boundary = jobs_gen::current_reset_boundary(&job_pools_def, now);
-            let needs_regen = character.character.0.last_jobs_reset_time < reset_boundary;
-
-            let completed_job_ids = if needs_regen {
-                std::collections::HashSet::new()
-            } else {
-                use crate::schema::quests;
-                quests::table
-                    .filter(quests::character_id.eq(character_id_var))
-                    .select(QuestDbEntry::as_select())
-                    .load(&mut conn)
-                    .await?
-                    .into_iter()
-                    .filter(|q| jobs_gen::is_job_row(&q.info.0) && q.info.0.completed)
-                    .map(|q| q.id)
-                    .collect()
-            };
-
-            // Advance the difficulty cycle BEFORE rolling (tracker #313): every later
-            // fetch in this window — and /accept and /complete — rolls from the
-            // stored index, so the first roll must use that same value or the
-            // board's difficulties would shift on the second fetch.
-            if needs_regen {
-                character.character.0.job_difficulty_cycle_index = jobs_gen::next_cycle_index(
-                    &job_pools_def,
-                    character.character.0.job_difficulty_cycle_index,
-                );
-            }
-            let (jobs, job_pools) = jobs_gen::generate_replenished(
+            let (jobs, job_pools, rotated_out) = rotate_job_board_in_tx(
+                &mut conn,
                 &job_pools_def,
-                character_id_var,
-                character.character.0.level,
-                character.character.0.job_difficulty_cycle_index,
-                reset_boundary,
+                &globals.game_data,
+                &globals.static_data.quests_daily.level_scaling,
+                &mut character,
                 now,
-                &completed_job_ids,
-            );
-
-            if needs_regen {
-                // Drop the previous window's JOB rows (marked by the sentinel
-                // gldQuestId) so stale, un-accepted jobs don't linger, then insert
-                // the freshly rolled ones. Jobs already carried into a dungeon keep a
-                // real dungeon_state; we only prune the untouched catalog rows.
-                let job_quest_ids: Vec<Uuid> = jobs
-                    .iter()
-                    .filter_map(|j| j.get("questId").and_then(|v| v.as_str()))
-                    .filter_map(|s| Uuid::parse_str(s).ok())
-                    .collect();
-                {
-                    use crate::schema::quests;
-                    // Delete prior-window job rows for this character that are NOT part
-                    // of the new set and have not been entered (no dungeon_state).
-                    // Whatever goes here is reported to the client as `deletedQuestIds`
-                    // — otherwise the board keeps showing entries we just removed.
-                    let stale: Vec<Uuid> = quests::table
-                        .filter(quests::character_id.eq(character_id_var))
-                        .filter(quests::dungeon_state.is_null())
-                        .select(QuestDbEntry::as_select())
-                        .load(&mut conn)
-                        .await?
-                        .into_iter()
-                        .filter(|q| jobs_gen::is_job_row(&q.info.0))
-                        .map(|q| q.id)
-                        .filter(|id| !job_quest_ids.contains(id))
-                        .collect();
-                    if !stale.is_empty() {
-                        diesel::delete(
-                            quests::table
-                                .filter(quests::character_id.eq(character_id_var))
-                                .filter(quests::id.eq_any(&stale)),
-                        )
-                        .execute(&mut conn)
-                        .await?;
-                        deleted_quest_ids.extend(stale.iter().copied());
-                    }
-                }
-                // Persist the rotation scalars on the character (the cycle index
-                // was advanced above, before the roll).
-                character.character.0.last_jobs_reset_time = reset_boundary;
-                {
-                    use crate::schema::characters;
-                    diesel::update(characters::table)
-                        .filter(characters::id.eq(character_id_var))
-                        .set(&character)
-                        .execute(&mut conn)
-                        .await?;
-                }
-            }
-
-            // Upsert EVERY job the board is about to show — not only on a window reset.
-            // A replacement job minted by `generate_replenished` between resets (after a
-            // job was completed) is on the board too, and the client enters it by id:
-            // with no row behind it, `…/dungeons/current/enter` 404'd and the quest never
-            // started (tracker #279, 2026-09-29 12:57). Idempotent: `do_nothing` on an
-            // existing row, so an entered job's dungeon_state is never touched.
-            for job in &jobs {
-                if let Some(entry) = jobs_gen::job_quest_db_entry_for(
-                    job,
-                    character_id_var,
-                    &globals.game_data,
-                    &globals.static_data.quests_daily.level_scaling,
-                    &job_pools_def,
-                    character.character.0.level,
-                ) {
-                    use crate::schema::quests;
-                    insert_into(quests::table)
-                        .values(&entry)
-                        .on_conflict((quests::id, quests::character_id))
-                        .do_nothing()
-                        .execute(&mut conn)
-                        .await?;
-                }
-            }
+            )
+            .await?;
+            deleted_quest_ids.extend(rotated_out);
 
             // ---- Event ("Sigil") quests: mint the instances whose window is open ----
             // One stored GAME_EVENT row per (character, event instance). Deterministic
@@ -5134,6 +5174,36 @@ pub(crate) mod jobs_gen {
             timers.push(json!({ "id": pool_id, "endTime": end_time, "nextStartTime": next_start }));
         }
         (jobs, Value::Array(timers))
+    }
+
+    /// Every job id this window can issue a character, up to `extra` slots past
+    /// each pool's board size: the ids [`generate_replenished`] walks when that
+    /// many jobs of the window are already completed. Ids depend only on
+    /// `(character, boundary, pool, slot)`, so this needs no level or cycle.
+    pub fn window_job_ids(
+        pools_def: &Value,
+        character_id: Uuid,
+        reset_boundary: u64,
+        extra: u64,
+    ) -> Vec<Uuid> {
+        let Some(pools) = pools_def.get("jobPools").and_then(|p| p.as_array()) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for pool in pools {
+            let Some(pool_id) = get_str(pool, "jobPoolId") else {
+                continue;
+            };
+            let slots = pool_active_count(pool, reset_boundary)
+                .min(get_u64(pool, "maxTotal", u64::MAX))
+                .saturating_add(extra);
+            for slot in 0..slots {
+                out.push(uuid_from_seed(
+                    seed_for(character_id, reset_boundary, pool_id, slot).wrapping_add(0xA11CE),
+                ));
+            }
+        }
+        out
     }
 
     /// Generate the current board while replacing jobs already completed in this
@@ -11240,5 +11310,250 @@ mod report353_quest_town_xp_db {
             stored_town(&mut conn, ids.1).await,
             serde_json::from_str::<Value>(TOWN_BEFORE).unwrap()
         );
+    }
+}
+
+/// Tracker #465 (HauDrauf, 2026-11-04): jobs completed after the 05:00 UTC reset
+/// but before the first `/quests` of the new window came back on the board, and a
+/// second completion paid nothing. Against a real Postgres, through the handler's
+/// own rotation; SKIPS without TEST_DATABASE_URL.
+#[cfg(test)]
+mod report465_completed_jobs_stay_off_the_board_db {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+
+    const TABLES: &str = "\
+        CREATE TABLE characters ( \
+            id UUID PRIMARY KEY, user_id UUID NOT NULL, character JSONB NOT NULL, \
+            data JSONB NOT NULL, inventory JSONB NOT NULL, wallet JSONB NOT NULL, \
+            town JSONB, server_state JSONB NOT NULL, source_alt_uuid UUID); \
+        CREATE TABLE quests ( \
+            id UUID NOT NULL, character_id UUID NOT NULL REFERENCES characters(id), \
+            info JSONB NOT NULL, generated_data JSONB NOT NULL, dungeon_state JSONB, \
+            initial_state JSONB, PRIMARY KEY (id, character_id));";
+
+    /// 2026-11-04 05:00 UTC, the reset HauDrauf played through.
+    const RESET: u64 = 1_794_286_800;
+    const DAY: u64 = 86_400;
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"
+        ))
+        .await
+        .unwrap();
+        conn.batch_execute(TABLES).await.unwrap();
+        Some(conn)
+    }
+
+    struct World {
+        pools: Value,
+        sd: blades_lib::static_data::StaticData,
+        gd: blades_lib::game_data::GameData,
+    }
+
+    fn world() -> &'static World {
+        static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();
+        WORLD.get_or_init(|| {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            let read = |f: &str| -> String { std::fs::read_to_string(dir.join(f)).expect(f) };
+            World {
+                pools: serde_json::from_str(&read("job_pools.json")).unwrap(),
+                sd: crate::static_loader::load(&dir),
+                gd: serde_json::from_str(&read("parsed.json")).unwrap(),
+            }
+        })
+    }
+
+    /// A level-100 character whose board was last rotated at the PREVIOUS reset.
+    async fn seed_character(conn: &mut AsyncPgConnection) -> CharacterDbEntryCharacterAlone {
+        let (user, id) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut character = blades_lib::user_data::CompleteCharacter::default();
+        character.level = 100;
+        character.last_jobs_reset_time = RESET - DAY;
+        character.job_difficulty_cycle_index = 48;
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, data, inventory, wallet, server_state) \
+             VALUES ($1, $2, $3::jsonb, '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&character).unwrap())
+        .execute(conn)
+        .await
+        .unwrap();
+        CharacterDbEntryCharacterAlone {
+            id,
+            user_id: user,
+            character: JsonDbWrapper(character),
+        }
+    }
+
+    fn job_id(job: &Value) -> Uuid {
+        Uuid::parse_str(job["questId"].as_str().unwrap()).unwrap()
+    }
+
+    fn presentation_of(pools: &Value, job: &Value) -> i64 {
+        let pool = job["jobPoolId"].as_str().unwrap();
+        pools["jobPools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["jobPoolId"] == pool)
+            .map_or(0, |p| p["presentation"].as_i64().unwrap_or(0))
+    }
+
+    /// What a `/complete` that crossed the reset leaves behind: the new window's
+    /// rows for `ids`, completed, their dungeon exited (`dungeon_state` NULL).
+    async fn completed_rows(
+        conn: &mut AsyncPgConnection,
+        character: &CharacterDbEntryCharacterAlone,
+        board: &[Value],
+    ) {
+        let w = world();
+        for job in board {
+            let mut row = jobs_gen::job_quest_db_entry_for(
+                job,
+                character.id,
+                &w.gd,
+                &w.sd.quests_daily.level_scaling,
+                &w.pools,
+                100,
+            )
+            .expect("a job row");
+            row.info.0.completed = true;
+            use crate::schema::quests;
+            insert_into(quests::table)
+                .values(&row)
+                .execute(conn)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn fetch(
+        conn: &mut AsyncPgConnection,
+        character: &mut CharacterDbEntryCharacterAlone,
+        now: u64,
+    ) -> Vec<Uuid> {
+        let w = world();
+        let (jobs, _, _) = rotate_job_board_in_tx(
+            conn,
+            &w.pools,
+            &w.gd,
+            &w.sd.quests_daily.level_scaling,
+            character,
+            now,
+        )
+        .await
+        .expect("/quests rotates");
+        jobs.iter().map(job_id).collect()
+    }
+
+    #[tokio::test]
+    async fn jobs_completed_across_the_reset_stay_off_the_first_board_and_after() {
+        let Some(mut conn) = fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — #465 NOT verified");
+            return;
+        };
+        let w = world();
+        let mut character = seed_character(&mut conn).await;
+        // The board a /complete at 05:00:57 handed out: the new window's, rolled
+        // from the clock while lastJobsResetTime still named the old window.
+        let (board, _) = jobs_gen::generate_replenished(
+            &w.pools,
+            character.id,
+            100,
+            character.character.0.job_difficulty_cycle_index,
+            RESET,
+            RESET + 57,
+            &Default::default(),
+        );
+        let gem_jobs: Vec<Value> = board
+            .iter()
+            .filter(|j| presentation_of(&w.pools, j) > 0)
+            .cloned()
+            .collect();
+        assert!(
+            !gem_jobs.is_empty(),
+            "the board carries a featured or boss job"
+        );
+        let standard = board
+            .iter()
+            .find(|j| presentation_of(&w.pools, j) == 0)
+            .cloned()
+            .unwrap();
+        let mut played = gem_jobs.clone();
+        played.push(standard);
+        completed_rows(&mut conn, &character, &played).await;
+        let played: Vec<Uuid> = played.iter().map(job_id).collect();
+
+        // 14:12, the first /quests of the window.
+        let first = fetch(&mut conn, &mut character, RESET + 9 * 3600).await;
+        for id in &played {
+            assert!(
+                !first.contains(id),
+                "completed job {id} is back on the board"
+            );
+        }
+        assert_eq!(character.character.0.last_jobs_reset_time, RESET);
+        // A later fetch in the same window: the completed rows were not pruned.
+        let second = fetch(&mut conn, &mut character, RESET + 10 * 3600).await;
+        for id in &played {
+            assert!(
+                !second.contains(id),
+                "completed job {id} came back on a re-fetch"
+            );
+        }
+        assert_eq!(first, second, "the board is stable within the window");
+    }
+
+    /// Control: the next window starts a fresh board, and the previous window's
+    /// completed rows are pruned (their ids can never recur).
+    #[tokio::test]
+    async fn the_next_window_is_a_fresh_board_and_prunes_the_old_rows() {
+        let Some(mut conn) = fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — #465 NOT verified");
+            return;
+        };
+        let w = world();
+        let mut character = seed_character(&mut conn).await;
+        let (board, _) = jobs_gen::generate_replenished(
+            &w.pools,
+            character.id,
+            100,
+            character.character.0.job_difficulty_cycle_index,
+            RESET,
+            RESET + 57,
+            &Default::default(),
+        );
+        completed_rows(&mut conn, &character, &board[..1]).await;
+        let first = fetch(&mut conn, &mut character, RESET + 3600).await;
+        assert!(!first.contains(&job_id(&board[0])));
+
+        let next = fetch(&mut conn, &mut character, RESET + DAY + 60).await;
+        assert!(next.len() >= 4, "a full board in the next window");
+        assert!(next.iter().all(|id| !first.contains(id)), "all new ids");
+        let left: i64 = diesel::sql_query("SELECT count(*) AS n FROM quests WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(job_id(&board[0]))
+            .get_result::<Count>(&mut conn)
+            .await
+            .unwrap()
+            .n;
+        assert_eq!(left, 0, "the old window's completed row is pruned");
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
     }
 }
