@@ -664,7 +664,7 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
         r.character.0.pvp_season_id,
         &r.inventory.0,
     );
-    lo.next_treasury_chest_id = r.inventory.0.treasury.next_chest_id();
+    lo.next_treasury_chest_id = r.inventory.0.next_chest_id();
     lo.stackable_counts = r.inventory.0.backpack.stackable_items.counts().collect();
     lo.arena_chests_earned = r.server_state.0.arena_chests_earned;
     lo.arena_last_elder_one_chest_at_secs = r.server_state.0.arena_last_elder_one_chest_at_secs;
