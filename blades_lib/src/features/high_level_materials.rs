@@ -16,6 +16,9 @@
 //! setting [`FROM_LEVEL`] above the level cap (or removing the calls to
 //! [`pay_rewards`], [`pay_chest`] and [`pay_dungeon`]).
 //!
+//! One rule here applies at EVERY level: [`even_effect_kinds`] (#461), which
+//! [`pay_chest`] and [`pay_dungeon`] run before the level-45 rules.
+//!
 //! It is applied on top of #388's crafting-material stacks (5, 10 or 20,
 //! [`crate::features::beginner_economy::MATERIAL_STACK_SIZES`]) wherever #388
 //! sizes them -- treasury, daily, gift and store chests; story-quest and job
@@ -185,6 +188,59 @@ fn resize(stacks: &mut HashMap<Uuid, u64>, chest: bool, effect_30: bool, seed: u
     }
 }
 
+// ---------------------------------------------------------------------------
+// 5. The seven effect ingredients, equally often (#461, every level)
+// ---------------------------------------------------------------------------
+
+/// Set to `false` to revert #461: quest loot then pays effect ingredients in
+/// retail's own mix again.
+pub const EVEN_EFFECT_KINDS: bool = true;
+
+/// Which of the seven effect ingredients a stack is, drawn uniformly (#461).
+///
+/// OWNER-APPROVED DEVIATION FROM RETAIL (HauDrauf, #461, 2026-11-04, under the
+/// standing rule for his reversible common-good rules): "Check the equal
+/// distribution of the 7 ingredients again; in quests I find relatively few Fire
+/// Salts." The Abyss bonus has drawn the seven uniformly since #383; quest loot
+/// still followed retail's tables, which never pay one of them. Measured on the
+/// shipped tables (share of effect-ingredient stacks, retail observations):
+///
+/// | source                      | Frost | Fire | Void | Glow | Imp | Honey | Death |
+/// |-----------------------------|-------|------|------|------|-----|-------|-------|
+/// | enemy corpses, level 45+    | 13%   | 14%  | 16%  | 0%   | 26% | 20%   | 12%   |
+/// | containers, level 45+       | 13%   | 14%  | 15%  | 0%   | 28% | 19%   | 12%   |
+/// | Wooden chests, level 45+    | 2/11  | 2/11 | 1/11 | 0    | 2/11| 4/11  | 0     |
+///
+/// So every effect-ingredient stack in a corpse, a container or a chest now
+/// takes its KIND from a uniform draw over the seven (distinct within one loot
+/// result), keeping the stack's size and the number of stacks. Whether a stack is
+/// paid at all, and how big, is unchanged. The draw depends only on `seed` and the
+/// stack sizes, never on the kinds already there, so a re-run is a no-op.
+pub fn even_effect_kinds(stacks: &mut HashMap<Uuid, u64>, seed: u64) {
+    if !EVEN_EFFECT_KINDS {
+        return;
+    }
+    let mut sizes: Vec<u64> = stacks
+        .iter()
+        .filter(|(id, q)| **q > 0 && is_effect_ingredient(id))
+        .map(|(_, q)| *q)
+        .collect();
+    if sizes.is_empty() {
+        return;
+    }
+    stacks.retain(|id, q| *q == 0 || !is_effect_ingredient(id));
+    sizes.sort_unstable();
+    let mut kinds: Vec<u128> = EFFECT_INGREDIENTS.to_vec();
+    for (k, size) in sizes.into_iter().enumerate() {
+        if kinds.is_empty() {
+            break;
+        }
+        let pick = (mix(seed ^ 0x0461_E7E4_0000 ^ (k as u64).rotate_left(32)) % kinds.len() as u64)
+            as usize;
+        stacks.insert(Uuid::from_u128(kinds.swap_remove(pick)), size);
+    }
+}
+
 /// A non-chest reward's stacks (a story-quest or job completion reward, the Abyss
 /// `/end` package or a rung) for a character of `level`.
 pub fn pay_rewards(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
@@ -201,6 +257,7 @@ pub fn pay_rewards(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
 /// Ectoplasm in [`WOODEN_CHEST_ECTOPLASM_PER_10K`] openings. Every other chest keeps
 /// its effect ingredients' sizes (HauDrauf, msg 3018: 30 "in Holztruhen ja").
 pub fn pay_chest(stacks: &mut HashMap<Uuid, u64>, tier: u64, level: i64, seed: u64) {
+    even_effect_kinds(stacks, mix(seed ^ 0x0461_C4E5));
     if !applies(level) {
         return;
     }
@@ -256,23 +313,34 @@ fn result_seed(place: u64, loot: &LootTableResult) -> u64 {
 /// character of `level` (quest, job, event or Abyss dungeon). Chests are rolled when
 /// opened and are paid by [`pay_chest`].
 pub fn pay_dungeon(data: &mut DungeonGeneratedData, level: i64) {
-    if !applies(level) {
-        return;
-    }
+    pay_dungeon_with(data, level, true);
+}
+
+/// [`pay_dungeon`] for an Abyss slice: the #438 sizes only. The Abyss already
+/// draws its effect ingredients uniformly (#383's bonus), so #461 leaves it alone.
+pub fn pay_abyss_dungeon(data: &mut DungeonGeneratedData, level: i64) {
+    pay_dungeon_with(data, level, false);
+}
+
+fn pay_dungeon_with(data: &mut DungeonGeneratedData, level: i64, even: bool) {
+    let sized = applies(level);
+    let mut pay = |stacks: &mut HashMap<Uuid, u64>, seed: u64| {
+        if even {
+            even_effect_kinds(stacks, seed);
+        }
+        if sized {
+            resize(stacks, false, true, seed);
+        }
+    };
     for (group, spawners) in &mut data.enemy_generated_data {
         for (a, enemies) in spawners.iter_mut().enumerate() {
             for (b, enemy) in enemies.iter_mut().enumerate() {
                 let corpse = mix(group.as_u128() as u64 ^ ((a as u64) << 32) ^ b as u64);
                 let seed = result_seed(corpse, &enemy.spawn_group_loot);
-                resize(
-                    &mut enemy.spawn_group_loot.stackable_items,
-                    false,
-                    true,
-                    seed,
-                );
+                pay(&mut enemy.spawn_group_loot.stackable_items, seed);
                 for (table, loot) in &mut enemy.loot_table_loot {
                     let seed = result_seed(corpse ^ table.as_u128() as u64, loot);
-                    resize(&mut loot.stackable_items, false, true, seed);
+                    pay(&mut loot.stackable_items, seed);
                 }
             }
         }
@@ -283,7 +351,7 @@ pub fn pay_dungeon(data: &mut DungeonGeneratedData, level: i64) {
                 let place =
                     group.as_u128() as u64 ^ (a as u64).rotate_left(48) ^ table.as_u128() as u64;
                 let seed = result_seed(place, loot);
-                resize(&mut loot.stackable_items, false, true, seed);
+                pay(&mut loot.stackable_items, seed);
             }
         }
     }
@@ -307,6 +375,48 @@ mod tests {
             (DRAGON_BONES, 20),
             (LUMBER, 9),
         ])
+    }
+
+    fn effect(id: Uuid) -> bool {
+        EFFECT_INGREDIENTS.contains(&id.as_u128())
+    }
+
+    /// #461: a stack's kind is drawn uniformly over the seven, at every level;
+    /// sizes, counts and every other stack are left alone, and a re-run is a no-op.
+    #[test]
+    fn report_461_effect_kinds_are_even_and_idempotent() {
+        const IMP_STOOL: Uuid = Uuid::from_u128(0x07f380dd_f123_4ef7_9b12_8b9fdb03c3e1);
+        let mut by_kind: HashMap<Uuid, u64> = HashMap::new();
+        for seed in 0..70_000u64 {
+            let mut s = HashMap::from([(IMP_STOOL, 3), (FROST_SALTS, 7), (LUMBER, 9)]);
+            even_effect_kinds(&mut s, seed);
+            let mut sizes: Vec<u64> = s
+                .iter()
+                .filter(|(id, _)| effect(**id))
+                .map(|(_, q)| *q)
+                .collect();
+            sizes.sort_unstable();
+            assert_eq!(sizes, vec![3, 7], "sizes and count kept");
+            assert_eq!(s.get(&LUMBER), Some(&9), "other stacks untouched");
+            let again = {
+                let mut t = s.clone();
+                even_effect_kinds(&mut t, seed);
+                t
+            };
+            assert_eq!(again, s, "idempotent");
+            for id in s.keys().filter(|id| effect(**id)) {
+                *by_kind.entry(*id).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(by_kind.len(), 7, "all seven drawn");
+        for (id, n) in &by_kind {
+            let share = *n as f64 / 140_000.0;
+            assert!((0.135..=0.151).contains(&share), "{id}: {share}");
+        }
+        // Control: a result with no effect ingredient is not given one.
+        let mut plain = HashMap::from([(LUMBER, 9)]);
+        even_effect_kinds(&mut plain, 1);
+        assert_eq!(plain, HashMap::from([(LUMBER, 9)]));
     }
 
     #[test]
@@ -358,13 +468,27 @@ mod tests {
         }
     }
 
+    /// Below 45 nothing is resized; a chest's effect ingredient may change KIND
+    /// (#461, every level) but keeps its size.
     #[test]
     fn level_44_is_untouched() {
         let mut s = sample();
         pay_rewards(&mut s, 44, 1);
         assert_eq!(s, sample());
         pay_chest(&mut s, 1, 44, 1);
-        assert_eq!(s, sample());
+        let strip = |m: &HashMap<Uuid, u64>| -> HashMap<Uuid, u64> {
+            m.iter()
+                .filter(|(id, _)| !is_effect_ingredient(id))
+                .map(|(k, v)| (*k, *v))
+                .collect()
+        };
+        assert_eq!(strip(&s), strip(&sample()));
+        let effect: Vec<u64> = s
+            .iter()
+            .filter(|(id, _)| is_effect_ingredient(id))
+            .map(|(_, q)| *q)
+            .collect();
+        assert_eq!(effect, vec![10], "one effect stack, its size kept");
     }
 
     #[test]
@@ -402,7 +526,7 @@ mod tests {
                 if tier == 1 {
                     assert!(effect.iter().all(|q| *q == 30));
                     assert_eq!(effect.len(), 2, "seed {seed}");
-                    assert!(s.contains_key(&FROST_SALTS), "the rolled stack is kept");
+                    // The rolled stack's kind is redrawn (#461); it stays one of two.
                 } else {
                     // Only a Wooden chest's are 30 (msg 3018); the rest keep theirs.
                     assert_eq!(effect, vec![10]);

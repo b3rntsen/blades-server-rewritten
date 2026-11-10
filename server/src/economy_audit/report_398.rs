@@ -356,8 +356,12 @@ const PINNED_BELOW_45: [(&str, u64); 9] = [
     ("daily", 0x9383_a385_9613_ac82),
     ("abyss_rewards", 0x6978_dbed_683e_0aee),
     ("abyss_floor", 0xbda8_123f_7ab4_feb4),
-    ("quests", 0x2726_6fe1_0a09_8738),
-    ("event_dungeons", 0xbda4_5e54_3c7e_75fc),
+    // #461 (2026-11-10) re-pins quests: the seven effect ingredients take their kind
+        // from a uniform draw at every level (was 0x2726_6fe1_0a09_8738).
+        ("quests", 0x38d2_54b3_fb43_9c3e),
+    // #461 (2026-11-10) re-pins event_dungeons: the seven effect ingredients take their kind
+        // from a uniform draw at every level (was 0xbda4_5e54_3c7e_75fc).
+        ("event_dungeons", 0xa38a_4214_0438_3fdf),
     ("jobs", 0x1455_a9aa_6819_838d),
     ("store", 0x46d6_4f30_3642_1ea7),
     ("treasury", 0xa1c5_590f_12ec_5edf),
