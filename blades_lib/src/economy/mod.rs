@@ -33,6 +33,9 @@ pub mod skip_time;
 /// Gem pricing for the MISSING part of a recipe's inputs (`gemsPayment: true`).
 pub mod missing_resources;
 
+/// How long timed actions (crafts, building) take relative to retail (#436).
+pub mod timer_scale;
+
 use crate::user_data::{
     CompleteCharacter, CompleteInventory, CompleteWallet, InventoryChangeTracker, Item, WalletEntry,
 };
