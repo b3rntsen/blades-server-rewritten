@@ -2663,17 +2663,20 @@ pub async fn list_exchanges(
     let rows = load_exchanges(&mut conn, &m.guild_id).await?;
     let requester_ids: Vec<Uuid> = rows.iter().map(|r| r.requester_character_id).collect();
     let current_requesters = current_users_for_characters(&mut conn, &requester_ids).await?;
+    let viewer = session.session.user_id;
     let wires = rows
         .iter()
         .map(|r| {
-            GuildExchangeWire::from_row_with_requester(
+            let mut wire = GuildExchangeWire::from_row_with_requester(
                 r,
                 true,
                 current_requesters
                     .get(&r.requester_character_id)
                     .copied()
                     .unwrap_or(r.requester_user_id),
-            )
+            );
+            wire.donations = Some(visible_donations(&r.donations.0, viewer));
+            wire
         })
         .collect();
     Ok(Json(ExchangeListResponse {
@@ -2804,6 +2807,48 @@ mod exchange_amount_tests {
                 "{t} ladder decreases"
             );
         }
+    }
+
+    /// Tracker #462 (HauDrauf's rule): every new request asks for ten times
+    /// retail's amount, and ONE donation stays retail's size.
+    #[test]
+    fn requests_ask_ten_times_retail_with_retail_sized_donations() {
+        let limestone = u("fd67bbc6-20f4-44a3-9614-28265ebb8c67");
+        assert_eq!(exchange_amounts(limestone, 10), Some((50, 10)), "retail");
+        assert_eq!(request_amounts(limestone, 10), Some((500, 10)));
+        let honeycomb = u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50");
+        assert_eq!(request_amounts(honeycomb, 10), Some((100, 5)));
+        for gem in SOUL_GEMS {
+            assert_eq!(request_amounts(u(gem), 5), Some((10, 1)), "{gem}");
+        }
+        assert_eq!(
+            request_amounts(Uuid::nil(), 10),
+            None,
+            "still not requestable"
+        );
+    }
+
+    /// Tracker #462: the client drops a request from a player's board once that
+    /// player is in its `donations` (RemoveFulfilledExchanges). The viewer's own
+    /// entries are left out so they can give again; everyone else's stay.
+    #[test]
+    fn a_viewer_is_not_shown_their_own_donations() {
+        let me = Uuid::from_u128(1);
+        let other = Uuid::from_u128(2);
+        let d = |who: Uuid, n: i64| Donation {
+            donator_user_id: who,
+            donator_character_id: who,
+            donated_amount: n,
+        };
+        let all = vec![d(me, 5), d(other, 5), d(me, 5)];
+        let shown = visible_donations(&all, me);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].donator_user_id, other);
+        assert_eq!(
+            visible_donations(&all, Uuid::from_u128(3)).len(),
+            3,
+            "a bystander sees all"
+        );
     }
 
     /// Report #325's second half: the donor held 3 of the item and the request
@@ -3282,6 +3327,54 @@ pub fn exchange_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64,
     Some((requested, max_donation))
 }
 
+/// How many times retail's request size a new guild request asks for.
+///
+/// NOT RETAIL — a community rule (tracker #462, HauDrauf, 2026-11-04, approved
+/// under the owner's standing "HauDrauf's common-good rules" policy of
+/// 2026-10-25): "Alle Vorgaben x zehn … die einzelnen Einteilungen beibehalten".
+/// Every request asks for ten times what retail asked, while ONE donation stays
+/// retail's size, so a request now takes ten times as many donations — and,
+/// with [`visible_donations`], the same guildmate may give several of them.
+/// Revert: set to 1 (requests already posted keep their size).
+pub const REQUEST_AMOUNT_MULTIPLIER: i64 = 10;
+
+/// The `(requestedAmount, maxDonationAmount)` a new request is created with:
+/// retail's [`exchange_amounts`] with the request scaled by
+/// [`REQUEST_AMOUNT_MULTIPLIER`] and the per-donation split left as retail's.
+pub fn request_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64, i64)> {
+    let (requested, max_donation) = exchange_amounts(item_template_id, town_level)?;
+    Some((requested * REQUEST_AMOUNT_MULTIPLIER, max_donation))
+}
+
+/// The `donations` a guildmate is shown on a request: everyone's but their own.
+///
+/// The client hides a request from a player as soon as that player appears in
+/// its `donations` — `GuildChatQueryResults.RemoveFulfilledExchanges(userId)`
+/// drops every exchange where `GetDonationAmount(userId) > 0` or
+/// `donationSum == requestedAmount` (libil2cpp `0x1C39510`, which calls
+/// `GuildExchangeInfo.GetDonationAmount` at `0x1C3956C`). So a server that merely
+/// stopped refusing a second donation would still never be asked for one.
+/// Leaving the viewer's own entries out keeps the request on their board;
+/// `donationSum` is untouched, so progress still shows every donation (#462).
+fn visible_donations(donations: &[Donation], viewer_user_id: Uuid) -> Vec<Donation> {
+    donations
+        .iter()
+        .filter(|d| d.donator_user_id != viewer_user_id)
+        .cloned()
+        .collect()
+}
+
+/// Which of a donate's candidate requests (oldest first) receives it: the oldest
+/// that still needs items. A guildmate who already gave may give again (#462).
+/// With nothing open it falls back to the first, so the handler's "full" refusal
+/// explains why.
+fn pick_candidate(candidates: &[GuildExchangeRow]) -> usize {
+    candidates
+        .iter()
+        .position(|e| e.donation_sum < e.requested_amount)
+        .unwrap_or(0)
+}
+
 /// How many units one donation moves: a full `maxDonationAmount`, but never more
 /// than the request still needs nor more than the donor holds. Retail takes what a
 /// short donor has — captured donations of 2 into a 10/5 Glow Dust request and of 1
@@ -3369,7 +3462,7 @@ pub async fn create_exchange(
             .and_then(Value::as_u64)
             .unwrap_or(0)
     };
-    let (requested_amount, max_donation_amount) = exchange_amounts(item_template_id, town_level)
+    let (requested_amount, max_donation_amount) = request_amounts(item_template_id, town_level)
         .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, GUILD_SERVICE_ID, 15))?;
     let ts = now_secs();
     let row = GuildExchangeRow {
@@ -3513,37 +3606,15 @@ pub async fn donate_exchange(
                     11,
                 ));
             }
-            // Oldest request this donor can still give to. Falling back to the
+            // Oldest request that still needs items. Falling back to the
             // first candidate keeps the existing refusal codes meaningful: with
             // nothing donatable, the checks below explain WHY.
-            let pick = candidates
-                .iter()
-                .position(|e| {
-                    e.donation_sum < e.requested_amount
-                        && !e
-                            .donations
-                            .0
-                            .iter()
-                            .any(|d| d.donator_user_id == donor_user_id)
-                })
-                .unwrap_or(0);
+            let pick = pick_candidate(&candidates);
             let exchange: GuildExchangeRow = candidates.into_iter().nth(pick).expect("non-empty");
 
-            // A donor may not donate twice to the same request. Nothing stopped a
-            // single player filling a request by themselves, repeatedly, which is
-            // neither what the feature is for nor what retail allowed.
-            if exchange
-                .donations
-                .0
-                .iter()
-                .any(|d| d.donator_user_id == donor_user_id)
-            {
-                return Err(BladeApiError::new(
-                    StatusCode::CONFLICT,
-                    GUILD_SERVICE_ID,
-                    12,
-                ));
-            }
+            // A guildmate may give to the same request more than once (#462,
+            // HauDrauf's rule; retail refused a second donation). Each donation is
+            // still one retail-sized share, capped below by what is left.
 
             // Never donate more than the request still needs. The amount was always
             // the full `maxDonationAmount`, so the last donor to a nearly-complete
@@ -4130,12 +4201,37 @@ mod donating_with_several_requests_for_one_item {
 
     /// The selection rule, extracted so it can be tested without a database: the
     /// oldest candidate this donor can still give to, else the first.
-    fn pick(rows: &[(i64, i64, Vec<Uuid>)], donor: Uuid) -> usize {
-        rows.iter()
-            .position(|(sum, requested, donors)| {
-                sum < requested && !donors.iter().any(|d| *d == donor)
+    ///
+    /// Runs the handler's own [`pick_candidate`] on rows built from the tuples.
+    fn pick(rows: &[(i64, i64, Vec<Uuid>)], _donor: Uuid) -> usize {
+        let rows: Vec<GuildExchangeRow> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, (sum, requested, donors))| GuildExchangeRow {
+                id: format!("ex-{i}"),
+                guild_id: "g".into(),
+                requester_user_id: Uuid::from_u128(99),
+                requester_character_id: Uuid::from_u128(98),
+                item_template_id: Uuid::nil(),
+                requested_amount: *requested,
+                max_donation_amount: 1,
+                donations: JsonDbWrapper(
+                    donors
+                        .iter()
+                        .map(|d| Donation {
+                            donator_user_id: *d,
+                            donator_character_id: *d,
+                            donated_amount: 1,
+                        })
+                        .collect(),
+                ),
+                donation_sum: *sum,
+                creation_time: i as i64,
+                redeemed: false,
+                redeemed_amount: 0,
             })
-            .unwrap_or(0)
+            .collect();
+        pick_candidate(&rows)
     }
 
     const DONOR: Uuid = Uuid::from_u128(1);
@@ -4162,16 +4258,13 @@ mod donating_with_several_requests_for_one_item {
         assert_eq!(pick(&b, DONOR), 1);
     }
 
-    /// A donor who has already given to the only open request is not silently
-    /// moved onto a different one — they fall through to the refusal.
+    /// Tracker #462: a guildmate who already gave may give again. The oldest
+    /// request they gave to, still short, is chosen over a newer one they have
+    /// not touched — the donation goes where the player tapped, not elsewhere.
     #[test]
-    fn a_donor_who_already_gave_is_not_rerouted() {
-        let rows = vec![(5, 10, vec![DONOR])];
-        assert_eq!(
-            pick(&rows, DONOR),
-            0,
-            "falls back to the first so the existing 409 explains why"
-        );
+    fn a_donor_who_already_gave_can_give_again() {
+        let rows = vec![(5, 100, vec![DONOR]), (0, 100, vec![])];
+        assert_eq!(pick(&rows, DONOR), 0, "the request they already gave to");
     }
 
     /// THE CONTROL: when nothing is donatable the refusal must still happen. The
