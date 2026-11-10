@@ -714,6 +714,45 @@ pub async fn get_global_shop_for_character(
     }))
 }
 
+/// `POST /…/globalshops/current/lastchance` — the client tells the server a
+/// town-level-up special offer has run out its normal window and entered its
+/// "last chance" window (`PlayerSpecialOfferController.CheckPlayerOffersForLastChance`).
+///
+/// The client keeps the offer's timers in its own save; `UpdateLastChanceResponse`
+/// carries no fields, so the server only has to acknowledge it. Without this route
+/// every boot of a character holding such an offer ended in a burst of 404s and a
+/// communication error before town (#477: a recovered retail save with a June
+/// offer — 65 refusals, the only caller on the box). Retail's corpus holds no
+/// sample of this call, so the body shape is the response class: empty.
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/lastchance"
+)]
+pub async fn update_last_chance(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+) -> Result<Json<Value>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let character_id = path.into_inner();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows = {
+        use crate::schema::characters::dsl::*;
+        characters
+            .filter(id.eq(character_id))
+            .select(CharacterDbEntryServerState::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap()
+    };
+    get_only_single_character_and_check_permission(rows, &session.session)?;
+    Ok(Json(last_chance_ack()))
+}
+
+/// What [`update_last_chance`] answers: `UpdateLastChanceResponse` has no fields.
+fn last_chance_ack() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PurchaseRequest {
@@ -5360,5 +5399,24 @@ mod raised_window_cap_tests {
             Some(("window", 3, 3)),
             "{other}: still 3 per window"
         );
+    }
+}
+
+#[cfg(test)]
+mod last_chance_tests {
+    /// #477: the client POSTs `/globalshops/current/lastchance` for a special offer
+    /// in its last-chance window; a 404 there is a communication error before town.
+    #[test]
+    fn last_chance_route_is_registered_and_answers_an_empty_object() {
+        let main = include_str!("main.rs");
+        assert!(
+            main.contains(".service(global_shop::update_last_chance)"),
+            "the lastchance route must be registered with the app"
+        );
+        let src = include_str!("global_shop.rs");
+        assert!(
+            src.contains("/globalshops/current/lastchance\"\n)]\npub async fn update_last_chance(")
+        );
+        assert_eq!(super::last_chance_ack(), serde_json::json!({}));
     }
 }

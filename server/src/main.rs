@@ -715,6 +715,7 @@ async fn main() -> Result<()> {
                     .service(global_shop::get_global_shop_for_character)
                     .service(global_shop::get_iap)
                     .service(global_shop::purchase_global_shop)
+                    .service(global_shop::update_last_chance)
                     .service(global_gift::get_global_gifts)
                     .service(global_gift::get_global_gift)
                     .service(global_gift::claim_global_gift)
