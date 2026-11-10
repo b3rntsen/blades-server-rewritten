@@ -2022,6 +2022,218 @@ async fn depart_guild(
     Ok(())
 }
 
+// ---- Alt switches ----------------------------------------------------------------
+//
+// An alt switch (or a new alt, or an import of another alt) parks the outgoing
+// alt's guild seat in its character version and deletes the `guild_members` row
+// (admin.rs `ALT_ROW_TABLES`). To everyone else in the guild that alt has LEFT,
+// and the board has to say so.
+//
+// Tracker #439: Sephoris (HauDrauf's second account) started the level-1 alt HD1.
+// The seat was parked and deleted with no LEAVE entry, so New Bladers' board kept
+// Sephoris's chat and donation entries for a user who was neither a member nor
+// recorded as gone. That is a board retail never produced: a member's LEAVE is
+// always newer than anything they posted, so it is always in the window with
+// it. The guild screen of every member stalled after the first load. The seat
+// is also handed on when the outgoing alt was the Grand Master (#410 found a
+// guild left with none), and a returning alt posts the JOIN a join would.
+
+/// A guild seat held by the alt on the live row.
+#[derive(QueryableByName, Clone, Debug, PartialEq)]
+pub(crate) struct AltGuildSeat {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub(crate) guild_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub(crate) rank: String,
+}
+
+/// The seats the live alt holds, matched the way the park and the delete match
+/// them (`character_id` or `user_id`, see `AltRowKey::CharacterOrUser`).
+pub(crate) async fn alt_guild_seats(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<AltGuildSeat>, diesel::result::Error> {
+    diesel::sql_query(
+        "SELECT guild_id, rank FROM guild_members WHERE character_id = $1 OR user_id = $2",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .load(conn)
+    .await
+}
+
+async fn insert_board_entry(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    uid: Uuid,
+    cid: Uuid,
+    message_type: &str,
+    data: Value,
+    ts: i64,
+) -> Result<(), diesel::result::Error> {
+    use crate::schema::guild_messages;
+    diesel::insert_into(guild_messages::table)
+        .values(&GuildMessageRow {
+            message_id: format!("{}::{}", ts, Uuid::new_v4()),
+            guild_id: gid.to_string(),
+            user_id: uid,
+            character_id: cid,
+            message_type: message_type.to_string(),
+            type_specific_data: JsonDbWrapper(data),
+            creation_time: ts,
+        })
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+#[derive(QueryableByName)]
+struct RemainingMember {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    stored_user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    rank: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    join_date: i64,
+}
+
+/// After the alt's seats were removed: post a LEAVE in each guild that still
+/// exists, and hand a Grand Master's guild to its successor exactly as a leave
+/// does (`remove_member_and_succeed`). A guild the alt was the last member of is
+/// NOT torn down, unlike a leave: the alt did not choose to go, and the guild is
+/// what it comes back to when the player switches to it again.
+pub(crate) async fn record_alt_departures(
+    conn: &mut AsyncPgConnection,
+    seats: &[AltGuildSeat],
+    user_id: Uuid,
+    character_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    let ts = now_secs();
+    for seat in seats {
+        if load_guild_row(conn, &seat.guild_id).await?.is_none() {
+            continue;
+        }
+        insert_board_entry(
+            conn,
+            &seat.guild_id,
+            user_id,
+            character_id,
+            "LEAVE",
+            json!({}),
+            ts,
+        )
+        .await?;
+        if GuildRank::from_wire(&seat.rank) != Some(GuildRank::Grandmaster) {
+            continue;
+        }
+        let remaining: Vec<RemainingMember> = diesel::sql_query(
+            "SELECT gm.user_id AS stored_user_id,
+                    COALESCE(c.user_id, gm.user_id) AS user_id,
+                    gm.rank, gm.join_date
+               FROM guild_members gm
+               LEFT JOIN characters c ON c.id = gm.character_id
+              WHERE gm.guild_id = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(&seat.guild_id)
+        .load(conn)
+        .await?;
+        if remaining
+            .iter()
+            .any(|m| m.rank == GuildRank::Grandmaster.as_wire())
+        {
+            continue;
+        }
+        let handles: Vec<(Uuid, GuildRank, i64)> = remaining
+            .iter()
+            .filter_map(|m| GuildRank::from_wire(&m.rank).map(|r| (m.user_id, r, m.join_date)))
+            .collect();
+        let Some(heir) = successor(&handles) else {
+            continue;
+        };
+        let heir_stored = remaining
+            .iter()
+            .find(|m| m.user_id == heir)
+            .map(|m| m.stored_user_id)
+            .unwrap_or(heir);
+        {
+            use crate::schema::guild_members::dsl as gm;
+            diesel::update(
+                gm::guild_members
+                    .filter(gm::guild_id.eq(&seat.guild_id))
+                    .filter(gm::user_id.eq(heir_stored)),
+            )
+            .set(gm::rank.eq(GuildRank::Grandmaster.as_wire()))
+            .execute(conn)
+            .await?;
+        }
+        {
+            use crate::schema::guilds::dsl as g;
+            diesel::update(g::guilds.filter(g::id.eq(&seat.guild_id)))
+                .set(g::grandmaster_since.eq(ts))
+                .execute(conn)
+                .await?;
+        }
+        insert_board_entry(
+            conn,
+            &seat.guild_id,
+            user_id,
+            character_id,
+            "PROMOTE",
+            json!({
+                "type": "PROMOTE",
+                "promotedUserId": heir,
+                "guildRank": GuildRank::Grandmaster.as_wire(),
+            }),
+            ts,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// After an alt's parked seats were written back: post the JOIN a join posts in
+/// every guild it holds now and did not hold before.
+pub(crate) async fn record_alt_returns(
+    conn: &mut AsyncPgConnection,
+    before: &[AltGuildSeat],
+    user_id: Uuid,
+    character_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    let ts = now_secs();
+    for seat in alt_guild_seats(conn, character_id, user_id).await? {
+        if before.iter().any(|b| b.guild_id == seat.guild_id) {
+            continue;
+        }
+        insert_board_entry(
+            conn,
+            &seat.guild_id,
+            user_id,
+            character_id,
+            "JOIN",
+            json!({}),
+            ts,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn load_guild_row(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+) -> Result<Option<String>, diesel::result::Error> {
+    use crate::schema::guilds::dsl as g;
+    g::guilds
+        .filter(g::id.eq(gid))
+        .select(g::id)
+        .first::<String>(conn)
+        .await
+        .optional()
+}
+
 /// Shared body of kick and ban: authorise the actor against the target's rank,
 /// remove them, post the board entry, and arm the removal record.
 async fn remove_other_member(
