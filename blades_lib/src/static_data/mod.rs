@@ -251,7 +251,8 @@ impl EnchantingData {
     }
 
     /// The count odds an enchant roll uses: the item's arcane tier's when the catalog
-    /// has one (tier 1 = exactly one, tier 2 = exactly two), else
+    /// has one (APK: tier 1 = exactly one, tier 2 = exactly two; the tuning's
+    /// `arcaneTierCountOdds` replaces a tier's odds, tracker #485), else
     /// [`Self::count_odds_for`] the item's table.
     pub fn roll_count_odds<'a>(
         &'a self,
@@ -259,7 +260,12 @@ impl EnchantingData {
         arcane_tier: Option<u64>,
     ) -> &'a [f64] {
         arcane_tier
-            .and_then(|t| self.arcane_tier_count_odds.get(&t))
+            .and_then(|t| {
+                self.tuning
+                    .arcane_tier_count_odds
+                    .get(&t)
+                    .or_else(|| self.arcane_tier_count_odds.get(&t))
+            })
             .map_or_else(|| self.count_odds_for(table), Vec::as_slice)
     }
 
@@ -288,6 +294,10 @@ pub struct EnchantTuning {
     pub secondary_count_odds: Vec<CountOddsRule>,
     /// The double-Ravage (Magicka + Stamina) pity timer on weapon enchants.
     pub double_ravage_pity: DoubleRavagePity,
+    /// P(0), P(1), P(2) secondaries per arcane tier, replacing the APK's
+    /// `ArcaneTier._oddsOfAdditionalEnchantment` for the tiers it names (tracker #485:
+    /// an Arcane I item may roll a second secondary). Empty = the APK's fixed counts.
+    pub arcane_tier_count_odds: HashMap<u64, Vec<f64>>,
 }
 
 /// One `secondaryCountOdds` rule: which secondary tables it covers and their odds.
@@ -323,13 +333,15 @@ impl CountOddsRule {
 
 /// Owner decision d17 (tracker #415): after `tries[class]` weapon enchants of one odds
 /// class without both Ravage Magicka and Ravage Stamina, the next one in that class is
-/// given both. Not retail; `enabled: false` turns it off.
+/// given both. Shields count the same way under `shield:<class>` keys with the shield
+/// Ravage pair (tracker #463). Not retail; `enabled: false` turns it off.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DoubleRavagePity {
     pub enabled: bool,
     /// Misses allowed per odds class ([`EnchantingData::odds_class`]) before the pair
-    /// is forced. A class that is absent, or set to 0, is never forced.
+    /// is forced: bare class names for weapons, `shield:<class>` for shields. A class
+    /// that is absent, or set to 0, is never forced.
     pub tries: BTreeMap<String, u32>,
 }
 
@@ -1438,10 +1450,10 @@ impl EventQuestTemplate {
     /// From [`EVENT_TOP_BAND_FROM_LEVEL`] on it is always the top band, whatever
     /// threshold the data carries for it. `None` for a template without bands.
     ///
-    /// `level` is the level the character is PAID as
-    /// ([`crate::features::loot_level::effective_loot_level`], #398).
+    /// `level` is the level the character's fixed rewards are PAID as
+    /// ([`crate::features::loot_level::effective_event_reward_level`], #398, #432).
     pub fn band_for_level(&self, level: i64) -> Option<&EventLevelBand> {
-        let level = crate::features::loot_level::effective_loot_level(level);
+        let level = crate::features::loot_level::effective_event_reward_level(level);
         let bands = || self.level_bands.iter().filter(|b| !b.rewards.is_empty());
         let reached = if level >= EVENT_TOP_BAND_FROM_LEVEL {
             i64::MAX
@@ -1458,9 +1470,11 @@ impl EventQuestTemplate {
     /// band's ladder, with each crafting material at `level`'s own step (#362).
     /// From level 49 that is the level-100 character's ladder and step (#398), its
     /// soul gems Grand at 49-60
-    /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
+    /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]). Fixed rewards
+    /// keep 49 when every other source moved to 45 (#432,
+    /// [`crate::features::loot_level::EVENT_FIXED_REWARDS_TOP_FROM_LEVEL`]).
     fn retail_rewards_for_level(&self, real_level: i64) -> Vec<crate::economy::RewardGrant> {
-        let level = crate::features::loot_level::effective_loot_level(real_level);
+        let level = crate::features::loot_level::effective_event_reward_level(real_level);
         let mut out = self
             .band_for_level(level)
             .map_or_else(|| self.rewards.clone(), |b| b.rewards.clone());
@@ -1475,12 +1489,13 @@ impl EventQuestTemplate {
     /// The `finalReward` an instance minted for a character of `level` carries, its
     /// material at `level`'s own step like the milestones'. From level 49 that is
     /// the level-100 character's (#398), its soul gems Grand at 49-60
-    /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]).
+    /// ([`crate::features::loot_level::EVENT_GRAND_SOUL_GEM_LEVELS`]). Like the
+    /// milestones it keeps 49 (#432).
     fn retail_final_reward_for_level(
         &self,
         real_level: i64,
     ) -> Option<crate::economy::RewardGrant> {
-        let level = crate::features::loot_level::effective_loot_level(real_level);
+        let level = crate::features::loot_level::effective_event_reward_level(real_level);
         let mut out = match self.band_for_level(level) {
             Some(b) => b.final_reward.clone(),
             None => self.final_reward.clone(),

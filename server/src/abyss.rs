@@ -5451,6 +5451,25 @@ mod tests {
         })
     }
 
+    /// The runs with the count of every stack #438 resizes zeroed (HauDrauf, levels
+    /// 45-100: effect ingredients 30, tempering 1, dragon 1-7), rungs and `/end`, for
+    /// a character of `level`. Which items are paid still counts. A no-op below 45.
+    fn blind_438(runs: &[Payout], level: u32) -> Vec<Payout> {
+        let mut runs = runs.to_vec();
+        for (rungs, end) in &mut runs {
+            for g in rungs.iter_mut().map(|(_, g)| g).chain(std::iter::once(end)) {
+                for (id, q) in g.stackable_items.iter_mut() {
+                    // HauDrauf's 45, literally, so the digest printed with #438
+                    // switched off blinds the same stacks.
+                    if level >= 45 && blades_lib::features::high_level_materials::names(id) {
+                        *q = 0;
+                    }
+                }
+            }
+        }
+        runs
+    }
+
     /// The runs with every rung past 650 taken out — what a run paid before #424
     /// continued the ladder, so a digest pinned before it still holds.
     fn without_rungs_past_650(runs: &[Payout]) -> Vec<Payout> {
@@ -5489,8 +5508,22 @@ mod tests {
                 "#471's schedule"
             );
         }
-        assert_eq!(payout_digest(&runs), LEVEL_100_FROM_149_DIGEST);
+        // #438 resizes the effect-ingredient, tempering and dragon stacks from 45
+        // (sizes pinned in report_438); everything else pays as before it.
+        assert_eq!(
+            payout_digest(&blind_438(&runs, 100)),
+            LEVEL_100_FROM_149_DIGEST_438_BLIND
+        );
+        assert_ne!(
+            payout_digest(&runs),
+            LEVEL_100_FROM_149_DIGEST,
+            "the run pays what it paid before #438"
+        );
     }
+    /// [`LEVEL_100_FROM_149_DIGEST`] blind to #438 ([`blind_438`]), printed by
+    /// [`print_438_blind_digests`] with #438 switched off (`FROM_LEVEL` 101) and the
+    /// same with it on. The full digest moves with #438.
+    const LEVEL_100_FROM_149_DIGEST_438_BLIND: u64 = 0x80a7_e7ea_daac_d29d;
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// `/end` materials are 20; everything else is pinned unchanged by
     /// [`abyss_runs_move_only_what_388_moves`].
@@ -5529,31 +5562,26 @@ mod tests {
     /// everything else is pinned unchanged by [`abyss_runs_move_only_what_407_moves`].
     const LEVEL_7_FROM_1_DIGEST: u64 = 0x9e72_4b46_4b92_47e7;
 
-    /// Sephoris, level 45, from floor 149: below 49, so unchanged — rung 70 is still
-    /// the level 34-40 captures' Nightshade, Chaurus Chitin, Quicksilver or Malachite,
-    /// never Giant's Toe. That is what he saw; #383 moves the band from 49, not 45.
+    /// Sephoris, level 45, from floor 149. Until #432 he was below #383's 49, so rung
+    /// 70 was the level 34-40 captures' Nightshade, Chaurus Chitin, Quicksilver or
+    /// Malachite and his run was pinned to a digest (0x3275_357d_1f5a_769c). HauDrauf
+    /// (#432, 2026-10-26): "No more differences between levels 45 and 100", so a
+    /// level-45 run now draws the top band — Giant's Toe at rung 70, never
+    /// Quicksilver — and pays what a level-100 run pays
+    /// ([`a_level_45_to_99_run_from_floor_149_pays_what_level_100_pays`]).
     #[test]
-    fn a_level_45_run_from_floor_149_is_unchanged_by_383() {
-        let runs = payouts(45, 149, 4, DEEP_FLOOR_KILLS);
-        let mid = [
-            NIGHTSHADE,
-            CHAURUS_CHITIN,
-            QUICKSILVER_INGOT,
-            MALACHITE_INGOT,
-        ]
-        .map(|u| Uuid::parse_str(u).unwrap());
-        for run in &runs {
+    fn a_level_45_run_from_floor_149_draws_the_top_band_since_432() {
+        const GIANTS_TOE: &str = "a4d5e792-5a27-4bb3-851f-e0917c0962db";
+        let giants_toe = Uuid::parse_str(GIANTS_TOE).unwrap();
+        let quicksilver = Uuid::parse_str(QUICKSILVER_INGOT).unwrap();
+        let mut toes = 0;
+        for run in &payouts(45, 149, 4, DEEP_FLOOR_KILLS) {
             let seventy = template_of(rung_draw(run, 70).expect("reaches rung 70")).unwrap();
-            assert!(mid.contains(&seventy), "level 45 rung 70 drew {seventy}");
+            assert_ne!(seventy, quicksilver, "level 45 rung 70 drew Quicksilver");
+            toes += usize::from(seventy == giants_toe);
         }
-        assert_eq!(payout_digest(&runs), LEVEL_45_FROM_149_DIGEST);
+        assert!(toes >= 8, "Giant's Toe on only {toes}/64 level-45 rung 70s");
     }
-    /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
-    /// soul gems are the three best and its `/end` materials 20. Everything else
-    /// is pinned unchanged by [`abyss_runs_move_only_what_388_moves`].
-    /// Re-pinned by #407 (HauDrauf, 2026-10-17): its `/end` soul gems are 3 to 7;
-    /// everything else is pinned unchanged by [`abyss_runs_move_only_what_407_moves`].
-    const LEVEL_45_FROM_149_DIGEST: u64 = 0x3275_357d_1f5a_769c;
 
     /// [`payout_digest`] blind to what #388 (owner-approved deviation from retail,
     /// 2026-10-16) moves in a run: every soul gem taken out (the three best at
@@ -5571,22 +5599,26 @@ mod tests {
         payout_digest(&runs)
     }
 
-    /// #388, the three mandatory runs: level 7 from floor 1, and levels 45 and 100
-    /// from floor 149 pay everything exactly as before #388 but for its two Abyss
-    /// changes (the blind digests were taken on the commit before them); every
-    /// `/end` material is 20, and at 45 every soul gem is one of the three best.
+    /// #388, the mandatory runs: level 7 from floor 1 and level 100 from floor 149
+    /// pay everything exactly as before #388 but for its two Abyss changes (the
+    /// blind digests were taken on the commit before them); every `/end` material is
+    /// 20. The level-45 run (0xd5bd_df6a_7c49_1cb9, every soul gem one of the three
+    /// best) left this test with #432: it now pays level 100's.
     #[test]
     fn abyss_runs_move_only_what_388_moves() {
         use blades_lib::features::beginner_economy::{
             ABYSS_END_MATERIAL_STACK, is_crafting_material,
         };
-        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
         for (level, start, count, kills, blind) in [
             (7u32, 1u32, 30usize, MIXED_KILLS, 0x70de_e0c6_4225_b2ac_u64),
-            (45, 149, 4, DEEP_FLOOR_KILLS, 0xd5bd_df6a_7c49_1cb9),
-            (100, 149, 4, DEEP_FLOOR_KILLS, 0xb599_e98b_9612_3a1a),
+            // Blind to #438 too ([`blind_438`]; 0xb599_e98b_9612_3a1a before it),
+            // printed with #438 switched off and the same with it on.
+            (100, 149, 4, DEEP_FLOOR_KILLS, 0x71a3_ec71_327a_11cd),
         ] {
-            let runs = without_rungs_past_650(&payouts(level, start, count, kills));
+            let runs = blind_438(
+                &without_rungs_past_650(&payouts(level, start, count, kills)),
+                level,
+            );
             assert_eq!(
                 payout_digest_388_blind(&runs),
                 blind,
@@ -5595,11 +5627,14 @@ mod tests {
             let mut end_materials = 0;
             for (_, end) in &runs {
                 for (id, q) in &end.stackable_items {
+                    // #438's stacks are HauDrauf's sizes from 45 (report_438).
                     if is_crafting_material(id) {
-                        assert_eq!(
-                            *q, ABYSS_END_MATERIAL_STACK,
-                            "level {level}: /end paid {q} of {id}"
-                        );
+                        if !is_438(id, level) {
+                            assert_eq!(
+                                *q, ABYSS_END_MATERIAL_STACK,
+                                "level {level}: /end paid {q} of {id}"
+                            );
+                        }
                         end_materials += 1;
                     }
                 }
@@ -5609,19 +5644,6 @@ mod tests {
                 "level {level}: no /end material in {} runs",
                 runs.len()
             );
-            if level == 45 {
-                let paid: Vec<Uuid> = runs
-                    .iter()
-                    .flat_map(|(rungs, end)| rungs.iter().map(|(_, g)| g).chain([end]))
-                    .flat_map(|g| g.stackable_items.keys().copied())
-                    .filter(|id| soul_gems.contains(id))
-                    .collect();
-                assert!(!paid.is_empty(), "the runs pay soul gems");
-                assert!(
-                    paid.iter().all(|id| soul_gems[7..].contains(id)),
-                    "{paid:?}"
-                );
-            }
         }
     }
 
@@ -5641,19 +5663,24 @@ mod tests {
         payout_digest(&runs)
     }
 
-    /// #407 (HauDrauf, 2026-10-17), the three mandatory runs: level 7 from floor 1,
-    /// and levels 45 and 100 from floor 149 pay everything exactly as before but for
-    /// the `/end` soul-gem count (the blind digests were taken on the commit before
-    /// it), and every `/end` soul-gem stack is 3 to 7.
+    /// #407 (HauDrauf, 2026-10-17), the mandatory runs: level 7 from floor 1 and
+    /// level 100 from floor 149 pay everything exactly as before but for the `/end`
+    /// soul-gem count (the blind digests were taken on the commit before it), and
+    /// every `/end` soul-gem stack is 3 to 7. The level-45 run (0x74c9_d235_fd2a_9a71)
+    /// left this test with #432: it now pays level 100's.
     #[test]
     fn abyss_runs_move_only_what_407_moves() {
         let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
         for (level, start, count, kills, blind) in [
             (7u32, 1u32, 30usize, MIXED_KILLS, 0x2f20_6b6d_cfe3_5242_u64),
-            (45, 149, 4, DEEP_FLOOR_KILLS, 0x74c9_d235_fd2a_9a71),
-            (100, 149, 4, DEEP_FLOOR_KILLS, 0xbf70_0091_a7e2_266a),
+            // Blind to #438 too ([`blind_438`]; 0xbf70_0091_a7e2_266a before it),
+            // printed with #438 switched off and the same with it on.
+            (100, 149, 4, DEEP_FLOOR_KILLS, 0xe81a_df8a_9663_3b25),
         ] {
-            let runs = without_rungs_past_650(&payouts(level, start, count, kills));
+            let runs = blind_438(
+                &without_rungs_past_650(&payouts(level, start, count, kills)),
+                level,
+            );
             assert_eq!(
                 payout_digest_407_blind(&runs),
                 blind,
@@ -5670,6 +5697,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Prints the #438-blind digests of the level-100 run from floor 149
+    /// (`--ignored --nocapture`). Pinned with #438 switched off
+    /// (`high_level_materials::FROM_LEVEL` 101, `NO_LOW_TIER_POTIONS_FROM_LOOT_LEVEL`
+    /// `i64::MAX`), and the same with it on.
+    #[test]
+    #[ignore]
+    fn print_438_blind_digests() {
+        let all = blind_438(&payouts(100, 149, 4, DEEP_FLOOR_KILLS), 100);
+        let runs = without_rungs_past_650(&all);
+        println!("full {:#x}", payout_digest(&all));
+        println!("388 {:#x}", payout_digest_388_blind(&runs));
+        println!("407 {:#x}", payout_digest_407_blind(&runs));
     }
 
     /// Prints the #407-blind digests (`--ignored --nocapture`), to pin them on the
@@ -5737,11 +5778,13 @@ mod tests {
     /// for the same seed and kills — every rung (chests at level 100) and `/end` —
     /// except rungs 190 and 490, where a level 49-59 character keeps #371's extra
     /// Grand Soul Gem result on top of level 100's pool. Run from floor 149, where
-    /// both stand at difficulty 100. Levels 7, 45 and 100 keep their digests above.
+    /// both stand at difficulty 100. Levels 7 and 100 keep their digests above.
+    /// #432 (HauDrauf, 2026-10-26) moved it to 45: 45, 46 and 48 are checked too,
+    /// with #371's extra Grand at 190/490 as at 49-59.
     #[test]
-    fn a_level_49_run_from_floor_149_pays_what_level_100_pays() {
+    fn a_level_45_to_99_run_from_floor_149_pays_what_level_100_pays() {
         let at_100 = payouts(100, 149, 4, DEEP_FLOOR_KILLS);
-        for level in [49u32, 60, 80] {
+        for level in [45u32, 46, 48, 49, 60, 80] {
             let at = payouts(level, 149, 4, DEEP_FLOOR_KILLS);
             for (run, run_100) in at.iter().zip(&at_100) {
                 assert_eq!(run.1, run_100.1, "/end at level {level}");
@@ -6079,6 +6122,18 @@ mod tests {
             .collect()
     }
 
+    /// Whether `id` is a stack #438 resizes for a character of `level` (HauDrauf:
+    /// effect ingredients 30, tempering 1, dragon 1-7, from 45).
+    fn is_438(id: &Uuid, level: u32) -> bool {
+        blades_lib::features::high_level_materials::applies(i64::from(level))
+            && blades_lib::features::high_level_materials::names(id)
+    }
+
+    /// `stacks` without what [`is_438`] names.
+    fn without_438(stacks: &mut HashMap<Uuid, u64>, level: u32) {
+        stacks.retain(|id, _| !is_438(id, level));
+    }
+
     /// What one Abyss run's corpses dropped, with and without the #383 bonus.
     struct BonusTally {
         corpses: usize,
@@ -6132,9 +6187,15 @@ mod tests {
                     for (spawner, enemies) in spawners.iter().enumerate() {
                         for (index, enemy) in enemies.iter().enumerate() {
                             t.corpses += 1;
-                            let was = before.enemy_generated_data[group][spawner][index]
+                            let mut was = before.enemy_generated_data[group][spawner][index]
                                 .merged_loot_table();
-                            let now = enemy.merged_loot_table();
+                            let full = enemy.merged_loot_table();
+                            let mut now = full.clone();
+                            // From 45 the stacks #438 resizes (HauDrauf: effect
+                            // ingredients 30, tempering 1, dragon 1-7) are checked in
+                            // report_438, not here.
+                            without_438(&mut was.stackable_items, level);
+                            without_438(&mut now.stackable_items, level);
                             // The retail loot is untouched: same gold, same gear.
                             assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
                             let gear = |l: &blades_lib::user_data::LootTableResult| {
@@ -6152,7 +6213,7 @@ mod tests {
                                 );
                             }
                             t.with_material += usize::from(
-                                now.stackable_items.keys().any(|id| materials.contains(id)),
+                                full.stackable_items.keys().any(|id| materials.contains(id)),
                             );
                             // The bonus is exactly what the pure draw says, and nothing else.
                             let mut added: Vec<(Uuid, u64)> = now
@@ -6181,7 +6242,11 @@ mod tests {
                                 index,
                                 i64::from(level),
                             );
-                            assert_eq!(added, paid.into_iter().collect::<Vec<_>>(), "L{level}");
+                            let paid: Vec<(Uuid, u64)> = paid
+                                .into_iter()
+                                .filter(|(id, _)| !is_438(id, level))
+                                .collect();
+                            assert_eq!(added, paid, "L{level}");
                             let Some((item, qty)) = drawn else { continue };
                             assert!(
                                 materials.contains(&item),
@@ -6193,8 +6258,13 @@ mod tests {
                             let is_enchanting = ENCHANTING_INGREDIENTS.contains(&item.as_u128());
                             t.enchanting += usize::from(is_enchanting);
                             t.town += usize::from(TOWN_MATERIALS.contains(&item.as_u128()));
+                            // Banded to the level the character is paid as: 100 from
+                            // 45 (#432; 49 under #398).
+                            let paid_as = blades_lib::features::loot_level::effective_loot_level(
+                                i64::from(level),
+                            );
                             assert!(
-                                abyss_bonus_candidates(i64::from(level), is_enchanting)
+                                abyss_bonus_candidates(paid_as, is_enchanting)
                                     .iter()
                                     .any(|c| c.0 == item && c.1 == qty),
                                 "L{level}: {} x{qty} is not in the level's retail band",
@@ -6218,8 +6288,8 @@ mod tests {
 
     /// The Abyss rule's runs: a level-7 run from floor 1, a level-20 run from floor
     /// 15 (#381 found level 20 lent level-3/7 rewards), a level-43 run from floor 40,
-    /// HauDrauf's level-45 Sephoris on floor 149, and a level-100 run from floor 149
-    /// (the floors [`level_100_run_from_149`] serves).
+    /// HauDrauf's level-45 Sephoris on floor 149 (paid as 100 since #432), and a
+    /// level-100 run from floor 149 (the floors [`level_100_run_from_149`] serves).
     const BONUS_RUNS: [(u32, u32); 5] = [(7, 1), (20, 15), (43, 40), (45, 149), (100, 149)];
 
     /// Report #383 (owner-approved deviation from retail, 2026-10-13): on top of
@@ -6318,7 +6388,11 @@ mod tests {
         };
         let odds = |s: f64| s / (1.0 - s);
         for (level, start) in BONUS_RUNS {
-            let candidates = abyss_bonus_candidates(i64::from(level), false);
+            // The band the character is paid as: 100 from 45 (#432).
+            let candidates = abyss_bonus_candidates(
+                blades_lib::features::loot_level::effective_loot_level(i64::from(level)),
+                false,
+            );
             let town_share =
                 |weight: &dyn Fn(&blades_lib::util::dungeon::BonusCandidate) -> f64| {
                     let all: f64 = candidates.iter().map(weight).sum();
@@ -6497,6 +6571,9 @@ mod tests {
         ]));
         let grants = collect_enemy_loot(&gd, &mut run, &actions);
         assert_eq!(grants.len(), 1);
+        // A stack #438 resizes at level 100 (HauDrauf: effect ingredients 30,
+        // tempering 1, dragon 1-7) is paid at that size, not the draw's.
+        let qty = if is_438(&item, 100) { 1 } else { qty };
         assert!(
             grants[0]
                 .stackable_items
@@ -6548,9 +6625,13 @@ mod tests {
                         for (spawner, enemies) in spawners.iter().enumerate() {
                             for (index, enemy) in enemies.iter().enumerate() {
                                 corpses += 1;
-                                let was = before.enemy_generated_data[group][spawner][index]
+                                let mut was = before.enemy_generated_data[group][spawner][index]
                                     .merged_loot_table();
                                 let mut now = enemy.merged_loot_table();
+                                // From 45 the stacks #438 resizes are checked in
+                                // report_438, not here.
+                                without_438(&mut was.stackable_items, level);
+                                without_438(&mut now.stackable_items, level);
                                 assert_eq!(now.currencies, was.currencies, "L{level}: gold moved");
                                 let gear = |l: &blades_lib::user_data::LootTableResult| {
                                     let mut ids: Vec<Uuid> = l.item.0.keys().copied().collect();
@@ -6572,7 +6653,9 @@ mod tests {
                                     i64::from(level),
                                 );
                                 // Retail's stackables are exactly what is left once the bonus is taken off.
-                                if let Some((item, qty)) = drawn {
+                                if let Some((item, qty)) =
+                                    drawn.filter(|(id, _)| !is_438(id, level))
+                                {
                                     let left = now.stackable_items[&item] - qty;
                                     if left == 0 {
                                         now.stackable_items.remove(&item);
@@ -6590,9 +6673,18 @@ mod tests {
                                 }
                                 // Since #388 (owner-approved deviation) a material's
                                 // quantity is 5, 10 or 20, not the band's.
+                                // From 45 it is HauDrauf's 30 (#438).
+                                let sized = if is_438(&item, level) {
+                                    qty == blades_lib::features::high_level_materials::EFFECT_INGREDIENT_STACK
+                                } else {
+                                    blades_lib::features::beginner_economy::MATERIAL_STACK_SIZES
+                                        .contains(&qty)
+                                };
                                 assert!(
-                                    abyss_bonus_candidates(i64::from(level), true).iter().any(|c| c.0 == item)
-                                        && blades_lib::features::beginner_economy::MATERIAL_STACK_SIZES.contains(&qty),
+                                    abyss_bonus_candidates(i64::from(level), true)
+                                        .iter()
+                                        .any(|c| c.0 == item)
+                                        && sized,
                                     "L{level}: {} x{qty} is not one of the level's stack sizes",
                                     name(&item)
                                 );

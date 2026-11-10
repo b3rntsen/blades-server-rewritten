@@ -249,6 +249,114 @@ fn window_of(e: &Value) -> Option<(i64, i64)> {
     ))
 }
 
+/// Every replayed shop window lasts at most 24 hours.
+///
+/// NOT RETAIL. Tracker #440 (HauDrauf, 2026-10): "This week the shop has many
+/// things for 7 days that nobody needs. Set everything to 24 hours. Everyone can
+/// still buy everything, and you don't have to wait a week for fitting offers."
+/// Shipped under the owner's standing rule for HauDrauf's reversible common-good
+/// economy requests. To revert, set this to `false`.
+///
+/// Retail scheduled some windows longer than a day: the Monday 16:00 weekly block
+/// (~20 offers, a different set each week), the Saturday 17:00 and 04:00 weekend
+/// blocks (two days), a few two-to-four-day 05:00/16:00 packs, and three ~950-day
+/// evergreen offers. With this on, see [`slice_into_days`]: a long window's days
+/// are dealt round-robin across the retail windows of its kind, so the weekly
+/// section turns over every day at 16:00 like the daily block does, and each
+/// weekly block comes back every 6 days instead of once in 42. Total time on sale
+/// per block is unchanged (7 one-day appearances per 42-day cycle instead of one
+/// 7-day one).
+///
+/// Purchase caps stay retail's per-window allowance: every one-day appearance
+/// counts against the windowed tracking id of a RETAIL window of that offer, not a
+/// fresh id per day. So a per-week cap stays per-week instead of becoming per-day,
+/// and a player can never buy more of an offer per cycle than retail allowed.
+pub(crate) const ONE_DAY_WINDOWS_440: bool = true;
+
+const DAY: i64 = 86_400;
+
+/// One way to serve an offer: the retail window `src` whose prices and tracking
+/// ids it carries (embedded window starts moved by `tid_shift`), on sale over
+/// `[start, end]`.
+struct Candidate<'a> {
+    start: i64,
+    end: i64,
+    src: &'a Value,
+    tid_shift: i64,
+}
+
+/// A dated retail window placed in the replay slice: `s`, `en` are retail's,
+/// `base` the whole-period shift that puts it in the slice.
+#[derive(Clone, Copy)]
+struct Placed<'a> {
+    e: &'a Value,
+    s: i64,
+    en: i64,
+    base: i64,
+}
+
+impl Placed<'_> {
+    fn long(&self) -> bool {
+        self.en - self.s > DAY
+    }
+    /// Days the window spans, rounded up: retail's long windows end on the hour or
+    /// one minute before it (`604_740` is a 7-day window).
+    fn days(&self) -> i64 {
+        (self.en - self.s + DAY - 1).div_euclid(DAY)
+    }
+    /// Which kind of long window this is: its length in days and its start time
+    /// within the week. Retail repeated each kind weekly with different contents.
+    fn kind(&self) -> (i64, i64) {
+        (self.days(), (self.s + self.base).rem_euclid(7 * DAY))
+    }
+}
+
+/// #440: the one-day pieces a long retail window `w` is served as, in slice time.
+///
+/// Every window of one [`Placed::kind`] in the slice (`starts`, sorted) covers
+/// `days` days, so the kind owns `starts.len() * days` day-slots. Slot `j` (in time
+/// order) shows the window at index `j % starts.len()`, so each window keeps exactly
+/// `days` slots, and consecutive days show different windows. With six weekly
+/// windows: day 0 shows week 0's block, day 1 week 1's ... day 6 week 0's again.
+///
+/// Each piece keeps retail's end-of-day convention (a window ending a minute before
+/// the hour gives one-day pieces that do the same, like retail's own 04:00 dailies).
+///
+/// The allowance a piece counts against ([`Candidate::src`]) is the offer's retail
+/// window that covered that moment, if it had one, else the window being shown. So
+/// an offer retail sold every weekend keeps its per-weekend cap, and an offer sold
+/// in one week of six keeps that one week's cap for all seven of its appearances.
+fn slice_into_days<'a>(
+    w: Placed<'a>,
+    starts: &[i64],
+    own_long: &[Placed<'a>],
+) -> Vec<Candidate<'a>> {
+    let n = starts.len() as i64;
+    let days = w.days();
+    let Some(m) = starts.iter().position(|&s| s == w.s + w.base) else {
+        return Vec::new();
+    };
+    let gap = days * DAY - (w.en - w.s);
+    let piece = DAY - if gap <= 60 { gap } else { 0 };
+    (0..n * days)
+        .filter(|j| j % n == m as i64)
+        .map(|j| {
+            let t = starts[(j / days) as usize] + (j % days) * DAY;
+            let key = own_long
+                .iter()
+                .find(|o| o.s + o.base <= t && t < o.en + o.base)
+                .copied()
+                .unwrap_or(w);
+            Candidate {
+                start: t,
+                end: t + piece,
+                src: key.e,
+                tid_shift: key.base,
+            }
+        })
+        .collect()
+}
+
 /// Replay retail's FULL shop calendar so it covers `now`. `None` when there is no
 /// calendar to replay, and the caller falls back to [`shift_to_now`].
 ///
@@ -280,15 +388,20 @@ fn window_of(e: &Value) -> Option<(i64, i64)> {
 /// The client's catalogue holds one entry per offer, so each offer is served with
 /// the window covering `now` if there is one, else its next one, else its last:
 /// the same one-entry-per-offer shape as before, just the right window.
-fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
+///
+/// With `one_day` (tracker #440, [`ONE_DAY_WINDOWS_440`]) every window longer than
+/// a day is served as one-day pieces instead; see [`slice_into_days`].
+fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Value> {
     let calendar = windows
         .get("globalShopWindows")
         .and_then(Value::as_object)
         .filter(|m| !m.is_empty())?;
     let cycle = (now - CALENDAR_START).div_euclid(REPLAY_PERIOD);
     let fold = |start: i64| -(start - CALENDAR_START).div_euclid(REPLAY_PERIOD) * REPLAY_PERIOD;
+    let is_dated = |s: i64, en: i64| en - s < MAX_DATED_WINDOW;
 
-    let mut out = serde_json::Map::new();
+    // (offer id, its windows placed once in the slice, its evergreen windows).
+    let mut offers: Vec<(&String, Vec<Placed>, Vec<(&Value, i64, i64)>)> = Vec::new();
     for (id, list) in calendar {
         if Uuid::parse_str(id).is_err() {
             continue;
@@ -299,56 +412,133 @@ fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
             .flatten()
             .filter_map(|e| window_of(e).map(|(s, en)| (e, s, en)))
             .collect();
-        let is_dated = |s: i64, en: i64| en - s < MAX_DATED_WINDOW;
 
-        // (window, base shift) pairs that place the offer inside the slice once.
-        let mut placed: Vec<(&Value, i64, i64, i64)> = dated
+        // Windows that place the offer inside the slice once.
+        let mut placed: Vec<Placed> = dated
             .iter()
             .filter(|&&(_, s, en)| is_dated(s, en) && (CALENDAR_START..CALENDAR_END).contains(&s))
-            .map(|&(e, s, en)| (e, s, en, 0))
+            .map(|&(e, s, en)| Placed { e, s, en, base: 0 })
             .collect();
         if placed.is_empty() {
             placed = dated
                 .iter()
                 .filter(|&&(_, s, en)| is_dated(s, en))
-                .map(|&(e, s, en)| (e, s, en, fold(s)))
+                .map(|&(e, s, en)| Placed {
+                    e,
+                    s,
+                    en,
+                    base: fold(s),
+                })
                 .collect();
+        }
+        let evergreen = dated
+            .iter()
+            .copied()
+            .filter(|&(_, s, en)| !is_dated(s, en))
+            .collect();
+        offers.push((id, placed, evergreen));
+    }
+
+    // #440: every kind of long window, and where in the slice its windows start.
+    let mut kinds: HashMap<(i64, i64), Vec<i64>> = HashMap::new();
+    if one_day {
+        for w in offers.iter().flat_map(|o| &o.1).filter(|w| w.long()) {
+            kinds.entry(w.kind()).or_default().push(w.s + w.base);
+        }
+        for starts in kinds.values_mut() {
+            starts.sort_unstable();
+            starts.dedup();
+        }
+    }
+
+    let mut out = serde_json::Map::new();
+    for (id, placed, evergreen) in &offers {
+        // Each way to serve the offer within one cycle of the slice, in slice time.
+        let mut in_slice: Vec<Candidate> = Vec::new();
+        let own_long: Vec<Placed> = placed.iter().copied().filter(Placed::long).collect();
+        for &w in placed {
+            if one_day && w.long() {
+                in_slice.extend(slice_into_days(w, &kinds[&w.kind()], &own_long));
+            } else {
+                in_slice.push(Candidate {
+                    start: w.s + w.base,
+                    end: w.en + w.base,
+                    src: w.e,
+                    tid_shift: w.base,
+                });
+            }
         }
 
         // Candidates: the placed windows in the previous, current and next cycle
         // (the previous one because a window near the slice end runs into the next
         // cycle), plus any evergreen window moved just far enough to cover `now`.
-        let mut candidates: Vec<(i64, i64, &Value, i64)> = Vec::new();
-        for &(e, s, en, base) in &placed {
-            for c in [cycle - 1, cycle, cycle + 1] {
-                let shift = base + c * REPLAY_PERIOD;
-                candidates.push((s + shift, en + shift, e, shift));
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for c in &in_slice {
+            for k in [cycle - 1, cycle, cycle + 1] {
+                let shift = k * REPLAY_PERIOD;
+                candidates.push(Candidate {
+                    start: c.start + shift,
+                    end: c.end + shift,
+                    src: c.src,
+                    tid_shift: c.tid_shift + shift,
+                });
             }
         }
-        for &(e, s, en) in &dated {
-            if !is_dated(s, en) {
-                let periods = (now - en + REPLAY_PERIOD - 1)
-                    .div_euclid(REPLAY_PERIOD)
-                    .max(0);
-                let shift = periods * REPLAY_PERIOD;
-                candidates.push((s + shift, en + shift, e, shift));
+        for &(e, s, en) in evergreen {
+            let periods = (now - en + REPLAY_PERIOD - 1)
+                .div_euclid(REPLAY_PERIOD)
+                .max(0);
+            let shift = periods * REPLAY_PERIOD;
+            let (s, en) = (s + shift, en + shift);
+            if !one_day {
+                candidates.push(Candidate {
+                    start: s,
+                    end: en,
+                    src: e,
+                    tid_shift: shift,
+                });
+                continue;
+            }
+            // #440: the day of it that covers `now`, and the day after. Same
+            // allowance throughout; evergreen offers carry no windowed cap.
+            let today = s + (now - s).div_euclid(DAY).max(0) * DAY;
+            for t in [today, today + DAY].into_iter().filter(|&t| t <= en) {
+                candidates.push(Candidate {
+                    start: t,
+                    end: (t + DAY).min(en),
+                    src: e,
+                    tid_shift: shift,
+                });
             }
         }
 
         let live = candidates
             .iter()
-            .filter(|c| c.0 <= now && now <= c.1)
-            .max_by_key(|c| c.0);
-        let next = || candidates.iter().filter(|c| c.0 > now).min_by_key(|c| c.0);
-        let last = || candidates.iter().max_by_key(|c| c.0);
-        let Some(&(_, _, entry, shift)) = live.or_else(next).or_else(last) else {
+            .filter(|c| c.start <= now && now <= c.end)
+            .max_by_key(|c| c.start);
+        let next = || {
+            candidates
+                .iter()
+                .filter(|c| c.start > now)
+                .min_by_key(|c| c.start)
+        };
+        let last = || candidates.iter().max_by_key(|c| c.start);
+        let Some(c) = live.or_else(next).or_else(last) else {
             continue;
         };
-        let mut e = entry.clone();
-        shift_entry_in_place(&mut e, shift);
-        out.insert(id.clone(), e);
+        let mut e = c.src.clone();
+        shift_entry_in_place(&mut e, c.tid_shift);
+        e["activeStartDate"] = Value::from(c.start);
+        e["activeEndDate"] = Value::from(c.end);
+        out.insert((*id).clone(), e);
     }
     Some(serde_json::json!({ "globalShopOverrides": out }))
+}
+
+/// The replay as [`current_catalog`] runs it.
+#[cfg(test)]
+fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
+    replay_calendar_with(windows, now, ONE_DAY_WINDOWS_440)
 }
 
 /// The catalogue as the client sees it at `now`: retail's calendar replayed (or,
@@ -359,9 +549,22 @@ pub(crate) fn current_catalog(
     static_data: &blades_lib::static_data::StaticData,
     now: i64,
 ) -> Value {
-    let replayed = replay_calendar(&static_data.global_shop_windows, now)
+    catalog_with(static_data, now, ONE_DAY_WINDOWS_440)
+}
+
+/// [`current_catalog`] with the #440 one-day windows on or off; tests read the
+/// retail-shaped replay underneath it with `one_day` false.
+fn catalog_with(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+    one_day: bool,
+) -> Value {
+    let replayed = replay_calendar_with(&static_data.global_shop_windows, now, one_day)
         .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
-    apply_raised_window_caps(apply_authored(replayed, &static_data.global_shop_authored))
+    uncap_sigil_materials(apply_raised_window_caps(apply_authored(
+        replayed,
+        &static_data.global_shop_authored,
+    )))
 }
 
 /// Per-window purchase caps raised above retail's, by product id.
@@ -416,6 +619,80 @@ fn apply_raised_window_caps(mut catalog: Value) -> Value {
             if windowed && lim.get("limit").and_then(Value::as_u64).unwrap_or(0) > 0 {
                 lim["limit"] = Value::from(*cap);
             }
+        }
+    }
+    catalog
+}
+
+/// Sigil-shop MATERIAL offers sold without a purchase limit, by product id.
+///
+/// NOT RETAIL. Tracker #435 (HauDrauf, 2026-10): "Please remove the limit in the
+/// sigil shop for materials — players can decide for themselves what they buy with
+/// their sigils." Shipped under the owner's standing rule for HauDrauf's
+/// reversible common-good economy requests. To revert, empty this list.
+///
+/// Retail capped these per window in every one of their captured windows
+/// (`global_shop_windows.json`): the town materials and effect ingredients at 3,
+/// the copper and marble/bronze packs at 1. The Sigil shop's other materials
+/// (`SigilShop_Smithing_*` ingots, `SigilShop_Jewel_*` gems) and soul gems were
+/// already unlimited in retail's data and are not listed. Gear, jewellery, gold
+/// and the Ultimate offers keep their limits.
+///
+/// Uncapped by serving retail's own unlimited shape: every `maxPurchaseLimits`
+/// entry kept (so the APK's `perUserMaximum` cannot fill in for a missing tracking
+/// id) with `limit` 0, which is how the uncapped soul-gem and ingot offers arrive
+/// and which the client reads as unlimited (prod: one character bought the
+/// all-zero `SigilShop_SoulGem_Grand` 26 times in one window). The purchase
+/// handler reads the same catalogue, so its cap check agrees.
+pub(crate) const UNCAPPED_SIGIL_MATERIAL_OFFERS: &[&str] = &[
+    "396bc276-508f-4c01-a2d5-69b29519c6ce", // SigilShop_EffectIngredients_AllIngredients
+    "0ccaf37b-a829-404f-8b8d-e0de711b4f2c", // SigilShop_EffectIngredients_Deathbell
+    "5d4a230c-43c8-498f-9534-659fe9389476", // SigilShop_EffectIngredients_FireSalts
+    "3cb3c2ee-35e4-43b7-bf1d-03c45d65d9c1", // SigilShop_EffectIngredients_FrostSalts
+    "01b0466e-f11d-4f41-91be-93b5e904b0dd", // SigilShop_EffectIngredients_GlowDust
+    "b77ed0a4-b347-4d20-82d1-75ad32b90dfb", // SigilShop_EffectIngredients_Honeycomb
+    "f7807aca-96fe-4418-8000-372d01410eff", // SigilShop_EffectIngredients_ImpStool
+    "d0414c5f-b76c-457c-ba81-9ec3a74b77cf", // SigilShop_EffectIngredients_VoidSalts
+    "d02875da-c506-4006-aeb8-68b017f0a193", // SigilShop_TownMaterials_Copper_x20
+    "5c9d1ddb-b6fa-4d77-8537-a0b07c5414d1", // SigilShop_TownMaterials_Copper_x40
+    "bf528cf7-3499-48b9-84de-d3fcad55cdaa", // SigilShop_TownMaterials_Copper_x80
+    "802477ea-532a-4d1c-a6ca-0571a17c3b76", // SigilShop_TownMaterials_Copper_x160
+    "a08ecd27-5837-4481-853f-70aa88f02f47", // SigilShop_TownMaterials_Limestone_x25
+    "119bab2e-9b73-4193-a599-d43500e17530", // SigilShop_TownMaterials_Limestone_x50
+    "8fbf3b8a-6516-42a5-8d8d-6451f28e8d27", // SigilShop_TownMaterials_Limestone_x100
+    "92405a05-ac97-4547-90f1-3c963efca6df", // SigilShop_TownMaterials_Limestone_x200
+    "ac5fd3c2-574d-4d6b-9add-42190fd213a4", // SigilShop_TownMaterials_Lumber_x30
+    "81f7927b-48e4-47ee-a1b2-214f1e9ffdee", // SigilShop_TownMaterials_Lumber_x60
+    "7d103d6e-cfff-4f9c-af51-d4885e9a3aa8", // SigilShop_TownMaterials_Lumber_x120
+    "a83bf730-2681-4218-a6f5-63076a709817", // SigilShop_TownMaterials_Lumber_x240
+    "6c7bcf8c-ab89-486c-982f-b90c6cc55a8b", // SigilShop_TownMaterials_MarbleBronze_x50
+];
+
+/// Zero every purchase limit of each [`UNCAPPED_SIGIL_MATERIAL_OFFERS`] product
+/// (#435). The window, prices and tracking ids are left as retail served them.
+fn uncap_sigil_materials(mut catalog: Value) -> Value {
+    let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    else {
+        return catalog;
+    };
+    for product in UNCAPPED_SIGIL_MATERIAL_OFFERS {
+        let Some(entry) = map.get_mut(*product).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if let Some(limits) = entry
+            .get_mut("maxPurchaseLimits")
+            .and_then(Value::as_array_mut)
+        {
+            for lim in limits {
+                if lim.get("limit").is_some() {
+                    lim["limit"] = Value::from(0u64);
+                }
+            }
+        }
+        if entry.contains_key("maxPurchases") {
+            entry.insert("maxPurchases".into(), Value::from(0u64));
         }
     }
     catalog
@@ -1527,7 +1804,7 @@ pub async fn purchase_global_shop(
             // the Golden Chest is a Gold chest, so from 49 it is a level-100
             // treasury Gold chest (#421).
             let reward = {
-                // From level 49 the level-100 buyer's chest (#398); a chest's soul
+                // From level 45 the level-100 buyer's chest (#398, #432); a chest's soul
                 // gems at 45-100 by the owner's rule (#421, #429).
                 blades_lib::features::store_bundles::roll_store_chest(
                     &product_id,
@@ -3553,7 +3830,16 @@ mod report238_calendar_tests {
     /// Live Sigil offers at `now`, and the subset on a one-day window (the block
     /// retail replaced every day at 16:00 UTC).
     fn live_sigil(sd: &StaticData, now: i64) -> (HashSet<String>, HashSet<String>) {
-        let cat = current_catalog(sd, now);
+        live_sigil_in(&current_catalog(sd, now), now)
+    }
+
+    /// [`live_sigil`] on the retail-shaped replay, without the #440 one-day pieces:
+    /// what the tests that hold the replay to retail's own calendar read.
+    fn live_sigil_retail(sd: &StaticData, now: i64) -> (HashSet<String>, HashSet<String>) {
+        live_sigil_in(&catalog_with(sd, now, false), now)
+    }
+
+    fn live_sigil_in(cat: &Value, now: i64) -> (HashSet<String>, HashSet<String>) {
         let mut all = HashSet::new();
         let mut daily = HashSet::new();
         for (id, e) in cat["globalShopOverrides"].as_object().unwrap() {
@@ -3633,11 +3919,14 @@ mod report238_calendar_tests {
 
     /// "Not refreshing daily": consecutive days' daily blocks must be different
     /// offers. Retail's overlap between consecutive days was zero on all 59 pairs.
+    /// Read on the retail-shaped replay: under #440 the weekly and weekend blocks
+    /// are one-day pieces too, and an offer retail sold every weekend is rightly on
+    /// sale on both days of it.
     #[test]
     fn the_daily_block_turns_over_completely() {
         let sd = shipped();
         let days: Vec<_> = evenings(REPLAY_PERIOD_DAYS + 1)
-            .map(|t| live_sigil(&sd, t).1)
+            .map(|t| live_sigil_retail(&sd, t).1)
             .collect();
         for (i, pair) in days.windows(2).enumerate() {
             let same = pair[0].intersection(&pair[1]).count();
@@ -3726,6 +4015,8 @@ mod report238_calendar_tests {
     /// Replaying moves windows, never reshapes them: every served window is a
     /// retail window moved by whole periods, so its length, its time of day and
     /// its weekday are retail's. Its per-occurrence tracking id moves with it.
+    /// (The replay underneath #440; the one-day pieces are held to retail's
+    /// windows by `report440_one_day_windows`.)
     #[test]
     fn served_windows_are_retail_windows_moved_by_whole_periods() {
         let sd = shipped();
@@ -3733,7 +4024,7 @@ mod report238_calendar_tests {
             .as_object()
             .unwrap();
         for t in [REPORTED, REPORTED + 17 * DAY, REPORTED + 900 * DAY] {
-            let cat = current_catalog(&sd, t);
+            let cat = catalog_with(&sd, t, false);
             for (id, e) in cat["globalShopOverrides"].as_object().unwrap() {
                 let (s, en) = window_of(e).unwrap();
                 let matched = calendar[id].as_array().unwrap().iter().find(|w| {
@@ -3765,11 +4056,13 @@ mod report238_calendar_tests {
 
     /// Inside the replayed slice, the client sees exactly what retail showed that
     /// day: the replay is the identity on its own source dates.
+    /// (Without the #440 one-day pieces, which deliberately show a different
+    /// weekly block each day.)
     #[test]
     fn inside_the_slice_retail_dates_are_served_unmoved() {
         let sd = shipped();
         let now = CALENDAR_START + 21 * DAY + 4 * 3_600; // 2026-06-10 20:00 UTC
-        let (served, _) = live_sigil(&sd, now);
+        let (served, _) = live_sigil_retail(&sd, now);
         let retail: HashSet<String> = sd.global_shop_windows["globalShopWindows"]
             .as_object()
             .unwrap()
@@ -3825,8 +4118,11 @@ mod report238_calendar_tests {
         for t in [REPORTED, REPORTED + 40 * DAY] {
             assert_eq!(
                 current_catalog(&sd, t),
-                // #394's raised caps apply on either path.
-                apply_raised_window_caps(shift_to_now(&sd.global_shop_overrides, t)),
+                // #394's raised caps and #435's uncapped materials apply on either path.
+                uncap_sigil_materials(apply_raised_window_caps(shift_to_now(
+                    &sd.global_shop_overrides,
+                    t
+                ))),
             );
         }
     }
@@ -5318,7 +5614,11 @@ mod raised_window_cap_tests {
     #[test]
     fn other_products_are_unchanged() {
         let sd = sd();
-        let raised: HashSet<&str> = RAISED_WINDOW_CAPS.iter().map(|(id, _)| *id).collect();
+        let raised: HashSet<&str> = RAISED_WINDOW_CAPS
+            .iter()
+            .map(|(id, _)| *id)
+            .chain(UNCAPPED_SIGIL_MATERIAL_OFFERS.iter().copied())
+            .collect();
         for now in (BASE..BASE + 7 * 86_400).step_by(6 * 3_600) {
             let got = current_catalog(&sd, now);
             let want = unraised(&sd, now);
@@ -5360,5 +5660,537 @@ mod raised_window_cap_tests {
             Some(("window", 3, 3)),
             "{other}: still 3 per window"
         );
+    }
+}
+
+#[cfg(test)]
+mod report_435_sigil_materials_unlimited {
+    use super::*;
+
+    fn sd() -> blades_lib::static_data::StaticData {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        crate::static_loader::load(&dir)
+    }
+
+    const NOW: i64 = 1_783_000_000 + 400 * 86_400;
+    // Retail capped these at 3 and 1 per window.
+    const LIMESTONE_X50: &str = "119bab2e-9b73-4193-a599-d43500e17530";
+    const COPPER_X160: &str = "802477ea-532a-4d1c-a6ca-0571a17c3b76";
+    const FIRE_SALTS: &str = "5d4a230c-43c8-498f-9534-659fe9389476";
+    // Controls: a Sigil-priced weapon and gold pack, both 1 per window.
+    const EBONY_MACE: &str = "0fb021e6-72fa-4427-bf41-b689a51ce687";
+    const GOLD_20K: &str = "9fe91c76-2cb4-4b83-9306-d7d29cd16b75";
+
+    /// Buy `product` `n` times through the handler's own cap gate and counter;
+    /// returns the purchase number that was refused, if any.
+    fn buy(sd: &blades_lib::static_data::StaticData, product: &str, n: u64) -> Option<u64> {
+        let id = Uuid::parse_str(product).unwrap();
+        let lifetime = lifetime_purchase_cap(sd, id, NOW);
+        let window = window_purchase_cap(sd, id, NOW);
+        let mut state = blades_lib::server_state::ServerState::default();
+        for k in 1..=n {
+            if purchase_cap_reached(&state, id, lifetime, window.as_ref()).is_some() {
+                return Some(k);
+            }
+            record_purchase(
+                &mut state,
+                id,
+                current_product_purchase_tracking_ids(sd, id, NOW),
+            );
+        }
+        None
+    }
+
+    /// THE REPORT. Retail sold Sigil-shop materials 3 (or 1) per window; #435 asks
+    /// for no limit. 50 purchases in one window must all go through.
+    #[test]
+    fn a_material_offer_can_be_bought_past_its_old_window_limit() {
+        let sd = sd();
+        for product in [LIMESTONE_X50, COPPER_X160, FIRE_SALTS] {
+            assert_eq!(buy(&sd, product, 50), None, "{product}: refused before 50");
+        }
+    }
+
+    /// The client keeps its own sold-out check off the served limits, so the
+    /// payload must say unlimited too — in retail's own unlimited shape (every
+    /// limit 0, `maxPurchases` 0), the one its uncapped soul-gem and ingot offers
+    /// carried. Prod shows the client buying such an offer 26 times in a window.
+    #[test]
+    fn a_material_offer_is_served_with_every_limit_zero() {
+        let sd = sd();
+        let catalog = current_catalog(&sd, NOW);
+        for product in [LIMESTONE_X50, COPPER_X160, FIRE_SALTS] {
+            let e = &catalog["globalShopOverrides"][product];
+            let limits = e["maxPurchaseLimits"].as_array().expect("limits kept");
+            assert_eq!(limits.len(), 3, "{product}: every tracking id still named");
+            assert!(
+                limits.iter().all(|l| l["limit"] == 0),
+                "{product}: {limits:?}"
+            );
+            assert_eq!(e["maxPurchases"], 0, "{product}");
+        }
+    }
+
+    /// The list is exactly the Sigil-priced material offers retail capped: every
+    /// `SigilShop_TownMaterials_*` / `SigilShop_EffectIngredients_*` offer, and
+    /// nothing else (no gear, jewellery, gold, soul gems).
+    #[test]
+    fn the_table_is_every_capped_sigil_material_offer() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/global_shop_offer_contents.json"
+        );
+        let offers: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let mut want: Vec<&str> = offers["offers"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(_, o)| {
+                o["editorName"].as_str().is_some_and(|n| {
+                    n.starts_with("SigilShop_TownMaterials_")
+                        || n.starts_with("SigilShop_EffectIngredients_")
+                })
+            })
+            .map(|(id, _)| id.as_str())
+            .collect();
+        want.sort_unstable();
+        let mut got: Vec<&str> = UNCAPPED_SIGIL_MATERIAL_OFFERS.to_vec();
+        got.sort_unstable();
+        assert_eq!(got, want);
+
+        let sd = sd();
+        let retail = replay_calendar(&sd.global_shop_windows, NOW).unwrap();
+        for product in UNCAPPED_SIGIL_MATERIAL_OFFERS {
+            let e = &retail["globalShopOverrides"][*product];
+            assert!(
+                e["prices"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|p| p["currencyId"] == blades_lib::economy::SIGIL.to_string()),
+                "{product}: Sigil-priced"
+            );
+            assert!(
+                e["maxPurchaseLimits"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|l| l["limit"].as_u64().unwrap_or(0) > 0),
+                "{product}: retail capped it, or it has no business in this list"
+            );
+        }
+    }
+
+    /// THE CONTROL: other Sigil offers keep retail's limit.
+    #[test]
+    fn a_non_material_sigil_offer_is_still_limited() {
+        let sd = sd();
+        for product in [EBONY_MACE, GOLD_20K] {
+            assert_eq!(buy(&sd, product, 5), Some(2), "{product}: 1 per window");
+        }
+    }
+}
+
+#[cfg(test)]
+mod report440_one_day_windows {
+    //! Tracker #440: every shop window lasts at most 24 hours, the weekly block
+    //! turns over daily, and purchase caps keep retail's per-window allowance.
+    use super::*;
+    use blades_lib::static_data::StaticData;
+
+    const DAY: i64 = 86_400;
+    /// Ten cycles past the captured slice, at 20:00 UTC (after the 16:00 rotation).
+    const T0: i64 =
+        CALENDAR_START + 10 * REPLAY_PERIOD - CALENDAR_START.rem_euclid(DAY) + 20 * 3_600;
+
+    fn read(name: &str) -> Value {
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap()
+    }
+
+    fn shipped() -> StaticData {
+        StaticData {
+            global_shop_overrides: read("global_shop_overrides.json"),
+            global_shop_windows: read("global_shop_windows.json"),
+            global_shop_authored: serde_json::json!({ "globalShopOverrides": {} }),
+            ..StaticData::default()
+        }
+    }
+
+    fn calendar(sd: &StaticData) -> &serde_json::Map<String, Value> {
+        sd.global_shop_windows["globalShopWindows"]
+            .as_object()
+            .unwrap()
+    }
+
+    fn retail_windows<'a>(sd: &'a StaticData, id: &str) -> Vec<(i64, i64, &'a Value)> {
+        calendar(sd)[id]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|w| window_of(w).map(|(s, en)| (s, en, w)))
+            .collect()
+    }
+
+    fn is_live(e: &Value, now: i64) -> bool {
+        e.get("isActive").and_then(Value::as_bool).unwrap_or(false)
+            && window_of(e).is_some_and(|(s, en)| s <= now && now <= en)
+    }
+
+    /// The windowed tracking id with a non-zero limit: the per-window allowance.
+    fn capped_key(e: &Value) -> Option<String> {
+        e["maxPurchaseLimits"].as_array()?.iter().find_map(|l| {
+            let tid = l["purchaseTrackingId"].as_str()?;
+            let tail = tid.rsplit("::").next()?;
+            let windowed = !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit());
+            (windowed && l["limit"].as_u64().unwrap_or(0) > 0).then(|| tid.to_owned())
+        })
+    }
+
+    /// Offers in retail's Monday 16:00 seven-day block.
+    fn weekly_offers(sd: &StaticData) -> Vec<String> {
+        calendar(sd)
+            .keys()
+            .filter(|id| {
+                retail_windows(sd, id).iter().any(|&(s, en, _)| {
+                    en - s == 7 * DAY
+                        && s.rem_euclid(DAY) == 16 * 3_600
+                        && s.div_euclid(DAY).rem_euclid(7) == 4
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// `catalog` at 20:00 UTC on each of `days` evenings from [`T0`].
+    fn evenings(
+        sd: &StaticData,
+        days: i64,
+        catalog: impl Fn(&StaticData, i64) -> Value,
+    ) -> Vec<(i64, Value)> {
+        (0..days)
+            .map(|d| {
+                let t = T0 + d * DAY;
+                (t, catalog(sd, t))
+            })
+            .collect()
+    }
+
+    fn retail(sd: &StaticData, now: i64) -> Value {
+        catalog_with(sd, now, false)
+    }
+
+    /// No window the server hands out — live or upcoming — lasts more than a day,
+    /// and every one-day piece is shaped like retail's: it starts at a time of day
+    /// retail started that offer, lasts a day (or a day less the minute retail's
+    /// 04:00 windows end early), and its per-window tracking id is one of retail's
+    /// windows of that offer moved by whole periods.
+    #[test]
+    fn no_window_lasts_longer_than_a_day() {
+        let sd = shipped();
+        let long_before = catalog_with(&sd, T0, false)["globalShopOverrides"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|e| window_of(e).is_some_and(|(s, en)| en - s > DAY))
+            .count();
+        assert!(
+            long_before >= 20,
+            "control: retail's replay serves {long_before} long windows"
+        );
+
+        for q in 0..REPLAY_PERIOD_DAYS * 4 {
+            let now = T0 + q * 6 * 3_600;
+            let cat = current_catalog(&sd, now);
+            for (id, e) in cat["globalShopOverrides"].as_object().unwrap() {
+                let (s, en) = window_of(e).unwrap();
+                assert!(s < en && en - s <= DAY, "{id} at {now}: window {s}..{en}");
+                let retail = retail_windows(&sd, id);
+                assert!(
+                    retail
+                        .iter()
+                        .any(|&(rs, _, _)| (s - rs).rem_euclid(DAY) == 0),
+                    "{id} at {now}: starts at a time of day retail never used"
+                );
+                if retail
+                    .iter()
+                    .all(|&(rs, ren, _)| ren - rs < MAX_DATED_WINDOW)
+                {
+                    assert!(en - s >= DAY - 60, "{id} at {now}: piece of {}s", en - s);
+                }
+                if let Some(key) = capped_key(e) {
+                    let (_, ts) = key.rsplit_once("::").unwrap();
+                    let ts: i64 = ts.parse().unwrap();
+                    assert!(
+                        retail
+                            .iter()
+                            .any(|&(rs, _, _)| (ts - rs).rem_euclid(REPLAY_PERIOD) == 0),
+                        "{id} at {now}: allowance {key} is no retail window's"
+                    );
+                }
+            }
+        }
+    }
+
+    /// "You don't have to wait a week for fitting offers": the weekly block turns
+    /// over every evening, every weekly offer is on sale again within six days, and
+    /// every offer retail ever had on a long window still comes round each cycle.
+    #[test]
+    fn every_weekly_offer_is_back_within_six_days() {
+        let sd = shipped();
+        let weekly = weekly_offers(&sd);
+        assert!(weekly.len() >= 80, "{} weekly offers", weekly.len());
+        let longest_absence = |days: &[(i64, Value)], id: &str| -> usize {
+            let mut run = 0;
+            let mut worst = 0;
+            for (t, cat) in days {
+                if is_live(&cat["globalShopOverrides"][id], *t) {
+                    run = 0;
+                } else {
+                    run += 1;
+                    worst = worst.max(run);
+                }
+            }
+            worst
+        };
+
+        // CONTROL: retail's replay keeps a weekly offer away for weeks.
+        let before = evenings(&sd, 2 * REPLAY_PERIOD_DAYS, retail);
+        let worst_before = weekly
+            .iter()
+            .map(|id| longest_absence(&before, id))
+            .max()
+            .unwrap();
+        assert!(
+            worst_before >= 28,
+            "control: longest absence {worst_before} days"
+        );
+
+        let days = evenings(&sd, 2 * REPLAY_PERIOD_DAYS, current_catalog);
+        for id in &weekly {
+            let gone = longest_absence(&days, id);
+            assert!(gone <= 5, "{id} is away {gone} evenings in a row");
+        }
+
+        // Consecutive evenings show different weekly blocks.
+        let live_weekly = |(t, cat): &(i64, Value)| -> HashSet<String> {
+            weekly
+                .iter()
+                .filter(|id| {
+                    let e = &cat["globalShopOverrides"][id.as_str()];
+                    is_live(e, *t)
+                        && e["activeStartDate"].as_i64().unwrap().rem_euclid(DAY) == 16 * 3_600
+                })
+                .cloned()
+                .collect()
+        };
+        for pair in days.windows(2) {
+            let (a, b) = (live_weekly(&pair[0]), live_weekly(&pair[1]));
+            assert!(
+                a.len() >= 15 && b.len() >= 15,
+                "a thin weekly block: {} / {}",
+                a.len(),
+                b.len()
+            );
+            assert_ne!(a, b, "the weekly block did not turn over at {}", pair[1].0);
+        }
+
+        // Every offer that had a long window is on sale at some point of a cycle.
+        let long: Vec<&String> = calendar(&sd)
+            .keys()
+            .filter(|id| {
+                retail_windows(&sd, id).iter().any(|&(s, en, w)| {
+                    en - s > DAY && en - s < MAX_DATED_WINDOW && w["isActive"] == true
+                })
+            })
+            .collect();
+        let hourly: Vec<(i64, Value)> = (0..REPLAY_PERIOD_DAYS * 24)
+            .step_by(3)
+            .map(|h| {
+                let t = T0 + h * 3_600;
+                (t, current_catalog(&sd, t))
+            })
+            .collect();
+        for id in long {
+            assert!(
+                hourly
+                    .iter()
+                    .any(|(t, cat)| is_live(&cat["globalShopOverrides"][id.as_str()], *t)),
+                "{id} never on sale in a cycle"
+            );
+        }
+    }
+
+    /// The cap reading chosen for #440: a one-day piece counts against a RETAIL
+    /// window's allowance, never a fresh one per day. A weekly offer capped at one
+    /// per week, bought on its first day, is sold out when it comes back six days
+    /// later — it is the same retail week's allowance — and fresh again next cycle
+    /// (each six-week cycle of the rotation gets retail's allowances anew, as the
+    /// replay always did).
+    /// An offer retail sold every weekend keeps one allowance per weekend: Sunday's
+    /// piece shares Saturday's, the next weekend's is new.
+    #[test]
+    fn caps_stay_per_retail_window() {
+        let sd = shipped();
+        // From the Monday 16:00 that starts a cycle of the weekly rotation (the
+        // first weekly window in the slice), so the first six weeks are one cycle.
+        let days: Vec<(i64, Value)> = (0..2 * REPLAY_PERIOD_DAYS)
+            .map(|d| {
+                let t = T0 + 5 * DAY + d * DAY;
+                (t, current_catalog(&sd, t))
+            })
+            .collect();
+
+        // Weekly offers capped at one per window, sold in one retail week only.
+        let singles: Vec<String> = weekly_offers(&sd)
+            .into_iter()
+            .filter(|id| {
+                let w = retail_windows(&sd, id);
+                w.iter()
+                    .filter(|&&(s, _, _)| (CALENDAR_START..CALENDAR_END).contains(&s))
+                    .count()
+                    == 1
+                    && w.iter().all(|&(s, en, e)| {
+                        en - s == 7 * DAY
+                            && e["maxPurchaseLimits"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|l| l["limit"] == 1)
+                    })
+            })
+            .collect();
+        assert!(
+            singles.len() >= 5,
+            "{} one-per-week weekly offers",
+            singles.len()
+        );
+
+        for id in &singles {
+            let at = |(t, cat): &(i64, Value)| {
+                let e = &cat["globalShopOverrides"][id.as_str()];
+                is_live(e, *t).then(|| {
+                    (
+                        e["activeStartDate"].as_i64().unwrap(),
+                        capped_key(e).unwrap(),
+                    )
+                })
+            };
+            let (i1, (start1, key1)) = days[..REPLAY_PERIOD_DAYS as usize]
+                .iter()
+                .enumerate()
+                .find_map(|(i, d)| at(d).map(|x| (i, x)))
+                .unwrap_or_else(|| panic!("{id} never on sale"));
+            let (i2, (_, key2)) = days[i1 + 1..]
+                .iter()
+                .enumerate()
+                .find_map(|(i, d)| at(d).filter(|(s, _)| *s != start1).map(|x| (i1 + 1 + i, x)))
+                .unwrap_or_else(|| panic!("{id} never comes back"));
+            assert!(i2 - i1 <= 6, "{id} back after {} days", i2 - i1);
+            assert_eq!(key2, key1, "{id}: its return renews the weekly allowance");
+            let next_cycle = days[i1 + REPLAY_PERIOD_DAYS as usize..]
+                .iter()
+                .find_map(at)
+                .unwrap();
+            assert_ne!(
+                next_cycle.1, key1,
+                "{id}: next cycle starts a new allowance"
+            );
+        }
+
+        // Drive the purchase handler's own cap gate across the return.
+        let id = &singles[0];
+        let product = Uuid::parse_str(id).unwrap();
+        let live_on = |from: i64| {
+            (0..2 * REPLAY_PERIOD_DAYS)
+                .map(|d| from + d * DAY)
+                .find(|&t| {
+                    is_live(
+                        &current_catalog(&sd, t)["globalShopOverrides"][id.as_str()],
+                        t,
+                    )
+                })
+                .unwrap()
+        };
+        let t1 = live_on(T0 + 5 * DAY);
+        let window = window_purchase_cap(&sd, product, t1);
+        let (key, cap) = window.clone().expect("windowed cap");
+        assert_eq!(cap, 1);
+        let mut state = blades_lib::server_state::ServerState::default();
+        assert_eq!(
+            purchase_cap_reached(&state, product, None, window.as_ref()),
+            None
+        );
+        record_purchase(
+            &mut state,
+            product,
+            current_product_purchase_tracking_ids(&sd, product, t1),
+        );
+        let t2 = live_on(t1 + DAY);
+        assert!(t2 - t1 <= 6 * DAY, "comes back after {}s", t2 - t1);
+        let back = window_purchase_cap(&sd, product, t2);
+        assert_eq!(
+            purchase_cap_reached(&state, product, None, back.as_ref()),
+            Some(("window", 1, 1)),
+            "the same week's allowance, already spent"
+        );
+        let list = purchases_list_with_tracking_counts(
+            &state.global_shop_purchases,
+            &state.global_shop_window_purchases,
+            &current_purchase_tracking_ids(&sd, t2),
+            &current_lifetime_purchase_tracking_ids(&sd, t2),
+        );
+        assert!(
+            list.iter().any(|e| e.id == key && e.quantity == 1),
+            "the client sees it sold out: {list:?}"
+        );
+
+        // Every-weekend offers (Saturday 17:00, two days): one allowance per weekend.
+        let weekend: Vec<String> = calendar(&sd)
+            .keys()
+            .filter(|id| {
+                retail_windows(&sd, id)
+                    .iter()
+                    .filter(|&&(s, en, _)| {
+                        en - s == 2 * DAY
+                            && s.rem_euclid(DAY) == 17 * 3_600
+                            && s.div_euclid(DAY).rem_euclid(7) == 2
+                    })
+                    .count()
+                    >= 6
+            })
+            .cloned()
+            .collect();
+        assert!(weekend.len() >= 5, "{} weekend offers", weekend.len());
+        for id in &weekend {
+            let keys: Vec<Option<String>> = days
+                .iter()
+                .map(|(t, cat)| {
+                    let e = &cat["globalShopOverrides"][id.as_str()];
+                    is_live(e, *t).then(|| capped_key(e)).flatten()
+                })
+                .collect();
+            for (i, (t, _)) in days.iter().enumerate() {
+                // Saturday evening: Sunday shares its key, next Saturday does not.
+                if t.div_euclid(DAY).rem_euclid(7) != 2 || i + 7 >= days.len() {
+                    continue;
+                }
+                let sat = keys[i]
+                    .as_ref()
+                    .unwrap_or_else(|| panic!("{id} off sale on a Saturday"));
+                assert_eq!(
+                    keys[i + 1].as_ref(),
+                    Some(sat),
+                    "{id}: Sunday renewed the allowance"
+                );
+                assert_ne!(
+                    keys[i + 7].as_ref(),
+                    Some(sat),
+                    "{id}: next weekend kept the allowance"
+                );
+            }
+        }
     }
 }

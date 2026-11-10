@@ -53,7 +53,7 @@ fn open_season_chests(
 ) {
     let season_chests = std::mem::take(&mut reward.chests);
     let opener_level = i64::try_from(character_level).unwrap_or(i64::MAX);
-    // From level 49, at the level-100 character's level (#398).
+    // From level 45, at the level-100 character's level (#398, #432).
     let character_level =
         blades_lib::features::loot_level::effective_loot_level_u64(character_level);
     for (index, chest) in season_chests.into_iter().enumerate() {
@@ -71,6 +71,13 @@ fn open_season_chests(
                 chest.tier as u64,
                 opener_level,
                 blades_lib::features::beginner_economy::key_seed(&key),
+            );
+            // Levels 45-100 (HauDrauf, #438).
+            blades_lib::features::high_level_materials::pay_chest(
+                &mut loot.stackable_items,
+                chest.tier as u64,
+                opener_level,
+                blades_lib::features::beginner_economy::key_seed(&key) ^ 0x0438,
             );
             for item in &mut loot.items {
                 item.id = Uuid::new_v4();
@@ -668,7 +675,7 @@ pub async fn claim_global_gift(
             }
             for chest in &mut reward.chests {
                 if chest.level == 0 {
-                    // The claimant's paid-as level: 100 from level 49 (#398).
+                    // The claimant's paid-as level: 100 from level 45 (#398, #432).
                     chest.level = blades_lib::features::loot_level::effective_loot_level_u64(
                         entry.character.0.level as u64,
                     );

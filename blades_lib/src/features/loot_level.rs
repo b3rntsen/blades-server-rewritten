@@ -1,4 +1,4 @@
-//! The level a character's LOOT is rolled at (report #398).
+//! The level a character's LOOT is rolled at (reports #398, #432).
 //!
 //! HauDrauf (#398, 2026-10-16), who played retail to the end: "From level 49, is
 //! everything at the highest level? From then on there should be no difference to
@@ -6,16 +6,24 @@
 //! 45 and complete by 50, many players stopped at 49, so everything must be
 //! obtainable by 49.
 //!
+//! HauDrauf (#432, 2026-10-26) then moved it down to 45: "No more differences
+//! between levels 45 and 100, except in events with fixed rewards."
+//!
 //! So from [`TOP_LOOT_FROM_LEVEL`] every level-keyed loot and reward source rolls as
 //! for a level-[`TOP_LOOT_LEVEL`] character: treasury and store chests, enemy and
-//! container loot, event rewards, job rewards, daily rewards and the Abyss. Only
+//! container loot, event dungeons, job rewards, daily rewards and the Abyss. Only
 //! rewards move. Character stats, experience, enemy levels and difficulty, and gear
 //! required-level checks still read the real level.
 //!
-//! Below 49 nothing changes: [`effective_loot_level`] is the identity there.
+//! Below 45 nothing changes: [`effective_loot_level`] is the identity there.
 //!
-//! One exception, also HauDrauf's: EVENT soul gems at 49-60 stay Grand
-//! ([`EVENT_GRAND_SOUL_GEM_LEVELS`], [`cap_event_soul_gems`]).
+//! Two exceptions, both HauDrauf's:
+//!
+//! - An EVENT's fixed rewards — its milestones and final reward — keep #398's
+//!   threshold, 49 ([`EVENT_FIXED_REWARDS_TOP_FROM_LEVEL`],
+//!   [`effective_event_reward_level`]): at 45-48 they are what they were (#432).
+//! - EVENT soul gems at 45-60 stay Grand ([`EVENT_GRAND_SOUL_GEM_LEVELS`],
+//!   [`cap_event_soul_gems`]).
 
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
@@ -25,18 +33,38 @@ use uuid::Uuid;
 use crate::static_data::QuestLevelScaling;
 use crate::user_data::{DungeonGeneratedData, LootTableResult};
 
-/// From this character level on, loot is rolled as for [`TOP_LOOT_LEVEL`] (#398).
-pub const TOP_LOOT_FROM_LEVEL: i64 = 49;
+/// From this character level on, loot is rolled as for [`TOP_LOOT_LEVEL`]: 49 since
+/// #398, 45 since #432 (HauDrauf, 2026-10-26: "No more differences between levels
+/// 45 and 100, except in events with fixed rewards").
+pub const TOP_LOOT_FROM_LEVEL: i64 = 45;
+
+/// From this character level on, an EVENT's fixed rewards (its milestones and
+/// final reward) are level 100's. #432 lowered [`TOP_LOOT_FROM_LEVEL`] to 45 for
+/// every other source, "except in events with fixed rewards", so these keep #398's
+/// 49 and a level 45-48 character's milestones and final reward are unchanged.
+pub const EVENT_FIXED_REWARDS_TOP_FROM_LEVEL: i64 = 49;
 
 /// The level a character at or above [`TOP_LOOT_FROM_LEVEL`] is paid as.
 pub const TOP_LOOT_LEVEL: i64 = 100;
 
 /// The character level a loot or reward generator is given for a character of
-/// `level`: `level` itself below 49, 100 from 49 on.
+/// `level`: `level` itself below 45, 100 from 45 on.
 ///
-/// HauDrauf, #398: "From level 49 ... there should be no difference to level 100."
+/// HauDrauf, #432: "No more differences between levels 45 and 100, except in
+/// events with fixed rewards" (#398 had it from 49).
 pub fn effective_loot_level(level: i64) -> i64 {
-    if level >= TOP_LOOT_FROM_LEVEL {
+    paid_as_from(level, TOP_LOOT_FROM_LEVEL)
+}
+
+/// The level an EVENT's fixed rewards (milestones, final reward) are minted at for
+/// a character of `level`: `level` itself below 49, 100 from 49 on
+/// ([`EVENT_FIXED_REWARDS_TOP_FROM_LEVEL`], unchanged by #432).
+pub fn effective_event_reward_level(level: i64) -> i64 {
+    paid_as_from(level, EVENT_FIXED_REWARDS_TOP_FROM_LEVEL)
+}
+
+fn paid_as_from(level: i64, from: i64) -> i64 {
+    if level >= from {
         TOP_LOOT_LEVEL.max(level)
     } else {
         level
@@ -56,7 +84,7 @@ pub fn effective_loot_level_u16(level: u16) -> u16 {
 /// How many levels above `dungeon_level` the loot of a dungeon minted for a
 /// character of `character_level` is rolled: the gap between the dungeon level a
 /// level-100 character is served ([`QuestLevelScaling::enemy_level`]) and this
-/// dungeon's own. Zero below level 49, and never negative, so a dungeon that
+/// dungeon's own. Zero below level 45, and never negative, so a dungeon that
 /// already stands above the level-100 one keeps its own (better) loot.
 ///
 /// Enemies keep their real level and experience; only what they and the
@@ -76,7 +104,7 @@ pub fn dungeon_loot_shift(
     (scaling.enemy_level(paid_as) - dungeon_level).max(0)
 }
 
-/// The character levels whose EVENT soul gems are Grand, never better (#398).
+/// The character levels whose EVENT soul gems are Grand, never better (#398, #432).
 ///
 /// HauDrauf (#398, 2026-10-16), after level 49 was made to pay as level 100:
 /// "At the end of events you get Grand soul gems instead of Glorious. Within the
@@ -89,6 +117,11 @@ pub fn dungeon_loot_shift(
 /// pay a 49-60 character level 100's rewards with every soul gem above Grand
 /// (Glorious, Transcendent) paid as Grand, same count. Nothing else moves: not the
 /// rest of the event's rewards, not other sources, not 61+.
+///
+/// #432 starts it at 45 with [`TOP_LOOT_FROM_LEVEL`]: a 45-48 character's event
+/// dungeon is now level 100's too, and pays Grand as a 49's does. Its milestones and
+/// final reward stay its own level's, every soul gem already Grand there
+/// ([`crate::features::beginner_economy::top_event_soul_gems`]), so they do not move.
 pub const EVENT_GRAND_SOUL_GEM_LEVELS: RangeInclusive<i64> = TOP_LOOT_FROM_LEVEL..=60;
 
 /// Grand Soul Gem (`Items.Name.SoulGem8`).
@@ -139,34 +172,57 @@ pub fn cap_event_dungeon_soul_gems(data: &mut DungeonGeneratedData, character_le
 mod tests {
     use super::*;
 
+    /// #432: 45, 46 and 48 are paid as 100 (they were their own level under #398's
+    /// 49); 44 is still its own.
     #[test]
-    fn below_49_is_the_identity_and_from_49_it_is_100() {
-        for level in -1..49 {
+    fn below_45_is_the_identity_and_from_45_it_is_100() {
+        for level in -1..45 {
             assert_eq!(effective_loot_level(level), level);
         }
-        for level in 49..=100 {
+        for level in 45..=100 {
             assert_eq!(effective_loot_level(level), 100, "level {level}");
         }
-        assert_eq!(effective_loot_level_u64(48), 48);
-        assert_eq!(effective_loot_level_u64(49), 100);
+        assert_eq!(effective_loot_level_u64(44), 44);
+        assert_eq!(effective_loot_level_u64(45), 100);
+        assert_eq!(effective_loot_level_u64(48), 100);
+        assert_eq!(effective_loot_level_u16(46), 100);
         assert_eq!(effective_loot_level_u16(60), 100);
         assert_eq!(effective_loot_level_u16(1), 1);
     }
 
+    /// #432 keeps an event's fixed rewards (milestones, final reward) on #398's 49.
     #[test]
-    fn no_dungeon_moves_below_49() {
+    fn event_fixed_rewards_keep_49() {
+        for level in -1..49 {
+            assert_eq!(effective_event_reward_level(level), level);
+        }
+        for level in 49..=100 {
+            assert_eq!(effective_event_reward_level(level), 100, "level {level}");
+        }
+    }
+
+    #[test]
+    fn no_dungeon_moves_below_45() {
         let scaling = QuestLevelScaling::default();
-        for level in 1..49 {
+        for level in 1..45 {
             assert_eq!(
                 dungeon_loot_shift(&scaling, level, scaling.enemy_level(level)),
                 0
             );
         }
+        for level in [45, 46, 48] {
+            assert_eq!(
+                dungeon_loot_shift(&scaling, level, scaling.enemy_level(level)),
+                scaling.enemy_level(100) - scaling.enemy_level(level),
+                "level {level}"
+            );
+        }
     }
 
-    /// HauDrauf #398: Glorious and Transcendent are paid as Grand at 49-60 only.
+    /// HauDrauf #398: Glorious and Transcendent are paid as Grand at 49-60 only;
+    /// #432 starts it at 45.
     #[test]
-    fn event_soul_gems_above_grand_are_grand_at_49_to_60_only() {
+    fn event_soul_gems_above_grand_are_grand_at_45_to_60_only() {
         let [glorious, transcendent] = SOUL_GEMS_ABOVE_GRAND;
         let exceptional: Uuid = "3932e499-441e-4c6d-b671-9a03131ebe6f".parse().unwrap();
         let lumber: Uuid = "e7193116-d761-479b-8a20-5633737977f5".parse().unwrap();
@@ -177,7 +233,7 @@ mod tests {
             (exceptional, 3),
             (lumber, 9),
         ]);
-        for level in [49, 55, 60] {
+        for level in [45, 48, 49, 55, 60] {
             let mut s = stacks.clone();
             cap_event_soul_gems(&mut s, level);
             assert_eq!(
@@ -186,7 +242,7 @@ mod tests {
                 "level {level}"
             );
         }
-        for level in [1, 48, 61, 100] {
+        for level in [1, 44, 61, 100] {
             let mut s = stacks.clone();
             cap_event_soul_gems(&mut s, level);
             assert_eq!(s, stacks, "level {level}");

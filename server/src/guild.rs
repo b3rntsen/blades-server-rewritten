@@ -2022,6 +2022,218 @@ async fn depart_guild(
     Ok(())
 }
 
+// ---- Alt switches ----------------------------------------------------------------
+//
+// An alt switch (or a new alt, or an import of another alt) parks the outgoing
+// alt's guild seat in its character version and deletes the `guild_members` row
+// (admin.rs `ALT_ROW_TABLES`). To everyone else in the guild that alt has LEFT,
+// and the board has to say so.
+//
+// Tracker #439: Sephoris (HauDrauf's second account) started the level-1 alt HD1.
+// The seat was parked and deleted with no LEAVE entry, so New Bladers' board kept
+// Sephoris's chat and donation entries for a user who was neither a member nor
+// recorded as gone. That is a board retail never produced: a member's LEAVE is
+// always newer than anything they posted, so it is always in the window with
+// it. The guild screen of every member stalled after the first load. The seat
+// is also handed on when the outgoing alt was the Grand Master (#410 found a
+// guild left with none), and a returning alt posts the JOIN a join would.
+
+/// A guild seat held by the alt on the live row.
+#[derive(QueryableByName, Clone, Debug, PartialEq)]
+pub(crate) struct AltGuildSeat {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub(crate) guild_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub(crate) rank: String,
+}
+
+/// The seats the live alt holds, matched the way the park and the delete match
+/// them (`character_id` or `user_id`, see `AltRowKey::CharacterOrUser`).
+pub(crate) async fn alt_guild_seats(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<AltGuildSeat>, diesel::result::Error> {
+    diesel::sql_query(
+        "SELECT guild_id, rank FROM guild_members WHERE character_id = $1 OR user_id = $2",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .load(conn)
+    .await
+}
+
+async fn insert_board_entry(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    uid: Uuid,
+    cid: Uuid,
+    message_type: &str,
+    data: Value,
+    ts: i64,
+) -> Result<(), diesel::result::Error> {
+    use crate::schema::guild_messages;
+    diesel::insert_into(guild_messages::table)
+        .values(&GuildMessageRow {
+            message_id: format!("{}::{}", ts, Uuid::new_v4()),
+            guild_id: gid.to_string(),
+            user_id: uid,
+            character_id: cid,
+            message_type: message_type.to_string(),
+            type_specific_data: JsonDbWrapper(data),
+            creation_time: ts,
+        })
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+#[derive(QueryableByName)]
+struct RemainingMember {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    stored_user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    rank: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    join_date: i64,
+}
+
+/// After the alt's seats were removed: post a LEAVE in each guild that still
+/// exists, and hand a Grand Master's guild to its successor exactly as a leave
+/// does (`remove_member_and_succeed`). A guild the alt was the last member of is
+/// NOT torn down, unlike a leave: the alt did not choose to go, and the guild is
+/// what it comes back to when the player switches to it again.
+pub(crate) async fn record_alt_departures(
+    conn: &mut AsyncPgConnection,
+    seats: &[AltGuildSeat],
+    user_id: Uuid,
+    character_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    let ts = now_secs();
+    for seat in seats {
+        if load_guild_row(conn, &seat.guild_id).await?.is_none() {
+            continue;
+        }
+        insert_board_entry(
+            conn,
+            &seat.guild_id,
+            user_id,
+            character_id,
+            "LEAVE",
+            json!({}),
+            ts,
+        )
+        .await?;
+        if GuildRank::from_wire(&seat.rank) != Some(GuildRank::Grandmaster) {
+            continue;
+        }
+        let remaining: Vec<RemainingMember> = diesel::sql_query(
+            "SELECT gm.user_id AS stored_user_id,
+                    COALESCE(c.user_id, gm.user_id) AS user_id,
+                    gm.rank, gm.join_date
+               FROM guild_members gm
+               LEFT JOIN characters c ON c.id = gm.character_id
+              WHERE gm.guild_id = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(&seat.guild_id)
+        .load(conn)
+        .await?;
+        if remaining
+            .iter()
+            .any(|m| m.rank == GuildRank::Grandmaster.as_wire())
+        {
+            continue;
+        }
+        let handles: Vec<(Uuid, GuildRank, i64)> = remaining
+            .iter()
+            .filter_map(|m| GuildRank::from_wire(&m.rank).map(|r| (m.user_id, r, m.join_date)))
+            .collect();
+        let Some(heir) = successor(&handles) else {
+            continue;
+        };
+        let heir_stored = remaining
+            .iter()
+            .find(|m| m.user_id == heir)
+            .map(|m| m.stored_user_id)
+            .unwrap_or(heir);
+        {
+            use crate::schema::guild_members::dsl as gm;
+            diesel::update(
+                gm::guild_members
+                    .filter(gm::guild_id.eq(&seat.guild_id))
+                    .filter(gm::user_id.eq(heir_stored)),
+            )
+            .set(gm::rank.eq(GuildRank::Grandmaster.as_wire()))
+            .execute(conn)
+            .await?;
+        }
+        {
+            use crate::schema::guilds::dsl as g;
+            diesel::update(g::guilds.filter(g::id.eq(&seat.guild_id)))
+                .set(g::grandmaster_since.eq(ts))
+                .execute(conn)
+                .await?;
+        }
+        insert_board_entry(
+            conn,
+            &seat.guild_id,
+            user_id,
+            character_id,
+            "PROMOTE",
+            json!({
+                "type": "PROMOTE",
+                "promotedUserId": heir,
+                "guildRank": GuildRank::Grandmaster.as_wire(),
+            }),
+            ts,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// After an alt's parked seats were written back: post the JOIN a join posts in
+/// every guild it holds now and did not hold before.
+pub(crate) async fn record_alt_returns(
+    conn: &mut AsyncPgConnection,
+    before: &[AltGuildSeat],
+    user_id: Uuid,
+    character_id: Uuid,
+) -> Result<(), diesel::result::Error> {
+    let ts = now_secs();
+    for seat in alt_guild_seats(conn, character_id, user_id).await? {
+        if before.iter().any(|b| b.guild_id == seat.guild_id) {
+            continue;
+        }
+        insert_board_entry(
+            conn,
+            &seat.guild_id,
+            user_id,
+            character_id,
+            "JOIN",
+            json!({}),
+            ts,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn load_guild_row(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+) -> Result<Option<String>, diesel::result::Error> {
+    use crate::schema::guilds::dsl as g;
+    g::guilds
+        .filter(g::id.eq(gid))
+        .select(g::id)
+        .first::<String>(conn)
+        .await
+        .optional()
+}
+
 /// Shared body of kick and ban: authorise the actor against the target's rank,
 /// remove them, post the board entry, and arm the removal record.
 async fn remove_other_member(
@@ -2312,7 +2524,12 @@ struct GuildExchangeRow {
     donations: JsonDbWrapper<Vec<Donation>>,
     donation_sum: i64,
     creation_time: i64,
+    /// CLOSED: no longer listed and no longer accepts donations. Set when a
+    /// full request is collected, or when the character posts a newer request.
     redeemed: bool,
+    /// How much of `donation_sum` has been paid out to the requester. A collect
+    /// pays `donation_sum - redeemed_amount`, so no donation is paid twice.
+    redeemed_amount: i64,
 }
 
 /// Wire shape for a single guild exchange (used in list + create responses).
@@ -2446,17 +2663,20 @@ pub async fn list_exchanges(
     let rows = load_exchanges(&mut conn, &m.guild_id).await?;
     let requester_ids: Vec<Uuid> = rows.iter().map(|r| r.requester_character_id).collect();
     let current_requesters = current_users_for_characters(&mut conn, &requester_ids).await?;
+    let viewer = session.session.user_id;
     let wires = rows
         .iter()
         .map(|r| {
-            GuildExchangeWire::from_row_with_requester(
+            let mut wire = GuildExchangeWire::from_row_with_requester(
                 r,
                 true,
                 current_requesters
                     .get(&r.requester_character_id)
                     .copied()
                     .unwrap_or(r.requester_user_id),
-            )
+            );
+            wire.donations = Some(visible_donations(&r.donations.0, viewer));
+            wire
         })
         .collect();
     Ok(Json(ExchangeListResponse {
@@ -2487,6 +2707,7 @@ mod exchange_amount_tests {
             donation_sum: 0,
             creation_time: 1,
             redeemed: false,
+            redeemed_amount: 0,
         }
     }
 
@@ -2586,6 +2807,48 @@ mod exchange_amount_tests {
                 "{t} ladder decreases"
             );
         }
+    }
+
+    /// Tracker #462 (HauDrauf's rule): every new request asks for ten times
+    /// retail's amount, and ONE donation stays retail's size.
+    #[test]
+    fn requests_ask_ten_times_retail_with_retail_sized_donations() {
+        let limestone = u("fd67bbc6-20f4-44a3-9614-28265ebb8c67");
+        assert_eq!(exchange_amounts(limestone, 10), Some((50, 10)), "retail");
+        assert_eq!(request_amounts(limestone, 10), Some((500, 10)));
+        let honeycomb = u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50");
+        assert_eq!(request_amounts(honeycomb, 10), Some((100, 5)));
+        for gem in SOUL_GEMS {
+            assert_eq!(request_amounts(u(gem), 5), Some((10, 1)), "{gem}");
+        }
+        assert_eq!(
+            request_amounts(Uuid::nil(), 10),
+            None,
+            "still not requestable"
+        );
+    }
+
+    /// Tracker #462: the client drops a request from a player's board once that
+    /// player is in its `donations` (RemoveFulfilledExchanges). The viewer's own
+    /// entries are left out so they can give again; everyone else's stay.
+    #[test]
+    fn a_viewer_is_not_shown_their_own_donations() {
+        let me = Uuid::from_u128(1);
+        let other = Uuid::from_u128(2);
+        let d = |who: Uuid, n: i64| Donation {
+            donator_user_id: who,
+            donator_character_id: who,
+            donated_amount: n,
+        };
+        let all = vec![d(me, 5), d(other, 5), d(me, 5)];
+        let shown = visible_donations(&all, me);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].donator_user_id, other);
+        assert_eq!(
+            visible_donations(&all, Uuid::from_u128(3)).len(),
+            3,
+            "a bystander sees all"
+        );
     }
 
     /// Report #325's second half: the donor held 3 of the item and the request
@@ -3064,6 +3327,54 @@ pub fn exchange_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64,
     Some((requested, max_donation))
 }
 
+/// How many times retail's request size a new guild request asks for.
+///
+/// NOT RETAIL — a community rule (tracker #462, HauDrauf, 2026-11-04, approved
+/// under the owner's standing "HauDrauf's common-good rules" policy of
+/// 2026-10-25): "Alle Vorgaben x zehn … die einzelnen Einteilungen beibehalten".
+/// Every request asks for ten times what retail asked, while ONE donation stays
+/// retail's size, so a request now takes ten times as many donations — and,
+/// with [`visible_donations`], the same guildmate may give several of them.
+/// Revert: set to 1 (requests already posted keep their size).
+pub const REQUEST_AMOUNT_MULTIPLIER: i64 = 10;
+
+/// The `(requestedAmount, maxDonationAmount)` a new request is created with:
+/// retail's [`exchange_amounts`] with the request scaled by
+/// [`REQUEST_AMOUNT_MULTIPLIER`] and the per-donation split left as retail's.
+pub fn request_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64, i64)> {
+    let (requested, max_donation) = exchange_amounts(item_template_id, town_level)?;
+    Some((requested * REQUEST_AMOUNT_MULTIPLIER, max_donation))
+}
+
+/// The `donations` a guildmate is shown on a request: everyone's but their own.
+///
+/// The client hides a request from a player as soon as that player appears in
+/// its `donations` — `GuildChatQueryResults.RemoveFulfilledExchanges(userId)`
+/// drops every exchange where `GetDonationAmount(userId) > 0` or
+/// `donationSum == requestedAmount` (libil2cpp `0x1C39510`, which calls
+/// `GuildExchangeInfo.GetDonationAmount` at `0x1C3956C`). So a server that merely
+/// stopped refusing a second donation would still never be asked for one.
+/// Leaving the viewer's own entries out keeps the request on their board;
+/// `donationSum` is untouched, so progress still shows every donation (#462).
+fn visible_donations(donations: &[Donation], viewer_user_id: Uuid) -> Vec<Donation> {
+    donations
+        .iter()
+        .filter(|d| d.donator_user_id != viewer_user_id)
+        .cloned()
+        .collect()
+}
+
+/// Which of a donate's candidate requests (oldest first) receives it: the oldest
+/// that still needs items. A guildmate who already gave may give again (#462).
+/// With nothing open it falls back to the first, so the handler's "full" refusal
+/// explains why.
+fn pick_candidate(candidates: &[GuildExchangeRow]) -> usize {
+    candidates
+        .iter()
+        .position(|e| e.donation_sum < e.requested_amount)
+        .unwrap_or(0)
+}
+
 /// How many units one donation moves: a full `maxDonationAmount`, but never more
 /// than the request still needs nor more than the donor holds. Retail takes what a
 /// short donor has — captured donations of 2 into a 10/5 Glow Dust request and of 1
@@ -3151,7 +3462,7 @@ pub async fn create_exchange(
             .and_then(Value::as_u64)
             .unwrap_or(0)
     };
-    let (requested_amount, max_donation_amount) = exchange_amounts(item_template_id, town_level)
+    let (requested_amount, max_donation_amount) = request_amounts(item_template_id, town_level)
         .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, GUILD_SERVICE_ID, 15))?;
     let ts = now_secs();
     let row = GuildExchangeRow {
@@ -3166,10 +3477,12 @@ pub async fn create_exchange(
         donation_sum: 0,
         creation_time: ts,
         redeemed: false,
+        redeemed_amount: 0,
     };
     let row = conn
         .transaction(move |conn| {
             async move {
+                close_open_requests(conn, character_id).await?;
                 use crate::schema::guild_exchanges;
                 diesel::insert_into(guild_exchanges::table)
                     .values(&row)
@@ -3293,37 +3606,15 @@ pub async fn donate_exchange(
                     11,
                 ));
             }
-            // Oldest request this donor can still give to. Falling back to the
+            // Oldest request that still needs items. Falling back to the
             // first candidate keeps the existing refusal codes meaningful: with
             // nothing donatable, the checks below explain WHY.
-            let pick = candidates
-                .iter()
-                .position(|e| {
-                    e.donation_sum < e.requested_amount
-                        && !e
-                            .donations
-                            .0
-                            .iter()
-                            .any(|d| d.donator_user_id == donor_user_id)
-                })
-                .unwrap_or(0);
+            let pick = pick_candidate(&candidates);
             let exchange: GuildExchangeRow = candidates.into_iter().nth(pick).expect("non-empty");
 
-            // A donor may not donate twice to the same request. Nothing stopped a
-            // single player filling a request by themselves, repeatedly, which is
-            // neither what the feature is for nor what retail allowed.
-            if exchange
-                .donations
-                .0
-                .iter()
-                .any(|d| d.donator_user_id == donor_user_id)
-            {
-                return Err(BladeApiError::new(
-                    StatusCode::CONFLICT,
-                    GUILD_SERVICE_ID,
-                    12,
-                ));
-            }
+            // A guildmate may give to the same request more than once (#462,
+            // HauDrauf's rule; retail refused a second donation). Each donation is
+            // still one retail-sized share, capped below by what is left.
 
             // Never donate more than the request still needs. The amount was always
             // the full `maxDonationAmount`, so the last donor to a nearly-complete
@@ -3445,6 +3736,9 @@ pub async fn donate_exchange(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct GuildExchangeRedeemReward {
+    /// Retail answers a collect with nothing new as `"reward":{}` (106 of 143
+    /// captured collects), not an empty map.
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
     stackable_items: std::collections::HashMap<Uuid, i64>,
 }
 
@@ -3461,9 +3755,66 @@ struct RedeemResponse {
     guild_exchange_redeem: GuildExchangeRedeemInfo,
 }
 
-/// `POST /guilds/current/exchanges/redeem` — redeem all of the session user's
-/// non-redeemed exchanges that have a donationSum > 0. Credits the requester the
-/// donated stackables and marks each exchange as redeemed.
+/// Close every request the character still has open. Retail lists at most one
+/// request per character (0 of 639 captured boards list a requester twice), and a
+/// partly filled request that the owner had collected was gone from the board once
+/// they posted the next one. Donations not yet collected stay collectable:
+/// [`collect_unpaid_donations`] does not look at `redeemed`.
+async fn close_open_requests(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<(), BladeApiError> {
+    use crate::schema::guild_exchanges::dsl as ge;
+    diesel::update(
+        ge::guild_exchanges
+            .filter(ge::requester_character_id.eq(character_id))
+            .filter(ge::redeemed.eq(false)),
+    )
+    .set(ge::redeemed.eq(true))
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Pay out a character's guild requests: the donations that arrived since the
+/// last collect, as `(itemTemplateId, amount)` per request.
+///
+/// A collect does NOT close a request that is still short — retail kept it on the
+/// board for the remaining donors and paid each later donation on a later collect
+/// (tracker #434; evidence on [`partial_collect_keeps_the_request_open`]). It
+/// closes once it is full. Closed requests are still read here, so donations that
+/// reached one before [`close_open_requests`] replaced it are paid, not lost.
+async fn collect_unpaid_donations(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<Vec<(Uuid, i64)>, BladeApiError> {
+    use crate::schema::guild_exchanges::dsl as ge;
+    let exchanges: Vec<GuildExchangeRow> = ge::guild_exchanges
+        .filter(ge::requester_character_id.eq(character_id))
+        .filter(ge::donation_sum.gt(ge::redeemed_amount))
+        .order((ge::creation_time.asc(), ge::id.asc()))
+        .select(GuildExchangeRow::as_select())
+        .for_no_key_update()
+        .load(conn)
+        .await?;
+    let mut payouts = Vec::new();
+    for ex in &exchanges {
+        payouts.push((ex.item_template_id, ex.donation_sum - ex.redeemed_amount));
+        diesel::update(ge::guild_exchanges.filter(ge::id.eq(&ex.id)))
+            .set((
+                ge::redeemed_amount.eq(ex.donation_sum),
+                ge::redeemed.eq(ex.redeemed || ex.donation_sum >= ex.requested_amount),
+            ))
+            .execute(conn)
+            .await?;
+    }
+    Ok(payouts)
+}
+
+/// `POST /guilds/current/exchanges/redeem` — collect what guildmates have donated
+/// to the session character's requests since the last collect
+/// ([`collect_unpaid_donations`]). The client calls it each time the guild
+/// exchange screen loads, right after `GET /exchanges`.
 #[post(
     "/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/exchanges/redeem"
 )]
@@ -3481,28 +3832,18 @@ pub async fn redeem_exchange(
 
     conn.transaction(move |conn| {
         async move {
-            // Load all non-redeemed exchanges for this user with sum > 0.
-            use crate::schema::guild_exchanges::dsl as ge;
-            let exchanges: Vec<GuildExchangeRow> = ge::guild_exchanges
-                .filter(ge::requester_character_id.eq(character_id))
-                .filter(ge::redeemed.eq(false))
-                .filter(ge::donation_sum.gt(0))
-                .select(GuildExchangeRow::as_select())
-                .for_no_key_update()
-                .load(conn)
-                .await?;
+            let payouts = collect_unpaid_donations(conn, character_id).await?;
 
             let mut entry = load_economy(conn, character_id, user_id).await?;
             let mut tracker = InventoryChangeTracker::default();
             let mut reward_stackables: std::collections::HashMap<Uuid, i64> =
                 std::collections::HashMap::new();
 
-            for ex in &exchanges {
-                let amount = ex.donation_sum as u64;
+            for (item_template_id, amount) in &payouts {
                 let reward = RewardGrant {
                     stackable_items: std::collections::HashMap::from([(
-                        ex.item_template_id,
-                        amount,
+                        *item_template_id,
+                        *amount as u64,
                     )]),
                     ..Default::default()
                 };
@@ -3513,20 +3854,14 @@ pub async fn redeem_exchange(
                     &mut entry.character.0,
                     &mut tracker,
                 );
-                *reward_stackables.entry(ex.item_template_id).or_insert(0) += ex.donation_sum;
+                *reward_stackables.entry(*item_template_id).or_insert(0) += *amount;
             }
-            entry.inventory.0.backpack_version += 1;
+            if !payouts.is_empty() {
+                entry.inventory.0.backpack_version += 1;
+            }
 
             let inventory_update = entry.inventory.0.generate_client_update(&tracker);
             write_economy(conn, entry).await?;
-
-            // Mark all redeemed.
-            for ex in &exchanges {
-                diesel::update(ge::guild_exchanges.filter(ge::id.eq(&ex.id)))
-                    .set(ge::redeemed.eq(true))
-                    .execute(conn)
-                    .await?;
-            }
 
             Ok::<_, BladeApiError>(Json(RedeemResponse {
                 inventory: inventory_update,
@@ -3866,12 +4201,37 @@ mod donating_with_several_requests_for_one_item {
 
     /// The selection rule, extracted so it can be tested without a database: the
     /// oldest candidate this donor can still give to, else the first.
-    fn pick(rows: &[(i64, i64, Vec<Uuid>)], donor: Uuid) -> usize {
-        rows.iter()
-            .position(|(sum, requested, donors)| {
-                sum < requested && !donors.iter().any(|d| *d == donor)
+    ///
+    /// Runs the handler's own [`pick_candidate`] on rows built from the tuples.
+    fn pick(rows: &[(i64, i64, Vec<Uuid>)], _donor: Uuid) -> usize {
+        let rows: Vec<GuildExchangeRow> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, (sum, requested, donors))| GuildExchangeRow {
+                id: format!("ex-{i}"),
+                guild_id: "g".into(),
+                requester_user_id: Uuid::from_u128(99),
+                requester_character_id: Uuid::from_u128(98),
+                item_template_id: Uuid::nil(),
+                requested_amount: *requested,
+                max_donation_amount: 1,
+                donations: JsonDbWrapper(
+                    donors
+                        .iter()
+                        .map(|d| Donation {
+                            donator_user_id: *d,
+                            donator_character_id: *d,
+                            donated_amount: 1,
+                        })
+                        .collect(),
+                ),
+                donation_sum: *sum,
+                creation_time: i as i64,
+                redeemed: false,
+                redeemed_amount: 0,
             })
-            .unwrap_or(0)
+            .collect();
+        pick_candidate(&rows)
     }
 
     const DONOR: Uuid = Uuid::from_u128(1);
@@ -3898,16 +4258,13 @@ mod donating_with_several_requests_for_one_item {
         assert_eq!(pick(&b, DONOR), 1);
     }
 
-    /// A donor who has already given to the only open request is not silently
-    /// moved onto a different one — they fall through to the refusal.
+    /// Tracker #462: a guildmate who already gave may give again. The oldest
+    /// request they gave to, still short, is chosen over a newer one they have
+    /// not touched — the donation goes where the player tapped, not elsewhere.
     #[test]
-    fn a_donor_who_already_gave_is_not_rerouted() {
-        let rows = vec![(5, 10, vec![DONOR])];
-        assert_eq!(
-            pick(&rows, DONOR),
-            0,
-            "falls back to the first so the existing 409 explains why"
-        );
+    fn a_donor_who_already_gave_can_give_again() {
+        let rows = vec![(5, 100, vec![DONOR]), (0, 100, vec![])];
+        assert_eq!(pick(&rows, DONOR), 0, "the request they already gave to");
     }
 
     /// THE CONTROL: when nothing is donatable the refusal must still happen. The
@@ -4310,5 +4667,202 @@ mod rejoin_after_leaving {
         assert_eq!(verdict, Err(JoinRefusal::UserRecentlyRemovedFromGuild));
         let err = join_refused(verdict.unwrap_err());
         assert_eq!(err.error_code(), 802);
+    }
+}
+
+/// Collecting a half-filled guild request (tracker #434).
+///
+/// HauDrauf asked for 10 Fire Salts, donated 5 at a time. After the first donor
+/// he collected the 5 — and the request was gone, so nobody could give the other
+/// 5. We closed a request on its first collect.
+///
+/// Retail kept it open. Captured (prod capture DB, character a9c46eca,
+/// 2026-06-17): request fe3567e0 at 5/10 → collect pays 5; at 10/10 the same
+/// request (same creationTime) → collect pays 5, not 10; then it is gone. The
+/// same shape for 38c987fd on 2026-05-24/25, and f9f1f31d's board still lists a
+/// 30/50 request fifteen minutes after collecting 30, where a second collect pays
+/// nothing.
+#[cfg(test)]
+mod partial_collect_keeps_the_request_open {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, SimpleAsyncConnection};
+
+    const REQUESTER: Uuid = Uuid::from_u128(0x4341);
+    const CHARACTER: Uuid = Uuid::from_u128(0x4342);
+    const FIRE_SALTS: Uuid = Uuid::from_u128(0xf1c5);
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — guild exchange collect NOT verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        // The real DDL, both migrations, so the test runs the shipped schema.
+        for ddl in [
+            include_str!("../../migrations/2026-06-20-020000-0000_add_guild_exchanges/up.sql"),
+            include_str!(
+                "../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"
+            ),
+        ] {
+            conn.batch_execute(ddl).await.unwrap();
+        }
+        Some(conn)
+    }
+
+    async fn request(conn: &mut AsyncPgConnection, id: &str, creation_time: i64) {
+        diesel::sql_query(
+            "INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                 requester_character_id, item_template_id, requested_amount, \
+                 max_donation_amount, creation_time) VALUES ($1, 'g', $2, $3, $4, 10, 5, $5)",
+        )
+        .bind::<diesel::sql_types::Text, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(REQUESTER)
+        .bind::<diesel::sql_types::Uuid, _>(CHARACTER)
+        .bind::<diesel::sql_types::Uuid, _>(FIRE_SALTS)
+        .bind::<diesel::sql_types::BigInt, _>(creation_time)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    /// What `donate_exchange` does to the row: add 5 to the sum.
+    async fn donate_five(conn: &mut AsyncPgConnection, id: &str) {
+        diesel::sql_query(
+            "UPDATE guild_exchanges SET donation_sum = donation_sum + 5 WHERE id = $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(id)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    async fn board(conn: &mut AsyncPgConnection) -> Vec<(String, i64)> {
+        load_exchanges(conn, "g")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.donation_sum))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn half_collected_request_stays_open_and_pays_each_donation_once() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, "salts", 100).await;
+        donate_five(&mut c, "salts").await;
+
+        // First collect: the 5 that are there.
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(paid, vec![(FIRE_SALTS, 5)]);
+        assert_eq!(
+            board(&mut c).await,
+            vec![("salts".to_string(), 5)],
+            "the request stays on the board at 5/10 for the second donor"
+        );
+
+        // Collecting again before anyone gives more pays nothing.
+        assert_eq!(
+            collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
+            vec![]
+        );
+
+        // The second donor fills it; the collect pays only the new 5.
+        donate_five(&mut c, "salts").await;
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(
+            paid,
+            vec![(FIRE_SALTS, 5)],
+            "the first 5 must not be paid again"
+        );
+        assert_eq!(board(&mut c).await, vec![], "full and collected: closed");
+        assert_eq!(
+            collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
+            vec![]
+        );
+    }
+
+    /// Control: a request filled before the first collect pays all of it at once
+    /// and closes, as before.
+    #[tokio::test]
+    async fn a_full_request_pays_in_one_collect_and_closes() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, "salts", 100).await;
+        donate_five(&mut c, "salts").await;
+        donate_five(&mut c, "salts").await;
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(paid, vec![(FIRE_SALTS, 10)]);
+        assert_eq!(board(&mut c).await, vec![]);
+    }
+
+    /// Posting a new request replaces the old one on the board, and a donation
+    /// that landed on the old one after its last collect is still paid.
+    #[tokio::test]
+    async fn a_new_request_replaces_the_old_without_losing_its_donations() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, "old", 100).await;
+        donate_five(&mut c, "old").await;
+        collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        donate_five(&mut c, "old").await; // 10/10, not yet collected
+
+        close_open_requests(&mut c, CHARACTER).await.unwrap();
+        request(&mut c, "new", 200).await;
+        assert_eq!(
+            board(&mut c).await,
+            vec![("new".to_string(), 0)],
+            "one request per character on the board"
+        );
+        let paid = collect_unpaid_donations(&mut c, CHARACTER).await.unwrap();
+        assert_eq!(paid, vec![(FIRE_SALTS, 5)], "the old request's second 5");
+    }
+
+    /// Rows closed before the migration were paid in full at the time; the
+    /// migration must not make them payable again.
+    #[tokio::test]
+    async fn requests_closed_before_the_migration_are_not_paid_again() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        diesel::sql_query("ALTER TABLE guild_exchanges DROP COLUMN redeemed_amount")
+            .execute(&mut c)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                 requester_character_id, item_template_id, donation_sum, redeemed) \
+                 VALUES ('closed', 'g', $1, $2, $3, 5, true)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(REQUESTER)
+        .bind::<diesel::sql_types::Uuid, _>(CHARACTER)
+        .bind::<diesel::sql_types::Uuid, _>(FIRE_SALTS)
+        .execute(&mut c)
+        .await
+        .unwrap();
+        c.batch_execute(include_str!(
+            "../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"
+        ))
+        .await
+        .unwrap();
+        assert_eq!(
+            collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
+            vec![]
+        );
     }
 }

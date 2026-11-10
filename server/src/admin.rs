@@ -818,7 +818,9 @@ ON CONFLICT DO NOTHING"#,
     AltRowTable {
         // Open donation requests. Redeeming pays whoever holds the requester's
         // character id, which every alt shares — so before this, one alt could
-        // collect the items guildmates donated to another.
+        // collect the items guildmates donated to another. A closed request with
+        // donations not yet collected (#434: replaced by a newer request) still
+        // belongs to the alt, so it travels too, with what it has paid so far.
         key: "parkedGuildExchanges",
         by: AltRowKey::CharacterOrUser,
         park: r#"
@@ -826,20 +828,23 @@ UPDATE character_versions
    SET server_state = server_state || jsonb_build_object('parkedGuildExchanges',
          COALESCE((SELECT jsonb_agg(to_jsonb(x) - 'requester_character_id' - 'requester_user_id')
                      FROM guild_exchanges x
-                    WHERE NOT x.redeemed
+                    WHERE (NOT x.redeemed OR x.donation_sum > x.redeemed_amount)
                       AND (x.requester_character_id = $2 OR x.requester_user_id = $3)),
                   '[]'::jsonb))
  WHERE id = $1"#,
         delete: "DELETE FROM guild_exchanges \
-                  WHERE NOT redeemed AND (requester_character_id = $1 OR requester_user_id = $2)",
+                  WHERE (NOT redeemed OR donation_sum > redeemed_amount) \
+                    AND (requester_character_id = $1 OR requester_user_id = $2)",
         restore: r#"
 INSERT INTO guild_exchanges
        (id, guild_id, requester_user_id, requester_character_id, item_template_id,
-        requested_amount, max_donation_amount, donations, donation_sum, creation_time, redeemed)
+        requested_amount, max_donation_amount, donations, donation_sum, creation_time, redeemed,
+        redeemed_amount)
 SELECT r.id, r.guild_id, $2, $1, r.item_template_id,
        COALESCE(r.requested_amount, 10), COALESCE(r.max_donation_amount, 5),
        COALESCE(r.donations, '[]'::jsonb), COALESCE(r.donation_sum, 0),
-       COALESCE(r.creation_time, 0), false
+       COALESCE(r.creation_time, 0), COALESCE(r.redeemed, false),
+       COALESCE(r.redeemed_amount, 0)
   FROM jsonb_array_elements($3) e,
        LATERAL jsonb_populate_record(NULL::guild_exchanges, e) r
  WHERE r.id IS NOT NULL AND r.guild_id IS NOT NULL AND r.item_template_id IS NOT NULL
@@ -893,9 +898,10 @@ ON CONFLICT DO NOTHING"#,
 /// The migrations that create every [`ALT_ROW_TABLES`] table, for test fixtures
 /// that exercise a switch: the real DDL, not a copy that could drift.
 #[cfg(test)]
-pub(crate) const ALT_ROW_TABLE_MIGRATIONS: [&str; 5] = [
+pub(crate) const ALT_ROW_TABLE_MIGRATIONS: [&str; 6] = [
     include_str!("../../migrations/2026-06-20-010000-0000_add_guilds/up.sql"),
     include_str!("../../migrations/2026-06-20-020000-0000_add_guild_exchanges/up.sql"),
+    include_str!("../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"),
     include_str!("../../migrations/2026-08-25-000000-0000_add_guild_applications_and_ranks/up.sql"),
     include_str!("../../migrations/2026-09-18-000000-0000_add_free_for_all/up.sql"),
     include_str!("../../migrations/2026-09-20-000000-0000_add_character_creation_allowance/up.sql"),
@@ -911,6 +917,8 @@ async fn park_alt_rows_in_version(
 ) -> Result<(), diesel::result::Error> {
     use diesel::sql_types::Uuid as SqlUuid;
     use diesel_async::RunQueryDsl as _;
+    // Read before the delete below: the board entries are written after it.
+    let seats = crate::guild::alt_guild_seats(conn, character_id, user_id).await?;
     for t in ALT_ROW_TABLES {
         match t.by {
             AltRowKey::Character => {
@@ -950,6 +958,8 @@ async fn park_alt_rows_in_version(
             }
         }
     }
+    // To the guild, the outgoing alt has left (tracker #439).
+    crate::guild::record_alt_departures(conn, &seats, user_id, character_id).await?;
     Ok(())
 }
 
@@ -990,6 +1000,7 @@ async fn unpark_alt_rows(
 ) -> Result<(), diesel::result::Error> {
     use diesel::sql_types::{Jsonb, Uuid as SqlUuid};
     use diesel_async::RunQueryDsl as _;
+    let seats_before = crate::guild::alt_guild_seats(conn, character_id, user_id).await?;
     for (t, rows) in ALT_ROW_TABLES.iter().zip(parked.0) {
         let Some(rows) = rows else { continue };
         match t.by {
@@ -1017,6 +1028,8 @@ async fn unpark_alt_rows(
             }
         }
     }
+    // Back in its guild: the board says so, as it said it left (tracker #439).
+    crate::guild::record_alt_returns(conn, &seats_before, user_id, character_id).await?;
     Ok(())
 }
 
@@ -3798,7 +3811,7 @@ pub async fn grant_arena_season_awards(
                     // other Arena chest.
                     for chest in &mut reward.chests {
                         if chest.level == 0 {
-                            // The recipient's paid-as level: 100 from level 49 (#398).
+                            // The recipient's paid-as level: 100 from level 45 (#398, #432).
                             chest.level =
                                 blades_lib::features::loot_level::effective_loot_level_u64(
                                     entry.character.0.level as u64,
@@ -6600,8 +6613,9 @@ mod tests {
                          requester_character_id, item_template_id, donation_sum) \
                          VALUES ('open', 'ga', '{uid}', '{cid}', '{item}', 3); \
                      INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
-                         requester_character_id, item_template_id, donation_sum, redeemed) \
-                         VALUES ('done', 'ga', '{uid}', '{cid}', '{item}', 4, true); \
+                         requester_character_id, item_template_id, donation_sum, redeemed, \
+                         redeemed_amount) \
+                         VALUES ('done', 'ga', '{uid}', '{cid}', '{item}', 4, true, 4); \
                      INSERT INTO free_for_all_runs (id, opens_at, closes_at, gems) \
                          VALUES ('{run}', 1, 2, 100); \
                      INSERT INTO free_for_all_grants (run_id, character_id, gems, granted_at) \
@@ -6765,6 +6779,156 @@ mod tests {
                     )
                     .await,
                     1
+                );
+            }
+
+            /// Every user the guild's board names (as author or as a donation's
+            /// requester) is a member or has a LEAVE/KICK/BAN on the board — the
+            /// invariant retail's boards always kept and #439's broke.
+            async fn board_names_only_members_or_leavers(c: &mut AsyncPgConnection, gid: &str) {
+                let strays = n(
+                    c,
+                    &format!(
+                        "WITH named AS ( \
+                             SELECT user_id::text AS u FROM guild_messages WHERE guild_id = '{gid}' \
+                             UNION SELECT type_specific_data->>'requesterUserId' FROM guild_messages \
+                              WHERE guild_id = '{gid}' AND type_specific_data ? 'requesterUserId') \
+                         SELECT count(*) AS n FROM named \
+                          WHERE NOT EXISTS (SELECT 1 FROM guild_members m \
+                                             WHERE m.guild_id = '{gid}' AND m.user_id::text = named.u) \
+                            AND NOT EXISTS (SELECT 1 FROM guild_messages x \
+                                             WHERE x.guild_id = '{gid}' AND x.user_id::text = named.u \
+                                               AND x.message_type IN ('LEAVE', 'KICK', 'BAN'))"
+                    ),
+                )
+                .await;
+                assert_eq!(
+                    strays, 0,
+                    "the board names a user who is neither a member nor gone"
+                );
+            }
+
+            /// Tracker #439, the path that broke New Bladers: a member starts a
+            /// level-1 alt. Its seat is parked, and the guild's board must record
+            /// that it left — its chat lines and the donations to it stay.
+            #[tokio::test]
+            async fn a_new_alt_posts_the_leave_its_guild_needs() {
+                let mut c = db!();
+                let (sephoris, hd1) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) =
+                    seed_character_on_alt(&mut c, "Sephoris", 52, 1_000_000, Some(sephoris)).await;
+                add_user_row(&mut c, uid).await;
+                guilds(&mut c).await;
+                let (mate_u, mate_c) = (Uuid::new_v4(), Uuid::new_v4());
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES \
+                         ('ga', '{mate_u}', '{mate_c}', 'GRANDMASTER', 50), \
+                         ('ga', '{uid}', '{cid}', 'MEMBER', 100); \
+                     INSERT INTO guild_messages (message_id, guild_id, user_id, character_id, \
+                         message_type, type_specific_data, creation_time) VALUES \
+                         ('1::a', 'ga', '{uid}', '{cid}', 'CLIENT', '{{\"text\":\"hello\"}}', 1), \
+                         ('2::b', 'ga', '{mate_u}', '{mate_c}', 'DONATE', \
+                          '{{\"type\":\"DONATE\",\"requesterUserId\":\"{uid}\",\"requesterCharacterId\":\"{cid}\"}}', 2);"
+                ))
+                .await;
+                board_names_only_members_or_leavers(&mut c, "ga").await; // control
+
+                apply_new_alt(&mut c, &new_alt(uid, hd1), &appearance_cost())
+                    .await
+                    .unwrap();
+
+                assert_eq!(guild_of(&mut c, uid).await, None, "HD1 is in no guild");
+                board_names_only_members_or_leavers(&mut c, "ga").await;
+                assert_eq!(
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM guild_messages WHERE guild_id = 'ga' \
+                           AND user_id = '{uid}' AND message_type = 'LEAVE' \
+                           AND type_specific_data = '{{}}'::jsonb AND creation_time > 2"
+                        )
+                    )
+                    .await,
+                    1,
+                    "one LEAVE, retail's empty shape, newer than the alt's own entries"
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM guild_messages WHERE guild_id = 'ga'"
+                    )
+                    .await,
+                    3,
+                    "the guild's history stays"
+                );
+            }
+
+            /// A Grand Master switched out hands the guild on as a leave does,
+            /// and coming back is a JOIN on the board (as a MEMBER: the guild has
+            /// a Grand Master again).
+            #[tokio::test]
+            async fn a_switched_out_grand_master_hands_on_the_guild_and_rejoins() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                guilds(&mut c).await;
+                let (mate_u, mate_c) = (Uuid::new_v4(), Uuid::new_v4());
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES \
+                         ('ga', '{uid}', '{cid}', 'GRANDMASTER', 100), \
+                         ('ga', '{mate_u}', '{mate_c}', 'MEMBER', 200)"
+                ))
+                .await;
+
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, mate_u).await,
+                    Some(("ga".into(), "GRANDMASTER".into())),
+                    "a guild is never left without a Grand Master"
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM guild_messages WHERE guild_id = 'ga' \
+                           AND message_type = 'PROMOTE' \
+                           AND type_specific_data->>'promotedUserId' = '{mate_u}'"
+                        )
+                    )
+                    .await,
+                    1
+                );
+                assert!(
+                    n(
+                        &mut c,
+                        "SELECT grandmaster_since AS n FROM guilds WHERE id = 'ga'"
+                    )
+                    .await
+                        > 0
+                );
+                board_names_only_members_or_leavers(&mut c, "ga").await;
+
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "MEMBER".into()))
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM guild_messages WHERE guild_id = 'ga' \
+                           AND user_id = '{uid}' AND message_type = 'JOIN'"
+                        )
+                    )
+                    .await,
+                    1,
+                    "the board shows the alt coming back"
                 );
             }
 

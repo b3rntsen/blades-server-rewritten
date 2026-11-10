@@ -501,6 +501,13 @@ fn pay_chest_gems(grant: &mut RewardGrant, tier: u64, nonce: u64) {
 /// chest's soul gems were.
 pub const TOP_BAND_GOLD_CHEST_LEVEL: u64 = 61;
 
+/// The CHEST level from which a Gold chest takes [`pay_top_band_gold_soul_gems`].
+/// It is #398's 49 and stays there after #432: a level 45-48 character's chests
+/// are minted at 100 now, so a chest of level 45-48 is one a lower character
+/// earned (a hard job above its level), and moving it would change what a level-44
+/// character is paid.
+pub const TOP_BAND_GOLD_SOUL_GEMS_FROM_CHEST_LEVEL: u64 = 49;
+
 /// A Gold chest's soul gems from level 49 (report #421).
 ///
 /// THE BUG. [`compose_loot`] keeps the soul gems of one retail opening among the
@@ -533,7 +540,7 @@ fn pay_top_band_gold_soul_gems(
     nonce: u64,
 ) {
     use crate::features::store_bundles::{SOUL_GEMS, mix};
-    if level < crate::features::loot_level::TOP_LOOT_FROM_LEVEL as u64 {
+    if level < TOP_BAND_GOLD_SOUL_GEMS_FROM_CHEST_LEVEL {
         return;
     }
     let band: Vec<&ChestLootSample> = pool

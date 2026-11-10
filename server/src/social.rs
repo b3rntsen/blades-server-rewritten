@@ -55,6 +55,19 @@ use crate::{
 
 const SOCIAL_SERVICE_ID: u64 = 9006;
 
+/// The portrait a card carries for a character that never chose one.
+///
+/// Retail characters below level 5 have no `avatarIconId` at all (captured
+/// `GET /characters`, levels 1-4: 0 of 18), and retail never put one of them on
+/// a card: 0 of 603 captured `/social/characters` cards lacked a real portrait,
+/// none was level 1. At level 5, 23 of 25 captured characters carry this id —
+/// the portrait the client assigns when the feature unlocks.
+///
+/// We used to send the nil UUID, a value no retail card ever held. Tracker #439:
+/// the first such card a guild board asked for (HD1, a level-1 alt on a user
+/// whose old alt had posted there) is where every member's guild screen stalled.
+pub const DEFAULT_AVATAR_ICON_ID: Uuid = Uuid::from_u128(0xb835baa3_ce6e_4e89_9240_fa4f37ccd977);
+
 /// A ceiling on how many ids one call may resolve, so a malformed or hostile
 /// `userIds` cannot turn into an unbounded `IN (...)`. The largest captured
 /// request asks for a handful; a full guild roster is capped at 50 members by
@@ -95,8 +108,7 @@ struct SocialCharacterWire {
     pvp_trophies: i64,
     /// Retail sent this on 77 of 77 sampled characters, so it is never omitted.
     /// A character who has not chosen a portrait has `None` in the DB; we send
-    /// the nil UUID, which is the "no icon" value the client already handles
-    /// (`avatar_icon_id` is `None` on every freshly created character).
+    /// [`DEFAULT_AVATAR_ICON_ID`], never the nil UUID — see there.
     avatar_icon_id: Uuid,
     presence: PresenceWire,
     name: String,
@@ -135,7 +147,7 @@ impl SocialCharacterWire {
             character_id,
             level: c.level,
             pvp_trophies: c.pvp_trophies,
-            avatar_icon_id: c.avatar_icon_id.unwrap_or(Uuid::nil()),
+            avatar_icon_id: c.avatar_icon_id.unwrap_or(DEFAULT_AVATAR_ICON_ID),
             presence: PresenceWire {
                 last_activity_date: if is_online { now_ms } else { 0 },
                 show_player_as: if is_online { "online" } else { "offline" },
@@ -638,6 +650,7 @@ mod wire {
 
     /// A character who never picked a portrait still gets the key: retail sent
     /// `avatarIconId` on 77 of 77, so omitting it is a shape it never produced.
+    /// And it is retail's default portrait, never the nil UUID (#439).
     #[test]
     fn avatar_icon_is_always_present() {
         let c = CompleteCharacter {
@@ -655,7 +668,10 @@ mod wire {
             &[],
         ))
         .unwrap();
-        assert_eq!(v.get("avatarIconId").unwrap(), &json!(Uuid::nil()));
+        assert_eq!(
+            v.get("avatarIconId").unwrap(),
+            &json!("b835baa3-ce6e-4e89-9240-fa4f37ccd977")
+        );
     }
 
     /// The two-level `{"social":{"characters":[...]}}` wrapper, present on every

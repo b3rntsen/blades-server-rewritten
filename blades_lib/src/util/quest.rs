@@ -88,7 +88,7 @@ pub fn generate_quest_data(
 
     let enemy_level = scaling.enemy_level(player_level);
     let given_xp = scaling.given_xp(enemy_level);
-    // From level 49 the loot is the level-100 character's; enemies stay (#398).
+    // From level 45 the loot is the level-100 character's; enemies stay (#398, #432).
     let loot_shift =
         crate::features::loot_level::dungeon_loot_shift(scaling, player_level, enemy_level);
 
@@ -111,6 +111,8 @@ pub fn generate_quest_data(
         player_level,
         false,
     );
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    crate::features::high_level_materials::pay_dungeon(&mut generated_dungeon_data, player_level);
 
     Ok((quest, Some(generated_dungeon_data)))
 }
@@ -280,6 +282,8 @@ pub fn generate_for_event_dungeon_for_character(
     crate::features::loot_level::cap_event_dungeon_soul_gems(&mut data, character_level);
     // Grand at 45-48 (owner-approved deviation, #388).
     crate::features::beginner_economy::top_dungeon_soul_gems(&mut data, character_level, true);
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    crate::features::high_level_materials::pay_dungeon(&mut data, character_level);
     Some(data)
 }
 
