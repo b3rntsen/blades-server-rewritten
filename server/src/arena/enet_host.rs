@@ -282,7 +282,7 @@ fn pump(
 ) -> bool {
     // Extract everything we need, then drop the event so `host` is free to send.
     let action = match host.service() {
-        Ok(Some(Event::Connect { peer, .. })) => Act::Connect(peer.id(), peer.address()),
+        Ok(Some(Event::Connect { peer, data })) => Act::Connect(peer.id(), peer.address(), data),
         Ok(Some(Event::Disconnect { peer, .. })) => Act::Disconnect(peer.id(), peer.address()),
         Ok(Some(Event::Receive { peer, packet, .. })) => Act::Receive(
             peer.id(),
@@ -298,11 +298,33 @@ fn pump(
     };
 
     match action {
-        Act::Connect(pid, addr) => {
+        Act::Connect(pid, addr, data) => {
+            info!("arena-enet: peer connected ({addr:?}) connect data {data:#010x}");
             if let Some(addr) = addr {
                 peer_at.insert(addr, pid);
+                // #430: the retail client's mid-match transport reconnect. It opens a
+                // new ENet peer from a new source port, keeps its key, and waits for
+                // the server to speak. Move its slot here and speak first.
+                if let Some(rebind) = registry.note_connect(addr, data) {
+                    info!(
+                        "arena-enet: {} reconnected as {addr} mid-match; replaying {} \
+                         current-state frame(s) and dropping the old peer",
+                        rebind.old_addr,
+                        rebind.replay.len(),
+                    );
+                    // Reset (not disconnect) the abandoned generation: the client has
+                    // already let it go, a reset raises no Disconnect event, and a
+                    // late datagram from it can no longer pull the slot back through
+                    // `rebind_encrypted_peer`.
+                    if let Some(old_pid) = peer_at.remove(&rebind.old_addr) {
+                        host.peer_mut(old_pid).reset();
+                    }
+                    registry.forget_connect(&rebind.old_addr);
+                    for (channel, bytes) in &rebind.replay {
+                        send_to(host, peer_at, &addr, *channel, bytes);
+                    }
+                }
             }
-            info!("arena-enet: peer connected ({addr:?})");
         }
         Act::Disconnect(pid, addr) => {
             info!("arena-enet: peer disconnected ({addr:?})");
@@ -320,12 +342,18 @@ fn pump(
                 // retirement deliberately removes `peer_at` before the eventual
                 // Disconnect event arrives.
                 if !disconnect_still_owns_address(peer_at, &addr, &pid) {
+                    // Retired by the server first (post-match / reclaim): nobody
+                    // owns the address any more, so its CONNECT data can go too.
+                    if !peer_at.contains_key(&addr) {
+                        registry.forget_connect(&addr);
+                    }
                     info!(
                         "arena-enet: ignoring stale disconnect for peer {pid:?} at {addr}; \
                          address is absent or already owned by a newer peer"
                     );
                     return true;
                 }
+                registry.forget_connect(&addr);
                 // If the peer left a live match, its opponent wins by concession;
                 // send the immediate victory frames down the same encrypt+send path.
                 // The match-end walk then rides the tick loop as for a normal win.
@@ -349,7 +377,7 @@ fn pump(
 }
 
 enum Act {
-    Connect(PeerID, Option<std::net::SocketAddr>),
+    Connect(PeerID, Option<std::net::SocketAddr>, u32),
     Disconnect(PeerID, Option<std::net::SocketAddr>),
     Receive(PeerID, Option<std::net::SocketAddr>, Duration, Vec<u8>),
 }
@@ -632,6 +660,11 @@ mod tests {
 
     impl Client {
         fn connect(server: SocketAddr) -> Self {
+            Self::connect_with_data(server, 0)
+        }
+        /// Connect with a given ENet CONNECT `data` word. The retail client puts a
+        /// per-process value there and keeps it across its transport reconnects.
+        fn connect_with_data(server: SocketAddr, data: u32) -> Self {
             let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
             let mut host = Host::new(
                 BladesEnetSocket::new(sock),
@@ -643,7 +676,7 @@ mod tests {
             .unwrap();
             // Request 7 channels (ch0–6), matching the retail client's CONNECT
             // (channelCount=7 in s506) so the server can send on ch1/ch4/ch6.
-            let pid = host.connect(server, 7, 0).unwrap().id();
+            let pid = host.connect(server, 7, data).unwrap().id();
             Client {
                 host,
                 pid,
@@ -934,6 +967,137 @@ mod tests {
         let peer = &registry.debug_list()[0].peers[0];
         assert_eq!(peer.rebind_count, 1);
         assert_eq!(peer.last_match_state_ack.as_deref(), Some("StateTimeout"));
+    }
+
+    /// #430 (HauDrauf, 2026-10-26 02:57:52, match 6d9bc558): mid-match the client's
+    /// ENet peer timed out and it reconnected from a NEW source port with the same
+    /// CONNECT `data` and the same key, then sent NOTHING, waiting for the server
+    /// as retail's does (s257 port 58728 → 52036: the server speaks first, under
+    /// the old key, with no second op-0x38). Our server waited for ciphertext, so
+    /// the round went live without him and the old peer's timeout conceded the
+    /// match. The replacement must get the current state without saying a word,
+    /// and the abandoned peer must be gone from the match.
+    #[test]
+    fn midmatch_reconnect_is_resumed_before_the_client_speaks() {
+        const DATA: u32 = 0x76B7_F0F5; // retail s506's CONNECT data word
+        let registry = MatchRegistry::new(4);
+        assert!(registry.allocate_with_bots(
+            &["haudrauf".to_string()],
+            vec![Default::default(), Default::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server_sock.local_addr().unwrap();
+        let mut server = Host::new(
+            BladesEnetSocket::new(server_sock),
+            HostSettings {
+                peer_limit: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut peer_at = HashMap::new();
+        let mut old = Client::connect_with_data(server_addr, DATA);
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            old.drain();
+            if old.connected {
+                break;
+            }
+        }
+        assert!(old.connected);
+        let (client_sk, client_pk) = gen_keypair();
+        old.send_plain(&hs_c2s(&client_pk));
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            old.drain();
+            if !old.inbox.is_empty() {
+                break;
+            }
+        }
+        let reply = old.inbox.first().expect("key exchange reply");
+        let mut server_pk = [0u8; 32];
+        server_pk.copy_from_slice(&reply[14..46]);
+        let mut nonce = [0u8; 8];
+        nonce.copy_from_slice(&reply[47..55]);
+        old.crypto = Some(CryptoCtx {
+            key: x25519_shared(&client_sk, &server_pk),
+            nonce,
+        });
+        old.inbox.clear();
+        let mut vnow = std::time::Instant::now();
+        for _ in 0..160 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            vnow += Duration::from_millis(250);
+            for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                send_to(&mut server, &peer_at, &addr, channel, &bytes);
+            }
+            server.flush();
+            old.drain();
+            if old.inbox.iter().any(|m| m.ends_with(b"StateTimeout")) {
+                break;
+            }
+        }
+        assert_eq!(
+            registry.debug_list()[0].phase,
+            "StateTimeout",
+            "round is live"
+        );
+
+        // A housemate on the same IP (127.0.0.1 here) opens a connection of their
+        // own: it must not take the slot.
+        let mut housemate = Client::connect_with_data(server_addr, 0x0BAD_F00D);
+        // The reconnect: new socket, same CONNECT data, same key, silent.
+        let mut replacement = Client::connect_with_data(server_addr, DATA);
+        replacement.crypto = old.crypto.clone();
+        assert_ne!(replacement.addr(), old.addr(), "new source port");
+        let saw_inround = |c: &Client| {
+            c.inbox.iter().any(|m| {
+                m.get(1) == Some(&0x35)
+                    && arena_proto::parse_netdata(&m[2..]).int(5)
+                        == Some(crate::arena::combat::state::MatchState::InRound as i64)
+            })
+        };
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            housemate.drain();
+            replacement.drain();
+            if saw_inround(&replacement)
+                && replacement
+                    .inbox
+                    .iter()
+                    .any(|m| m.ends_with(b"StateTimeout"))
+            {
+                break;
+            }
+        }
+        assert!(replacement.connected);
+        assert!(housemate.connected);
+        assert!(
+            saw_inround(&replacement),
+            "the silent replacement peer is sent the live MatchState"
+        );
+        assert!(
+            replacement
+                .inbox
+                .iter()
+                .any(|m| m.ends_with(b"StateTimeout")),
+            "and the live flow trigger"
+        );
+        assert!(housemate.inbox.is_empty(), "the housemate is sent nothing");
+        assert!(registry.is_active(&replacement.addr()));
+        assert!(!registry.is_active(&old.addr()));
+        assert!(!registry.is_active(&housemate.addr()));
+        assert!(
+            !peer_at.contains_key(&old.addr()),
+            "the abandoned ENet generation is dropped, so its timeout cannot concede"
+        );
+        assert_eq!(registry.active_count(), 1);
+        assert_eq!(registry.debug_list()[0].peers[0].rebind_count, 1);
     }
 
     /// #375, the waiting player's side. A paired match whose opponent never dials is
