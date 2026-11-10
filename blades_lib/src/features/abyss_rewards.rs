@@ -369,6 +369,12 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
     );
     // Its materials are always 20 (owner-approved deviation from retail, #388).
     crate::features::beginner_economy::size_abyss_end_materials(&mut grant.stackable_items);
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    crate::features::high_level_materials::pay_rewards(
+        &mut grant.stackable_items,
+        i64::try_from(character_level).unwrap_or(i64::MAX),
+        mix((run_seed as u64) ^ 0x0438_E4D0),
+    );
     // Its soul gems are 3 to 7 (HauDrauf, #407) — the count only.
     size_end_soul_gems(&mut grant.stackable_items, run_seed);
     grant
@@ -811,6 +817,12 @@ fn rung_reward(rung: &Rung, at: u32, real_level: u64, run_seed: i64) -> RewardGr
         &mut grant.stackable_items,
         i64::try_from(real_level).unwrap_or(i64::MAX),
         mix((run_seed as u64) ^ u64::from(at).rotate_left(17) ^ 0x388_7E40),
+    );
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    crate::features::high_level_materials::pay_rewards(
+        &mut grant.stackable_items,
+        i64::try_from(real_level).unwrap_or(i64::MAX),
+        mix((run_seed as u64) ^ u64::from(at).rotate_left(17) ^ 0x0438_7E40),
     );
     grant
 }
@@ -1756,12 +1768,18 @@ mod tests {
             (95, 90.0, IMP_STOOL, 6, Some((NIGHTSHADE, 30))),
             (82, 60.0, HONEYCOMB, 5, None),
         ];
-        for (level, score, item, count, seventy) in screens {
+        // The screens' counts (third column) were retail's; from 45 an effect
+        // ingredient is HauDrauf's 30 (#438), so the stack is that item at 30.
+        for (level, score, item, _retail_count, seventy) in screens {
             let hit = (0..200_000i64).find(|seed| {
                 let rung35 = future_reward_for_rung(35, level, *seed).unwrap();
                 let chest = future_reward_for_rung(50, level, *seed).unwrap();
                 let rung70 = future_reward_for_rung(70, level, *seed).unwrap();
-                rung35.stackable_items == HashMap::from([(uuid(item), count)])
+                rung35.stackable_items
+                    == HashMap::from([(
+                        uuid(item),
+                        crate::features::high_level_materials::EFFECT_INGREDIENT_STACK,
+                    )])
                     && chest.chests.iter().any(|c| {
                         (c.tier, c.level)
                             == (

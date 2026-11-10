@@ -1271,8 +1271,10 @@ mod report152_stale_story_loot_tests {
         // A count of our own deterministic rolls, so it moves with the floor-loot
         // corpus: 37 before #374 drew each table from the levels nearest the
         // dungeon's, which changed the level-48 results these rolls pick from; 37
-        // again since #388 fills every breakable to its 2 / 4 / 6 stacks.
-        assert_eq!(paying_spawns, 37, "the capture-derived deterministic rolls");
+        // again since #388 fills every breakable to its 2 / 4 / 6 stacks; 36 since
+        // #438 (HauDrauf, msg 3018) pays no Seeds, Dye or Pelt from level 45, and one
+        // spawn here held nothing else.
+        assert_eq!(paying_spawns, 36, "the capture-derived deterministic rolls");
 
         // Exact shape of the reporter's durable pre-fix row: spawn/table ids exist,
         // but every result is empty. Preserve the enemy/chest sections verbatim.
@@ -2397,6 +2399,12 @@ pub(crate) fn beginner_economy_completion(reward: &mut RewardGrant, level: i64, 
     size_material_stacks(
         &mut reward.stackable_items,
         quest_id.as_u128() as u64 ^ 0x388,
+    );
+    // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf, #438).
+    blades_lib::features::high_level_materials::pay_rewards(
+        &mut reward.stackable_items,
+        level,
+        quest_id.as_u128() as u64 ^ 0x438,
     );
 }
 
@@ -4612,6 +4620,8 @@ pub(crate) mod jobs_gen {
             i64::from(level),
             false,
         );
+        // Levels 45-100 (HauDrauf, #438).
+        blades_lib::features::high_level_materials::pay_dungeon(&mut data, i64::from(level));
         Some(data)
     }
 
@@ -4638,6 +4648,8 @@ pub(crate) mod jobs_gen {
                 i64::from(level),
                 false,
             );
+            // Levels 45-100 (HauDrauf, #438).
+            blades_lib::features::high_level_materials::pay_dungeon(data, i64::from(level));
         }
         Some(entry)
     }

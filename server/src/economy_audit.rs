@@ -65,6 +65,10 @@ use crate::jewelry_grade::{self, NECKLACE, RING};
 #[cfg(test)]
 mod report_388;
 
+/// HauDrauf's material rules for levels 45-100 (#438): one test per rule.
+#[cfg(test)]
+mod report_438;
+
 /// The character levels every level-dependent generator is sampled at.
 const LEVELS: [u64; 10] = [1, 10, 20, 30, 40, 45, 49, 60, 80, 100];
 

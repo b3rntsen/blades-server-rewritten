@@ -253,6 +253,19 @@ impl Sizes {
         }
     }
 
+    /// [`Self::add`] for a character of `level`: from 45 the stacks #438 sizes
+    /// (HauDrauf's 30 / 1 / 1-7, report_438) are left out; every other material is
+    /// still #388's.
+    fn add_at(&mut self, level: i64, stacks: &HashMap<Uuid, u64>) {
+        use blades_lib::features::high_level_materials::{applies, names};
+        let kept: HashMap<Uuid, u64> = stacks
+            .iter()
+            .filter(|(id, _)| !applies(level) || !names(id))
+            .map(|(id, q)| (*id, *q))
+            .collect();
+        self.add(&kept);
+    }
+
     /// Only 5, 10 and 20, each a third (within `slack`) of at least `min` stacks.
     fn assert_thirds(&self, what: &str, min: u64, slack: f64) {
         assert!(
@@ -322,12 +335,12 @@ fn material_stacks_are_5_10_or_20_in_chests_corpses_and_containers() {
             for e in d.enemy_generated_data.values().flatten().flatten() {
                 e.loot_table_loot
                     .values()
-                    .for_each(|l| corpses.add(&l.stackable_items));
+                    .for_each(|l| corpses.add_at(level, &l.stackable_items));
             }
             for r in d.item_generated_data.values().flatten() {
                 r.loot_table_loot
                     .values()
-                    .for_each(|l| containers.add(&l.stackable_items));
+                    .for_each(|l| containers.add_at(level, &l.stackable_items));
             }
         }
     }
@@ -440,12 +453,12 @@ fn event_ladders_keep_retail_material_amounts_while_the_switch_is_off() {
             for e in data.enemy_generated_data.values().flatten().flatten() {
                 e.loot_table_loot
                     .values()
-                    .for_each(|l| dungeon.add(&l.stackable_items));
+                    .for_each(|l| dungeon.add_at(level, &l.stackable_items));
             }
             for r in data.item_generated_data.values().flatten() {
                 r.loot_table_loot
                     .values()
-                    .for_each(|l| dungeon.add(&l.stackable_items));
+                    .for_each(|l| dungeon.add_at(level, &l.stackable_items));
             }
         }
     }

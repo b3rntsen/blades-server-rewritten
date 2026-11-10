@@ -597,6 +597,11 @@ async fn handle_quest_dungeon_update(
                         i64::from(character_data.character.0.level),
                         false,
                     );
+                    // Levels 45-100 (HauDrauf, #438).
+                    blades_lib::features::high_level_materials::pay_dungeon(
+                        &mut generated_data,
+                        i64::from(character_data.character.0.level),
+                    );
                 }
                 let mut dungeon_state = quest_data
                     .dungeon_state
@@ -867,6 +872,11 @@ async fn handle_event_dungeon_update(
                         &mut repaired,
                         i64::from(character_data.character.0.level),
                         true,
+                    );
+                    // Levels 45-100 (HauDrauf, #438).
+                    blades_lib::features::high_level_materials::pay_dungeon(
+                        &mut repaired,
+                        i64::from(character_data.character.0.level),
                     );
                     repaired
                 }
