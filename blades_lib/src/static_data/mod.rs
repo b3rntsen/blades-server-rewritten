@@ -251,7 +251,8 @@ impl EnchantingData {
     }
 
     /// The count odds an enchant roll uses: the item's arcane tier's when the catalog
-    /// has one (tier 1 = exactly one, tier 2 = exactly two), else
+    /// has one (APK: tier 1 = exactly one, tier 2 = exactly two; the tuning's
+    /// `arcaneTierCountOdds` replaces a tier's odds, tracker #485), else
     /// [`Self::count_odds_for`] the item's table.
     pub fn roll_count_odds<'a>(
         &'a self,
@@ -259,7 +260,12 @@ impl EnchantingData {
         arcane_tier: Option<u64>,
     ) -> &'a [f64] {
         arcane_tier
-            .and_then(|t| self.arcane_tier_count_odds.get(&t))
+            .and_then(|t| {
+                self.tuning
+                    .arcane_tier_count_odds
+                    .get(&t)
+                    .or_else(|| self.arcane_tier_count_odds.get(&t))
+            })
             .map_or_else(|| self.count_odds_for(table), Vec::as_slice)
     }
 
@@ -288,6 +294,10 @@ pub struct EnchantTuning {
     pub secondary_count_odds: Vec<CountOddsRule>,
     /// The double-Ravage (Magicka + Stamina) pity timer on weapon enchants.
     pub double_ravage_pity: DoubleRavagePity,
+    /// P(0), P(1), P(2) secondaries per arcane tier, replacing the APK's
+    /// `ArcaneTier._oddsOfAdditionalEnchantment` for the tiers it names (tracker #485:
+    /// an Arcane I item may roll a second secondary). Empty = the APK's fixed counts.
+    pub arcane_tier_count_odds: HashMap<u64, Vec<f64>>,
 }
 
 /// One `secondaryCountOdds` rule: which secondary tables it covers and their odds.
@@ -323,13 +333,15 @@ impl CountOddsRule {
 
 /// Owner decision d17 (tracker #415): after `tries[class]` weapon enchants of one odds
 /// class without both Ravage Magicka and Ravage Stamina, the next one in that class is
-/// given both. Not retail; `enabled: false` turns it off.
+/// given both. Shields count the same way under `shield:<class>` keys with the shield
+/// Ravage pair (tracker #463). Not retail; `enabled: false` turns it off.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DoubleRavagePity {
     pub enabled: bool,
     /// Misses allowed per odds class ([`EnchantingData::odds_class`]) before the pair
-    /// is forced. A class that is absent, or set to 0, is never forced.
+    /// is forced: bare class names for weapons, `shield:<class>` for shields. A class
+    /// that is absent, or set to 0, is never forced.
     pub tries: BTreeMap<String, u32>,
 }
 

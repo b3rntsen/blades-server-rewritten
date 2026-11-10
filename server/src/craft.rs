@@ -2675,7 +2675,13 @@ mod tests {
             "normal tries {normal} vs expected {expected:.1}"
         );
         assert!(shipped.tuning.double_ravage_pity.enabled);
-        assert_eq!(shipped.tuning.double_ravage_pity.tries["arcane2"], 95);
+        // HauDrauf's rule (#463): weapons and shields with two guaranteed enchants get
+        // the pair on the 50th in a row without it.
+        assert_eq!(shipped.tuning.double_ravage_pity.tries["arcane2"], 49);
+        assert_eq!(
+            shipped.tuning.double_ravage_pity.tries["shield:arcane2"],
+            49
+        );
         // Every table is covered by a rule, so editing the file reaches every type.
         for (i, t) in shipped.secondary_tables.iter().enumerate() {
             assert!(
@@ -2690,6 +2696,50 @@ mod tests {
                 t.equipment_slot
             );
         }
+    }
+
+    /// HauDrauf's rule (tracker #485): an Arcane I item keeps its guaranteed
+    /// secondary and rolls a second one with a plain weapon's chance of two (0.25).
+    /// Red before: the APK's tier-1 odds are exactly one, so `two` stayed 0. The code
+    /// default (no file) is still the APK's exactly-one, and Arcane II stays two.
+    #[test]
+    fn shipped_arcane_one_can_roll_a_second_secondary() {
+        let shipped = static_data_from_deploy().enchanting;
+        let weapon_p2 =
+            shipped.count_odds_for(shipped.table_for(&uuid(MADNESS_BATTLEAXE)).unwrap())[2];
+        assert_eq!(
+            shipped.tuning.arcane_tier_count_odds[&1],
+            vec![0.0, 1.0 - weapon_p2, weapon_p2]
+        );
+        let mut rng = seeded(485);
+        let n = 4_000;
+        let count = |e: &EnchantingData, item: &Item, rng: &mut rand::rngs::StdRng| {
+            roll_item_for_test(item, uuid(MAGICKA_DAMAGE_T10), e, rng)
+                .properties
+                .enchanting
+                .len()
+                - 1
+        };
+        let arcane1 = madness_battleaxe(Some(1));
+        let counts: Vec<usize> = (0..n)
+            .map(|_| count(&shipped, &arcane1, &mut rng))
+            .collect();
+        assert!(counts.iter().all(|c| *c == 1 || *c == 2), "never 0");
+        let two = counts.iter().filter(|c| **c == 2).count() as f64 / n as f64;
+        assert!((two - 0.25).abs() < 0.03, "arcane I with two: {two}");
+        // Every item type at Arcane I follows the same rule, e.g. a ring.
+        for template in [GOLD_EMERALD_RING] {
+            let it = Item {
+                item_template_id: uuid(template),
+                ..madness_battleaxe(Some(1))
+            };
+            assert!((0..400).any(|_| count(&shipped, &it, &mut rng) == 2));
+        }
+        // Code default: the APK's exactly one; Arcane II is always two either way.
+        let code_default = deploy_enchanting();
+        assert!((0..500).all(|_| count(code_default, &arcane1, &mut rng) == 1));
+        let arcane2 = madness_battleaxe(Some(2));
+        assert!((0..500).all(|_| count(&shipped, &arcane2, &mut rng) == 2));
     }
 
     /// The config is what the roll reads: weapons set to "always two" roll two, and
