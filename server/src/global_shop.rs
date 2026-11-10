@@ -561,10 +561,62 @@ fn catalog_with(
 ) -> Value {
     let replayed = replay_calendar_with(&static_data.global_shop_windows, now, one_day)
         .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
-    uncap_sigil_materials(apply_raised_window_caps(apply_authored(
-        replayed,
-        &static_data.global_shop_authored,
-    )))
+    apply_level_up_offer_price(
+        uncap_sigil_materials(apply_raised_window_caps(apply_authored(
+            replayed,
+            &static_data.global_shop_authored,
+        ))),
+        &static_data.level_up_offers,
+    )
+}
+
+/// The Gem price of every player level-up offer (`level_up_offers.json`, the
+/// `PlayerLvlOffer_03` products `/levelup` stamps on `character.globalShopOffers`).
+///
+/// NOT RETAIL. Owner decision d33 (tracker #473, SpaceMunk, 2026-11-10): the
+/// levelling offers sell for 1 green Gem. Retail priced them at 375-1,875 Gems in
+/// the APK catalogue. Retail's own farewell sale re-priced 48 Gem-priced
+/// (`productType` 1) products to 1 Gem through this same override `prices` field,
+/// which is the path the client reads a price from.
+///
+/// REVERT SWITCH: `None` serves no override and the APK's retail price applies.
+pub(crate) const LEVEL_UP_OFFER_GEM_PRICE: Option<u64> = Some(1);
+
+/// The override window of a repriced level-up offer: the APK catalogue's own
+/// window for these products (2018-01-01 .. 2030-01-31 UTC). The offer's 24-hour
+/// countdown runs from the `startTime` `/levelup` stamps, not from this.
+const LEVEL_UP_OFFER_WINDOW: (i64, i64) = (1_514_764_800, 1_896_134_400);
+
+/// Lay a [`LEVEL_UP_OFFER_GEM_PRICE`] override over each level-up offer. Each
+/// product stays once per character (`maxPurchases` 1, the APK's
+/// `perUserMaximum`), which also caps what a 1-Gem price can be bought for. An
+/// entry already in the catalogue for the same product (none ship) is replaced.
+fn apply_level_up_offer_price(mut catalog: Value, level_up_offers: &HashMap<u16, Uuid>) -> Value {
+    let Some(price) = LEVEL_UP_OFFER_GEM_PRICE else {
+        return catalog;
+    };
+    let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    else {
+        return catalog;
+    };
+    for product in level_up_offers.values() {
+        let id = product.to_string();
+        map.insert(
+            id.clone(),
+            serde_json::json!({
+                "activeStartDate": LEVEL_UP_OFFER_WINDOW.0,
+                "activeEndDate": LEVEL_UP_OFFER_WINDOW.1,
+                "isActive": true,
+                "maxPurchaseLimits": [{ "limit": 0, "purchaseTrackingId": id }],
+                "maxPurchases": 1,
+                "prices": [{ "currencyId": blades_lib::economy::GEMS, "quantity": price }],
+                "purchaseTrackingId": null,
+            }),
+        );
+    }
+    catalog
 }
 
 /// Per-window purchase caps raised above retail's, by product id.
@@ -5462,7 +5514,12 @@ mod raised_window_cap_tests {
     fn unraised(sd: &blades_lib::static_data::StaticData, now: i64) -> Value {
         let replayed = replay_calendar(&sd.global_shop_windows, now)
             .unwrap_or_else(|| shift_to_now(&sd.global_shop_overrides, now));
-        apply_authored(replayed, &sd.global_shop_authored)
+        // The level-up offer repricing (d33) is its own deviation with its own
+        // test; this one isolates the raised caps.
+        apply_level_up_offer_price(
+            apply_authored(replayed, &sd.global_shop_authored),
+            &sd.level_up_offers,
+        )
     }
 
     /// One hour into `product`'s next (or current) window after `after`.
@@ -6191,6 +6248,42 @@ mod report440_one_day_windows {
                     "{id}: next weekend kept the allowance"
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod level_up_offer_price_tests {
+    use super::*;
+
+    /// d33 (#473): a level-up offer costs [`LEVEL_UP_OFFER_GEM_PRICE`] Gems — the
+    /// served catalogue says so, the purchase check accepts exactly that and
+    /// refuses the retail price, and each offer stays once per character.
+    #[test]
+    fn level_up_offers_sell_for_one_gem_once_per_character() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        assert!(!sd.level_up_offers.is_empty());
+        let now = 1_794_000_000; // 2026-11-07
+        let one_gem = vec![Price {
+            currency_id: blades_lib::economy::GEMS,
+            quantity: 1,
+        }];
+        let served = served_catalog(&sd, now);
+        for product in sd.level_up_offers.values() {
+            let retail = sd.global_shop_prices[product].clone();
+            assert_ne!(retail, one_gem, "retail priced {product} above 1 Gem");
+            assert_eq!(
+                served["globalShopOverrides"][product.to_string()]["prices"],
+                serde_json::json!([{ "currencyId": blades_lib::economy::GEMS, "quantity": 1 }]),
+                "{product} served at 1 Gem"
+            );
+            assert!(validate_purchase_prices(&sd, *product, &one_gem, now).is_ok());
+            assert!(
+                validate_purchase_prices(&sd, *product, &retail, now).is_err(),
+                "the retail price is no longer the price"
+            );
+            assert_eq!(lifetime_purchase_cap(&sd, *product, now), Some(1));
         }
     }
 }
