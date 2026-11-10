@@ -615,7 +615,7 @@ async fn handle_quest_dungeon_update(
 
                 let mut wallet = std::mem::take(&mut character_data.wallet.0);
 
-                // From level 49 a chest is minted at the level a level-100 character's
+                // From level 45 a chest is minted at the level a level-100 character's
                 // would be (#398): a job's at the level-100 board's difficulty, any
                 // other dungeon's at the level-100 enemy level.
                 let character_level = character_data.character.0.level;
@@ -857,7 +857,7 @@ async fn handle_event_dungeon_update(
                         "dungeon_update: character {character_id} is in a different EVENT dungeon \
                          variant than we generated; regenerated from the spawner it reported (#174)"
                     );
-                    // An event's soul gems stay Grand at 49-60 (#398).
+                    // An event's soul gems stay Grand at 45-60 (#398, #432).
                     blades_lib::features::loot_level::cap_event_dungeon_soul_gems(
                         &mut repaired,
                         i64::from(character_data.character.0.level),
@@ -890,7 +890,7 @@ async fn handle_event_dungeon_update(
 
             let mut wallet = std::mem::take(&mut character_data.wallet.0);
 
-            // From level 49 the chest is the level-100 character's (#398).
+            // From level 45 the chest is the level-100 character's (#398, #432).
             let character_level = character_data.character.0.level;
             let chest_loot_level = |level: u64| {
                 paid_chest_level(

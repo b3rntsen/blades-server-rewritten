@@ -248,11 +248,26 @@ pub fn chest_gems(tier: u64, seed: u64) -> Option<u64> {
 
 /// The character levels that are paid the three best soul gems (Grand, Glorious,
 /// Transcendent) wherever a lower kind would be paid. From 49 every source already
-/// pays as level 100 (#398), so this is 45-48; below 45 nothing moves.
+/// paid as level 100 (#398), so this is 45-48; below 45 nothing moves.
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16: "the three best soul
 /// gems are paid from level 45 in every source".
+///
+/// #432 (HauDrauf, 2026-10-26: "No more differences between levels 45 and 100,
+/// except in events with fixed rewards") pays 45-48 as level 100 in every source
+/// ([`crate::features::loot_level::TOP_LOOT_FROM_LEVEL`]), so on top of that this
+/// would make 45-48 out-earn level 100. It now applies only where 45-48 are still
+/// paid their own level: an event's milestones and final reward
+/// ([`top_event_soul_gems`] via [`event_rewards`]); see [`bridges`].
 pub const TOP_SOUL_GEM_LEVELS: RangeInclusive<i64> = 45..=48;
+
+/// Whether #388's three best soul gems still bridge a source at `level`: only
+/// below [`crate::features::loot_level::TOP_LOOT_FROM_LEVEL`], where the source
+/// is not already paid as level 100. Since #432 lowered that to 45 this is never
+/// true; raising it back to 49 brings the bridge back for 45-48 unchanged.
+fn bridges(level: i64) -> bool {
+    TOP_SOUL_GEM_LEVELS.contains(&level) && level < crate::features::loot_level::TOP_LOOT_FROM_LEVEL
+}
 
 /// The ten soul gems, Petty (`SoulGem1`) to Transcendent (`SoulGem10`).
 pub const SOUL_GEMS: [Uuid; 10] = crate::features::store_bundles::SOUL_GEMS;
@@ -283,7 +298,7 @@ pub const TOP_SOUL_GEM_WEIGHTS: [(Uuid, u64); 3] = [
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
 pub fn top_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
-    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+    if !bridges(level) {
         return;
     }
     let total: u64 = TOP_SOUL_GEM_WEIGHTS.iter().map(|(_, w)| w).sum();
@@ -307,6 +322,10 @@ pub fn top_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64, seed: u64) {
 /// [`top_soul_gems`] for an EVENT reward: at [`TOP_SOUL_GEM_LEVELS`] every soul
 /// gem is Grand, same count — the most an event pays a level 49-60 character
 /// (`EVENT_GRAND_SOUL_GEM_LEVELS`, #398), so 45-48 never out-earns 49.
+///
+/// An event's milestones and final reward take it at 45-48 ([`event_rewards`]),
+/// where #432 leaves them their own level's; an event DUNGEON at 45-48 is paid as
+/// level 100 since #432 and no longer takes it ([`top_dungeon_soul_gems`]).
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
 pub fn top_event_soul_gems(stacks: &mut HashMap<Uuid, u64>, level: i64) {
@@ -336,7 +355,8 @@ fn lower_soul_gems(stacks: &mut HashMap<Uuid, u64>) -> Vec<(Uuid, u64)> {
 /// [`top_soul_gems`] (or, for an `event` dungeon, [`top_event_soul_gems`]) over a
 /// generated dungeon's corpse and container loot, for a character of `level`.
 /// Chests are rolled when opened and are paid there. Idempotent: once paid, no
-/// stack below Grand is left to move.
+/// stack below Grand is left to move. A no-op since #432 (see [`bridges`]): a
+/// 45-48 dungeon is level 100's.
 ///
 /// Owner-approved deviation from retail, #388, 2026-10-16.
 pub fn top_dungeon_soul_gems(
@@ -366,7 +386,7 @@ fn top_corpse_soul_gems(
     level: i64,
     event: bool,
 ) {
-    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+    if !bridges(level) {
         return;
     }
     for (group, spawners) in &mut data.enemy_generated_data {
@@ -389,7 +409,7 @@ pub fn top_container_soul_gems(
     level: i64,
     event: bool,
 ) {
-    if !TOP_SOUL_GEM_LEVELS.contains(&level) {
+    if !bridges(level) {
         return;
     }
     for (group, pile) in &mut data.item_generated_data {
@@ -576,45 +596,26 @@ mod tests {
         assert_eq!(chest_gems(3, 1), None);
     }
 
+    /// #388 paid 45-48 the three best soul gems in every source. Since #432 every
+    /// source but an event's fixed rewards pays 45-48 as level 100, so the bridge
+    /// leaves them alone (it would make 45-48 out-earn 100); the event's milestones
+    /// and final reward, still their own level's, keep every soul gem Grand.
     #[test]
-    fn soul_gems_at_45_to_48_are_the_three_best() {
+    fn soul_gems_at_45_to_48_are_level_100s_but_event_fixed_rewards_stay_grand() {
         use crate::features::store_bundles::SOUL_GEMS;
         let lumber = Uuid::from_u128(0xe7193116_d761_479b_8a20_5633737977f5);
-        let mut seen = std::collections::BTreeMap::new();
-        for seed in 0..400 {
-            for level in [45, 46, 47, 48] {
-                let mut s = HashMap::from([
+        for level in [1, 44, 45, 46, 47, 48, 49, 100] {
+            for seed in 0..50 {
+                let s0 = HashMap::from([
                     (SOUL_GEMS[0], 3),
                     (SOUL_GEMS[6], 2),
                     (GLORIOUS_SOUL_GEM, 1),
                     (lumber, 9),
                 ]);
+                let mut s = s0.clone();
                 top_soul_gems(&mut s, level, seed);
-                assert_eq!(s[&lumber], 9);
-                assert!(
-                    s.keys().all(|k| *k == lumber
-                        || [GRAND_SOUL_GEM, GLORIOUS_SOUL_GEM, TRANSCENDENT_SOUL_GEM].contains(k)),
-                    "{s:?}"
-                );
-                assert_eq!(
-                    s.iter()
-                        .filter(|(k, _)| **k != lumber)
-                        .map(|(_, n)| n)
-                        .sum::<u64>(),
-                    6,
-                    "counts kept"
-                );
-                for k in s.keys() {
-                    *seen.entry(*k).or_insert(0) += 1;
-                }
+                assert_eq!(s, s0, "level {level} untouched");
             }
-        }
-        assert!(seen.contains_key(&GRAND_SOUL_GEM) && seen.contains_key(&TRANSCENDENT_SOUL_GEM));
-        for level in [1, 44, 49, 100] {
-            let s0 = HashMap::from([(SOUL_GEMS[0], 3), (SOUL_GEMS[6], 2)]);
-            let mut s = s0.clone();
-            top_soul_gems(&mut s, level, 1);
-            assert_eq!(s, s0, "level {level} untouched");
         }
         let mut e = HashMap::from([(SOUL_GEMS[3], 3), (GLORIOUS_SOUL_GEM, 1), (lumber, 9)]);
         top_event_soul_gems(&mut e, 45);

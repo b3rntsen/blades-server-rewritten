@@ -88,7 +88,7 @@ pub fn generate_quest_data(
 
     let enemy_level = scaling.enemy_level(player_level);
     let given_xp = scaling.given_xp(enemy_level);
-    // From level 49 the loot is the level-100 character's; enemies stay (#398).
+    // From level 45 the loot is the level-100 character's; enemies stay (#398, #432).
     let loot_shift =
         crate::features::loot_level::dungeon_loot_shift(scaling, player_level, enemy_level);
 
