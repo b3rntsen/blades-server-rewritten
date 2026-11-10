@@ -32,8 +32,27 @@ use uuid::Uuid;
 pub const RAVAGE_MAGICKA: Uuid = Uuid::from_u128(0x7cdb7179_4cd4_466e_8b77_4caf2fddb268);
 /// `Weapon Ravage Stamina` (`WeaponRavageStaminaPropertyLogic`).
 pub const RAVAGE_STAMINA: Uuid = Uuid::from_u128(0x9be2e7e9_5ef5_4ee8_aeec_b864bca07f07);
+/// `Shield Ravage Magicka` (`ShieldRavageMagickaPropertyLogic`).
+pub const SHIELD_RAVAGE_MAGICKA: Uuid = Uuid::from_u128(0x2ac1e2f6_8f97_444e_97af_7efd46c71cca);
+/// `Shield Ravage Stamina` (`ShieldRavageStaminaPropertyLogic`).
+pub const SHIELD_RAVAGE_STAMINA: Uuid = Uuid::from_u128(0x9701ded5_e1d1_4436_8b14_d5d726ff4434);
 /// `BGS.Game.Inventory.ItemType.Weapon`.
 const WEAPON_ITEM_TYPE: i64 = 2;
+/// `BGS.Game.Inventory.ItemType.Shield`.
+const SHIELD_ITEM_TYPE: i64 = 9;
+
+/// The Ravage pair an item type's timer watches, and the prefix its counters carry
+/// in `tries` / `enchantPityMisses`. Weapons keep the bare class names they always
+/// had (`normal`, `arcane2`), so no stored counter moves; shields (tracker #463,
+/// HauDrauf, 2026-11-04) count under `shield:<class>` with their own pair, because
+/// a shield's Ravage properties are different ids from a weapon's.
+fn ravage_pair(item_type: Option<i64>) -> Option<(Uuid, Uuid, &'static str)> {
+    match item_type? {
+        WEAPON_ITEM_TYPE => Some((RAVAGE_MAGICKA, RAVAGE_STAMINA, "")),
+        SHIELD_ITEM_TYPE => Some((SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA, "shield:")),
+        _ => None,
+    }
+}
 
 /// What the pity timer did to one enchant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,12 +73,13 @@ pub enum PityOutcome {
     },
 }
 
-/// The odds class and threshold when this enchant counts toward the timer.
+/// The counter key, threshold and Ravage pair when this enchant counts toward the
+/// timer.
 fn counted_class(
     enchanting: &EnchantingData,
     before: &Item,
     recipe_id: Uuid,
-) -> Option<(String, u32)> {
+) -> Option<(String, u32, [Uuid; 2])> {
     let pity = &enchanting.tuning.double_ravage_pity;
     if !pity.enabled {
         return None;
@@ -67,11 +87,9 @@ fn counted_class(
     // Only a roll from the APK tables (`roll_enchant`); the captured-outcome
     // fallback is not a roll this timer can reason about.
     let recipe = enchanting.recipes.get(&recipe_id)?;
-    if recipe.property == RAVAGE_MAGICKA || recipe.property == RAVAGE_STAMINA {
-        return None;
-    }
     let table = enchanting.table_for(&before.item_template_id)?;
-    if table.item_type != Some(WEAPON_ITEM_TYPE) {
+    let (magicka, stamina, prefix) = ravage_pair(table.item_type)?;
+    if recipe.property == magicka || recipe.property == stamina {
         return None;
     }
     let in_pool = |id: Uuid| {
@@ -80,7 +98,7 @@ fn counted_class(
             .iter()
             .any(|p| p.id == id && p.weight > 0.0)
     };
-    if !(in_pool(RAVAGE_MAGICKA) && in_pool(RAVAGE_STAMINA)) {
+    if !(in_pool(magicka) && in_pool(stamina)) {
         return None;
     }
     // A class that can never draw two secondaries (arcane 1) cannot carry the pair;
@@ -89,15 +107,20 @@ fn counted_class(
     if odds.iter().skip(2).all(|p| *p <= 0.0) {
         return None;
     }
-    let class = enchanting.odds_class(before.arcane_tier);
+    let class = format!("{prefix}{}", enchanting.odds_class(before.arcane_tier));
     let threshold = *pity.tries.get(&class)?;
-    (threshold > 0).then_some((class, threshold))
+    (threshold > 0).then_some((class, threshold, [magicka, stamina]))
 }
 
-/// Whether an enchant (primary first, then secondaries) carries both Ravages.
+/// Whether an enchant (primary first, then secondaries) carries both WEAPON Ravages.
 pub fn has_double_ravage(enchanting: &[ItemSingleProperty]) -> bool {
+    has_pair(enchanting, [RAVAGE_MAGICKA, RAVAGE_STAMINA])
+}
+
+/// Whether an enchant's secondaries carry both properties of `pair`.
+fn has_pair(enchanting: &[ItemSingleProperty], pair: [Uuid; 2]) -> bool {
     let secs = || enchanting.iter().skip(1);
-    secs().any(|p| p.id == RAVAGE_MAGICKA) && secs().any(|p| p.id == RAVAGE_STAMINA)
+    pair.iter().all(|id| secs().any(|p| p.id == *id))
 }
 
 /// Run the timer on one enchant. `before` is the item as it went in, `rolled` the item
@@ -110,11 +133,11 @@ pub fn apply(
     rolled: &mut Item,
     misses: &mut BTreeMap<String, u32>,
 ) -> PityOutcome {
-    let Some((class, threshold)) = counted_class(enchanting, before, recipe_id) else {
+    let Some((class, threshold, pair)) = counted_class(enchanting, before, recipe_id) else {
         return PityOutcome::NotCounted;
     };
     let so_far = misses.get(&class).copied().unwrap_or(0);
-    if has_double_ravage(&rolled.properties.enchanting) {
+    if has_pair(&rolled.properties.enchanting, pair) {
         misses.remove(&class);
         return PityOutcome::NaturalHit { class };
     }
@@ -122,7 +145,7 @@ pub fn apply(
         let tier = enchanting.recipes[&recipe_id].tier;
         let e = &mut rolled.properties.enchanting;
         e.truncate(1);
-        e.extend([RAVAGE_MAGICKA, RAVAGE_STAMINA].map(|id| ItemSingleProperty { id, tier }));
+        e.extend(pair.map(|id| ItemSingleProperty { id, tier }));
         misses.remove(&class);
         return PityOutcome::Forced {
             class,
@@ -395,6 +418,132 @@ mod tests {
             assert_eq!(out, PityOutcome::NotCounted, "{what}");
             assert_eq!(rolled, kept, "{what}: enchant untouched");
             assert_eq!(m, start, "{what}: no counter moves");
+        }
+    }
+
+    const DIVINE_DAEDRIC_LIGHT_SHIELD: Uuid =
+        Uuid::from_u128(0x08a302c9_fc5b_4a03_bd6c_e7974a81009f);
+    /// `Enchant.Recipe.ShieldFireDamageT10`.
+    const SHIELD_FIRE_DAMAGE_T10: Uuid = Uuid::from_u128(0xb1db39b2_2bf1_49bb_962a_e55f58e447ff);
+
+    fn shield_enchant(arcane_tier: Option<u64>, secondaries: &[Uuid]) -> Item {
+        let mut it = item(DIVINE_DAEDRIC_LIGHT_SHIELD, arcane_tier);
+        let primary = enchanting().recipes[&SHIELD_FIRE_DAMAGE_T10].property;
+        it.properties.enchanting = std::iter::once(primary)
+            .chain(secondaries.iter().copied())
+            .map(|id| ItemSingleProperty { id, tier: 10 })
+            .collect();
+        it
+    }
+
+    /// HauDrauf's rule (tracker #463): an Arcane II shield gets the SHIELD Ravage
+    /// pair on the 50th enchant in a row without it, on its own counter. Red before:
+    /// shields were never counted (`NotCounted`, roll untouched).
+    #[test]
+    fn arcane_two_shields_are_forced_their_own_pair_on_their_own_counter() {
+        let mut e = enchanting();
+        e.tuning.double_ravage_pity.tries =
+            misses(&[("normal", 380), ("arcane2", 49), ("shield:arcane2", 49)]);
+        let before = item(DIVINE_DAEDRIC_LIGHT_SHIELD, Some(2));
+        // 49 misses so far: the 50th miss is replaced by the pair.
+        let mut m = misses(&[("arcane2", 7), ("shield:arcane2", 49)]);
+        let mut rolled = shield_enchant(Some(2), &[FORTIFY_A, SHIELD_RAVAGE_MAGICKA]);
+        let out = apply(&e, &before, SHIELD_FIRE_DAMAGE_T10, &mut rolled, &mut m);
+        assert_eq!(
+            out,
+            PityOutcome::Forced {
+                class: "shield:arcane2".into(),
+                misses: 49,
+                threshold: 49
+            }
+        );
+        let ids: Vec<Uuid> = rolled.properties.enchanting.iter().map(|p| p.id).collect();
+        assert_eq!(&ids[1..], &[SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA]);
+        assert_eq!(
+            m,
+            misses(&[("arcane2", 7)]),
+            "the weapon counter is not touched"
+        );
+
+        // 48 misses: an ordinary miss, counted under the shield key.
+        let mut m = misses(&[("shield:arcane2", 48)]);
+        let mut rolled = shield_enchant(Some(2), &[FORTIFY_A, SHIELD_RAVAGE_MAGICKA]);
+        let kept = rolled.clone();
+        let out = apply(&e, &before, SHIELD_FIRE_DAMAGE_T10, &mut rolled, &mut m);
+        assert_eq!(
+            out,
+            PityOutcome::Miss {
+                class: "shield:arcane2".into(),
+                misses: 49
+            }
+        );
+        assert_eq!(rolled, kept);
+
+        // A natural shield pair restarts the count; WEAPON Ravages on a shield are
+        // not its pair (they are not even in its pool, but the check is by id).
+        let mut m = misses(&[("shield:arcane2", 30)]);
+        let mut rolled = shield_enchant(Some(2), &[SHIELD_RAVAGE_STAMINA, SHIELD_RAVAGE_MAGICKA]);
+        let out = apply(&e, &before, SHIELD_FIRE_DAMAGE_T10, &mut rolled, &mut m);
+        assert_eq!(
+            out,
+            PityOutcome::NaturalHit {
+                class: "shield:arcane2".into()
+            }
+        );
+        assert!(m.is_empty());
+
+        // The code default has no shield key: shields are not counted.
+        let d = enchanting();
+        let mut m = misses(&[("shield:arcane2", 1_000)]);
+        let mut rolled = shield_enchant(Some(2), &[FORTIFY_A, SHIELD_RAVAGE_MAGICKA]);
+        assert_eq!(
+            apply(&d, &before, SHIELD_FIRE_DAMAGE_T10, &mut rolled, &mut m),
+            PityOutcome::NotCounted
+        );
+    }
+
+    /// Real Arcane II shield and weapon rolls with the shipped thresholds never go
+    /// past 50 enchants without their pair (#463).
+    #[test]
+    fn shipped_thresholds_cap_arcane_two_runs_at_fifty() {
+        use rand::SeedableRng;
+        let mut e = enchanting();
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/enchant_tuning.json");
+        e.tuning = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(463);
+        for (before, recipe, pair) in [
+            (
+                item(MADNESS_BATTLEAXE, Some(2)),
+                MAGICKA_DAMAGE_T10,
+                [RAVAGE_MAGICKA, RAVAGE_STAMINA],
+            ),
+            (
+                item(DIVINE_DAEDRIC_LIGHT_SHIELD, Some(2)),
+                SHIELD_FIRE_DAMAGE_T10,
+                [SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA],
+            ),
+        ] {
+            let mut m = BTreeMap::new();
+            let (mut streak, mut longest, mut forced) = (0u32, 0u32, 0);
+            for _ in 0..3_000 {
+                let mut rolled = crate::craft::roll_item_for_test(&before, recipe, &e, &mut rng);
+                match apply(&e, &before, recipe, &mut rolled, &mut m) {
+                    PityOutcome::Forced { .. } => forced += 1,
+                    PityOutcome::NotCounted => panic!("arcane II counts"),
+                    _ => {}
+                }
+                if has_pair(&rolled.properties.enchanting, pair) {
+                    streak = 0;
+                } else {
+                    streak += 1;
+                    longest = longest.max(streak);
+                }
+            }
+            assert!(longest < 50, "longest run without the pair: {longest}");
+            if pair[0] == RAVAGE_MAGICKA {
+                assert!(forced > 0, "weapons at 1.05% hit the timer in 3,000 tries");
+            }
         }
     }
 
