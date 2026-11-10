@@ -905,6 +905,82 @@ fn pick_deep_dungeon(
         .unwrap_or_else(Uuid::nil)
 }
 
+/// A family of Abyss dungeons served at a fixed share of deep floors instead of its
+/// turn in the shuffle bag: from `from_floor` on, each floor rolls once and serves one
+/// of the family's eligible dungeons with probability `share`; otherwise the family is
+/// left out of that floor's draw. A dungeon belongs to the family when its `AbyssSlice`
+/// name contains `name_token`.
+#[derive(Debug, Clone, Copy)]
+struct ThinnedFamily {
+    name_token: &'static str,
+    from_floor: u32,
+    share: f64,
+}
+
+/// HauDrauf's rule (tracker #487, 2026-11-10): "Im Abgrund bitte die Lichs und
+/// Kriegsmeister auf jeweils 1% ab Level 120 setzen." Liches (every `*_Liches*` slice,
+/// Liches Outcast Nether included) and Warmasters (`Enemy.Name.Warlord` = "Warmaster":
+/// the `*_Warlord*` slices) each fill 1% of floors from floor 120. Retail's table dealt
+/// them 9 and 3 of the 33 difficulty-100 dungeons (27% and 9%). NOT retail — a
+/// community rule; revert by making this slice empty (`&[]`).
+const THINNED_FAMILIES: &[ThinnedFamily] = &[
+    ThinnedFamily {
+        name_token: "_Liches",
+        from_floor: 120,
+        share: 0.01,
+    },
+    ThinnedFamily {
+        name_token: "_Warlord",
+        from_floor: 120,
+        share: 0.01,
+    },
+];
+
+/// The floor's thinned-family outcome: `Ok(Some(id))` serves that dungeon (the family
+/// won its roll), `Ok(None)` means no thinned family applies on this floor, and
+/// `Err(excluded)` lists the dungeons to leave out of the bag draw.
+fn thinned_family_pick(
+    static_abyss: &blades_lib::static_data::AbyssStaticData,
+    thinned: &[ThinnedFamily],
+    eligible: &std::collections::BTreeMap<Uuid, f64>,
+    seed: i64,
+    floor: u32,
+) -> Result<Option<Uuid>, std::collections::HashSet<Uuid>> {
+    let active: Vec<(&ThinnedFamily, Vec<Uuid>)> = thinned
+        .iter()
+        .filter(|family| floor >= family.from_floor)
+        .map(|family| {
+            let members: std::collections::BTreeSet<Uuid> = static_abyss
+                .abyss_slices
+                .iter()
+                .filter(|slice| slice.name.contains(family.name_token))
+                .map(|slice| slice.dungeon_settings_id)
+                .filter(|id| eligible.contains_key(id))
+                .collect();
+            (family, members.into_iter().collect())
+        })
+        .filter(|(_, members): &(_, Vec<Uuid>)| !members.is_empty())
+        .collect();
+    if active.is_empty() {
+        return Ok(None);
+    }
+    // An independent roll per floor, so the bag's own sequence is untouched.
+    let roll = deep_floor_roll(seed ^ 0x0487_0487, floor);
+    let u = (roll >> 11) as f64 / (1u64 << 53) as f64;
+    let mut cumulative = 0.0;
+    for (family, members) in &active {
+        cumulative += family.share;
+        if u < cumulative {
+            let which = deep_floor_roll(seed ^ 0x0487_1487, floor) as usize % members.len();
+            return Ok(Some(members[which]));
+        }
+    }
+    Err(active
+        .into_iter()
+        .flat_map(|(_, members)| members)
+        .collect())
+}
+
 /// The dungeons retail's own table serves on deep floors `first_floor..=last_floor`
 /// of a run at `initial_player_level` (#294). One entry per floor; `None` where the
 /// table has nothing eligible (never for difficulties 1-100), and an empty list when
@@ -938,6 +1014,7 @@ fn retail_deep_floors(
     last_floor: u32,
     initial_player_level: u32,
     has_completed: &dyn Fn(Uuid) -> bool,
+    thinned: &[ThinnedFamily],
 ) -> Vec<Option<Uuid>> {
     if static_abyss.abyss_slices.is_empty() || last_floor < first_floor {
         return Vec::new();
@@ -963,6 +1040,15 @@ fn retail_deep_floors(
             }
             if eligible.is_empty() {
                 return None;
+            }
+            match thinned_family_pick(static_abyss, thinned, &eligible, seed, floor) {
+                Ok(Some(pick)) => return Some(pick),
+                Ok(None) => {}
+                Err(excluded) => {
+                    if eligible.keys().any(|id| !excluded.contains(id)) {
+                        eligible.retain(|id, _| !excluded.contains(id));
+                    }
+                }
             }
             let mut bag: Vec<(Uuid, f64)> = eligible
                 .iter()
@@ -1025,6 +1111,27 @@ fn build_slices_from(
     initial_player_level: u32,
     has_completed: &dyn Fn(Uuid) -> bool,
 ) -> Vec<AbyssSliceEntry> {
+    build_slices_from_with(
+        static_abyss,
+        seed,
+        total,
+        start_floor,
+        initial_player_level,
+        has_completed,
+        THINNED_FAMILIES,
+    )
+}
+
+/// [`build_slices_from`] with an explicit thinned-family rule (`&[]` = retail's table).
+fn build_slices_from_with(
+    static_abyss: &blades_lib::static_data::AbyssStaticData,
+    seed: i64,
+    total: usize,
+    start_floor: u32,
+    initial_player_level: u32,
+    has_completed: &dyn Fn(Uuid) -> bool,
+    thinned: &[ThinnedFamily],
+) -> Vec<AbyssSliceEntry> {
     let start_floor = start_floor.max(1);
     // Number of slices remaining from `start_floor` to the top (`total`).
     let remaining = (total as u32).saturating_sub(start_floor - 1) as usize;
@@ -1037,6 +1144,7 @@ fn build_slices_from(
         total as u32,
         initial_player_level,
         has_completed,
+        thinned,
     );
     for k in 0..remaining {
         let floor = start_floor + k as u32; // absolute 1-based floor
@@ -1276,15 +1384,35 @@ fn build_run_slices(
     initial_player_level: u32,
     has_completed: &dyn Fn(Uuid) -> bool,
 ) -> Vec<AbyssSliceEntry> {
+    build_run_slices_with(
+        static_abyss,
+        seed,
+        start_floor,
+        initial_player_level,
+        has_completed,
+        THINNED_FAMILIES,
+    )
+}
+
+/// [`build_run_slices`] with an explicit thinned-family rule (`&[]` = retail's table).
+fn build_run_slices_with(
+    static_abyss: &blades_lib::static_data::AbyssStaticData,
+    seed: i64,
+    start_floor: u32,
+    initial_player_level: u32,
+    has_completed: &dyn Fn(Uuid) -> bool,
+    thinned: &[ThinnedFamily],
+) -> Vec<AbyssSliceEntry> {
     let start_floor = start_floor.max(1);
     let last_floor = start_floor + RUN_FLOORS - 1;
-    let mut slices = build_slices_from(
+    let mut slices = build_slices_from_with(
         static_abyss,
         seed,
         last_floor as usize,
         start_floor,
         initial_player_level,
         has_completed,
+        thinned,
     );
     for (position, slice) in slices.iter_mut().enumerate() {
         slice.slice_index = position as u32;
@@ -4838,7 +4966,8 @@ mod tests {
         > = Default::default();
         for &(ipl, start) in runs {
             for seed in seeds.clone() {
-                for s in build_run_slices(sd, seed, start, ipl, has_completed) {
+                // Retail's table: #487's community rule is measured on its own.
+                for s in build_run_slices_with(sd, seed, start, ipl, has_completed, &[]) {
                     let band = match s.floor_index {
                         0..=79 => "<80",
                         80..=148 => "80-148",
@@ -4967,7 +5096,8 @@ mod tests {
         assert_eq!(ipl, 84);
         let random_pool: std::collections::HashSet<Uuid> = sd.random_pool.iter().copied().collect();
         for seed in 0..200i64 {
-            let served = build_run_slices(&sd, seed, 149, ipl, &ALL_QUESTS);
+            // Retail's table; #487 thins liches and warmasters on top of it.
+            let served = build_run_slices_with(&sd, seed, 149, ipl, &ALL_QUESTS, &[]);
             assert_eq!((served[0].floor_index, served.len()), (149, 150));
             let mut families: std::collections::HashMap<String, usize> = Default::default();
             for s in &served {
@@ -5017,7 +5147,7 @@ mod tests {
         // 34% dragons; retail's table: 9 lich of 33 dungeons, no dragon.
         let mut first: std::collections::HashMap<String, usize> = Default::default();
         for seed in 0..1000i64 {
-            let s = &build_run_slices(&sd, seed, 149, ipl, &ALL_QUESTS)[0];
+            let s = &build_run_slices_with(&sd, seed, 149, ipl, &ALL_QUESTS, &[])[0];
             *first
                 .entry(sd.dungeon_pool[&s.dungeon_settings_id].monsters[0].clone())
                 .or_default() += 1;
@@ -5083,6 +5213,108 @@ mod tests {
                 .keys()
                 .any(|f| f.starts_with("Liches") || f == "Warlord"),
             "{deep:?}"
+        );
+    }
+
+    /// Whether a served dungeon is a lich or a warmaster (`Enemy.Name.Warlord`) floor,
+    /// read from the dungeon pool's monster family, not from the slice names the rule
+    /// itself matches on.
+    fn lich_or_warmaster(sd: &AbyssStaticData, id: Uuid) -> (bool, bool) {
+        let family = &sd.dungeon_pool[&id].monsters[0];
+        (family.starts_with("Liches"), family.starts_with("Warlord"))
+    }
+
+    /// Lich and warmaster shares of the floors `floors` of `seeds` runs.
+    fn lich_warmaster_shares(
+        sd: &AbyssStaticData,
+        seeds: std::ops::Range<i64>,
+        start: u32,
+        ipl: u32,
+        floors: std::ops::RangeInclusive<u32>,
+        thinned: &[ThinnedFamily],
+    ) -> (f64, f64, usize) {
+        let (mut lich, mut warmaster, mut total) = (0usize, 0usize, 0usize);
+        for seed in seeds {
+            for s in build_run_slices_with(sd, seed, start, ipl, &ALL_QUESTS, thinned) {
+                if floors.contains(&s.floor_index) {
+                    let (l, w) = lich_or_warmaster(sd, s.dungeon_settings_id);
+                    lich += l as usize;
+                    warmaster += w as usize;
+                    total += 1;
+                }
+            }
+        }
+        (
+            lich as f64 / total as f64,
+            warmaster as f64 / total as f64,
+            total,
+        )
+    }
+
+    /// #487 (HauDrauf): liches and warmasters 1% each from floor 120. The deep-floor
+    /// population: a level-100 character (ipl 84) from floor 149, every quest done.
+    /// Retail's table gave them ~27% and ~9% of those floors.
+    #[test]
+    fn report_487_a_level_100_run_from_floor_149_meets_liches_and_warmasters_1_percent_each() {
+        let sd = real_static_abyss();
+        let ipl = initial_player_level(&real_job_pools(), 100);
+        let (lich, warmaster, n) = lich_warmaster_shares(&sd, 0..400, 149, ipl, 149..=298, &[]);
+        assert!(
+            lich > 0.2 && warmaster > 0.06,
+            "retail control {lich:.3} {warmaster:.3} of {n}"
+        );
+        let (lich, warmaster, n) =
+            lich_warmaster_shares(&sd, 0..400, 149, ipl, 149..=298, THINNED_FAMILIES);
+        assert_eq!(n, 400 * 150);
+        assert!(
+            (0.008..=0.012).contains(&lich),
+            "lich share {lich:.4} of {n} floors"
+        );
+        assert!(
+            (0.008..=0.012).contains(&warmaster),
+            "warmaster share {warmaster:.4} of {n} floors"
+        );
+        // Both still turn up now and then, on all three dungeon sets.
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..400 {
+            for s in build_run_slices(&sd, seed, 149, ipl, &ALL_QUESTS) {
+                if lich_or_warmaster(&sd, s.dungeon_settings_id) != (false, false) {
+                    seen.insert(s.dungeon_settings_id);
+                }
+            }
+        }
+        assert!(seen.len() >= 6, "{seen:?}");
+    }
+
+    /// #487 at the shallow end: a level-7 character (ipl 10) from floor 1. Floors below
+    /// 120 — floor 9 among them — are exactly retail's table; from floor 120 the rule.
+    #[test]
+    fn report_487_a_low_level_run_is_untouched_below_floor_120() {
+        let sd = real_static_abyss();
+        let ipl = initial_player_level(&real_job_pools(), 7);
+        for seed in 0..200i64 {
+            let ruled = build_run_slices(&sd, seed, 1, ipl, &ALL_QUESTS);
+            let retail = build_run_slices_with(&sd, seed, 1, ipl, &ALL_QUESTS, &[]);
+            assert_eq!(ruled[8].floor_index, 9);
+            for (r, t) in ruled.iter().zip(&retail).take(119) {
+                assert_eq!(
+                    (r.floor_index, r.dungeon_settings_id),
+                    (t.floor_index, t.dungeon_settings_id),
+                    "seed {seed}"
+                );
+            }
+        }
+        let (lich, warmaster, n) = lich_warmaster_shares(&sd, 0..2000, 1, ipl, 120..=150, &[]);
+        assert!(
+            lich > 0.15 && warmaster > 0.05,
+            "retail control {lich:.3} {warmaster:.3} of {n}"
+        );
+        let (lich, warmaster, n) =
+            lich_warmaster_shares(&sd, 0..2000, 1, ipl, 120..=150, THINNED_FAMILIES);
+        assert!((0.006..=0.014).contains(&lich), "lich {lich:.4} of {n}");
+        assert!(
+            (0.006..=0.014).contains(&warmaster),
+            "warmaster {warmaster:.4} of {n}"
         );
     }
 
