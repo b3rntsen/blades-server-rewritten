@@ -1046,13 +1046,13 @@ mod tests {
 
     #[test]
     fn inventory_upgrade_stops_at_the_highest_tier_sold() {
-        // #469 adds tiers 9-11 at retail's doubling (5,120 / 10,240 / 20,480).
+        // #469 adds tiers 9-11 at 2,560 gems each (HauDrauf, msg 3077).
         let mut character = CompleteCharacter {
             inventory_level: 8,
             ..CompleteCharacter::default()
         };
         let mut wallet = wallet_of(&[(GEMS, 100_000)]);
-        for expected in [5_120u64, 10_240, 20_480] {
+        for expected in [2_560u64, 2_560, 2_560] {
             assert_eq!(
                 apply_inventory_upgrade(&mut character, &mut wallet).unwrap(),
                 expected
@@ -1060,7 +1060,7 @@ mod tests {
         }
         assert_eq!(character.inventory_level, 11);
         assert!(apply_inventory_upgrade(&mut character, &mut wallet).is_err());
-        assert_eq!(wallet.balance(GEMS), 100_000 - 35_840);
+        assert_eq!(wallet.balance(GEMS), 100_000 - 7_680);
     }
 
     fn wallet_of(pairs: &[(uuid::Uuid, u64)]) -> CompleteWallet {

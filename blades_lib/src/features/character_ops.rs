@@ -94,11 +94,12 @@ pub fn apply_respec(ch: &mut CompleteCharacter, stamina: u32, magicka: u32) {
 /// Deathbell agree on every step they cover).
 ///
 /// Tiers 9-11 are NOT retail: tracker #469 (HauDrauf, common-good rule) asked for
-/// three more +10 tiers "at the original gem costs", so they continue retail's
-/// doubling. The client only offers them once an asset pack adds the matching
-/// `InventoryData` rows; without it the client stops at 8 and never asks.
+/// three more +10 tiers and chose 2,560 gems each (retail's top-tier price,
+/// msg 3077: "Ja bitte für 2560, sonst wird es zu teuer"). The client only
+/// offers them once an asset pack adds the matching `InventoryData` rows;
+/// without it the client stops at 8 and never asks.
 pub const INVENTORY_UPGRADE_GEM_COST: [u64; 12] =
-    [0, 10, 40, 80, 160, 320, 640, 1280, 2560, 5120, 10240, 20480];
+    [0, 10, 40, 80, 160, 320, 640, 1280, 2560, 2560, 2560, 2560];
 
 /// Highest backpack tier the server will sell.
 pub const MAX_INVENTORY_LEVEL: u16 = (INVENTORY_UPGRADE_GEM_COST.len() - 1) as u16;
