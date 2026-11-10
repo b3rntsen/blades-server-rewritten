@@ -714,6 +714,47 @@ mod tests {
         assert!((2.4..3.6).contains(&ratio), "weight ratio {ratio}");
     }
 
+    /// #466 follow-up (HauDrauf, msg 3108): the bigger pool and the "three
+    /// gold-category + one gem-category" sets change WHICH challenges come, not
+    /// what they pay. Every challenge drawn, at every level, still pays gems only,
+    /// doubled (owner decision 2026-10-16, #388/#541): no gold, and exactly
+    /// [`gems_only_reward`] of its template's retail reward.
+    #[test]
+    fn report_466_every_drawn_challenge_still_pays_doubled_gems_only() {
+        let pool = shipped_pool();
+        let cleave = pool
+            .iter()
+            .find(|t| t.template_id == CLEAVING_15_COMMON)
+            .unwrap();
+        // Retail pays 4,000 gold: 16 gems at 250 gold a gem, doubled.
+        let paid = ChallengeInstance::from_template(cleave, Uuid::nil(), Uuid::nil(), 0, 0).reward;
+        assert_eq!(paid.currencies, HashMap::from([(GEMS, 32)]));
+        for level in [1u16, 20, 50, 76, 100] {
+            for seed in 0..200usize {
+                let (picked, _) =
+                    pick_templates(&pool, seed, level, &serde_json::Value::Null, &[], 4);
+                for i in picked {
+                    let t = &pool[i];
+                    let c = ChallengeInstance::from_template(t, Uuid::nil(), Uuid::nil(), 0, 0);
+                    assert!(
+                        !c.reward.currencies.contains_key(&GOLD),
+                        "{:?} pays gold",
+                        t.name
+                    );
+                    assert_eq!(c.reward.currencies.keys().collect::<Vec<_>>(), vec![&GEMS]);
+                    assert_eq!(c.reward.currencies, gems_only_reward(&t.reward).currencies);
+                    let retail_gems = t.reward.currencies.get(&GEMS).copied().unwrap_or(0);
+                    if t.reward.currencies.get(&GOLD).copied().unwrap_or(0) == 0 {
+                        assert_eq!(
+                            c.reward.currencies[&GEMS],
+                            retail_gems * CHALLENGE_GEM_MULTIPLIER
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     const CLEAVING_15_COMMON: Uuid = Uuid::from_u128(0xbf88a825_8c46_4825_91e1_b2f1774180bc);
 
     /// #466 (HauDrauf, level 100): "always blunt damage, never cleave or slash,
