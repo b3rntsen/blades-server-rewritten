@@ -348,7 +348,19 @@ pub async fn respec(
     .await
 }
 
+/// Characters BELOW this level respec for free; from it up, the retail per-level
+/// `reset_cost` (in Gems) applies. An owner-approved deviation from retail
+/// (decision d35, tracker #464/#480, HauDrauf, 2026-11-10): new players should be
+/// able to try builds in the arena without paying for every attempt. The
+/// appearance change keeps its retail 50 Gems.
+///
+/// REVERT SWITCH: set to `0` for retail pricing at every level.
+pub const FREE_RESPEC_BELOW_LEVEL: u16 = 45;
+
 fn respec_cost_for_level(data: &level_up::LevelUpData, level: u16) -> u64 {
+    if level < FREE_RESPEC_BELOW_LEVEL {
+        return 0;
+    }
     data.get_reward(u32::from(level))
         .map(|r| u64::from(r.reset_cost))
         .unwrap_or(0)
@@ -1221,6 +1233,45 @@ mod tests {
         assert!(
             character.abilities.get(&stale).is_none(),
             "a full-map save must not re-merge a pre-reset stale ability"
+        );
+    }
+
+    /// d35 (#464/#480): respec is free below level 45 and keeps the retail
+    /// per-level price from 45 up, even with no Gems at all.
+    #[test]
+    fn respec_is_free_below_level_45_and_retail_from_45() {
+        let data = level_table();
+        for level in [1u16, 10, 30, 44] {
+            assert_eq!(respec_cost_for_level(&data, level), 0, "L{level} is free");
+        }
+        let retail_45 = u64::from(data.get_reward(45).unwrap().reset_cost);
+        assert!(retail_45 > 0);
+        assert_eq!(respec_cost_for_level(&data, 45), retail_45);
+        assert_eq!(respec_cost_for_level(&data, 86), 456);
+
+        let mut character = CompleteCharacter {
+            level: 44,
+            stamina_attribute_points: 43,
+            magicka_attribute_points: 0,
+            ..CompleteCharacter::default()
+        };
+        let mut wallet = wallet_of(&[(GEMS, 0)]);
+        let paid = apply_respec_transaction(&mut character, &mut wallet, &data, 22, 21)
+            .expect("a level-44 respec needs no Gems");
+        assert_eq!(paid, 0);
+        assert_eq!(wallet.balance(GEMS), 0);
+        assert_eq!(character.stamina_attribute_points, 22);
+        assert_eq!(character.magicka_attribute_points, 21);
+
+        let mut character = CompleteCharacter {
+            level: 45,
+            stamina_attribute_points: 44,
+            ..CompleteCharacter::default()
+        };
+        let mut wallet = wallet_of(&[(GEMS, 0)]);
+        assert!(
+            apply_respec_transaction(&mut character, &mut wallet, &data, 22, 22).is_err(),
+            "level 45 pays retail"
         );
     }
 
