@@ -1950,6 +1950,21 @@ pub(super) fn resolve_ability_cast(
                 "combat: slot {sender} maneuver {} has no authored hit",
                 ea.ability_uuid
             );
+            // A maneuver with no hit is a self-buff (Reckless Fury, `FURY.impacts`
+            // is empty). Queuing zero impacts meant its effect never ran at all:
+            // 425 stamina for nothing, and no stun immunity (#467/#470). It takes
+            // effect at the cast, the moment the status goes up.
+            out.extend(apply_ability_impact(
+                combat,
+                sender,
+                target_slot,
+                &ea.ability_uuid,
+                level,
+                tag,
+                magicka_full_at_cast,
+                now,
+                true,
+            ));
         }
         for idx in 0..impact_count {
             let authored = maneuver_timing
@@ -7099,6 +7114,45 @@ mod tests {
             combat.fighters[0].stamina,
             660 - 425,
             "the accepted cast spends its 425 stamina"
+        );
+    }
+
+    /// Reports #467/#470: a Reckless Fury caster was still stunned by the opponent's
+    /// high block. Production never once logged `RECKLESS FURY r` since 2026-10-20,
+    /// against three paid casts: the `FURY` timing ships NO authored impact, so the
+    /// maneuver lane queued zero `PendingImpact`s and `apply_reckless_fury` never ran.
+    /// The existing Fury tests call `apply_reckless_fury` directly and could not see
+    /// it. This drives the real wire path: cast, then a high-block stun 1.6 s in
+    /// (match cdebc8f6: cast 22:51:34.824, STUNNED 22:51:36.457).
+    #[test]
+    fn a_wire_cast_reckless_fury_takes_effect_and_blocks_the_stun() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let rf_uuid = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: rf_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        });
+        combat.fighters[0].max_stamina = 660;
+        combat.fighters[0].stamina = 660;
+
+        let cast_at = now + Duration::from_millis(100);
+        let frame = make_ability_frame(120, rf_uuid);
+        let out = on_c2s_input(&mut combat, 0, &frame, cast_at);
+        assert!(!out.is_empty(), "precondition: the cast was accepted");
+        assert_eq!(combat.fighters[0].stamina, 660 - 425, "and paid for");
+        // Land anything the cast queued, as the engine tick would.
+        let _ = land_due_impacts(&mut combat, cast_at + Duration::from_millis(50));
+
+        let at_stun = cast_at + Duration::from_millis(1600);
+        assert!(
+            combat.fighters[0].has_reckless_fury(at_stun),
+            "a paid Reckless Fury must open its 5 s window"
+        );
+        assert!(
+            !combat.fighters[0].apply_stagger_for(at_stun, 2.5),
+            "a high-block stun inside Fury must be refused"
         );
     }
 
