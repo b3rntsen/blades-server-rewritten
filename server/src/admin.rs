@@ -2030,6 +2030,145 @@ pub async fn set_current_character_name(
     .map(Json)
 }
 
+/// Owner decision d36 (tracker #482): a town name set from the website is 1-24
+/// characters. The game's character-name whitelist ([`GAME_NAME_CHARS`]) is the
+/// filter, so nothing the client cannot draw — controls, bidi overrides, emoji —
+/// reaches a town banner. Retail's own cap is not known; the 150 named towns on
+/// prod (2026-11-10) are all 4-16 long.
+const TOWN_NAME_MIN_LEN: usize = 1;
+const TOWN_NAME_MAX_LEN: usize = 24;
+
+/// NFC, trim, then [`TOWN_NAME_MIN_LEN`]..=[`TOWN_NAME_MAX_LEN`] UTF-16 units of
+/// game-name characters. The web applies the same rule (web/lib/town-name.ts).
+fn normalise_town_name(raw: &str) -> Result<String, ()> {
+    let name = raw.nfc().collect::<String>().trim().to_string();
+    let len = name.encode_utf16().count();
+    if !(TOWN_NAME_MIN_LEN..=TOWN_NAME_MAX_LEN).contains(&len)
+        || !name.chars().all(is_game_name_char)
+    {
+        return Err(());
+    }
+    Ok(name)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTownNameRequest {
+    pub user_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTownNameResponse {
+    pub ok: bool,
+    pub character_id: Uuid,
+    pub name: String,
+    pub previous_name: String,
+}
+
+/// `POST /…/api/dev/v1/characters/{character_id}/town/name` — rename the town of
+/// a user's live arena character from the website (tracker #482). The game's own
+/// `POST …/towns/current/name` needs a game session; this is the same write
+/// (`town::name_town`, which also sets the validated bit the client checks before
+/// it opens the Arena and Guilds menus) behind the import token.
+#[post("/blades.bgs.services/api/dev/v1/characters/{character_id}/town/name")]
+pub async fn set_current_town_name(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    body: web::Json<SetTownNameRequest>,
+) -> Result<Json<SetTownNameResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let character_id = path.into_inner();
+    let body = body.into_inner();
+    let name = normalise_town_name(&body.name)
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 33))?;
+
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
+
+    conn.transaction(move |mut conn| {
+        async move { rename_current_town(&mut conn, character_id, body.user_id, name).await }
+            .scope_boxed()
+    })
+    .await
+    .map(Json)
+}
+
+/// Rename a town the player has already named in game. An UNNAMED town is
+/// refused (409): naming it is a step of the town-hall tutorial
+/// (`Tutorial.BuildTownHall.EnterTownName`), and the client's `HasNamedTown`
+/// must not flip under a player who has not reached it.
+async fn rename_current_town(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    name: String,
+) -> Result<SetTownNameResponse, BladeApiError> {
+    let town: Option<Value> = characters::table
+        .filter(characters::id.eq(character_id))
+        .filter(characters::user_id.eq(user_id))
+        .select(characters::town)
+        .for_update()
+        .first::<Option<Value>>(conn)
+        .await
+        .optional()
+        .map_err(|e| {
+            warn!("town rename: read failed for {character_id}: {e}");
+            BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 36)
+        })?
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 34))?;
+
+    let mut town = match town {
+        Some(town) if town.is_object() => town,
+        _ => {
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                IMPORT_SERVICE_ID,
+                35,
+            ));
+        }
+    };
+    let previous_name = town
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if previous_name.is_empty() {
+        return Err(BladeApiError::new(
+            StatusCode::CONFLICT,
+            IMPORT_SERVICE_ID,
+            35,
+        ));
+    }
+
+    crate::town::name_town(&mut town, &name);
+
+    diesel::update(
+        characters::table
+            .filter(characters::id.eq(character_id))
+            .filter(characters::user_id.eq(user_id)),
+    )
+    .set(characters::town.eq(Some(town)))
+    .execute(conn)
+    .await
+    .map_err(|e| {
+        warn!("town rename: write failed for {character_id}: {e}");
+        BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 37)
+    })?;
+
+    log::info!("town rename: {character_id} {previous_name:?} -> {name:?}");
+    Ok(SetTownNameResponse {
+        ok: true,
+        character_id,
+        name,
+        previous_name,
+    })
+}
+
 /// NFC, trim, then the game's rule. NFC first: a decomposed "å" is two chars,
 /// and the game refuses the combining ring.
 fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
@@ -4292,7 +4431,8 @@ mod tests {
                  id UUID PRIMARY KEY, \
                  user_id UUID NOT NULL, \
                  character JSONB NOT NULL, \
-                 server_state JSONB NOT NULL)",
+                 server_state JSONB NOT NULL, \
+                 town JSONB)",
             "CREATE TABLE arena_ai_mimics ( \
                  character_id UUID PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE)",
         ];
@@ -4553,6 +4693,164 @@ mod tests {
                     .unwrap()
                     > 0
             );
+        }
+    }
+
+    /// Tracker #482: renaming a town from the website.
+    mod town_rename {
+        use super::super::*;
+        use actix_web::ResponseError;
+        use diesel::sql_types::{Jsonb, Nullable, Uuid as SqlUuid};
+        use diesel::{QueryableByName, sql_query};
+        use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+        #[derive(QueryableByName)]
+        struct StoredTown {
+            #[diesel(sql_type = Nullable<Jsonb>)]
+            town: Option<Value>,
+        }
+
+        async fn fixture() -> Option<AsyncPgConnection> {
+            let url = std::env::var("TEST_DATABASE_URL").ok()?;
+            let mut conn = AsyncPgConnection::establish(&url)
+                .await
+                .expect("TEST_DATABASE_URL is set but unreachable");
+            conn.begin_test_transaction().await.unwrap();
+            let schema = format!("t{}", Uuid::new_v4().simple());
+            sql_query(format!("CREATE SCHEMA {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sql_query(format!("SET LOCAL search_path TO {schema}"))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sql_query(
+                "CREATE TABLE characters (id UUID PRIMARY KEY, user_id UUID NOT NULL, \
+                 character JSONB NOT NULL, server_state JSONB NOT NULL, town JSONB)",
+            )
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            Some(conn)
+        }
+
+        macro_rules! db {
+            () => {
+                match fixture().await {
+                    Some(c) => c,
+                    None => {
+                        eprintln!(
+                            "SKIP: TEST_DATABASE_URL unset — town rename DB tests NOT verified"
+                        );
+                        return;
+                    }
+                }
+            };
+        }
+
+        async fn seed(conn: &mut AsyncPgConnection, town: Option<Value>) -> (Uuid, Uuid) {
+            let (id, user_id) = (Uuid::new_v4(), Uuid::new_v4());
+            sql_query(
+                "INSERT INTO characters (id, user_id, character, server_state, town) \
+                 VALUES ($1, $2, '{\"name\":\"Hero\"}'::jsonb, '{}'::jsonb, $3)",
+            )
+            .bind::<SqlUuid, _>(id)
+            .bind::<SqlUuid, _>(user_id)
+            .bind::<Nullable<Jsonb>, _>(town)
+            .execute(conn)
+            .await
+            .unwrap();
+            (id, user_id)
+        }
+
+        async fn stored(conn: &mut AsyncPgConnection, id: Uuid) -> Option<Value> {
+            sql_query("SELECT town FROM characters WHERE id = $1")
+                .bind::<SqlUuid, _>(id)
+                .get_result::<StoredTown>(conn)
+                .await
+                .unwrap()
+                .town
+        }
+
+        #[test]
+        fn a_town_name_is_1_to_24_game_characters() {
+            assert_eq!(normalise_town_name("  X  ").unwrap(), "X");
+            assert_eq!(
+                normalise_town_name("  So\u{308}vnga\u{30a}rd  ").unwrap(),
+                "Sövngård"
+            );
+            let longest = "Abcdefghijklmnopqrstuvwx";
+            assert_eq!(longest.len(), 24);
+            assert_eq!(normalise_town_name(longest).unwrap(), longest);
+            assert!(normalise_town_name("Abcdefghijklmnopqrstuvwxy").is_err());
+            for bad in [
+                "",
+                "   ",
+                "\u{1f5e1}Town",
+                "Town.ville",
+                "\u{202e}Town",
+                "To\nwn",
+            ] {
+                assert!(normalise_town_name(bad).is_err(), "{bad:?}");
+            }
+        }
+
+        #[actix_web::test]
+        async fn another_users_town_is_404() {
+            let mut conn = db!();
+            let (id, _) = seed(&mut conn, Some(serde_json::json!({"name":"Old"}))).await;
+            let err = rename_current_town(&mut conn, id, Uuid::new_v4(), "New".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::NOT_FOUND);
+            assert_eq!(stored(&mut conn, id).await.unwrap()["name"], "Old");
+        }
+
+        #[actix_web::test]
+        async fn a_town_not_yet_named_in_game_is_refused() {
+            let mut conn = db!();
+            for town in [
+                None,
+                Some(serde_json::json!({"name":"","validationFlags":0})),
+            ] {
+                let (id, user) = seed(&mut conn, town.clone()).await;
+                let err = rename_current_town(&mut conn, id, user, "New".into())
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.status_code(), StatusCode::CONFLICT, "{town:?}");
+                assert_eq!(stored(&mut conn, id).await, town);
+            }
+        }
+
+        #[actix_web::test]
+        async fn rename_sets_the_name_and_the_validated_bit_and_keeps_the_rest() {
+            let mut conn = db!();
+            let (id, user) = seed(
+                &mut conn,
+                Some(serde_json::json!({
+                    "name": "moonbase", "validationFlags": 0, "level": 7,
+                    "buildings": [{"type": 3}]
+                })),
+            )
+            .await;
+            let res = rename_current_town(&mut conn, id, user, "Søvngård Hold".into())
+                .await
+                .unwrap();
+            assert_eq!(
+                res,
+                SetTownNameResponse {
+                    ok: true,
+                    character_id: id,
+                    name: "Søvngård Hold".into(),
+                    previous_name: "moonbase".into(),
+                }
+            );
+            let town = stored(&mut conn, id).await.unwrap();
+            assert_eq!(town["name"], "Søvngård Hold");
+            assert_eq!(town["validationFlags"], 1, "the client re-validates a 0");
+            assert_eq!(town["level"], 7);
+            assert_eq!(town["buildings"], serde_json::json!([{"type": 3}]));
         }
     }
 
