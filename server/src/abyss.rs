@@ -1863,7 +1863,13 @@ fn end_reward(
     character_level: u64,
 ) -> RewardGrant {
     let mut reward = end_run_reward(static_abyss, run);
-    let package = abyss_rewards::end_package(run.score, character_level, run.seed);
+    // The floor the run ended on: from floor 120 its soul gems follow #490's mix.
+    let floor = run
+        .slices
+        .get(run.current_floor_index)
+        .or(run.slices.last())
+        .map_or(0, |s| s.floor_index);
+    let package = abyss_rewards::end_package_at_floor(run.score, character_level, floor, run.seed);
     for (template, count) in package.stackable_items {
         *reward.stackable_items.entry(template).or_default() += count;
     }
