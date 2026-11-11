@@ -547,6 +547,43 @@ mod tests {
         }
     }
 
+    /// Shields like weapons (#493): a plain shield counts under `shield:normal` with the
+    /// shipped threshold, so real rolls never go past it without the shield Ravage pair.
+    #[test]
+    fn shipped_thresholds_count_plain_shields() {
+        use rand::SeedableRng;
+        let mut e = enchanting();
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/enchant_tuning.json");
+        e.tuning = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        let threshold = e.tuning.double_ravage_pity.tries["shield:normal"];
+        let before = item(DIVINE_DAEDRIC_LIGHT_SHIELD, None);
+        let pair = [SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA];
+        let mut rng = rand::rngs::StdRng::seed_from_u64(493);
+        let mut m = BTreeMap::new();
+        let (mut streak, mut longest, mut forced) = (0u32, 0u32, 0);
+        for _ in 0..5_000 {
+            let mut rolled =
+                crate::craft::roll_item_for_test(&before, SHIELD_FIRE_DAMAGE_T10, &e, &mut rng);
+            match apply(&e, &before, SHIELD_FIRE_DAMAGE_T10, &mut rolled, &mut m) {
+                PityOutcome::Forced { class, .. } => {
+                    assert_eq!(class, "shield:normal");
+                    forced += 1;
+                }
+                PityOutcome::NotCounted => panic!("a plain shield counts"),
+                _ => {}
+            }
+            if has_pair(&rolled.properties.enchanting, pair) {
+                streak = 0;
+            } else {
+                streak += 1;
+                longest = longest.max(streak);
+            }
+        }
+        assert!(longest <= threshold, "longest run {longest} > {threshold}");
+        assert!(forced > 0, "5,000 plain shields at ~1.5% hit the timer");
+    }
+
     #[test]
     fn switched_off_by_config_nothing_is_counted_or_forced() {
         let mut e = enchanting();

@@ -2644,28 +2644,31 @@ mod tests {
             [0.3, 0.6, 0.1],
             "retail rings"
         );
-        // The shipped file: HauDrauf's rule for weapons and rings (#415, 2026-10-25);
-        // every other table stays retail.
-        assert_eq!(
-            odds(&shipped, MADNESS_BATTLEAXE),
-            [0.25, 0.5, 0.25],
-            "shipped weapons"
-        );
-        assert_eq!(
-            odds(&shipped, GOLD_EMERALD_RING),
-            [0.25, 0.5, 0.25],
-            "shipped rings"
-        );
+        // The shipped file: HauDrauf's rules. Weapons and shields 25/50/25 (#415,
+        // 2026-10-25; shields #493, 2026-11-11); rings, necklaces and every armour slot
+        // 25/40/35 (#493, 2026-11-11). Every table is covered, so none is retail.
         for (i, t) in shipped.secondary_tables.iter().enumerate() {
-            if matches!(t.item_type, Some(2) | Some(10)) {
-                continue;
-            }
+            let want: &[f64] = match t.item_type {
+                Some(2) | Some(9) => &[0.25, 0.5, 0.25],
+                Some(3) | Some(10) | Some(11) => &[0.25, 0.4, 0.35],
+                other => panic!("table {i}: unexpected item type {other:?}"),
+            };
             assert_eq!(
                 shipped.count_odds_for(t),
-                t.count_odds.as_slice(),
-                "table {i}"
+                want,
+                "table {i} ({:?}/{:?})",
+                t.item_type,
+                t.equipment_slot
             );
         }
+        // Arcane tiers are untouched by #493: tier 1 keeps #485's odds, tier 2 the APK's.
+        let shield = shipped
+            .secondary_tables
+            .iter()
+            .find(|t| t.item_type == Some(9))
+            .unwrap();
+        assert_eq!(shipped.roll_count_odds(shield, Some(1)), [0.0, 0.75, 0.25]);
+        assert_eq!(shipped.roll_count_odds(shield, Some(2)), [0.0, 0.0, 1.0]);
         // The pity threshold follows the shipped weapon P(2): 1 / (P2 x 2 x 0.07^2 / 0.93).
         let p2 = odds(&shipped, MADNESS_BATTLEAXE)[2];
         let expected = 1.0 / (p2 * 2.0 * 0.07 * 0.07 / 0.93);
@@ -2673,6 +2676,15 @@ mod tests {
         assert!(
             (normal - expected).abs() < 1.0,
             "normal tries {normal} vs expected {expected:.1}"
+        );
+        // Shields like weapons (#493): a plain shield gets the shield Ravage pair after
+        // its expected tries, 1 / (P2 x 2 x 0.16^2 / 0.84), with the shipped shield P2.
+        let sp2 = shipped.count_odds_for(shield)[2];
+        let expected = 1.0 / (sp2 * 2.0 * 0.16 * 0.16 / 0.84);
+        let shield_normal = shipped.tuning.double_ravage_pity.tries["shield:normal"] as f64;
+        assert!(
+            (shield_normal - expected).abs() < 1.0,
+            "shield:normal tries {shield_normal} vs expected {expected:.1}"
         );
         assert!(shipped.tuning.double_ravage_pity.enabled);
         // HauDrauf's rule (#463): weapons and shields with two guaranteed enchants get
