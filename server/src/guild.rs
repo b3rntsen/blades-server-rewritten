@@ -2729,6 +2729,27 @@ mod exchange_amount_tests {
         "d94bab85-53d5-4c9c-a637-acd94fc66c98",
     ];
 
+    /// Tracker #500: across every requestable item and town level, one donation
+    /// is never smaller than retail's, and four donations always fill the request.
+    #[test]
+    fn four_donations_fill_every_request() {
+        for (t, ..) in GUILD_EXCHANGE_DATA {
+            for level in 1..=10 {
+                let (_, retail_share) = exchange_amounts(u(t), level).unwrap();
+                let (requested, share) = request_amounts(u(t), level).unwrap();
+                assert!(share >= retail_share, "{t} L{level}");
+                assert!(
+                    4 * share >= requested,
+                    "{t} L{level}: 4×{share} < {requested}"
+                );
+                assert!(
+                    3 * share < requested,
+                    "{t} L{level}: 3 donations already fill it"
+                );
+            }
+        }
+    }
+
     /// Report #325: a SoulGem5 request was created as 10 wanted / 5 per donation,
     /// because only soul gems 7–10 had ever been seen in a capture and everything
     /// else fell back to 10/5. The client's own table asks for ONE soul gem of every
@@ -2810,16 +2831,21 @@ mod exchange_amount_tests {
     }
 
     /// Tracker #462 (HauDrauf's rule): every new request asks for ten times
-    /// retail's amount, and ONE donation stays retail's size.
+    /// retail's amount. Tracker #500 (his follow-up): one donation is a quarter
+    /// of the request, rounded up — so four donations always fill it.
     #[test]
-    fn requests_ask_ten_times_retail_with_retail_sized_donations() {
+    fn requests_ask_ten_times_retail_with_quarter_sized_donations() {
         let limestone = u("fd67bbc6-20f4-44a3-9614-28265ebb8c67");
         assert_eq!(exchange_amounts(limestone, 10), Some((50, 10)), "retail");
-        assert_eq!(request_amounts(limestone, 10), Some((500, 10)));
+        assert_eq!(request_amounts(limestone, 10), Some((500, 125)));
         let honeycomb = u("7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50");
-        assert_eq!(request_amounts(honeycomb, 10), Some((100, 5)));
+        assert_eq!(request_amounts(honeycomb, 10), Some((100, 25)));
         for gem in SOUL_GEMS {
-            assert_eq!(request_amounts(u(gem), 5), Some((10, 1)), "{gem}");
+            assert_eq!(
+                request_amounts(u(gem), 5),
+                Some((10, 3)),
+                "{gem}: ceil(2.5)"
+            );
         }
         assert_eq!(
             request_amounts(Uuid::nil(), 10),
@@ -3338,12 +3364,26 @@ pub fn exchange_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64,
 /// Revert: set to 1 (requests already posted keep their size).
 pub const REQUEST_AMOUNT_MULTIPLIER: i64 = 10;
 
+/// One donation's share of a new request, in percent of the request.
+///
+/// NOT RETAIL — a community rule (tracker #500, HauDrauf, 2026-11-12, approved
+/// under the owner's standing "HauDrauf's common-good rules" policy of
+/// 2026-10-25): "die Menge pro Spende auf 25% der angefragten Menge erhöhen".
+/// The share is rounded UP, so four donations always fill a request (the last
+/// one is capped at what is still needed), and never falls below retail's
+/// share. Only new requests get it: `maxDonationAmount` is stored per request.
+/// Revert: set to 0 (one donation is retail's size again, as under #462).
+pub const DONATION_SHARE_PERCENT: i64 = 25;
+
 /// The `(requestedAmount, maxDonationAmount)` a new request is created with:
 /// retail's [`exchange_amounts`] with the request scaled by
-/// [`REQUEST_AMOUNT_MULTIPLIER`] and the per-donation split left as retail's.
+/// [`REQUEST_AMOUNT_MULTIPLIER`] and one donation [`DONATION_SHARE_PERCENT`] of
+/// it (rounded up), but never less than retail's per-donation split.
 pub fn request_amounts(item_template_id: Uuid, town_level: u64) -> Option<(i64, i64)> {
-    let (requested, max_donation) = exchange_amounts(item_template_id, town_level)?;
-    Some((requested * REQUEST_AMOUNT_MULTIPLIER, max_donation))
+    let (requested, retail_share) = exchange_amounts(item_template_id, town_level)?;
+    let requested = requested * REQUEST_AMOUNT_MULTIPLIER;
+    let share = (requested * DONATION_SHARE_PERCENT + 99) / 100;
+    Some((requested, share.max(retail_share)))
 }
 
 /// The `donations` a guildmate is shown on a request: everyone's but their own.
@@ -3614,7 +3654,8 @@ pub async fn donate_exchange(
 
             // A guildmate may give to the same request more than once (#462,
             // HauDrauf's rule; retail refused a second donation). Each donation is
-            // still one retail-sized share, capped below by what is left.
+            // one stored `maxDonationAmount` share (#500: a quarter of the
+            // request), capped below by what is left.
 
             // Never donate more than the request still needs. The amount was always
             // the full `maxDonationAmount`, so the last donor to a nearly-complete
