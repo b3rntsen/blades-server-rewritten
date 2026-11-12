@@ -2661,14 +2661,43 @@ mod tests {
                 t.equipment_slot
             );
         }
-        // Arcane tiers are untouched by #493: tier 1 keeps #485's odds, tier 2 the APK's.
+        // Arcane I (#493, 2026-11-12): weapons and shields roll two half the time;
+        // every other type keeps #485's 0.75/0.25. Arcane II stays the APK's two.
         let shield = shipped
             .secondary_tables
             .iter()
             .find(|t| t.item_type == Some(9))
             .unwrap();
-        assert_eq!(shipped.roll_count_odds(shield, Some(1)), [0.0, 0.75, 0.25]);
-        assert_eq!(shipped.roll_count_odds(shield, Some(2)), [0.0, 0.0, 1.0]);
+        for (i, t) in shipped.secondary_tables.iter().enumerate() {
+            let want: &[f64] = match t.item_type {
+                Some(2) | Some(9) => &[0.0, 0.5, 0.5],
+                _ => &[0.0, 0.75, 0.25],
+            };
+            assert_eq!(
+                shipped.roll_count_odds(t, Some(1)),
+                want,
+                "arcane I table {i}"
+            );
+            assert_eq!(shipped.roll_count_odds(t, Some(2)), [0.0, 0.0, 1.0]);
+        }
+        // The Arcane I timers follow their P(2) the same way: 1 / (P2 x pair).
+        let weapon_table = shipped.table_for(&uuid(MADNESS_BATTLEAXE)).unwrap();
+        for (class, table, pair) in [
+            ("arcane1", weapon_table, 2.0 * 0.07 * 0.07 / 0.93),
+            ("shield:arcane1", shield, 2.0 * 0.16 * 0.16 / 0.84),
+        ] {
+            let expected = 1.0 / (shipped.roll_count_odds(table, Some(1))[2] * pair);
+            let tries = shipped.tuning.double_ravage_pity.tries[class] as f64;
+            assert!(
+                (tries - expected).abs() < 1.0,
+                "{class} tries {tries} vs expected {expected:.1}"
+            );
+        }
+        assert_eq!(shipped.tuning.double_ravage_pity.tries["arcane1"], 190);
+        assert_eq!(
+            shipped.tuning.double_ravage_pity.tries["shield:arcane1"],
+            33
+        );
         // The pity threshold follows the shipped weapon P(2): 1 / (P2 x 2 x 0.07^2 / 0.93).
         let p2 = odds(&shipped, MADNESS_BATTLEAXE)[2];
         let expected = 1.0 / (p2 * 2.0 * 0.07 * 0.07 / 0.93);
@@ -2738,15 +2767,20 @@ mod tests {
             .collect();
         assert!(counts.iter().all(|c| *c == 1 || *c == 2), "never 0");
         let two = counts.iter().filter(|c| **c == 2).count() as f64 / n as f64;
-        assert!((two - 0.25).abs() < 0.03, "arcane I with two: {two}");
-        // Every item type at Arcane I follows the same rule, e.g. a ring.
-        for template in [GOLD_EMERALD_RING] {
-            let it = Item {
-                item_template_id: uuid(template),
-                ..madness_battleaxe(Some(1))
-            };
-            assert!((0..400).any(|_| count(&shipped, &it, &mut rng) == 2));
-        }
+        // #493 (2026-11-12): Arcane I weapons roll two half the time (arcaneCountOdds).
+        assert!((two - 0.5).abs() < 0.03, "arcane I weapon with two: {two}");
+        // Other types keep #485's 0.25, e.g. a ring.
+        let ring = Item {
+            item_template_id: uuid(GOLD_EMERALD_RING),
+            ..madness_battleaxe(Some(1))
+        };
+        let ring_counts: Vec<usize> = (0..n).map(|_| count(&shipped, &ring, &mut rng)).collect();
+        assert!(
+            ring_counts.iter().all(|c| *c == 1 || *c == 2),
+            "ring never 0"
+        );
+        let two = ring_counts.iter().filter(|c| **c == 2).count() as f64 / n as f64;
+        assert!((two - 0.25).abs() < 0.03, "arcane I ring with two: {two}");
         // Code default: the APK's exactly one; Arcane II is always two either way.
         let code_default = deploy_enchanting();
         assert!((0..500).all(|_| count(code_default, &arcane1, &mut rng) == 1));
