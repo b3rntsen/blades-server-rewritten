@@ -22,14 +22,14 @@ use blades_lib::user_data::{
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{
-    scoped_futures::ScopedFutureExt, AsyncConnection, AsyncPgConnection, RunQueryDsl,
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe, BladeApiError, ServerGlobal,
+    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
 };
 
 const CHAR_OPS_SERVICE_ID: u64 = 9006;
@@ -122,15 +122,28 @@ fn requested_levelup_attribute(req: &LevelupRequest, current_level: u16) -> Opti
     }
 }
 
+/// Replace the player level-up offer with this level's, if it has one. A town
+/// level-up offer stays: retail's `/levelup` kept it (captures 13003, 14639,
+/// 20364; d49, tracker #473).
 fn set_level_up_offer(character: &mut CompleteCharacter, offers: &HashMap<u16, Uuid>, now: u64) {
-    character.global_shop_offers = match offers.get(&character.level) {
-        Some(product_id) => serde_json::json!([{
+    // Do not carry a previous level's expired offer into the new level.
+    let mut kept: Vec<Value> = character
+        .global_shop_offers
+        .as_array()
+        .map(|all| {
+            all.iter()
+                .filter(|o| crate::town::is_town_offer_entry(o))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(product_id) = offers.get(&character.level) {
+        kept.push(serde_json::json!({
             "globalShopProductId": product_id,
             "startTime": now,
-        }]),
-        // Do not carry a previous level's expired offer into the new level.
-        None => serde_json::json!([]),
-    };
+        }));
+    }
+    character.global_shop_offers = Value::Array(kept);
 }
 
 /// `POST /levelup` — spend banked experience on a level, into STAMINA or MAGICKA.
@@ -886,6 +899,38 @@ mod tests {
         character.level = 15;
         set_level_up_offer(&mut character, &offers, 1_789_261_778);
         assert_eq!(character.global_shop_offers, serde_json::json!([]));
+    }
+
+    /// d49 (#473), retail capture 13003: a player level-up keeps the town
+    /// level-up offer and appends its own after it.
+    #[test]
+    fn level_up_keeps_the_town_level_up_offer() {
+        let town_l7 = serde_json::json!({
+            "globalShopProductId": "c820b311-5b84-4bd6-be6c-a76cf0a5c57b",
+            "startTime": 1_778_634_888u64,
+            "expiryTime": 1_779_239_688u64,
+        });
+        let product = Uuid::from_u128(7);
+        let offers = HashMap::from([(10, product)]);
+        let mut character = CompleteCharacter {
+            level: 10,
+            global_shop_offers: serde_json::json!([
+                { "globalShopProductId": "16d100ba-e553-496f-b938-9e75e2a39a7c", "startTime": 1 },
+                town_l7.clone(),
+            ]),
+            ..CompleteCharacter::default()
+        };
+        set_level_up_offer(&mut character, &offers, 1_778_639_813);
+        assert_eq!(
+            character.global_shop_offers,
+            serde_json::json!([
+                town_l7.clone(),
+                { "globalShopProductId": product, "startTime": 1_778_639_813u64 },
+            ])
+        );
+        character.level = 11;
+        set_level_up_offer(&mut character, &offers, 1_778_639_900);
+        assert_eq!(character.global_shop_offers, serde_json::json!([town_l7]));
     }
 
     /// Swanne's actual request body, tracker #22 (capture 261220). Nine slots:

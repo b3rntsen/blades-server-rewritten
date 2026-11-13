@@ -619,6 +619,7 @@ fn catalog_with_chest_switch(
             &static_data.global_shop_authored,
         ))),
         &static_data.level_up_offers,
+        &static_data.global_shop_grants,
     )
 }
 
@@ -639,11 +640,56 @@ pub(crate) const LEVEL_UP_OFFER_GEM_PRICE: Option<u64> = Some(1);
 /// countdown runs from the `startTime` `/levelup` stamps, not from this.
 const LEVEL_UP_OFFER_WINDOW: (i64, i64) = (1_514_764_800, 1_896_134_400);
 
-/// Lay a [`LEVEL_UP_OFFER_GEM_PRICE`] override over each level-up offer. Each
+/// Retail's town level-up offers, by the town level that stamps each one: the
+/// APK catalogue's "Town Level Up Offer - Level N" products (N = 3..=10; there is
+/// none for levels 1, 2 or above 10).
+///
+/// MEASURED: retail answered every captured `/buildings/{id}/complete` that
+/// raised the town to level N (10 of 10, two characters, levels 3-9) with the
+/// `character` beside the town, its `globalShopOffers` carrying exactly this
+/// product with a fresh `startTime`. The previous town offer left the list; a
+/// player level-up offer stayed (captures 11412, 15331, 23454). `/levelup` in
+/// turn kept the town offer (13003, 14639, 20364). The grants are the APK's
+/// (`global_shop_grants.json`).
+///
+/// Owner decision d49 (tracker #473, SpaceMunk, 2026-11-13): sold at
+/// [`LEVEL_UP_OFFER_GEM_PRICE`] like the player level-up offers. In code, not
+/// `deploy/static`, because merging ships code and not the static data.
+pub(crate) const TOWN_LEVEL_UP_OFFERS: &[(u64, Uuid)] = &[
+    (3, uuid::uuid!("67b7a1eb-05fb-417d-b013-1e5fc037acc0")),
+    (4, uuid::uuid!("fd022c2e-a06c-4271-aa66-4424b1a8a7ab")),
+    (5, uuid::uuid!("6324182a-c722-4059-89d0-040ba500b4f8")),
+    (6, uuid::uuid!("ab94a2e0-9770-4fee-9f7f-8d9a34946750")),
+    (7, uuid::uuid!("c820b311-5b84-4bd6-be6c-a76cf0a5c57b")),
+    (8, uuid::uuid!("1185efd6-bb85-44d3-ae0d-e14272b2f8eb")),
+    (9, uuid::uuid!("8e35aa43-0e1c-4abd-9db2-3a908f851669")),
+    (10, uuid::uuid!("bb5631a5-e68d-4455-a01e-bc3080bcf054")),
+];
+
+/// The town level-up offer a town reaching `level` stamps, if any.
+pub(crate) fn town_level_up_offer(level: u64) -> Option<Uuid> {
+    TOWN_LEVEL_UP_OFFERS
+        .iter()
+        .find(|(l, _)| *l == level)
+        .map(|(_, product)| *product)
+}
+
+/// Whether `product` is one of the [`TOWN_LEVEL_UP_OFFERS`].
+pub(crate) fn is_town_level_up_offer(product: Uuid) -> bool {
+    TOWN_LEVEL_UP_OFFERS.iter().any(|(_, p)| *p == product)
+}
+
+/// Lay a [`LEVEL_UP_OFFER_GEM_PRICE`] override over each level-up offer, player
+/// (`level_up_offers.json`) and town ([`TOWN_LEVEL_UP_OFFERS`], those whose grant
+/// `global_shop_grants` knows, so nothing is sold that cannot be paid). Each
 /// product stays once per character (`maxPurchases` 1, the APK's
 /// `perUserMaximum`), which also caps what a 1-Gem price can be bought for. An
 /// entry already in the catalogue for the same product (none ship) is replaced.
-fn apply_level_up_offer_price(mut catalog: Value, level_up_offers: &HashMap<u16, Uuid>) -> Value {
+fn apply_level_up_offer_price(
+    mut catalog: Value,
+    level_up_offers: &HashMap<u16, Uuid>,
+    grants: &HashMap<Uuid, RewardGrant>,
+) -> Value {
     let Some(price) = LEVEL_UP_OFFER_GEM_PRICE else {
         return catalog;
     };
@@ -653,7 +699,11 @@ fn apply_level_up_offer_price(mut catalog: Value, level_up_offers: &HashMap<u16,
     else {
         return catalog;
     };
-    for product in level_up_offers.values() {
+    let town = TOWN_LEVEL_UP_OFFERS
+        .iter()
+        .map(|(_, product)| product)
+        .filter(|product| grants.contains_key(product));
+    for product in level_up_offers.values().chain(town) {
         let id = product.to_string();
         map.insert(
             id.clone(),
@@ -1998,6 +2048,7 @@ pub async fn purchase_global_shop(
             let town = crate::town::credit_town_xp(
                 &mut entry.town,
                 &mut entry.server_state.0,
+                &mut entry.character.0,
                 &globals,
                 reward.town_xp,
             )?;
@@ -5653,6 +5704,7 @@ mod raised_window_cap_tests {
         apply_level_up_offer_price(
             apply_authored(replayed, &sd.global_shop_authored),
             &sd.level_up_offers,
+            &sd.global_shop_grants,
         )
     }
 
@@ -6430,6 +6482,42 @@ mod level_up_offer_price_tests {
             );
             assert_eq!(lifetime_purchase_cap(&sd, *product, now), Some(1));
         }
+    }
+
+    /// d49 (#473): the eight retail town level-up offers sell the same way —
+    /// 1 Gem, once per character — and each has a grant the purchase can pay.
+    #[test]
+    fn town_level_up_offers_sell_for_one_gem_once_per_character() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let now = 1_794_000_000; // 2026-11-07
+        let one_gem = vec![Price {
+            currency_id: blades_lib::economy::GEMS,
+            quantity: 1,
+        }];
+        let served = served_catalog(&sd, now);
+        let levels: Vec<u64> = TOWN_LEVEL_UP_OFFERS.iter().map(|(l, _)| *l).collect();
+        assert_eq!(levels, (3..=10).collect::<Vec<_>>());
+        for (level, product) in TOWN_LEVEL_UP_OFFERS {
+            assert_eq!(town_level_up_offer(*level), Some(*product));
+            assert!(is_town_level_up_offer(*product));
+            let retail = sd.global_shop_prices[product].clone();
+            assert_ne!(retail, one_gem, "retail priced {product} above 1 Gem");
+            assert!(
+                sd.global_shop_grants.contains_key(product),
+                "town offer {level} has a grant"
+            );
+            assert_eq!(
+                served["globalShopOverrides"][product.to_string()]["prices"],
+                serde_json::json!([{ "currencyId": blades_lib::economy::GEMS, "quantity": 1 }]),
+                "town offer {level} served at 1 Gem"
+            );
+            assert!(validate_purchase_prices(&sd, *product, &one_gem, now).is_ok());
+            assert!(validate_purchase_prices(&sd, *product, &retail, now).is_err());
+            assert_eq!(lifetime_purchase_cap(&sd, *product, now), Some(1));
+        }
+        assert_eq!(town_level_up_offer(2), None);
+        assert_eq!(town_level_up_offer(11), None);
     }
 }
 

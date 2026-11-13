@@ -763,6 +763,7 @@ pub async fn buy_from_shop(
             let town = crate::town::credit_town_xp(
                 &mut entry.town,
                 &mut entry.server_state.0,
+                &mut entry.character.0,
                 &globals,
                 town_xp,
             )?;
@@ -1067,6 +1068,7 @@ pub async fn buy_from_social_shop(
             let town = crate::town::credit_town_xp(
                 &mut visitor.town,
                 &mut visitor.server_state.0,
+                &mut visitor.character.0,
                 &globals,
                 town_xp,
             )?;
