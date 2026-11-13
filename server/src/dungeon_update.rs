@@ -1240,15 +1240,12 @@ fn process_dungeon_actions(
                     dungeon_state.dungeon_status.level,
                     generated_data,
                 ));
-                let chest_id = character_data
-                    .inventory
-                    .0
-                    .treasury
-                    .add_chest(tier, chest_level);
-                inventory_modification_tracker
-                    .modified_treasury
-                    .added
-                    .push(chest_id);
+                // A full treasury sends the chest to `overflowTreasury` (#451).
+                character_data.inventory.0.add_found_chest(
+                    tier,
+                    chest_level,
+                    inventory_modification_tracker,
+                );
             }
 
             DungeonUpdateAction::CombatCompleted(combat) => {

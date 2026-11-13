@@ -388,7 +388,28 @@ impl Treasury {
         let pos = self.chests.iter().position(|c| c.id == id)?;
         Some(self.chests.remove(pos))
     }
+
+    /// Append an already-identified chest (ids are allocated across the treasury
+    /// AND the overflow treasury by [`CompleteInventory::next_chest_id`]).
+    pub fn push_chest(&mut self, chest: Chest) {
+        self.chests.push(chest);
+    }
+
+    /// Drain every chest out of this treasury.
+    pub fn take_all(&mut self) -> Vec<Chest> {
+        std::mem::take(&mut self.chests)
+    }
 }
+
+/// How many chests the treasury holds before a found chest goes to the overflow
+/// treasury instead.
+///
+/// `ChestData._maxChestCount` in the shipped `gameplaymetadata` bundle is 100, and
+/// every `_extraTreasuryLevelList` row has `_count: 0`, so the cap is flat — a
+/// treasury upgrade level adds nothing. Retail agrees: capture 37528 took a
+/// treasury from 98 to 100 with two dungeon chests and put the third straight into
+/// `overflowTreasury` (report #451).
+pub const TREASURY_CAPACITY: usize = 100;
 
 /// The treasury diff returned to the client: chests added this request (full) and the
 /// ids removed (`removedChests`). Default is `{chests:[]}` — wire-identical to the
@@ -480,8 +501,53 @@ impl CompleteInventory {
             treasury: self
                 .treasury
                 .generate_client_update(&tracker.modified_treasury),
-            overflow_treasury: TreasuryUpdate::default(),
+            overflow_treasury: self
+                .overflow_treasury
+                .generate_client_update(&tracker.modified_overflow_treasury),
         }
+    }
+
+    /// The id the next chest receives, unique across the treasury and the overflow
+    /// treasury (retail numbered them from one sequence: overflow chest 118 sat
+    /// beside treasury chests 1..117 in capture 37528).
+    pub fn next_chest_id(&self) -> u64 {
+        self.treasury
+            .next_chest_id()
+            .max(self.overflow_treasury.next_chest_id())
+    }
+
+    /// Add a chest to the treasury regardless of capacity. Store, gift, arena and
+    /// quest-reward chests take this path: retail overflow is only observed for
+    /// chests found in a dungeon, and those callers advertise ids up front.
+    pub fn add_treasury_chest(&mut self, tier: i64, level: u64) -> String {
+        let id = self.next_chest_id().to_string();
+        self.treasury
+            .push_chest(Chest::new(id.clone(), tier, level));
+        id
+    }
+
+    /// Add a chest found in a dungeon. With the treasury at
+    /// [`TREASURY_CAPACITY`] it goes to `overflowTreasury`, which is what the
+    /// client waits for: it then opens it on the spot with
+    /// `POST /chests/{id}/collect?fastTrack=True`. Granting it into a full treasury
+    /// instead left the client trying to open an overflow chest that did not exist,
+    /// and the game had to be restarted (report #451).
+    pub fn add_found_chest(
+        &mut self,
+        tier: i64,
+        level: u64,
+        tracker: &mut InventoryChangeTracker,
+    ) -> String {
+        let id = self.next_chest_id().to_string();
+        let chest = Chest::new(id.clone(), tier, level);
+        if self.treasury.chests().len() >= TREASURY_CAPACITY {
+            self.overflow_treasury.push_chest(chest);
+            tracker.modified_overflow_treasury.added.push(id.clone());
+        } else {
+            self.treasury.push_chest(chest);
+            tracker.modified_treasury.added.push(id.clone());
+        }
+        id
     }
 }
 
@@ -504,6 +570,7 @@ pub struct InventoryChangeTracker {
     pub modified_loadout: LoadoutChangeTracker,
     pub modified_backpack: BackpackChangeTracker,
     pub modified_treasury: TreasuryChangeTracker,
+    pub modified_overflow_treasury: TreasuryChangeTracker,
 }
 
 #[cfg(test)]
