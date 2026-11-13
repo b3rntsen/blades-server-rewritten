@@ -11,6 +11,11 @@
 //! |------------|---------------------|----------------|
 //! | `normal`   | 0.15 x 1.054% = 0.158% | 632.7 (owner: 630) |
 //! | `arcane1`  | 0 (exactly one secondary) | never; no timer |
+//!
+//! (APK numbers. The shipped `enchant_tuning.json` overrides them: plain weapons at
+//! P(2) 0.25 -> 380, and Arcane I weapons at P(2) 0.5 -> 190, HauDrauf's rule on
+//! tracker #493. A class only counts when it can roll two secondaries; a forced
+//! one-secondary roll becomes primary + the pair.)
 //! | `arcane2`  | 1.054%              | 94.9 (owner: 95) |
 //!
 //! The soul gem's grade only sets the TIER of the roll, never the count or the pool,
@@ -544,6 +549,130 @@ mod tests {
             if pair[0] == RAVAGE_MAGICKA {
                 assert!(forced > 0, "weapons at 1.05% hit the timer in 3,000 tries");
             }
+        }
+    }
+
+    /// Shields like weapons (#493): a plain shield counts under `shield:normal` with the
+    /// shipped threshold, so real rolls never go past it without the shield Ravage pair.
+    #[test]
+    fn shipped_thresholds_count_plain_shields() {
+        use rand::SeedableRng;
+        let mut e = enchanting();
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/enchant_tuning.json");
+        e.tuning = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        let threshold = e.tuning.double_ravage_pity.tries["shield:normal"];
+        let before = item(DIVINE_DAEDRIC_LIGHT_SHIELD, None);
+        let pair = [SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA];
+        let mut rng = rand::rngs::StdRng::seed_from_u64(493);
+        let mut m = BTreeMap::new();
+        let (mut streak, mut longest, mut forced) = (0u32, 0u32, 0);
+        for _ in 0..5_000 {
+            let mut rolled =
+                crate::craft::roll_item_for_test(&before, SHIELD_FIRE_DAMAGE_T10, &e, &mut rng);
+            match apply(&e, &before, SHIELD_FIRE_DAMAGE_T10, &mut rolled, &mut m) {
+                PityOutcome::Forced { class, .. } => {
+                    assert_eq!(class, "shield:normal");
+                    forced += 1;
+                }
+                PityOutcome::NotCounted => panic!("a plain shield counts"),
+                _ => {}
+            }
+            if has_pair(&rolled.properties.enchanting, pair) {
+                streak = 0;
+            } else {
+                streak += 1;
+                longest = longest.max(streak);
+            }
+        }
+        assert!(longest <= threshold, "longest run {longest} > {threshold}");
+        assert!(forced > 0, "5,000 plain shields at ~1.5% hit the timer");
+    }
+
+    /// HauDrauf's rule (tracker #493, 2026-11-12): an Arcane I weapon gets the pair on
+    /// the 191st enchant in a row without it (190 misses), and an Arcane I shield after
+    /// 33, each on its own counter. Red before: the shipped file had no `arcane1` key,
+    /// so Arcane I was `NotCounted` and the roll left alone.
+    #[test]
+    fn shipped_arcane_one_timer_fires_at_190_for_weapons_and_33_for_shields() {
+        use rand::SeedableRng;
+        let mut e = enchanting();
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/enchant_tuning.json");
+        e.tuning = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        assert_eq!(e.tuning.double_ravage_pity.tries["arcane1"], 190);
+        assert_eq!(e.tuning.double_ravage_pity.tries["shield:arcane1"], 33);
+
+        // A ONE-secondary Arcane I roll at the threshold is rewritten to the pair.
+        let before = item(MADNESS_BATTLEAXE, Some(1));
+        let mut m = misses(&[("normal", 5), ("arcane1", 190)]);
+        let mut rolled = with_enchant(before.clone(), &[FORTIFY_A]);
+        let out = apply(&e, &before, MAGICKA_DAMAGE_T10, &mut rolled, &mut m);
+        assert_eq!(
+            out,
+            PityOutcome::Forced {
+                class: "arcane1".into(),
+                misses: 190,
+                threshold: 190
+            }
+        );
+        let ids: Vec<Uuid> = rolled.properties.enchanting.iter().map(|p| p.id).collect();
+        assert_eq!(&ids[1..], &[RAVAGE_MAGICKA, RAVAGE_STAMINA]);
+        assert_eq!(m, misses(&[("normal", 5)]), "only arcane1 restarts");
+        // One short is an ordinary miss.
+        let mut m = misses(&[("arcane1", 189)]);
+        let mut rolled = with_enchant(before.clone(), &[FORTIFY_A]);
+        assert_eq!(
+            apply(&e, &before, MAGICKA_DAMAGE_T10, &mut rolled, &mut m),
+            PityOutcome::Miss {
+                class: "arcane1".into(),
+                misses: 190
+            }
+        );
+
+        // Real rolls: no run past the threshold, for weapons and shields.
+        let mut rng = rand::rngs::StdRng::seed_from_u64(4931);
+        for (before, recipe, pair, class, n) in [
+            (
+                item(MADNESS_BATTLEAXE, Some(1)),
+                MAGICKA_DAMAGE_T10,
+                [RAVAGE_MAGICKA, RAVAGE_STAMINA],
+                "arcane1",
+                6_000,
+            ),
+            (
+                item(DIVINE_DAEDRIC_LIGHT_SHIELD, Some(1)),
+                SHIELD_FIRE_DAMAGE_T10,
+                [SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA],
+                "shield:arcane1",
+                3_000,
+            ),
+        ] {
+            let threshold = e.tuning.double_ravage_pity.tries[class];
+            let mut m = BTreeMap::new();
+            let (mut streak, mut longest, mut forced) = (0u32, 0u32, 0);
+            for _ in 0..n {
+                let mut rolled = crate::craft::roll_item_for_test(&before, recipe, &e, &mut rng);
+                match apply(&e, &before, recipe, &mut rolled, &mut m) {
+                    PityOutcome::Forced { class: c, .. } => {
+                        assert_eq!(c, class);
+                        forced += 1;
+                    }
+                    PityOutcome::NotCounted => panic!("{class} counts"),
+                    _ => {}
+                }
+                if has_pair(&rolled.properties.enchanting, pair) {
+                    streak = 0;
+                } else {
+                    streak += 1;
+                    longest = longest.max(streak);
+                }
+            }
+            assert!(longest <= threshold, "{class}: run {longest} > {threshold}");
+            assert!(
+                forced > 0,
+                "{class}: {n} rolls at ~1/threshold hit the timer"
+            );
         }
     }
 

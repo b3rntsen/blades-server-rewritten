@@ -252,7 +252,8 @@ impl EnchantingData {
 
     /// The count odds an enchant roll uses: the item's arcane tier's when the catalog
     /// has one (APK: tier 1 = exactly one, tier 2 = exactly two; the tuning's
-    /// `arcaneTierCountOdds` replaces a tier's odds, tracker #485), else
+    /// `arcaneTierCountOdds` replaces a tier's odds, tracker #485, and a matching
+    /// `arcaneCountOdds` rule replaces them for one item type, tracker #493), else
     /// [`Self::count_odds_for`] the item's table.
     pub fn roll_count_odds<'a>(
         &'a self,
@@ -262,8 +263,11 @@ impl EnchantingData {
         arcane_tier
             .and_then(|t| {
                 self.tuning
-                    .arcane_tier_count_odds
-                    .get(&t)
+                    .arcane_count_odds
+                    .iter()
+                    .find(|r| r.arcane_tier == t && r.rule.matches(table))
+                    .map(|r| &r.rule.odds)
+                    .or_else(|| self.tuning.arcane_tier_count_odds.get(&t))
                     .or_else(|| self.arcane_tier_count_odds.get(&t))
             })
             .map_or_else(|| self.count_odds_for(table), Vec::as_slice)
@@ -298,6 +302,19 @@ pub struct EnchantTuning {
     /// `ArcaneTier._oddsOfAdditionalEnchantment` for the tiers it names (tracker #485:
     /// an Arcane I item may roll a second secondary). Empty = the APK's fixed counts.
     pub arcane_tier_count_odds: HashMap<u64, Vec<f64>>,
+    /// Per-item-type odds for one arcane tier, ahead of `arcane_tier_count_odds`
+    /// (first match wins; tracker #493: Arcane I weapons and shields roll two
+    /// secondaries half the time). Empty = `arcane_tier_count_odds` for every type.
+    pub arcane_count_odds: Vec<ArcaneCountOddsRule>,
+}
+
+/// One `arcaneCountOdds` rule: a `secondaryCountOdds` rule for one arcane tier.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ArcaneCountOddsRule {
+    pub arcane_tier: u64,
+    #[serde(flatten)]
+    pub rule: CountOddsRule,
 }
 
 /// One `secondaryCountOdds` rule: which secondary tables it covers and their odds.
