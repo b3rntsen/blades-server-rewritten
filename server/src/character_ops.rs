@@ -991,10 +991,10 @@ mod tests {
     // rather than on the struct: a `skip_serializing_if` that stops working is
     // invisible at the type level.
 
-    /// Tracker #450/#469: retail billed every backpack tier in gems. Ruukoto's
-    /// captured 1 -> 2 upgrade took the balance 50,006 -> 49,966.
+    /// Tracker #505 (HauDrauf): tiers 1-8 sell at half the retail price.
+    /// Ruukoto's captured 1 -> 2 upgrade cost 40 (50,006 -> 49,966); ours is 20.
     #[test]
-    fn inventory_upgrade_charges_the_retail_gem_price() {
+    fn inventory_upgrade_charges_half_the_retail_gem_price() {
         let mut character = CompleteCharacter {
             inventory_level: 1,
             ..CompleteCharacter::default()
@@ -1003,15 +1003,18 @@ mod tests {
 
         let cost = apply_inventory_upgrade(&mut character, &mut wallet).expect("affordable");
 
-        assert_eq!(cost, 40);
+        assert_eq!(cost, 20);
         assert_eq!(character.inventory_level, 2);
-        assert_eq!(wallet.balance(GEMS), 49_966, "capture 8748 balance");
+        assert_eq!(wallet.balance(GEMS), 49_986);
         assert_eq!(wallet.balance(GOLD), 900, "gold is untouched");
     }
 
+    /// The retail ladder stays on record: every captured step (Crazybob2k,
+    /// Ruukoto, Deathbell) is exactly twice what #505 charges. Reverting #505
+    /// means setting tiers 1-8 back to these retail deltas.
     #[test]
-    fn inventory_upgrade_ladder_matches_every_captured_step() {
-        // (from, gems before, gems after) — Crazybob2k, Ruukoto, Deathbell.
+    fn inventory_upgrade_is_half_of_every_captured_retail_step() {
+        // (from, retail gems before, retail gems after)
         for (from, before, after) in [
             (0u16, 50_074u64, 50_064u64),
             (2, 49_966, 49_886),
@@ -1019,34 +1022,37 @@ mod tests {
             (6, 50_413, 49_133),
             (7, 49_133, 46_573),
         ] {
+            let retail = before - after;
             let mut character = CompleteCharacter {
                 inventory_level: from,
                 ..CompleteCharacter::default()
             };
             let mut wallet = wallet_of(&[(GEMS, before)]);
-            apply_inventory_upgrade(&mut character, &mut wallet).expect("affordable");
-            assert_eq!(wallet.balance(GEMS), after, "step {from} -> {}", from + 1);
+            let cost = apply_inventory_upgrade(&mut character, &mut wallet).expect("affordable");
+            assert_eq!(cost * 2, retail, "step {from} -> {}", from + 1);
+            assert_eq!(wallet.balance(GEMS), before - retail / 2);
         }
     }
 
     #[test]
     fn inventory_upgrade_short_of_gems_refuses_without_mutating() {
         let mut character = CompleteCharacter {
-            inventory_level: 6,
+            inventory_level: 7,
             version: 7,
             ..CompleteCharacter::default()
         };
-        // Fumo Geist's balance on 2026-11-10: 955 gems, tier 6 -> 7 costs 1,280.
+        // Fumo Geist's balance on 2026-11-10: 955 gems; tier 7 -> 8 costs 1,280.
         let mut wallet = wallet_of(&[(GEMS, 955)]);
 
         assert!(apply_inventory_upgrade(&mut character, &mut wallet).is_err());
-        assert_eq!((character.inventory_level, character.version), (6, 7));
+        assert_eq!((character.inventory_level, character.version), (7, 7));
         assert_eq!(wallet.balance(GEMS), 955);
     }
 
     #[test]
     fn inventory_upgrade_stops_at_the_highest_tier_sold() {
-        // #469 adds tiers 9-11 at 2,560 gems each (HauDrauf, msg 3077).
+        // #469 adds tiers 9-11 at 2,560 gems each (HauDrauf, msg 3077); #505
+        // halves tiers 1-8 but keeps these at 2,560.
         let mut character = CompleteCharacter {
             inventory_level: 8,
             ..CompleteCharacter::default()
@@ -1061,6 +1067,21 @@ mod tests {
         assert_eq!(character.inventory_level, 11);
         assert!(apply_inventory_upgrade(&mut character, &mut wallet).is_err());
         assert_eq!(wallet.balance(GEMS), 100_000 - 7_680);
+    }
+
+    #[test]
+    fn inventory_upgrade_full_ladder_after_505() {
+        let mut character = CompleteCharacter::default();
+        let mut wallet = wallet_of(&[(GEMS, 100_000)]);
+        let mut paid = Vec::new();
+        while let Ok(cost) = apply_inventory_upgrade(&mut character, &mut wallet) {
+            paid.push(cost);
+        }
+        assert_eq!(
+            paid,
+            [5, 20, 40, 80, 160, 320, 640, 1280, 2560, 2560, 2560],
+            "tiers 1-8 at half retail, 9-11 unchanged"
+        );
     }
 
     fn wallet_of(pairs: &[(uuid::Uuid, u64)]) -> CompleteWallet {
