@@ -584,6 +584,19 @@ pub fn apply_sell(
     for item_id in items {
         let Some(item) = inventory.backpack.items.0.remove(item_id) else {
             outcome.unknown.push(*item_id);
+            // The client offered an item the server does not hold (#489). Answering
+            // with an empty diff left it on screen forever, unsellable. Report it
+            // removed so the client drops the ghost — unless it is worn, which is not
+            // a ghost and must stay visible.
+            let worn = inventory
+                .loadout
+                .equipped_items
+                .0
+                .values()
+                .any(|e| e.id == *item_id);
+            if !worn {
+                tracker.modified_backpack.items.insert(*item_id);
+            }
             continue;
         };
         nth += 1;
@@ -615,6 +628,9 @@ pub fn apply_sell(
             .is_err()
         {
             outcome.unknown.push(*template);
+            // Resync the stack to what is really held (#489): the diff then carries
+            // the server's count, or removes the template when none is left.
+            tracker.modified_backpack.stackable_items.insert(*template);
             continue;
         }
         nth += 1;
@@ -1086,6 +1102,89 @@ mod tests {
         assert!(out.sold.is_empty());
         assert_eq!(out.gold_paid, 0);
         assert_eq!(w.revenue_gold, 0);
+    }
+
+    /// Report #489: the client kept showing an item the server no longer held, and
+    /// every sell of it was answered 200 with an EMPTY inventory diff — so the ghost
+    /// stayed on screen and could never be sold (22 tries in one session). A stale
+    /// sell must resync the client: the ghost instance is reported removed, and an
+    /// over-count stack is reported at the count the server actually holds.
+    #[test]
+    fn a_stale_sell_tells_the_client_what_the_server_really_holds() {
+        let p = prices();
+        let mut w = window(10_000);
+        let mut inv = inventory();
+        inv.backpack.stackable_items.add(TPL_STACK, 2);
+        let mut wallet = CompleteWallet::default();
+        let mut tracker = InventoryChangeTracker::default();
+        let ghost = Uuid::from_u128(0xdead);
+        let mut stacks = HashMap::new();
+        stacks.insert(TPL_STACK, 3); // client thinks 3, server holds 2
+        let out = apply_sell(
+            &p,
+            &mut w,
+            SHOP,
+            &[ghost],
+            &stacks,
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            2_000_000,
+        );
+        assert_eq!(out.unknown.len(), 2);
+        assert_eq!(out.gold_paid, 0);
+        let diff = inv
+            .backpack
+            .generate_client_update(&tracker.modified_backpack);
+        assert!(
+            diff.removed_items.contains(&ghost),
+            "the ghost must be removed client-side"
+        );
+        assert_eq!(
+            diff.stackable_items.count(TPL_STACK),
+            2,
+            "the stack must be resynced to the held count"
+        );
+        assert_eq!(
+            inv.backpack.stackable_items.count(TPL_STACK),
+            2,
+            "nothing sold"
+        );
+    }
+
+    /// An item that is EQUIPPED server-side is not a ghost: it must not be reported
+    /// removed from the backpack (the client would lose sight of worn gear).
+    #[test]
+    fn a_stale_sell_of_worn_gear_does_not_report_it_removed() {
+        let p = prices();
+        let mut w = window(10_000);
+        let mut inv = inventory();
+        let worn = Uuid::from_u128(0xbeef);
+        let slot = Uuid::from_u128(0x5107);
+        inv.loadout.equipped_items.0.insert(
+            slot,
+            crate::user_data::SingleEquippedItem {
+                id: worn,
+                slot,
+                item: item(0, &[]),
+            },
+        );
+        let mut wallet = CompleteWallet::default();
+        let mut tracker = InventoryChangeTracker::default();
+        let out = apply_sell(
+            &p,
+            &mut w,
+            SHOP,
+            &[worn],
+            &HashMap::new(),
+            &mut inv,
+            &mut wallet,
+            &mut tracker,
+            2_000_000,
+        );
+        assert_eq!(out.unknown, vec![worn]);
+        assert!(tracker.modified_backpack.items.is_empty());
+        assert_eq!(inv.loadout.equipped_items.0.len(), 1);
     }
 
     #[test]
