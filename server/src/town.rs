@@ -35,7 +35,8 @@ use actix_web::{
 };
 use blades_lib::economy::{GEMS, GOLD};
 use blades_lib::user_data::{
-    CompleteInventory, CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker,
+    CompleteCharacter, CompleteCharacterWithIdWithoutData, CompleteInventory,
+    CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker,
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
@@ -943,6 +944,10 @@ struct CompleteResponse {
     /// The restocked merchant. Vendor buildings only.
     #[serde(skip_serializing_if = "Option::is_none")]
     shop: Option<crate::shop::BuildCompleteShop>,
+    /// The character, only when the town reached a level that stamped a town
+    /// level-up offer on it — retail's 10 of 10 such completes, and no other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    character: Option<CompleteCharacterWithIdWithoutData>,
 }
 
 #[post(
@@ -1004,9 +1009,19 @@ pub async fn complete_building(
                 .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, TOWN_SERVICE_ID, 1))?;
             apply_complete_transition(building);
 
-            if prestige > 0 {
-                apply_prestige_and_level_up(&mut town, prestige);
-            }
+            // A level reached stamps its town level-up offer (d49), and retail
+            // then answered with the character beside the town.
+            let stamped = prestige > 0
+                && level_town_and_stamp_offer(
+                    &mut town,
+                    prestige,
+                    &mut entry.character.0,
+                    now_secs(),
+                );
+            let character = stamped.then(|| CompleteCharacterWithIdWithoutData {
+                id: character_id,
+                character: entry.character.0.clone(),
+            });
 
             let shop = restock_finished_vendor(
                 &town,
@@ -1031,7 +1046,7 @@ pub async fn complete_building(
                     .await?;
 
                 Ok::<_, BladeApiError>(Json(complete_response(
-                    speed_up, town_col, wallet, inventory, shop,
+                    speed_up, town_col, wallet, inventory, shop, character,
                 )))
             }
         }
@@ -1091,6 +1106,7 @@ fn complete_response(
     wallet: CompleteWallet,
     inventory: CompleteInventoryUpdate,
     shop: Option<crate::shop::BuildCompleteShop>,
+    character: Option<CompleteCharacterWithIdWithoutData>,
 ) -> CompleteResponse {
     if speed_up {
         CompleteResponse {
@@ -1098,6 +1114,7 @@ fn complete_response(
             wallet: Some(wallet),
             inventory: Some(inventory),
             shop,
+            character,
         }
     } else {
         CompleteResponse {
@@ -1105,6 +1122,7 @@ fn complete_response(
             wallet: None,
             inventory: None,
             shop,
+            character,
         }
     }
 }
@@ -1522,7 +1540,7 @@ pub async fn set_building_style(
                 style_id,
             );
             if prestige > 0 {
-                apply_prestige_and_level_up(&mut town, prestige);
+                level_town_and_stamp_offer(&mut town, prestige, &mut entry.character.0, now_secs());
             }
 
             let tracker = InventoryChangeTracker::default();
@@ -2853,13 +2871,23 @@ fn backfill_store_town_xp_once(
 /// `{levelInfo, name, validationFlags}` beside the usual keys: 14 of 14 store
 /// purchases and 14 of 14 quest completions that paid `townXp`, and the one
 /// decoration craft collected. Nothing else carried it.
+///
+/// A level the town reaches stamps its retail town level-up offer on `character`
+/// (see [`stamp_town_level_up_offer`]); the caller writes the character back.
 pub(crate) fn credit_town_xp(
     town_column: &mut Option<JsonDbWrapper<Value>>,
     server_state: &mut blades_lib::server_state::ServerState,
+    character: &mut CompleteCharacter,
     app_state: &ServerGlobal,
     town_xp: u64,
 ) -> Result<Option<Value>, BladeApiError> {
-    credit_town_xp_with(town_column, server_state, app_state.town_statics(), town_xp)
+    credit_town_xp_with(
+        town_column,
+        server_state,
+        character,
+        app_state.town_statics(),
+        town_xp,
+    )
 }
 
 /// [`credit_town_xp`] for a handler whose economy row does not carry the town:
@@ -2872,6 +2900,7 @@ pub(crate) async fn credit_town_xp_in_tx(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     server_state: &mut blades_lib::server_state::ServerState,
+    character: &mut CompleteCharacter,
     statics: TownStatics<'_>,
     town_xp: u64,
 ) -> Result<Option<Value>, BladeApiError> {
@@ -2884,7 +2913,7 @@ pub(crate) async fn credit_town_xp_in_tx(
         .select(characters::town)
         .first(conn)
         .await?;
-    let wire = credit_town_xp_with(&mut town_column, server_state, statics, town_xp)?;
+    let wire = credit_town_xp_with(&mut town_column, server_state, character, statics, town_xp)?;
     diesel::update(characters::table)
         .filter(characters::id.eq(character_id))
         .set(characters::town.eq(town_column))
@@ -2896,6 +2925,7 @@ pub(crate) async fn credit_town_xp_in_tx(
 fn credit_town_xp_with(
     town_column: &mut Option<JsonDbWrapper<Value>>,
     server_state: &mut blades_lib::server_state::ServerState,
+    character: &mut CompleteCharacter,
     statics: TownStatics<'_>,
     town_xp: u64,
 ) -> Result<Option<Value>, BladeApiError> {
@@ -2903,7 +2933,7 @@ fn credit_town_xp_with(
         return Ok(None);
     }
     let mut town = take_town_with(town_column, server_state, statics)?;
-    apply_prestige_and_level_up(&mut town, town_xp);
+    level_town_and_stamp_offer(&mut town, town_xp, character, now_secs());
     let wire = town_xp_wire(&town);
     *town_column = Some(JsonDbWrapper(town));
     Ok(Some(wire))
@@ -2997,6 +3027,65 @@ fn repair_town_on_load(
         changed = true;
     }
     changed
+}
+
+/// Wall-clock seconds since the unix epoch, the unit of an offer's `startTime`.
+fn now_secs() -> u64 {
+    now_ms() / 1000
+}
+
+/// [`apply_prestige_and_level_up`], then stamp the town level-up offer of a level
+/// the town reached on `character`. `true` when an offer was stamped, which is
+/// when retail answered with the `character` beside the town.
+fn level_town_and_stamp_offer(
+    town: &mut Value,
+    prestige: u64,
+    character: &mut CompleteCharacter,
+    now: u64,
+) -> bool {
+    let before = town_level(town);
+    let after = apply_prestige_and_level_up(town, prestige).max(before);
+    stamp_town_level_up_offer(character, before, after, now)
+}
+
+/// Stamp retail's town level-up offer on `character.globalShopOffers` when the
+/// town went from `old_level` to a higher `new_level` (d49, tracker #473).
+///
+/// Retail's shape, measured on 10 of 10 captured level-raising `/complete`s:
+/// `{globalShopProductId, startTime}` appended, the previous town offer removed,
+/// any player level-up offer left in place. Several levels at once stamp only the
+/// highest one that has an offer, as one town offer is all retail ever held.
+/// `true` when an offer was stamped.
+pub(crate) fn stamp_town_level_up_offer(
+    character: &mut CompleteCharacter,
+    old_level: u64,
+    new_level: u64,
+    now: u64,
+) -> bool {
+    let Some(product) = (old_level.saturating_add(1)..=new_level)
+        .rev()
+        .find_map(crate::global_shop::town_level_up_offer)
+    else {
+        return false;
+    };
+    let mut offers: Vec<Value> = character
+        .global_shop_offers
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    offers.retain(|offer| !is_town_offer_entry(offer));
+    offers.push(json!({ "globalShopProductId": product, "startTime": now }));
+    character.global_shop_offers = Value::Array(offers);
+    true
+}
+
+/// Whether a `globalShopOffers` entry is a town level-up offer.
+pub(crate) fn is_town_offer_entry(offer: &Value) -> bool {
+    offer
+        .get("globalShopProductId")
+        .and_then(Value::as_str)
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .is_some_and(crate::global_shop::is_town_level_up_offer)
 }
 
 /// Apply prestige and check for town level up
@@ -3871,6 +3960,7 @@ mod tests {
             wallet_with(848),
             inv.clone(),
             None,
+            None,
         ))
         .unwrap();
         let keys: Vec<&str> = plain
@@ -3886,6 +3976,7 @@ mod tests {
             json!({"levelInfo": {"level": 6}}),
             wallet_with(848),
             inv,
+            None,
             None,
         ))
         .unwrap();
@@ -4033,6 +4124,7 @@ mod tests {
                 wallet_with(848),
                 inv.clone(),
                 shop,
+                None,
             ))
             .unwrap();
             let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
@@ -4441,25 +4533,30 @@ mod when_the_town_is_paid {
 
         // Find each call site and walk backwards to the enclosing `pub async fn`.
         let mut callers = Vec::new();
-        let needle = "apply_prestige_and_level_up(";
-        let mut from = 0;
-        while let Some(i) = src[from..].find(needle) {
-            let at = from + i;
-            from = at + needle.len();
-            // Skip the definition itself.
-            if src[..at].ends_with("fn ") {
-                continue;
-            }
-            let owner = src[..at]
-                .rmatch_indices("pub async fn ")
-                .next()
-                .map(|(j, _)| {
-                    let rest = &src[j + "pub async fn ".len()..];
-                    rest[..rest.find('(').unwrap_or(0)].to_string()
-                })
-                .unwrap_or_default();
-            if !owner.is_empty() && !callers.contains(&owner) {
-                callers.push(owner);
+        // `level_town_and_stamp_offer` is the prestige plus the d49 offer stamp.
+        for needle in [
+            "apply_prestige_and_level_up(",
+            "level_town_and_stamp_offer(",
+        ] {
+            let mut from = 0;
+            while let Some(i) = src[from..].find(needle) {
+                let at = from + i;
+                from = at + needle.len();
+                // Skip the definition itself.
+                if src[..at].ends_with("fn ") {
+                    continue;
+                }
+                let owner = src[..at]
+                    .rmatch_indices("pub async fn ")
+                    .next()
+                    .map(|(j, _)| {
+                        let rest = &src[j + "pub async fn ".len()..];
+                        rest[..rest.find('(').unwrap_or(0)].to_string()
+                    })
+                    .unwrap_or_default();
+                if !owner.is_empty() && !callers.contains(&owner) {
+                    callers.push(owner);
+                }
             }
         }
         callers.sort();
@@ -6124,5 +6221,151 @@ mod report353_decoration_prestige {
             let body = body_of(src, f);
             assert!(!body.contains("apply_prestige_and_level_up("), "{f}");
         }
+    }
+}
+
+#[cfg(test)]
+mod town_level_up_offer_tests {
+    use super::*;
+
+    const L3: &str = "67b7a1eb-05fb-417d-b013-1e5fc037acc0";
+    const L4: &str = "fd022c2e-a06c-4271-aa66-4424b1a8a7ab";
+    const L7: &str = "c820b311-5b84-4bd6-be6c-a76cf0a5c57b";
+    /// A player level-up offer (`level_up_offers.json`, level 6).
+    const PLAYER_L6: &str = "16d100ba-e553-496f-b938-9e75e2a39a7c";
+
+    fn town_at(level: u64, xp: u64) -> Value {
+        json!({ "levelInfo": { "level": level, "experiencePoints": xp } })
+    }
+
+    fn offers(c: &CompleteCharacter) -> Vec<(String, u64)> {
+        c.global_shop_offers
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| {
+                (
+                    o["globalShopProductId"].as_str().unwrap().to_string(),
+                    o["startTime"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// d49 (#473), retail capture 11412: the town reaching level 7 appends the
+    /// level-7 offer beside the player's level-6 offer, which stays untouched.
+    #[test]
+    fn reaching_a_level_stamps_its_offer_beside_the_player_offer() {
+        let mut c = CompleteCharacter {
+            global_shop_offers: json!([{
+                "globalShopProductId": PLAYER_L6,
+                "startTime": 1_778_602_163u64,
+                "expiryTime": 1_778_688_563u64,
+            }]),
+            ..CompleteCharacter::default()
+        };
+        let mut t = town_at(6, 26_000);
+        assert!(level_town_and_stamp_offer(
+            &mut t,
+            600,
+            &mut c,
+            1_778_634_888
+        ));
+        assert_eq!(town_level(&t), 7);
+        assert_eq!(
+            c.global_shop_offers,
+            json!([
+                {
+                    "globalShopProductId": PLAYER_L6,
+                    "startTime": 1_778_602_163u64,
+                    "expiryTime": 1_778_688_563u64,
+                },
+                { "globalShopProductId": L7, "startTime": 1_778_634_888u64 },
+            ])
+        );
+    }
+
+    /// Captures 10205 then 10221: level 4 replaces the level-3 offer, even one
+    /// already bought; XP that does not cross a level stamps nothing.
+    #[test]
+    fn the_next_level_replaces_the_previous_town_offer() {
+        let mut c = CompleteCharacter {
+            global_shop_offers: json!([]),
+            ..CompleteCharacter::default()
+        };
+        let mut t = town_at(2, 4_900);
+        assert!(level_town_and_stamp_offer(&mut t, 200, &mut c, 100));
+        assert_eq!(offers(&c), vec![(L3.to_string(), 100)]);
+
+        assert!(!level_town_and_stamp_offer(&mut t, 100, &mut c, 150));
+        assert_eq!(offers(&c), vec![(L3.to_string(), 100)], "still level 3");
+
+        assert!(level_town_and_stamp_offer(&mut t, 4_000, &mut c, 200));
+        assert_eq!(town_level(&t), 4);
+        assert_eq!(offers(&c), vec![(L4.to_string(), 200)]);
+    }
+
+    /// Levels 1 and 2 have no offer, nor does anything past 10; a jump across
+    /// several levels stamps only the highest one that has an offer.
+    #[test]
+    fn levels_without_an_offer_stamp_nothing_and_jumps_stamp_the_highest() {
+        let mut c = CompleteCharacter::default();
+        assert!(!stamp_town_level_up_offer(&mut c, 0, 2, 1));
+        assert!(!stamp_town_level_up_offer(&mut c, 10, 11, 1));
+        assert!(!stamp_town_level_up_offer(&mut c, 5, 5, 1));
+        assert!(stamp_town_level_up_offer(&mut c, 4, 7, 9));
+        assert_eq!(offers(&c), vec![(L7.to_string(), 9)]);
+        assert!(is_town_offer_entry(&c.global_shop_offers[0]));
+        assert!(!is_town_offer_entry(
+            &json!({ "globalShopProductId": PLAYER_L6 })
+        ));
+    }
+
+    /// Retail sent `character` on a `/complete` exactly when it stamped an offer.
+    #[test]
+    fn a_stamping_complete_answers_with_the_character() {
+        use blades_lib::user_data::{Backpack, CompleteInventory, Loadout, Treasury};
+        let inv = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        }
+        .generate_client_update(&InventoryChangeTracker::default());
+        let character = CompleteCharacterWithIdWithoutData {
+            id: Uuid::nil(),
+            character: CompleteCharacter {
+                global_shop_offers: json!([{ "globalShopProductId": L3, "startTime": 1 }]),
+                ..CompleteCharacter::default()
+            },
+        };
+        let v = serde_json::to_value(complete_response(
+            false,
+            town_at(3, 5_541),
+            CompleteWallet::default(),
+            inv,
+            None,
+            Some(character),
+        ))
+        .unwrap();
+        let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["character", "town"]);
+        assert_eq!(
+            v["character"]["globalShopOffers"][0]["globalShopProductId"],
+            L3
+        );
+    }
+
+    /// Store, merchant, craft and quest town XP stamp the offer too: they all
+    /// pay through `credit_town_xp_with`.
+    #[test]
+    fn town_xp_rewards_stamp_the_offer() {
+        let src = include_str!("town.rs");
+        let body = &src[src.find("fn credit_town_xp_with(").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(body.contains("level_town_and_stamp_offer("));
     }
 }

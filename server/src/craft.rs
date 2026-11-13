@@ -844,6 +844,7 @@ pub async fn finish_craft(
                 response.town = crate::town::credit_town_xp(
                     &mut entry.town,
                     &mut entry.server_state.0,
+                    &mut entry.character.0,
                     &globals,
                     response.town_xp,
                 )?;

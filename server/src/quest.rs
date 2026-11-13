@@ -2753,6 +2753,7 @@ pub(crate) async fn complete_quest_in_tx(
         conn,
         character_id,
         &mut entry.server_state.0,
+        &mut entry.character.0,
         town_statics,
         reward.town_xp,
     )
@@ -3205,6 +3206,7 @@ async fn update_quest_objectives_in_tx(
             conn,
             character_id,
             &mut entry.server_state.0,
+            &mut entry.character.0,
             town_statics,
             reward.town_xp,
         )
