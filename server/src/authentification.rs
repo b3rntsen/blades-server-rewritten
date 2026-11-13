@@ -1003,6 +1003,68 @@ async fn bnet_link_force(
     }))
 }
 
+/// The session a token refresh hands out: same account, new bearer, a full TTL.
+///
+/// No live session (expired, evicted by another device, or a token from before
+/// a restart that never got persisted) is retail's
+/// `{"httpErrorCode":401,"serviceId":1,"errorCode":201}`, which sends the client
+/// back through its ordinary sign-in.
+fn refreshed_session(
+    current: Option<&Session>,
+    ttl: std::time::Duration,
+) -> Result<Session, BladeApiError> {
+    let current = current.ok_or_else(|| BladeApiError::new(StatusCode::UNAUTHORIZED, 1, 201))?;
+    Ok(Session::new(current.user_id, current.secret_user_id, ttl))
+}
+
+/// `POST /…/auth/refresh` — the client's scheduled token renewal (tracker #497).
+///
+/// `Session.CalculateSessionRefreshTime` fires it at 0.67 of the token's
+/// remaining life, with the old token as Authorization and the literal body
+/// `null`. Retail answered with a fresh `session` envelope (new `sessionId`,
+/// same `userId`, new `token` and `tokenExpirationSeconds`; 123 of 125
+/// captured). Without this route every refresh was a 404 and the client sat on
+/// "Communication Error" until it was restarted.
+///
+/// The old session is left to expire on its own rather than evicted, so a
+/// request already in flight under it — or the rms socket the client reopens
+/// with the new token within a minute — does not race a 401. It still goes
+/// through the one-device claim like every other minting path, sparing the
+/// caller's own session; in practice there is nothing else to evict, since a
+/// device displaced by another login has no live token to refresh with.
+#[post("/blades.bgs.services/api/authentication/v1/public/auth/refresh")]
+async fn refresh_token(
+    app_state: web::Data<Arc<ServerGlobal>>,
+    current_session: SessionLookedUpMaybe,
+) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    let current = current_session.get_session_or_error().ok();
+    let session = Arc::new(refreshed_session(
+        current.map(|c| c.session.as_ref()),
+        app_state.session_store.ttl,
+    )?);
+    let session_id = app_state.session_store.store_new_session(session.clone());
+    crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
+    crate::session::claim_account_for_this_device_keeping(
+        &app_state.session_store,
+        &app_state.db_pool,
+        session.user_id,
+        session_id,
+        current.map(|c| c.session_id),
+    )
+    .await;
+    log::info!(
+        "auth refresh: user {} renewed session {} -> {}",
+        session.user_id,
+        current
+            .map(|c| c.session_id.to_string())
+            .unwrap_or_default(),
+        session_id
+    );
+    Ok(web::Json(SessionResponse {
+        session: SessionResponseInner::from_session(session_id, session.as_ref()),
+    }))
+}
+
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/anon")]
 async fn anon_log_in(
     req: HttpRequest,
@@ -2784,5 +2846,97 @@ mod forced_link_parking_rule {
             Some("Adventurer"),
             1
         ));
+    }
+}
+
+/// Tracker #497 (and the "Kommunikationsfehler" half of #479/#483): the client
+/// schedules `POST /auth/refresh` at 0.67 of its token's remaining life
+/// (`Session.TOKEN_REFRESH_TIME_COEFFICIENT`, dump.cs:484531). We hand out a
+/// 21.6 h token, so ~14.5 h after the last login the next request a still-open
+/// client makes is a refresh. The route did not exist: every one got a 404, the
+/// client showed "Communication Error" and kept failing until the app was
+/// restarted. On prod 2026-11-11 HauDrauf logged in at 04:16 and his first
+/// request after 18:44 was a 404'd refresh (18:50:32), then 16 more until he
+/// restarted at 19:29.
+#[cfg(test)]
+mod token_refresh {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// The bug itself: no handler was registered for the path, so actix
+    /// answered 404 before any of our code ran.
+    #[test]
+    fn the_refresh_route_is_registered() {
+        let main_rs = include_str!("main.rs");
+        assert!(
+            main_rs.contains(".service(authentification::refresh_token)"),
+            "POST /auth/refresh must be served, or long-open clients hit a \
+             Communication Error ~14.5 h after logging in"
+        );
+    }
+
+    #[test]
+    fn a_refresh_issues_a_new_token_for_the_same_account() {
+        let public = Uuid::from_u128(0x497);
+        let secret = Uuid::from_u128(0x497_5ec);
+        // An old session close to its end: only 60 s of life left.
+        let old = Session::new(public, secret, Duration::from_secs(60));
+
+        let new = refreshed_session(Some(&old), Duration::from_secs(24 * 3600)).unwrap();
+
+        assert_eq!(new.user_id, public);
+        assert_eq!(new.secret_user_id, secret);
+        assert_ne!(
+            new.extra_secret, old.extra_secret,
+            "a refresh must mint a new bearer, not echo the old one"
+        );
+        assert!(
+            new.expire_unix_timestamp > old.expire_unix_timestamp + 3600,
+            "the refreshed token must live well past the old one"
+        );
+    }
+
+    /// The client's next refresh is due at 0.67 of the remaining life; it must
+    /// land in the future, or the client would refresh in a tight loop.
+    #[test]
+    fn the_next_refresh_is_scheduled_in_the_future() {
+        let old = Session::new(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Duration::from_secs(60),
+        );
+        let new = refreshed_session(Some(&old), Duration::from_secs(24 * 3600)).unwrap();
+        let response = SessionResponseInner::from_session(Uuid::from_u128(3), &new);
+
+        let now = now_secs();
+        let remaining = response.token_expiration_seconds.saturating_sub(now) as f64;
+        assert!(
+            remaining * 0.67 > 3600.0,
+            "next refresh in {} s",
+            remaining * 0.67
+        );
+    }
+
+    /// Retail's answer to a refresh it will not honour (2 of 125 captured
+    /// refreshes): `{"httpErrorCode":401,"serviceId":1,"errorCode":201}`. A
+    /// 401 sends the client back through its normal sign-in instead of a dead
+    /// end.
+    #[test]
+    fn a_refresh_without_a_live_session_is_a_retail_401() {
+        let err = refreshed_session(None, Duration::from_secs(3600))
+            .err()
+            .unwrap();
+        assert_eq!(
+            actix_web::ResponseError::status_code(&err),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(err.error_code(), 201);
     }
 }
