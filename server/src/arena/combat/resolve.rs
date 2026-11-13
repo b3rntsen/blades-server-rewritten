@@ -2993,6 +2993,10 @@ fn apply_caster_begin_effects(
                 combat.fighters[caster].staggered_until = None;
                 combat.fighters[caster].weakness_rating = 0.0;
                 combat.fighters[caster].set_actor_state(ActorStateType::Maneuver, now);
+                // ...and back out at `OnManeuverEnded` (`ActorManeuverState$$OnExit`).
+                // Nothing else leaves this logical Maneuver, so without it every later
+                // spell was refused `NotAvailable` until a strike moved the state (#491).
+                combat.fighters[caster].schedule_state(expires, ActorStateType::Idle);
                 out.extend(emit_status_removals(combat, now));
             }
             combat.fighters[caster].negation_pools.push(NegationPool {
@@ -14488,6 +14492,46 @@ mod shipped_effects_tests {
                 "{name} must be performable while staggered"
             );
         }
+    }
+
+    /// Report #491: a dodge performed THROUGH a stagger moved the logical state
+    /// Staggered → Maneuver and nothing ever moved it back, so every later spell was
+    /// refused `NotAvailable state=Maneuver` (prod: Ice Spike refused 1.4–4.6 s into
+    /// "Maneuver") until a strike changed the state. Retail leaves Maneuver at
+    /// `OnManeuverEnded` (`ActorManeuverState$$OnExit@0x1d556b0`).
+    #[test]
+    fn report_491_a_dodge_through_a_stagger_returns_to_idle_and_spells_cast_again() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[0].max_magicka = 5_000;
+        c.fighters[0].magicka = 5_000;
+        c.fighters[0].apply_stagger_for(now, 2.5);
+        let obj = c.fighters[0].net_object_id;
+        let dodge_at = now + Duration::from_millis(600);
+        let dodge = messages::request_execute_ability(obj, &uuid_of("DodgingStrike"));
+        assert!(!on_c2s_input(&mut c, 0, &dodge, dodge_at).is_empty());
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Maneuver);
+
+        // Control: inside the dodge (OnManeuverEnded ≤ 1.25 s) a spell is refused.
+        let spike = messages::request_execute_ability(obj, &uuid_of("IceSpike"));
+        assert!(
+            on_c2s_input(&mut c, 0, &spike, dodge_at + Duration::from_millis(500)).is_empty(),
+            "Ice Spike must stay refused while the dodge still runs"
+        );
+
+        // The prod sequence: no strike, just Ice Spike again 1.4 s after the dodge.
+        let after = dodge_at + Duration::from_millis(1_400);
+        let out = on_c2s_input(&mut c, 0, &spike, after);
+        assert_eq!(
+            c.fighters[0].actor_state(),
+            ActorStateType::Idle,
+            "the dodge must end in Idle at OnManeuverEnded"
+        );
+        assert!(
+            out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(38)),
+            "Ice Spike must be cast once the dodge has ended, without a strike first"
+        );
     }
 
     /// THE CONTROL, and it is the one that matters: the exception must stay NARROW.
