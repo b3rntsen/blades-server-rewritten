@@ -404,7 +404,7 @@ pub fn grant_chest(
     level: u64,
     tracker: &mut InventoryChangeTracker,
 ) -> String {
-    let id = inventory.treasury.add_chest(tier as i64, level);
+    let id = inventory.add_treasury_chest(tier as i64, level);
     tracker.modified_treasury.added.push(id.clone());
     id
 }
@@ -419,6 +419,28 @@ pub fn remove_chest(
     let removed = inventory.treasury.remove_chest(chest_id).is_some();
     if removed {
         tracker.modified_treasury.removed.push(chest_id.to_string());
+    }
+    removed
+}
+
+/// Remove a chest by id from the treasury OR the overflow treasury, recording it in
+/// the matching diff (`treasury.removedChests` / `overflowTreasury.removedChests`).
+/// Retail answered an overflow chest's `/collect` with exactly
+/// `overflowTreasury: {removedChests: ["118"]}` (capture 37529, report #451).
+pub fn remove_any_chest(
+    inventory: &mut CompleteInventory,
+    chest_id: &str,
+    tracker: &mut InventoryChangeTracker,
+) -> bool {
+    if remove_chest(inventory, chest_id, tracker) {
+        return true;
+    }
+    let removed = inventory.overflow_treasury.remove_chest(chest_id).is_some();
+    if removed {
+        tracker
+            .modified_overflow_treasury
+            .removed
+            .push(chest_id.to_string());
     }
     removed
 }

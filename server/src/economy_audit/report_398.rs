@@ -356,8 +356,11 @@ const PINNED_BELOW_45: [(&str, u64); 9] = [
     ("daily", 0x9383_a385_9613_ac82),
     ("abyss_rewards", 0x6978_dbed_683e_0aee),
     ("abyss_floor", 0xbda8_123f_7ab4_feb4),
-    ("quests", 0x2726_6fe1_0a09_8738),
-    ("event_dungeons", 0xbda4_5e54_3c7e_75fc),
+    // #461 (HauDrauf, 2026-11-04) re-pins quests and event_dungeons in the 2026-11-14b
+    // batch: the seven enchanting ingredients drop equally often in quest, job and
+    // event loot at every level.
+    ("quests", 0x38d2_54b3_fb43_9c3e),
+    ("event_dungeons", 0xa38a_4214_0438_3fdf),
     // #431 re-pins jobs in the 2026-11-10 batch: a Duel's champion is +8 over the
     // job and capped at 70 (was 0x1455_a9aa_6819_838d with a 4-8 delta).
     ("jobs", 0xeba3_7100_b29b_cbc6),

@@ -1725,7 +1725,7 @@ pub fn generate_for_abyss_floor(
         crate::features::beginner_economy::top_container_soul_gems(&mut data, level, false);
         // Levels 45-100: effect ingredients 30, tempering 1, dragon 1-7 (HauDrauf,
         // #438), the corpses' #383 bonus included.
-        crate::features::high_level_materials::pay_dungeon(&mut data, level);
+        crate::features::high_level_materials::pay_abyss_dungeon(&mut data, level);
     }
     Some(data)
 }

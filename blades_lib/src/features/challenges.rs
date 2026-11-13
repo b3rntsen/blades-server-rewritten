@@ -100,6 +100,10 @@ pub struct ChallengeObjective {
 #[serde(rename_all = "camelCase")]
 pub struct ChallengeTemplate {
     pub template_id: Uuid,
+    /// The APK asset name (`Challenge_DealDamage_Cleaving_15_Common`), for
+    /// reviewers and tests; never sent to the client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub objective: ChallengeObjective,
     pub reward: RewardGrant,
     /// Retail's `ChallengeSelector._requiredPlayerLevel`: the lowest level the
@@ -114,7 +118,28 @@ pub struct ChallengeTemplate {
     /// (`Challenge_DefeatSkeever_4` → Skeevers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_enemy_group: Option<Uuid>,
+    /// Retail's `ChallengeSelector._requiredAbilities`: the abilities a character
+    /// must hold to be offered the challenge (report #466). Every
+    /// `Challenge_PerformAbility_*` names its own ability here
+    /// (`ChallengeSelector_RequiredAbilities_11-20_Skullcrusher`), so "use
+    /// Skullcrusher 10 times" went only to a character who had learned it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_abilities: Vec<Uuid>,
+    /// Retail's `BaseChallengeData._challengePoolCategory`: [`COMMON_CATEGORY`] for
+    /// the gold challenges, one of four gem categories (uncommon, rare, epic,
+    /// legendary) for the rest (report #466). Absent = common.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<Uuid>,
+    /// Retail's `BaseChallengeData._weight`, the template's draw weight among
+    /// those offered (report #466). Absent = 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
 }
+
+/// `_challengePoolCategory` of the gold ("common") challenges. Every captured
+/// retail set (214 of 224 list responses in the June 2026 snapshot) held three
+/// of these and at most one from a gem category.
+pub const COMMON_CATEGORY: Uuid = Uuid::from_u128(0x9fbd1d31_1000_4b4a_b7e4_0c29115c1e00);
 
 /// The challenges the APK marks `BaseChallengeData._oneTimeOnly` — all fifteen
 /// `Challenge_TUTORIAL_*`, and nothing else (every `Challenge_*` asset in
@@ -165,6 +190,38 @@ impl ChallengeTemplate {
             && level >= self.required_player_level
             && (self.locked_at_player_level == 0 || level < self.locked_at_player_level)
     }
+
+    /// Whether this is a gem-category ("premium") challenge, of which retail held
+    /// at most one at a time ([`COMMON_CATEGORY`]).
+    pub fn premium(&self) -> bool {
+        self.category.is_some_and(|c| c != COMMON_CATEGORY)
+    }
+
+    /// The draw weight ([`Self::weight`], 1 when absent).
+    pub fn draw_weight(&self) -> f64 {
+        self.weight.unwrap_or(1.0).max(0.0)
+    }
+
+    /// Whether retail offered this challenge to a character of `level` holding
+    /// `abilities` (the character's `abilities` map, ability id -> rank): its
+    /// level band ([`Self::offered_at`]) and every one of its
+    /// [`Self::required_abilities`] learned (report #466: HauDrauf, without
+    /// Skullcrusher, was asked to use it).
+    pub fn offered_to(&self, level: u16, abilities: &serde_json::Value) -> bool {
+        self.offered_at(level)
+            && self
+                .required_abilities
+                .iter()
+                .all(|id| holds_ability(abilities, id))
+    }
+}
+
+/// Whether the character's `abilities` map (ability id -> rank) holds `id` at
+/// rank 1 or more.
+pub fn holds_ability(abilities: &serde_json::Value, id: &Uuid) -> bool {
+    abilities
+        .get(id.to_string())
+        .is_some_and(|rank| rank.as_f64().is_none_or(|r| r > 0.0))
 }
 
 /// A live per-character challenge instance — persisted in `server_state` and returned
@@ -237,38 +294,86 @@ pub fn rotate_indices(pool_len: usize, cursor: usize, count: usize) -> Vec<usize
     (0..count).map(|i| (cursor + i) % pool_len).collect()
 }
 
-/// The pool indices to hand a character of `level` for `free` empty slots, and
-/// the cursor to resume from.
+/// One step of SplitMix64: the next state and its output. The challenge draw's
+/// RNG (this crate has no `rand`): the server seeds it afresh per refill, tests
+/// with a fixed seed so a draw is reproducible.
+fn splitmix64(state: u64) -> (u64, u64) {
+    let next = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = next;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    (next, z ^ (z >> 31))
+}
+
+/// The pool indices to hand a character of `level` holding `abilities` for
+/// `free` empty slots, and the RNG state to resume from.
 ///
-/// Walks the pool round-robin from `cursor` (the rotation the set always used)
-/// and takes the next templates offered at `level` ([`ChallengeTemplate::offered_at`])
-/// that are neither in `held` nor already taken. One lap at most: when fewer
-/// than `free` templates qualify the set stays short rather than repeating one.
-/// The cursor moves past the last template taken, so the rotation carries on.
+/// Retail's draw (report #466): each slot is a weighted draw
+/// ([`ChallengeTemplate::draw_weight`]) among the templates offered to the
+/// character ([`ChallengeTemplate::offered_to`]) that are neither in `held` nor
+/// already drawn. A set holds at most one gem-category challenge
+/// ([`ChallengeTemplate::premium`]): when none is held, the first free slot draws
+/// from those, the rest from the common ones. When too few qualify the set stays
+/// short rather than repeating one. `seed` is the RNG state.
+///
+/// This replaced a round-robin through a 45-template captured pool, which at
+/// level 100 could only ever offer the same dozen challenges.
 pub fn pick_templates(
     pool: &[ChallengeTemplate],
-    cursor: usize,
+    seed: usize,
     level: u16,
+    abilities: &serde_json::Value,
     held: &[Uuid],
     free: usize,
 ) -> (Vec<usize>, usize) {
+    let mut state = seed as u64;
     let mut picked: Vec<usize> = Vec::new();
-    let mut next = cursor;
-    for step in 0..pool.len() {
-        if picked.len() >= free {
+    let mut premium_held = held
+        .iter()
+        .any(|id| pool.iter().any(|t| t.template_id == *id && t.premium()));
+    for _ in 0..free {
+        let candidates = |premium: bool| -> Vec<usize> {
+            (0..pool.len())
+                .filter(|&i| {
+                    let t = &pool[i];
+                    t.premium() == premium
+                        && t.offered_to(level, abilities)
+                        && !held.contains(&t.template_id)
+                        && !picked.iter().any(|&p| pool[p].template_id == t.template_id)
+                })
+                .collect()
+        };
+        let mut options = if premium_held {
+            Vec::new()
+        } else {
+            candidates(true)
+        };
+        let premium = !options.is_empty();
+        if !premium {
+            options = candidates(false);
+        }
+        if options.is_empty() {
             break;
         }
-        let idx = (cursor + step) % pool.len();
-        let t = &pool[idx];
-        if t.offered_at(level)
-            && !held.contains(&t.template_id)
-            && !picked.iter().any(|&i| pool[i].template_id == t.template_id)
-        {
-            picked.push(idx);
-            next = cursor.wrapping_add(step + 1);
-        }
+        let total: f64 = options.iter().map(|&i| pool[i].draw_weight()).sum();
+        let (next, out) = splitmix64(state);
+        state = next;
+        let choice = if total > 0.0 {
+            let mut x = (out >> 11) as f64 / (1u64 << 53) as f64 * total;
+            *options
+                .iter()
+                .find(|&&i| {
+                    x -= pool[i].draw_weight();
+                    x < 0.0
+                })
+                .unwrap_or(options.last().unwrap())
+        } else {
+            options[(out % options.len() as u64) as usize]
+        };
+        premium_held |= premium;
+        picked.push(choice);
     }
-    (picked, next)
+    (picked, state as usize)
 }
 
 /// Whether an active challenge should be retired for a character of `level`
@@ -282,13 +387,18 @@ pub fn pick_templates(
 /// (level 65) has carried `Challenge_DefeatSkeever_4` since 2026-09-25. One
 /// with progress is kept, so nothing earned is taken away. A template no longer
 /// in the pool is kept too: there is nothing to judge it by.
-pub fn retire_out_of_band(c: &ChallengeInstance, pool: &[ChallengeTemplate], level: u16) -> bool {
+pub fn retire_out_of_band(
+    c: &ChallengeInstance,
+    pool: &[ChallengeTemplate],
+    level: u16,
+    abilities: &serde_json::Value,
+) -> bool {
     c.status == ChallengeStatus::Active
         && c.progress <= 0.0
         && pool
             .iter()
             .find(|t| t.template_id == c.template_id)
-            .is_some_and(|t| !t.offered_at(level))
+            .is_some_and(|t| !t.offered_to(level, abilities))
 }
 
 /// Clamp a client-reported absolute progress to `[0, quota]`.
@@ -305,6 +415,7 @@ mod tests {
     fn template(quota: f64) -> ChallengeTemplate {
         ChallengeTemplate {
             template_id: Uuid::from_u128(0xabc),
+            name: None,
             objective: ChallengeObjective {
                 kind: "Backend.DefaultObjective".to_string(),
                 uid: ObjectiveUid {
@@ -320,6 +431,9 @@ mod tests {
             required_player_level: 0,
             locked_at_player_level: 0,
             target_enemy_group: None,
+            required_abilities: Vec::new(),
+            category: None,
+            weight: None,
         }
     }
 
@@ -415,8 +529,10 @@ mod tests {
         ))
         .unwrap();
         let pool: Vec<ChallengeTemplate> = serde_json::from_str(&raw).unwrap();
-        assert_eq!(pool.len(), 45);
-        let (mut before, mut after) = (0u64, 0u64);
+        // The APK library minus one-time, weight-0, town/Abyss-gated and
+        // unspawnable-enemy
+        // templates (#466; it was the 45 captured ones before).
+        assert_eq!(pool.len(), 1584);
         for t in &pool {
             let paid = gems_only_reward(&t.reward);
             assert_eq!(
@@ -425,14 +541,10 @@ mod tests {
                 "{}",
                 t.template_id
             );
-            before += t.reward.currencies.get(&GEMS).copied().unwrap_or(0);
-            after += paid.currencies[&GEMS];
+            assert!(
+                paid.currencies[&GEMS] >= CHALLENGE_GEM_MULTIPLIER * CHALLENGE_MIN_CONVERTED_GEMS
+            );
         }
-        assert_eq!(
-            (before, after),
-            (46, 92 + 2 * 167),
-            "pool gems: 46 retail; 92 doubled + 167 from gold, doubled"
-        );
     }
 
     fn shipped_pool() -> Vec<ChallengeTemplate> {
@@ -476,25 +588,35 @@ mod tests {
         }
     }
 
-    /// #406: at every level 1..=100 and every rotation cursor, a full set of
-    /// distinct templates is handed out, each offered at that level, and the
-    /// Skeever hunt never reaches Lloyd's level.
+    /// #406/#466: at every level 1..=100 and many seeds, a full set of distinct
+    /// templates is handed out, each offered at that level, at most one of them
+    /// from a gem category, and the Skeever hunt never reaches Lloyd's level.
     #[test]
     fn report_406_every_level_gets_a_full_set_of_templates_offered_at_it() {
         let pool = shipped_pool();
         for level in 1..=100u16 {
-            for cursor in 0..pool.len() {
-                let (picked, next) =
-                    pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+            for seed in 0..40usize {
+                let (picked, _) = pick_templates(
+                    &pool,
+                    seed,
+                    level,
+                    &serde_json::Value::Null,
+                    &[],
+                    ACTIVE_CHALLENGE_COUNT,
+                );
                 assert_eq!(
                     picked.len(),
                     ACTIVE_CHALLENGE_COUNT,
-                    "level {level} cursor {cursor}"
+                    "level {level} seed {seed}"
                 );
                 let mut ids: Vec<Uuid> = picked.iter().map(|&i| pool[i].template_id).collect();
                 assert!(
                     picked.iter().all(|&i| pool[i].offered_at(level)),
                     "level {level}"
+                );
+                assert!(
+                    picked.iter().filter(|&&i| pool[i].premium()).count() <= 1,
+                    "two gem challenges at level {level}"
                 );
                 ids.sort();
                 ids.dedup();
@@ -503,7 +625,6 @@ mod tests {
                     ACTIVE_CHALLENGE_COUNT,
                     "duplicates at level {level}"
                 );
-                assert!(next > cursor, "the cursor advances");
                 if level == LLOYD_LEVEL {
                     assert!(
                         !ids.contains(&SKEEVER_4),
@@ -525,16 +646,180 @@ mod tests {
         c.required_player_level = 15;
         c.locked_at_player_level = 20;
         let pool = vec![a, b, c];
-        let (picked, next) = pick_templates(&pool, 0, 30, &[Uuid::from_u128(1)], 4);
+        let (picked, _) = pick_templates(
+            &pool,
+            0,
+            30,
+            &serde_json::Value::Null,
+            &[Uuid::from_u128(1)],
+            4,
+        );
         assert_eq!(
             picked,
             vec![1],
             "a is held and c is out of band: the set stays short"
         );
-        assert_eq!(next, 2, "resume after the last template taken");
-        let (picked, _) = pick_templates(&pool, 2, 17, &[], 4);
-        assert_eq!(picked, vec![2, 0, 1]);
-        assert_eq!(pick_templates(&[], 0, 17, &[], 4), (vec![], 0));
+        let (mut picked, _) = pick_templates(&pool, 2, 17, &serde_json::Value::Null, &[], 4);
+        picked.sort();
+        assert_eq!(picked, vec![0, 1, 2]);
+        assert_eq!(
+            pick_templates(&[], 7, 17, &serde_json::Value::Null, &[], 4),
+            (vec![], 7)
+        );
+    }
+
+    /// #466: a gem-category challenge goes in the first free slot when none is
+    /// held, never a second one; a weight-0 template is never drawn while others
+    /// can be; the draw follows the weights.
+    #[test]
+    fn report_466_one_gem_challenge_per_set_and_draws_follow_the_weights() {
+        let gem = Uuid::from_u128(0x3e59327f_2552_487a_a070_64580f3737b1);
+        let mk = |id: u128, category: Uuid, weight: f64| {
+            let mut t = template(1.0);
+            t.template_id = Uuid::from_u128(id);
+            t.category = Some(category);
+            t.weight = Some(weight);
+            t
+        };
+        let pool = vec![
+            mk(1, COMMON_CATEGORY, 1.0),
+            mk(2, COMMON_CATEGORY, 3.0),
+            mk(3, COMMON_CATEGORY, 0.0),
+            mk(4, COMMON_CATEGORY, 1.0),
+            mk(5, gem, 1.0),
+            mk(6, gem, 1.0),
+        ];
+        let none = serde_json::Value::Null;
+        let mut first_of_two = [0usize; 2];
+        for seed in 0..2000usize {
+            let (picked, _) = pick_templates(&pool, seed, 50, &none, &[], 4);
+            assert_eq!(picked.len(), 4);
+            assert!(pool[picked[0]].premium(), "slot 1 is the gem challenge");
+            assert_eq!(picked.iter().filter(|&&i| pool[i].premium()).count(), 1);
+            assert!(!picked.contains(&2), "weight 0 drawn while others could be");
+            let (picked, _) = pick_templates(&pool, seed, 50, &none, &[Uuid::from_u128(5)], 1);
+            assert!(
+                !pool[picked[0]].premium(),
+                "a gem challenge is already held"
+            );
+            let (picked, _) = pick_templates(&pool, seed, 50, &none, &[Uuid::from_u128(6)], 1);
+            if picked[0] == 0 {
+                first_of_two[0] += 1;
+            } else if picked[0] == 1 {
+                first_of_two[1] += 1;
+            }
+        }
+        // Weights 1 : 3 among templates 1 and 2 (template 4 also weight 1).
+        let ratio = first_of_two[1] as f64 / first_of_two[0] as f64;
+        assert!((2.4..3.6).contains(&ratio), "weight ratio {ratio}");
+    }
+
+    /// #466 follow-up (HauDrauf, msg 3108): the bigger pool and the "three
+    /// gold-category + one gem-category" sets change WHICH challenges come, not
+    /// what they pay. Every challenge drawn, at every level, still pays gems only,
+    /// doubled (owner decision 2026-10-16, #388/#541): no gold, and exactly
+    /// [`gems_only_reward`] of its template's retail reward.
+    #[test]
+    fn report_466_every_drawn_challenge_still_pays_doubled_gems_only() {
+        let pool = shipped_pool();
+        let cleave = pool
+            .iter()
+            .find(|t| t.template_id == CLEAVING_15_COMMON)
+            .unwrap();
+        // Retail pays 4,000 gold: 16 gems at 250 gold a gem, doubled.
+        let paid = ChallengeInstance::from_template(cleave, Uuid::nil(), Uuid::nil(), 0, 0).reward;
+        assert_eq!(paid.currencies, HashMap::from([(GEMS, 32)]));
+        for level in [1u16, 20, 50, 76, 100] {
+            for seed in 0..200usize {
+                let (picked, _) =
+                    pick_templates(&pool, seed, level, &serde_json::Value::Null, &[], 4);
+                for i in picked {
+                    let t = &pool[i];
+                    let c = ChallengeInstance::from_template(t, Uuid::nil(), Uuid::nil(), 0, 0);
+                    assert!(
+                        !c.reward.currencies.contains_key(&GOLD),
+                        "{:?} pays gold",
+                        t.name
+                    );
+                    assert_eq!(c.reward.currencies.keys().collect::<Vec<_>>(), vec![&GEMS]);
+                    assert_eq!(c.reward.currencies, gems_only_reward(&t.reward).currencies);
+                    let retail_gems = t.reward.currencies.get(&GEMS).copied().unwrap_or(0);
+                    if t.reward.currencies.get(&GOLD).copied().unwrap_or(0) == 0 {
+                        assert_eq!(
+                            c.reward.currencies[&GEMS],
+                            retail_gems * CHALLENGE_GEM_MULTIPLIER
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    const CLEAVING_15_COMMON: Uuid = Uuid::from_u128(0xbf88a825_8c46_4825_91e1_b2f1774180bc);
+
+    /// #466 (HauDrauf, level 100): "always blunt damage, never cleave or slash,
+    /// and retail had many different ability challenges". The captured pool held
+    /// one damage challenge for level 76+ (Bashing) and four ability ones;
+    /// retail's library has every damage type and an ability challenge for most
+    /// abilities. Over many draws a level-100 character must see all of them.
+    #[test]
+    fn report_466_level_100_draws_every_damage_type_and_many_abilities() {
+        let pool = shipped_pool();
+        let every_ability: serde_json::Map<String, serde_json::Value> = pool
+            .iter()
+            .flat_map(|t| t.required_abilities.iter())
+            .map(|id| (id.to_string(), serde_json::json!(1)))
+            .collect();
+        let every_ability = serde_json::Value::Object(every_ability);
+        let mut seen: std::collections::BTreeSet<String> = Default::default();
+        for seed in 0..3000usize {
+            let (picked, _) = pick_templates(&pool, seed, 100, &every_ability, &[], 4);
+            for i in picked {
+                let name = pool[i].name.clone().unwrap_or_default();
+                if let Some(rest) = name.strip_prefix("Challenge_DealDamage_") {
+                    seen.insert(format!("damage:{}", rest.split('_').next().unwrap()));
+                }
+                if let Some(rest) = name.strip_prefix("Challenge_PerformAbility_") {
+                    seen.insert(format!("ability:{}", rest.split('_').next().unwrap()));
+                }
+            }
+        }
+        for kind in [
+            "Slashing",
+            "Slashing+",
+            "Cleaving",
+            "Cleaving+",
+            "Bashing",
+            "Bashing+",
+            "Fire",
+            "Frost",
+            "Shock",
+            "Poison",
+        ] {
+            assert!(
+                seen.contains(&format!("damage:{kind}")),
+                "no {kind} damage challenge: {seen:?}"
+            );
+        }
+        let abilities = seen.iter().filter(|s| s.starts_with("ability:")).count();
+        assert!(
+            abilities >= 10,
+            "only {abilities} ability challenges: {seen:?}"
+        );
+
+        // A template new to the pool carries the APK's own values: quota the
+        // middle of 22,500..28,125 rounded to 500, reward the top-weight 4,000 gold.
+        let cleave = pool
+            .iter()
+            .find(|t| t.template_id == CLEAVING_15_COMMON)
+            .expect("Challenge_DealDamage_Cleaving_15_Common");
+        assert_eq!(cleave.objective.quota, 25500.0);
+        assert_eq!(cleave.reward.currencies.get(&GOLD), Some(&4000));
+        assert_eq!(
+            (cleave.required_player_level, cleave.locked_at_player_level),
+            (76, 0)
+        );
+        assert!(!cleave.premium());
     }
 
     /// #406: LLoyd's held set on prod (2026-10-17). The zero-progress Skeever
@@ -554,25 +839,35 @@ mod tests {
             c
         };
         let skeever = held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 0.0);
-        assert!(retire_out_of_band(&skeever, &pool, LLOYD_LEVEL));
-        assert!(!retire_out_of_band(&skeever, &pool, 17), "in band at 17");
+        assert!(retire_out_of_band(
+            &skeever,
+            &pool,
+            LLOYD_LEVEL,
+            &serde_json::Value::Null
+        ));
+        assert!(
+            !retire_out_of_band(&skeever, &pool, 17, &serde_json::Value::Null),
+            "in band at 17"
+        );
         assert!(retire_out_of_band(
             &held(0x8925740e_046b_4e7a_b418_a17bd83e035c, 0.0),
             &pool,
-            LLOYD_LEVEL
+            LLOYD_LEVEL,
+            &serde_json::Value::Null
         ));
         assert!(
             !retire_out_of_band(
                 &held(0x48efabe0_2138_42f6_9aa7_1d53a4751a1e, 3.0),
                 &pool,
-                LLOYD_LEVEL
+                LLOYD_LEVEL,
+                &serde_json::Value::Null
             ),
             "progress is kept"
         );
         let mut unknown = skeever.clone();
         unknown.template_id = Uuid::from_u128(0xdead);
         assert!(
-            !retire_out_of_band(&unknown, &pool, LLOYD_LEVEL),
+            !retire_out_of_band(&unknown, &pool, LLOYD_LEVEL, &serde_json::Value::Null),
             "no template, no judgement"
         );
     }
@@ -634,13 +929,20 @@ mod tests {
         );
         for level in 0..=100u16 {
             assert!(!tutorial.offered_at(level), "offered at {level}");
-            for cursor in 0..pool.len() {
-                let (picked, _) = pick_templates(&pool, cursor, level, &[], ACTIVE_CHALLENGE_COUNT);
+            for seed in 0..20usize {
+                let (picked, _) = pick_templates(
+                    &pool,
+                    seed,
+                    level,
+                    &serde_json::Value::Null,
+                    &[],
+                    ACTIVE_CHALLENGE_COUNT,
+                );
                 assert!(
                     picked
                         .iter()
                         .all(|&i| pool[i].template_id != TUTORIAL_CRAFT_DECORATION),
-                    "picked at level {level} cursor {cursor}"
+                    "picked at level {level} seed {seed}"
                 );
             }
         }
@@ -658,10 +960,19 @@ mod tests {
             .unwrap();
         let mut held =
             ChallengeInstance::from_template(t, Uuid::from_u128(9), Uuid::from_u128(9), 0, 0);
-        assert!(retire_out_of_band(&held, &pool, 77), "Dwalin, level 77");
-        assert!(retire_out_of_band(&held, &pool, 1), "and at level 1");
+        assert!(
+            retire_out_of_band(&held, &pool, 77, &serde_json::Value::Null),
+            "Dwalin, level 77"
+        );
+        assert!(
+            retire_out_of_band(&held, &pool, 1, &serde_json::Value::Null),
+            "and at level 1"
+        );
         held.progress = 1.0;
-        assert!(!retire_out_of_band(&held, &pool, 77), "progress is kept");
+        assert!(
+            !retire_out_of_band(&held, &pool, 77, &serde_json::Value::Null),
+            "progress is kept"
+        );
     }
 
     #[test]

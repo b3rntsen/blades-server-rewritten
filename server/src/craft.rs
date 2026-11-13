@@ -5583,6 +5583,89 @@ mod tests {
             .unwrap()
         }
 
+        /// Tracker #504 (HauDrauf, 2026-11-13: "schon ein paar mal die gleichen
+        /// Kombination"): crafting the Ebony Faerite Ring 60 times for ONE character
+        /// through the live start path must give 60 independently rolled GRADING sets,
+        /// not a sequence that repeats per character, recipe or day. With 34 ring
+        /// properties a three-property ring has thousands of outcomes, so even a
+        /// handful of exact repeats in 60 would mean the roll is not fresh.
+        #[tokio::test]
+        async fn ring_crafts_for_one_character_roll_fresh_grading_each_time() {
+            const EBONY_FAERITE_RING_RECIPE: &str = "f678c878-ca9e-41b0-83b2-5dc9cab7d1be";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 10_000_000).await;
+            // The ring's forge inputs (APK `Recipe._inputs`), enough for every craft.
+            let mut inv = enchanter_inventory(s.item_id, madness_battleaxe(Some(2)), None);
+            for t in [
+                "75112030-b248-49b0-9c70-0da8dea150d1",
+                "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95",
+                "70f2c013-813e-4f63-8b29-7a54a13b5e58",
+            ] {
+                inv.backpack.stackable_items.add(uuid(t), 1_000);
+            }
+            diesel::sql_query("UPDATE characters SET inventory = $1::jsonb WHERE id = $2")
+                .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&inv).unwrap())
+                .bind::<diesel::sql_types::Uuid, _>(s.character_id)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            let n = 60;
+            for _ in 0..n {
+                let req: CreateCraftRequest = serde_json::from_value(serde_json::json!({
+                    "recipeId": EBONY_FAERITE_RING_RECIPE,
+                    "buildingId": "561e3e1f-d941-40e2-899d-d11f125cd9ef",
+                    "temperingLevel": 0,
+                    "gemsPayment": false,
+                    "batchSize": 1
+                }))
+                .unwrap();
+                start_craft(
+                    &mut conn,
+                    &sd,
+                    rd,
+                    deploy_items(),
+                    s.user_id,
+                    s.character_id,
+                    req,
+                )
+                .await
+                .expect("ring craft starts");
+            }
+            let row = stored(&mut conn, &s).await;
+            let jobs = &row.server_state.0.craft_jobs;
+            assert_eq!(jobs.len(), n);
+            let mut sets = std::collections::HashSet::new();
+            for job in jobs {
+                let item = serde_json::from_value::<RewardItem>(job.results["items"][0].clone())
+                    .expect("reward item")
+                    .item;
+                assert_eq!(
+                    item.item_template_id,
+                    uuid("240eb001-fe3e-4899-b0cc-dd87cb8a72b6")
+                );
+                let mut g: Vec<(Uuid, u64)> = item
+                    .properties
+                    .grading
+                    .iter()
+                    .map(|p| (p.id, p.tier))
+                    .collect();
+                assert!(!g.is_empty(), "a crafted ring is graded");
+                g.sort();
+                sets.insert(g);
+            }
+            eprintln!(
+                "#504: {} distinct GRADING sets in {n} ring crafts",
+                sets.len()
+            );
+            assert!(
+                sets.len() >= n - 3,
+                "only {} distinct GRADING sets in {n} crafts: the roll repeats",
+                sets.len()
+            );
+        }
+
         async fn stored(conn: &mut AsyncPgConnection, s: &Seeded) -> CharacterDbEntryEconomy {
             load_owned(conn, s.character_id, s.user_id)
                 .await

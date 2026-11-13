@@ -1033,3 +1033,88 @@ mod event_dungeons_as_retail_built_them {
         }
     }
 }
+
+/// Tracker #461 (HauDrauf): the seven effect ingredients come equally often in
+/// quest loot. Retail's tables, which quest corpses and containers followed,
+/// never paid Glow Dust and paid Imp Stool about twice as often as Fire Salts.
+#[cfg(test)]
+mod report_461_even_effect_ingredients {
+    use super::*;
+    use crate::static_data::QuestLevelScaling;
+    use crate::util::dungeon::EFFECT_INGREDIENTS;
+    use std::collections::HashMap;
+
+    const GLOW_DUST: u128 = 0x9687d83c_aa7b_4cd9_8b7c_b80c397d3f50;
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn shipped() -> QuestLevelScaling {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/quests_daily.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        serde_json::from_value(json["levelScaling"].clone()).unwrap()
+    }
+
+    /// Effect-ingredient stacks by kind over every quest's corpses and containers.
+    fn kinds_paid(level: i64, rounds: usize) -> HashMap<u128, u64> {
+        let (gd, scaling) = (game_data(), shipped());
+        let mut out = HashMap::new();
+        let mut ids: Vec<Uuid> = gd.quests.keys().copied().collect();
+        ids.sort();
+        for _ in 0..rounds {
+            for id in &ids {
+                let Ok((_, Some(data))) = generate_quest_data(&gd, *id, level, &scaling) else {
+                    continue;
+                };
+                let mut tally = |stacks: &HashMap<Uuid, u64>| {
+                    for (item, q) in stacks {
+                        if *q > 0 && EFFECT_INGREDIENTS.contains(&item.as_u128()) {
+                            *out.entry(item.as_u128()).or_insert(0) += 1;
+                        }
+                    }
+                };
+                for spawners in data.enemy_generated_data.values() {
+                    for enemy in spawners.iter().flatten() {
+                        tally(&enemy.spawn_group_loot.stackable_items);
+                        for loot in enemy.loot_table_loot.values() {
+                            tally(&loot.stackable_items);
+                        }
+                    }
+                }
+                for pile in data.item_generated_data.values() {
+                    for result in pile {
+                        for loot in result.loot_table_loot.values() {
+                            tally(&loot.stackable_items);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_ingredient_is_paid_about_one_time_in_seven_at_low_and_high_levels() {
+        for level in [20, 100] {
+            let paid = kinds_paid(level, 3);
+            let total: u64 = paid.values().sum();
+            assert!(total >= 300, "level {level}: only {total} stacks to judge");
+            for id in EFFECT_INGREDIENTS {
+                let share = *paid.get(&id).unwrap_or(&0) as f64 / total as f64;
+                assert!(
+                    (0.09..=0.20).contains(&share),
+                    "level {level}: {:032x} is {:.1}% of {total} stacks (Glow Dust is \
+                     {:032x}); want about 14.3%",
+                    id,
+                    share * 100.0,
+                    GLOW_DUST
+                );
+            }
+        }
+    }
+}

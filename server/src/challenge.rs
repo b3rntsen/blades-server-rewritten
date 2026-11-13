@@ -82,10 +82,15 @@ fn sync_rewards(state: &mut ChallengeState, pool: &[ChallengeTemplate]) {
 
 /// Drop terminal (completed/abandoned) challenges and refill the active set back up
 /// to [`ACTIVE_CHALLENGE_COUNT`] from the templates offered at the character's
-/// `level` (report #406: retail's `ChallengeSelector` level band), advancing the
-/// cursor. The server mints the fresh instance/objective UUIDs (this crate has
+/// `level` (report #406: retail's `ChallengeSelector` level band), drawn at
+/// random by retail's weights (report #466). The server mints the fresh instance/objective UUIDs (this crate has
 /// no uuid-v4).
-fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
+fn refill(
+    state: &mut ChallengeState,
+    pool: &[ChallengeTemplate],
+    level: u16,
+    abilities: &serde_json::Value,
+) {
     state.active.retain(|c| c.status == ChallengeStatus::Active);
     if pool.is_empty() {
         return;
@@ -93,8 +98,10 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
     sync_rewards(state, pool);
     let free = ACTIVE_CHALLENGE_COUNT.saturating_sub(state.active.len());
     let held: Vec<Uuid> = state.active.iter().map(|c| c.template_id).collect();
-    let (picked, cursor) =
-        challenges::pick_templates(pool, state.cursor % pool.len(), level, &held, free);
+    // A fresh seed per refill (report #466: retail drew at random, weighted);
+    // the stored cursor is only the draw's last RNG state.
+    let seed = state.cursor ^ rand::random::<u64>() as usize;
+    let (picked, cursor) = challenges::pick_templates(pool, seed, level, abilities, &held, free);
     state.cursor = cursor;
     let (secs, ms) = (now_secs(), now_ms());
     for idx in picked {
@@ -112,10 +119,15 @@ fn refill(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
 /// and has not started (report #406), so [`refill`] replaces them. Only on the
 /// list call, whose response is the client's whole set: a challenge retired
 /// anywhere else would still be on the client's screen.
-fn retire_out_of_band(state: &mut ChallengeState, pool: &[ChallengeTemplate], level: u16) {
+fn retire_out_of_band(
+    state: &mut ChallengeState,
+    pool: &[ChallengeTemplate],
+    level: u16,
+    abilities: &serde_json::Value,
+) {
     state
         .active
-        .retain(|c| !challenges::retire_out_of_band(c, pool, level));
+        .retain(|c| !challenges::retire_out_of_band(c, pool, level, abilities));
 }
 
 #[derive(Serialize)]
@@ -149,8 +161,9 @@ pub async fn get_challenges(
             let mut entry = load_owned(&mut conn, character_id, user_id).await?;
             let pool = &globals.static_data.challenge_templates;
             let level = entry.character.0.level;
-            retire_out_of_band(&mut entry.server_state.0.challenges, pool, level);
-            refill(&mut entry.server_state.0.challenges, pool, level);
+            let abilities = &entry.character.0.abilities;
+            retire_out_of_band(&mut entry.server_state.0.challenges, pool, level, abilities);
+            refill(&mut entry.server_state.0.challenges, pool, level, abilities);
             let active = entry.server_state.0.challenges.active.clone();
             let character = entry.character.0.clone();
             write_back(&mut conn, entry).await?;
@@ -326,6 +339,7 @@ async fn resolve(
                 &mut entry.server_state.0.challenges,
                 &globals.static_data.challenge_templates,
                 level,
+                &entry.character.0.abilities,
             );
 
             let character = entry.character.0.clone();
@@ -404,7 +418,7 @@ mod tests {
                 GEM_CATEGORY_ID
             );
         }
-        refill(&mut state, &pool, 30);
+        refill(&mut state, &pool, 30, &serde_json::Value::Null);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         assert!(
             state
@@ -420,62 +434,166 @@ mod tests {
         match group.to_string().as_str() {
             // EnemyGroup "Skeevers" -> the Skeever family.
             "fe6ca800-ea7e-4fd7-a0ef-d1547da6ec5b" => Some("31be99a6-8557-4e9b-81e6-5503f900b7d2"),
+            // #466: the rest of retail's "defeat N <group>" challenges.
+            "08fe1986-7b9f-4993-8fd6-0cea4bdf3117" => Some("de8e06be-5403-4fc1-b912-1a5cd9d608a6"), // Bandits
+            "60ee58c4-285c-4b9e-8bbc-7ebeac074888" => Some("008cf5b0-2590-433b-832e-f2e6f0e0226f"), // Bears
+            "536d5baa-130c-4b50-aac0-56fb2919de65" => Some("340cd608-31ec-447f-9f72-2162639bff3c"), // Dremora
+            "524ebf5d-33e4-4e8a-81c8-c0e24dd98c3f" => Some("8c75bd1f-95a3-47d4-a28c-fdb1fc0de228"), // Goblins
+            "34b44d6e-9722-4c4a-8e73-4fd86a0b482e" => Some("4c60bb97-3918-485a-822e-1017d2401dd2"), // Mercenaries
+            "879e955b-7f70-48a9-a904-81e3e67c5519" => Some("50994925-f050-48b2-8cab-259b0f1a3531"), // Necromancers
+            "5147583a-1b1d-4bd3-a84f-12778c326c35" => Some("de4686d9-f748-40f7-a8d3-7baadb46a695"), // Skeletons
+            "375208a3-84d2-4f00-b1f8-eeb90ad050ef" => Some("3d932102-3b5c-42ba-b96a-35405752c5a3"), // Spiders
+            "fe14bdf9-efef-432b-892c-6db1bec7fc49" => Some("06591d48-8c3a-4f81-a2c6-dba2e7163788"), // Spriggans
+            "9e5bdf01-fae0-430a-b177-c269127ee04f" => Some("1b2a30db-2871-43a2-bca0-eaa4bd804698"), // Trolls
+            "5ad6efa9-fdbf-48e3-9c06-ed1b18bf2308" => Some("521bb612-587d-4a90-adee-904a48d89c33"), // Wights
+            "f0f07752-564d-4e2c-b621-3cf9f9dfaa7e" => Some("90a62106-6294-4456-8206-cf6817995bf8"), // Wisps
+            "a8c05731-9266-4d27-b59d-65cdf0fda0fa" => Some("7f9c2b46-e6b8-4a65-9caa-f2b952623c23"), // Wolves
             _ => None,
         }
     }
 
-    /// #406: for every level 1..=100, every enemy challenge the server can hand
-    /// out names a family that spawns at that level (the job generator's own
-    /// family table), and LLoyd (level 65) is never sent hunting Skeevers.
+    /// #466: HauDrauf (level 100) has not learned Skullcrusher, Power Attack or
+    /// Harrying Bash, and was still asked to use them. Retail's selectors
+    /// (`ChallengeSelector_RequiredAbilities_11-20_Skullcrusher` ...) offered a
+    /// "use ability X" challenge only to a character holding X. His ability map
+    /// is prod's (2026-11-10), trimmed to what matters: abilities he holds.
     #[test]
-    fn report_406_offered_enemy_challenges_spawn_at_the_characters_level() {
+    fn report_466_ability_challenges_go_only_to_characters_holding_the_ability() {
+        const SKULLCRUSHER: &str = "c112c956-eaac-4d7d-878e-32cd7d1e5209";
+        const SKULLCRUSHER_CHALLENGE: Uuid =
+            Uuid::from_u128(0xf99b8abf_8b87_4825_b966_46af328d642b);
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
         let pool = crate::static_loader::load(&dir).challenge_templates;
-        let targets: Vec<&ChallengeTemplate> = pool
+        let gated: Vec<&ChallengeTemplate> = pool
             .iter()
-            .filter(|t| t.target_enemy_group.is_some())
+            .filter(|t| !t.required_abilities.is_empty())
             .collect();
         assert!(
-            !targets.is_empty(),
-            "the pool has an enemy-target challenge to check"
+            gated.len() >= 30,
+            "retail's PerformAbility templates are gated ({})",
+            gated.len()
         );
-        for level in 1..=100u16 {
+        let haudrauf = serde_json::json!({
+            "1e7f0dd6-6015-4f65-b811-3246e407e330": 1,
+            "cdab44fb-6ff6-4701-a4ec-d19cce79e49f": 1,
+            "d07a8d30-9a1c-49b0-866d-97a8aa1534cf": 6,
+            "eb0cb7e6-47cf-48e7-8cc9-dbf80fc77f13": 1,
+        });
+        let mut with_skullcrusher = haudrauf.clone();
+        with_skullcrusher[SKULLCRUSHER] = serde_json::json!(1);
+
+        let offered = |abilities: &serde_json::Value| -> std::collections::HashSet<Uuid> {
+            let mut seen = std::collections::HashSet::new();
             for cursor in 0..pool.len() {
                 let mut state = ChallengeState {
                     active: vec![],
                     cursor,
                     points: 0,
                 };
-                refill(&mut state, &pool, level);
-                assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT, "level {level}");
-                for c in &state.active {
-                    let t = pool
-                        .iter()
-                        .find(|t| t.template_id == c.template_id)
-                        .unwrap();
-                    let Some(group) = t.target_enemy_group else {
-                        continue;
-                    };
-                    let family = job_family_of_group(group)
-                        .unwrap_or_else(|| panic!("no family for group {group}"));
-                    let f = crate::quest::jobs_gen::JOB_FAMILIES
-                        .iter()
-                        .find(|f| f.id == family)
-                        .unwrap();
-                    assert!(
-                        (f.min_level..=f.max_level).contains(&(level as i64)),
-                        "level {level}: {} asks for a family that spawns at {}..={}",
-                        t.template_id,
-                        f.min_level,
-                        f.max_level
-                    );
-                }
-                if level == 65 {
-                    assert!(
-                        state.active.iter().all(|c| t_is_not_skeever(c)),
-                        "Skeevers offered at 65"
-                    );
-                }
+                refill(&mut state, &pool, 100, abilities);
+                assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
+                seen.extend(state.active.iter().map(|c| c.template_id));
+            }
+            seen
+        };
+        let his = offered(&haudrauf);
+        let mut his_own = 0;
+        for t in &gated {
+            let holds = t
+                .required_abilities
+                .iter()
+                .all(|id| challenges::holds_ability(&haudrauf, id));
+            if holds {
+                his_own += usize::from(his.contains(&t.template_id));
+            } else {
+                assert!(!his.contains(&t.template_id), "offered {:?}", t.template_id);
+            }
+        }
+        assert!(his_own > 0, "an ability he holds gets its challenge too");
+        // Control: the same character with Skullcrusher learned is offered it.
+        assert!(offered(&with_skullcrusher).contains(&SKULLCRUSHER_CHALLENGE));
+
+        // One he already holds, untouched, is retired and replaced on the next list.
+        let skull = pool
+            .iter()
+            .find(|t| t.template_id == SKULLCRUSHER_CHALLENGE)
+            .unwrap();
+        let mut state = ChallengeState {
+            active: vec![ChallengeInstance::from_template(
+                skull,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                0,
+                0,
+            )],
+            cursor: 0,
+            points: 0,
+        };
+        refill(&mut state, &pool, 100, &with_skullcrusher);
+        assert!(
+            state
+                .active
+                .iter()
+                .any(|c| c.template_id == SKULLCRUSHER_CHALLENGE)
+        );
+        retire_out_of_band(&mut state, &pool, 100, &haudrauf);
+        refill(&mut state, &pool, 100, &haudrauf);
+        assert!(
+            state
+                .active
+                .iter()
+                .all(|c| c.template_id != SKULLCRUSHER_CHALLENGE),
+            "retired"
+        );
+        assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
+    }
+
+    /// #406: for every level 1..=100, every enemy challenge the server can hand
+    /// out names a family that spawns at that level (the job generator's own
+    /// family table), and LLoyd (level 65) is never sent hunting Skeevers.
+    /// #466: checked on every template offered at the level, not a sample of
+    /// draws, now that the draw is random.
+    #[test]
+    fn report_406_offered_enemy_challenges_spawn_at_the_characters_level() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pool = crate::static_loader::load(&dir).challenge_templates;
+        assert!(
+            pool.iter()
+                .filter(|t| t.target_enemy_group.is_some())
+                .count()
+                > 1,
+            "the pool has enemy-target challenges to check"
+        );
+        for level in 1..=100u16 {
+            for t in pool.iter().filter(|t| t.offered_at(level)) {
+                let Some(group) = t.target_enemy_group else {
+                    continue;
+                };
+                let family = job_family_of_group(group)
+                    .unwrap_or_else(|| panic!("no family for group {group}"));
+                let f = crate::quest::jobs_gen::JOB_FAMILIES
+                    .iter()
+                    .find(|f| f.id == family)
+                    .unwrap();
+                // A level-100 character's jobs run at effective level 83-84
+                // (job_pools.json initialEplByPlayerLevel), inside every family's
+                // range; families top out at 97-106, so the upper check is at 97.
+                assert!(
+                    (f.min_level..=f.max_level).contains(&(level.min(97) as i64)),
+                    "level {level}: {} asks for a family that spawns at {}..={}",
+                    t.template_id,
+                    f.min_level,
+                    f.max_level
+                );
+            }
+            let mut state = ChallengeState::default();
+            refill(&mut state, &pool, level, &serde_json::Value::Null);
+            assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT, "level {level}");
+            if level == 65 {
+                assert!(
+                    state.active.iter().all(|c| t_is_not_skeever(c)),
+                    "Skeevers offered at 65"
+                );
             }
         }
     }
@@ -524,8 +642,8 @@ mod tests {
             cursor: 11,
             points: 36,
         };
-        retire_out_of_band(&mut state, &pool, 77);
-        refill(&mut state, &pool, 77);
+        retire_out_of_band(&mut state, &pool, 77, &serde_json::Value::Null);
+        refill(&mut state, &pool, 77, &serde_json::Value::Null);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         let ids: Vec<Uuid> = state.active.iter().map(|c| c.id).collect();
         assert!(
@@ -568,12 +686,12 @@ mod tests {
             cursor: 6,
             points: 0,
         };
-        retire_out_of_band(&mut state, &pool, 65);
+        retire_out_of_band(&mut state, &pool, 65, &serde_json::Value::Null);
         assert!(
             state.active.is_empty(),
             "all four are out of band at 65 and untouched"
         );
-        refill(&mut state, &pool, 65);
+        refill(&mut state, &pool, 65, &serde_json::Value::Null);
         assert_eq!(state.active.len(), ACTIVE_CHALLENGE_COUNT);
         for c in &state.active {
             let t = pool

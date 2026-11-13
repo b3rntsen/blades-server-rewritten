@@ -10,14 +10,14 @@ use std::sync::Arc;
 use actix_web::{
     http::StatusCode,
     post,
-    web::{self, Json},
+    web::{self, Json, Query},
 };
-use blades_lib::economy::{RewardGrant, apply_reward, remove_chest};
+use blades_lib::economy::{RewardGrant, apply_reward, remove_any_chest};
 use blades_lib::features::chests;
 use blades_lib::user_data::{CompleteInventoryUpdate, CompleteWallet, InventoryChangeTracker};
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
@@ -64,13 +64,15 @@ pub async fn collect_chest(
                     .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
             };
 
-            // The chest must exist in the treasury. Copy its small identity tuple
-            // before mutating inventory below.
-            let (chest_tier, chest_level) = entry
-                .inventory
-                .0
+            // The chest must exist in the treasury or, for a chest found while the
+            // treasury was full, in the overflow treasury — the client opens that
+            // one at once with `fastTrack=True` (capture 37529, report #451). Copy
+            // its small identity tuple before mutating inventory below.
+            let inventory_ref = &entry.inventory.0;
+            let (chest_tier, chest_level) = inventory_ref
                 .treasury
                 .get_chest(&chest_id)
+                .or_else(|| inventory_ref.overflow_treasury.get_chest(&chest_id))
                 .map(|chest| (chest.tier, chest.level))
                 .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, CHEST_SERVICE_ID, 1))?;
 
@@ -138,7 +140,7 @@ pub async fn collect_chest(
             if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
                 entry.inventory.0.backpack_version += 1;
             }
-            remove_chest(&mut entry.inventory.0, &chest_id, &mut tracker);
+            remove_any_chest(&mut entry.inventory.0, &chest_id, &mut tracker);
             entry.inventory.0.treasury_version += 1;
 
             let inventory = entry.inventory.0.generate_client_update(&tracker);
@@ -162,4 +164,203 @@ pub async fn collect_chest(
         .scope_boxed()
     })
     .await
+}
+
+#[derive(Deserialize)]
+struct ResolveQuery {
+    #[serde(default)]
+    action: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResolveResponse {
+    inventory: CompleteInventoryUpdate,
+}
+
+/// What `/treasuries/current/resolve` does to the overflow treasury.
+#[derive(Debug, PartialEq, Eq)]
+enum ResolveAction {
+    /// Keep the overflow chests: move them into the treasury.
+    Accept,
+    /// Throw the overflow chests away.
+    Discard,
+}
+
+impl ResolveAction {
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.to_ascii_uppercase().as_str() {
+            "ACCEPT" => Some(Self::Accept),
+            "DISCARD" => Some(Self::Discard),
+            _ => None,
+        }
+    }
+}
+
+/// Settle every overflow chest the way `action` says, recording the diff.
+fn resolve_overflow(
+    inventory: &mut blades_lib::user_data::CompleteInventory,
+    action: &ResolveAction,
+    tracker: &mut InventoryChangeTracker,
+) {
+    for chest in inventory.overflow_treasury.take_all() {
+        tracker
+            .modified_overflow_treasury
+            .removed
+            .push(chest.id.clone());
+        if *action == ResolveAction::Accept {
+            tracker.modified_treasury.added.push(chest.id.clone());
+            inventory.treasury.push_chest(chest);
+        }
+    }
+}
+
+/// `POST /characters/{id}/treasuries/current/resolve?action=ACCEPT|DISCARD`.
+///
+/// The client's main menu calls this (`ResolveOverflowChestRequest`) when it finds a
+/// chest still sitting in `overflowTreasury` — one found with the treasury full and
+/// never opened, e.g. because the app was closed first. The route did not exist, so
+/// such a chest could never be cleared (report #451).
+///
+/// Not in the capture corpus: the ACCEPT/DISCARD names come from the client
+/// (`ResolveOverflowChestRequest` in `dump.cs`). ACCEPT keeps the chest by moving
+/// it into the treasury (the client also calls this after a treasury expansion,
+/// `ResolveOverflowFromTreasuryExpansion`); DISCARD drops it. The response type is
+/// the bare `Response`, so only the inventory diff is returned.
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/treasuries/current/resolve"
+)]
+pub async fn resolve_overflow_chest(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+    query: Query<ResolveQuery>,
+) -> Result<Json<ResolveResponse>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let user_id = session.session.user_id;
+    let character_id = path.into_inner();
+    let action = ResolveAction::parse(&query.action)
+        .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, CHEST_SERVICE_ID, 2))?;
+    let mut conn = app_state.db_pool.get().await.unwrap();
+
+    conn.transaction(move |mut conn| {
+        async move {
+            let mut entry = {
+                use crate::schema::characters;
+                characters::table
+                    .filter(characters::id.eq(character_id))
+                    .filter(characters::user_id.eq(user_id))
+                    .select(CharacterDbEntryEconomy::as_select())
+                    .for_no_key_update()
+                    .load(&mut conn)
+                    .await?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+            };
+
+            let mut tracker = InventoryChangeTracker::default();
+            resolve_overflow(&mut entry.inventory.0, &action, &mut tracker);
+            if !tracker.modified_overflow_treasury.removed.is_empty() {
+                entry.inventory.0.treasury_version += 1;
+            }
+            let inventory = entry.inventory.0.generate_client_update(&tracker);
+
+            {
+                use crate::schema::characters;
+                diesel::update(characters::table)
+                    .filter(characters::id.eq(entry.id))
+                    .set(entry)
+                    .execute(&mut conn)
+                    .await?;
+            }
+            Ok::<_, BladeApiError>(Json(ResolveResponse { inventory }))
+        }
+        .scope_boxed()
+    })
+    .await
+}
+
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+    use blades_lib::economy::remove_any_chest;
+    use blades_lib::user_data::{CompleteInventory, TREASURY_CAPACITY};
+
+    fn inventory_with_chests(n: usize) -> CompleteInventory {
+        let mut inv = CompleteInventory {
+            backpack: Default::default(),
+            loadout: Default::default(),
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 1,
+            treasury_version: 1,
+        };
+        for _ in 0..n {
+            inv.add_treasury_chest(2, 40);
+        }
+        inv
+    }
+
+    /// Retail capture 37528: treasury at 100, a dungeon chest → overflowTreasury.
+    #[test]
+    fn a_chest_found_with_a_full_treasury_goes_to_overflow() {
+        let mut inv = inventory_with_chests(TREASURY_CAPACITY);
+        let mut tracker = InventoryChangeTracker::default();
+        let id = inv.add_found_chest(3, 33, &mut tracker);
+
+        assert_eq!(inv.treasury.chests().len(), TREASURY_CAPACITY);
+        assert_eq!(inv.overflow_treasury.chests().len(), 1);
+        let wire = serde_json::to_value(inv.generate_client_update(&tracker)).unwrap();
+        assert_eq!(wire["overflowTreasury"]["chests"][0]["id"], id);
+        assert_eq!(wire["treasury"]["chests"], serde_json::json!([]));
+        assert_eq!(id, (TREASURY_CAPACITY + 1).to_string(), "one id sequence");
+    }
+
+    #[test]
+    fn a_chest_found_below_capacity_still_goes_to_the_treasury() {
+        let mut inv = inventory_with_chests(TREASURY_CAPACITY - 1);
+        let mut tracker = InventoryChangeTracker::default();
+        inv.add_found_chest(2, 33, &mut tracker);
+        assert_eq!(inv.treasury.chests().len(), TREASURY_CAPACITY);
+        assert!(inv.overflow_treasury.chests().is_empty());
+    }
+
+    /// Retail capture 37529: collecting the overflow chest answers
+    /// `overflowTreasury: {removedChests: ["118"]}`.
+    #[test]
+    fn collecting_an_overflow_chest_removes_it_from_overflow() {
+        let mut inv = inventory_with_chests(TREASURY_CAPACITY);
+        let mut t = InventoryChangeTracker::default();
+        let id = inv.add_found_chest(3, 33, &mut t);
+
+        let mut tracker = InventoryChangeTracker::default();
+        assert!(remove_any_chest(&mut inv, &id, &mut tracker));
+        assert!(inv.overflow_treasury.chests().is_empty());
+        let wire = serde_json::to_value(inv.generate_client_update(&tracker)).unwrap();
+        assert_eq!(
+            wire["overflowTreasury"]["removedChests"],
+            serde_json::json!([id])
+        );
+        assert!(wire["treasury"].get("removedChests").is_none());
+    }
+
+    #[test]
+    fn resolve_accept_moves_and_discard_drops() {
+        for (action, kept) in [(ResolveAction::Accept, 1), (ResolveAction::Discard, 0)] {
+            let mut inv = inventory_with_chests(TREASURY_CAPACITY);
+            let mut t = InventoryChangeTracker::default();
+            inv.add_found_chest(3, 33, &mut t);
+            let mut tracker = InventoryChangeTracker::default();
+            resolve_overflow(&mut inv, &action, &mut tracker);
+            assert!(inv.overflow_treasury.chests().is_empty());
+            assert_eq!(inv.treasury.chests().len(), TREASURY_CAPACITY + kept);
+        }
+        assert_eq!(ResolveAction::parse("ACCEPT"), Some(ResolveAction::Accept));
+        assert_eq!(
+            ResolveAction::parse("DISCARD"),
+            Some(ResolveAction::Discard)
+        );
+        assert_eq!(ResolveAction::parse("x"), None);
+    }
 }

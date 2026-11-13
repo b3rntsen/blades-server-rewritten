@@ -724,6 +724,7 @@ async fn main() -> Result<()> {
                     .service(daily_reward::get_daily_reward)
                     .service(daily_reward::collect_daily_reward)
                     .service(chests::collect_chest)
+                    .service(chests::resolve_overflow_chest)
                     // Guild: literal paths (current/search/leaderboard/exchanges/…)
                     // MUST precede the generic `/guilds/{guild_id}` so they aren't
                     // captured by it. Exchange sub-paths (donate/redeem) must come

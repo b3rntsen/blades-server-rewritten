@@ -148,6 +148,10 @@ pub fn loadout_client_backend_synchronized(
 /// family). `None` if the frame isn't carrier `0x36` or has no integral propId 3.
 /// Used by the engine to tell a round-start HANDSHAKE/state frame (op20/22/36/56/61/
 /// 79/80 …) apart from an actual combat swing/ability before resolving damage.
+/// `GameMessageId.PlayerInputCancelCharge` (dump.cs:588327): c2s, the client
+/// aborting its own attack wind-up. Carries no fields beyond the shared prefix.
+pub const GMID_PLAYER_INPUT_CANCEL_CHARGE: u8 = 31;
+
 pub fn user_message_gmid(user_data: &[u8]) -> Option<u8> {
     if user_data.get(1) != Some(&MSGTYPE_USERMESSAGE) {
         return None;
