@@ -22,14 +22,14 @@ use blades_lib::user_data::{
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
 use diesel_async::{
-    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+    scoped_futures::ScopedFutureExt, AsyncConnection, AsyncPgConnection, RunQueryDsl,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    BladeApiError, ServerGlobal, models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe,
+    models::CharacterDbEntryEconomy, session::SessionLookedUpMaybe, BladeApiError, ServerGlobal,
 };
 
 const CHAR_OPS_SERVICE_ID: u64 = 9006;
@@ -348,22 +348,25 @@ pub async fn respec(
     .await
 }
 
-/// Characters BELOW this level respec for free; from it up, the retail per-level
-/// `reset_cost` (in Gems) applies. An owner-approved deviation from retail
-/// (decision d35, tracker #464/#480, HauDrauf, 2026-11-10): new players should be
-/// able to try builds in the arena without paying for every attempt. The
-/// appearance change keeps its retail 50 Gems.
+/// Flat respec price in Gems at EVERY level. An owner-approved deviation from
+/// retail (decision d39, tracker #480, HauDrauf, 2026-11-13; replaces d35's
+/// "free below 45"): players should be able to try builds without paying the
+/// retail per-level price for every attempt. The appearance change keeps its
+/// retail 50 Gems.
 ///
-/// REVERT SWITCH: set to `0` for retail pricing at every level.
-pub const FREE_RESPEC_BELOW_LEVEL: u16 = 45;
+/// REVERT SWITCH: set to `None` for the retail per-level `reset_cost` from
+/// `level_rewards.json`.
+pub const RESPEC_GEM_PRICE: Option<u64> = Some(1);
 
-fn respec_cost_for_level(data: &level_up::LevelUpData, level: u16) -> u64 {
-    if level < FREE_RESPEC_BELOW_LEVEL {
-        return 0;
-    }
+/// Retail's per-level respec price (`reset_cost`, in Gems).
+fn retail_respec_cost_for_level(data: &level_up::LevelUpData, level: u16) -> u64 {
     data.get_reward(u32::from(level))
         .map(|r| u64::from(r.reset_cost))
         .unwrap_or(0)
+}
+
+fn respec_cost(data: &level_up::LevelUpData, level: u16, price: Option<u64>) -> u64 {
+    price.unwrap_or_else(|| retail_respec_cost_for_level(data, level))
 }
 
 fn apply_respec_transaction(
@@ -373,7 +376,18 @@ fn apply_respec_transaction(
     stamina: u32,
     magicka: u32,
 ) -> Result<u64, BladeApiError> {
-    let cost = respec_cost_for_level(data, character.level);
+    apply_respec_transaction_at(character, wallet, data, stamina, magicka, RESPEC_GEM_PRICE)
+}
+
+fn apply_respec_transaction_at(
+    character: &mut CompleteCharacter,
+    wallet: &mut CompleteWallet,
+    data: &level_up::LevelUpData,
+    stamina: u32,
+    magicka: u32,
+    price: Option<u64>,
+) -> Result<u64, BladeApiError> {
+    let cost = respec_cost(data, character.level, price);
     if cost > 0 {
         wallet
             .debit(GEMS, cost)
@@ -1154,7 +1168,7 @@ mod tests {
             "tracker #281: LagorPing L68 has 179 refundable skill points"
         );
         assert_eq!(
-            respec_cost_for_level(&data, 86),
+            retail_respec_cost_for_level(&data, 86),
             456,
             "captures 23184->23192 and 31880->31891 each dropped gems by 456"
         );
@@ -1181,7 +1195,7 @@ mod tests {
         };
         let mut wallet = wallet_of(&[(GEMS, 59_028), (GOLD, 900)]);
 
-        apply_respec_transaction(&mut character, &mut wallet, &data, 25, 24)
+        apply_respec_transaction_at(&mut character, &mut wallet, &data, 25, 24, None)
             .expect("captured respec is affordable");
 
         assert_eq!(
@@ -1236,43 +1250,48 @@ mod tests {
         );
     }
 
-    /// d35 (#464/#480): respec is free below level 45 and keeps the retail
-    /// per-level price from 45 up, even with no Gems at all.
+    /// d39 (#480): respec costs exactly 1 Gem at every level, including levels
+    /// where retail charged hundreds; 0 Gems is refused untouched.
     #[test]
-    fn respec_is_free_below_level_45_and_retail_from_45() {
+    fn respec_costs_one_gem_at_every_level() {
         let data = level_table();
-        for level in [1u16, 10, 30, 44] {
-            assert_eq!(respec_cost_for_level(&data, level), 0, "L{level} is free");
+        assert_eq!(RESPEC_GEM_PRICE, Some(1));
+        for level in [1u16, 10, 44, 45, 86, 100] {
+            let mut character = CompleteCharacter {
+                level,
+                stamina_attribute_points: 43,
+                magicka_attribute_points: 0,
+                ..CompleteCharacter::default()
+            };
+            let mut wallet = wallet_of(&[(GEMS, 1)]);
+            let paid = apply_respec_transaction(&mut character, &mut wallet, &data, 22, 21)
+                .unwrap_or_else(|_| panic!("L{level} respec affordable with 1 Gem"));
+            assert_eq!(paid, 1, "L{level} pays 1 Gem");
+            assert_eq!(wallet.balance(GEMS), 0, "L{level}");
+            assert_eq!(character.stamina_attribute_points, 22);
+            assert_eq!(character.magicka_attribute_points, 21);
         }
-        let retail_45 = u64::from(data.get_reward(45).unwrap().reset_cost);
-        assert!(retail_45 > 0);
-        assert_eq!(respec_cost_for_level(&data, 45), retail_45);
-        assert_eq!(respec_cost_for_level(&data, 86), 456);
 
         let mut character = CompleteCharacter {
-            level: 44,
-            stamina_attribute_points: 43,
-            magicka_attribute_points: 0,
+            level: 10,
+            stamina_attribute_points: 9,
             ..CompleteCharacter::default()
         };
-        let mut wallet = wallet_of(&[(GEMS, 0)]);
-        let paid = apply_respec_transaction(&mut character, &mut wallet, &data, 22, 21)
-            .expect("a level-44 respec needs no Gems");
-        assert_eq!(paid, 0);
-        assert_eq!(wallet.balance(GEMS), 0);
-        assert_eq!(character.stamina_attribute_points, 22);
-        assert_eq!(character.magicka_attribute_points, 21);
-
-        let mut character = CompleteCharacter {
-            level: 45,
-            stamina_attribute_points: 44,
-            ..CompleteCharacter::default()
-        };
+        let before = serde_json::to_value(&character).unwrap();
         let mut wallet = wallet_of(&[(GEMS, 0)]);
         assert!(
-            apply_respec_transaction(&mut character, &mut wallet, &data, 22, 22).is_err(),
-            "level 45 pays retail"
+            apply_respec_transaction(&mut character, &mut wallet, &data, 5, 4).is_err(),
+            "0 Gems cannot pay the 1-Gem respec"
         );
+        assert_eq!(serde_json::to_value(&character).unwrap(), before);
+    }
+
+    /// Revert switch: `None` restores retail's per-level price.
+    #[test]
+    fn respec_price_none_is_retail_per_level() {
+        let data = level_table();
+        assert_eq!(respec_cost(&data, 86, None), 456);
+        assert_eq!(respec_cost(&data, 86, Some(1)), 1);
     }
 
     #[test]
@@ -1291,7 +1310,7 @@ mod tests {
         let before_character = character.clone();
         let before_wallet = wallet.clone();
 
-        let err = apply_respec_transaction(&mut character, &mut wallet, &data, 25, 24)
+        let err = apply_respec_transaction_at(&mut character, &mut wallet, &data, 25, 24, None)
             .expect_err("one gem short must be refused");
 
         assert_eq!(
