@@ -380,6 +380,56 @@ pub fn end_package(score: f64, character_level: u64, run_seed: i64) -> RewardGra
     grant
 }
 
+/// [`end_package`] for a run that ended on `floor` (1-based, absolute): from
+/// [`DEEP_FLOOR_END_GEMS_FROM_FLOOR`] its soul gems take #490's grade mix — see
+/// [`DEEP_FLOOR_END_GEM_MIX`]. Below that floor it is exactly [`end_package`].
+pub fn end_package_at_floor(
+    score: f64,
+    character_level: u64,
+    floor: u32,
+    run_seed: i64,
+) -> RewardGrant {
+    let mut grant = end_package(score, character_level, run_seed);
+    regrade_deep_floor_end_gems(&mut grant.stackable_items, floor, run_seed);
+    grant
+}
+
+/// The Abyss floor from which `/end`'s soul gems follow [`DEEP_FLOOR_END_GEM_MIX`].
+///
+/// HauDrauf, trusted retail player, tracker #490 (2026-11-11): "ab Level 120 gibt
+/// es im Abgrund am Ende nur noch zu 50% mächtige, 25% herrliche und 25%
+/// transzendende Seelensteine" — from floor 120, the end-of-run soul gems are
+/// Grand 50%, Glorious 25%, Transcendent 25%, nothing lower. "Level" is the floor:
+/// no character is above level 100. REVERT: set this to `u32::MAX`.
+pub const DEEP_FLOOR_END_GEMS_FROM_FLOOR: u32 = 120;
+
+/// #490's grade mix as (soul-gem grade, weight): Grand 2, Glorious 1,
+/// Transcendent 1 — 50/25/25. Only the KIND moves: whether a run pays gems at all
+/// and how many ([`END_SOUL_GEM_COUNT`], #407) are drawn exactly as before.
+pub const DEEP_FLOOR_END_GEM_MIX: [(usize, u64); 3] =
+    [(GRAND, 2), (GLORIOUS, 1), (TRANSCENDENT, 1)];
+
+/// A soul-gem `/end` stack on a floor at or past [`DEEP_FLOOR_END_GEMS_FROM_FLOOR`]
+/// re-graded to [`DEEP_FLOOR_END_GEM_MIX`], its count kept. Materials, and every
+/// floor below, are untouched.
+fn regrade_deep_floor_end_gems(stacks: &mut HashMap<Uuid, u64>, floor: u32, run_seed: i64) {
+    if floor < DEEP_FLOOR_END_GEMS_FROM_FLOOR || !is_soul_gem_stack(stacks) {
+        return;
+    }
+    let count: u64 = stacks.values().sum();
+    let total: u64 = DEEP_FLOOR_END_GEM_MIX.iter().map(|(_, w)| w).sum();
+    let mut roll = mix((run_seed as u64) ^ 0x490_DEE9_50E1) % total;
+    let mut grade = DEEP_FLOOR_END_GEM_MIX[0].0;
+    for (g, w) in DEEP_FLOOR_END_GEM_MIX {
+        if roll < w {
+            grade = g;
+            break;
+        }
+        roll -= w;
+    }
+    *stacks = HashMap::from([(Uuid::parse_str(SOUL_GEMS[grade]).unwrap(), count)]);
+}
+
 /// Every soul-gem stack in an `/end` package re-counted, uniformly in
 /// [`END_SOUL_GEM_COUNT`], from its own roll — so the kind drawn, and whether gems
 /// are paid at all, never move. Anything that is not a soul-gem stack is untouched.
@@ -519,6 +569,8 @@ fn mid_level_soul_gems(level: u64, roll: u64) -> HashMap<Uuid, u64> {
 const GREATER: usize = 5;
 const ELEVATED: usize = 6;
 const GRAND: usize = 7;
+const GLORIOUS: usize = 8;
+const TRANSCENDENT: usize = 9;
 
 /// The rungs that sit either side of the golden chest (rung 360): the stackable
 /// rungs before (190) and after (490) it.
@@ -1830,6 +1882,57 @@ mod tests {
         );
         for seed in [1i64, -7, i64::MAX] {
             assert_eq!(end_package(50.0, 100, seed), end_package(50.0, 100, seed));
+        }
+    }
+
+    /// Report #490 (HauDrauf, 2026-11-11): from floor 120 the `/end` soul gems are
+    /// Grand 50%, Glorious 25%, Transcendent 25% — nothing lower. Floor 119 is
+    /// [`end_package`] unchanged; whether gems are paid and how many never move.
+    #[test]
+    fn deep_floor_end_soul_gems_are_grand_glorious_transcendent_50_25_25() {
+        let grade_of = |id: &Uuid| soul_gem_grade(id);
+        for level in [49u64, 60, 100] {
+            let runs = 20_000i64;
+            let mut before = [0u64; 10];
+            let mut after = [0u64; 10];
+            let mut gem_runs = 0u64;
+            for seed in 0..runs {
+                let base = end_package(100.0, level, seed);
+                // Floor 119: exactly as before.
+                assert_eq!(end_package_at_floor(100.0, level, 119, seed), base);
+                for floor in [120u32, 149] {
+                    let deep = end_package_at_floor(100.0, level, floor, seed);
+                    if !is_soul_gem_stack(&base.stackable_items) {
+                        assert_eq!(deep, base, "materials untouched");
+                        continue;
+                    }
+                    let (bi, bc) = single_stack(&base);
+                    let (di, dc) = single_stack(&deep);
+                    assert_eq!(dc, bc, "count kept (#407)");
+                    if floor == 149 {
+                        before[grade_of(&bi).unwrap()] += 1;
+                        after[grade_of(&di).unwrap()] += 1;
+                        gem_runs += 1;
+                    }
+                }
+            }
+            eprintln!(
+                "#490 level {level}: {gem_runs} gem /ends; before {before:?} after {after:?}"
+            );
+            assert!(gem_runs > 1_000, "level {level}: {gem_runs} gem runs");
+            assert_eq!(after[..GRAND].iter().sum::<u64>(), 0, "nothing below Grand");
+            let share = |g: usize| after[g] as f64 / gem_runs as f64;
+            assert!((share(GRAND) - 0.50).abs() < 0.03, "Grand {}", share(GRAND));
+            assert!(
+                (share(GLORIOUS) - 0.25).abs() < 0.03,
+                "Glorious {}",
+                share(GLORIOUS)
+            );
+            assert!(
+                (share(TRANSCENDENT) - 0.25).abs() < 0.03,
+                "Transcendent {}",
+                share(TRANSCENDENT)
+            );
         }
     }
 }

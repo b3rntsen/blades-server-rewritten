@@ -1863,7 +1863,13 @@ fn end_reward(
     character_level: u64,
 ) -> RewardGrant {
     let mut reward = end_run_reward(static_abyss, run);
-    let package = abyss_rewards::end_package(run.score, character_level, run.seed);
+    // The floor the run ended on: from floor 120 its soul gems follow #490's mix.
+    let floor = run
+        .slices
+        .get(run.current_floor_index)
+        .or(run.slices.last())
+        .map_or(0, |s| s.floor_index);
+    let package = abyss_rewards::end_package_at_floor(run.score, character_level, floor, run.seed);
     for (template, count) in package.stackable_items {
         *reward.stackable_items.entry(template).or_default() += count;
     }
@@ -5398,16 +5404,23 @@ mod tests {
                     "start {start} nonce {nonce}: one package stack"
                 );
                 let (template, count) = end.stackable_items.iter().next().unwrap();
-                if *template == grand {
+                let tid = template.to_string();
+                let deep = start >= abyss_rewards::DEEP_FLOOR_END_GEMS_FROM_FLOOR;
+                // From floor 120 the kind is #490's Grand/Glorious/Transcendent.
+                let gem = *template == grand
+                    || (deep && (tid == GLORIOUS || tid == abyss_rewards::TRANSCENDENT_SOUL_GEM));
+                if gem {
                     gem_ends += 1;
                     // HauDrauf, #407: 3 to 7 (it was 1-3).
                     assert!(
                         abyss_rewards::END_SOUL_GEM_COUNT.contains(count),
-                        "start {start}: {count} Grand gems"
+                        "start {start}: {count} gems"
                     );
                 }
-                assert_ne!(template.to_string(), abyss_rewards::TRANSCENDENT_SOUL_GEM);
-                assert_ne!(template.to_string(), GLORIOUS);
+                if !deep {
+                    assert_ne!(tid, abyss_rewards::TRANSCENDENT_SOUL_GEM);
+                    assert_ne!(tid, GLORIOUS);
+                }
             }
             assert!(
                 (20..=44).contains(&gem_ends),
@@ -5510,9 +5523,10 @@ mod tests {
         }
         // #438 resizes the effect-ingredient, tempering and dragon stacks from 45
         // (sizes pinned in report_438); everything else pays as before it.
+        // #490: from floor 120 the `/end` gem kind moves; blind to it too.
         assert_eq!(
-            payout_digest(&blind_438(&runs, 100)),
-            LEVEL_100_FROM_149_DIGEST_438_BLIND
+            payout_digest(&blind_490(&blind_438(&runs, 100))),
+            LEVEL_100_FROM_149_DIGEST_438_490_BLIND
         );
         assert_ne!(
             payout_digest(&runs),
@@ -5523,7 +5537,9 @@ mod tests {
     /// [`LEVEL_100_FROM_149_DIGEST`] blind to #438 ([`blind_438`]), printed by
     /// [`print_438_blind_digests`] with #438 switched off (`FROM_LEVEL` 101) and the
     /// same with it on. The full digest moves with #438.
-    const LEVEL_100_FROM_149_DIGEST_438_BLIND: u64 = 0x80a7_e7ea_daac_d29d;
+    /// It was 0x80a7_e7ea_daac_d29d before #490 blinded the `/end` gem kind; re-pinned
+    /// with #490 switched off and the same with it on.
+    const LEVEL_100_FROM_149_DIGEST_438_490_BLIND: u64 = 0x1b5b_7b7a_6575_84d9;
     /// Re-pinned by #388 (owner-approved deviation from retail, 2026-10-16): its
     /// `/end` materials are 20; everything else is pinned unchanged by
     /// [`abyss_runs_move_only_what_388_moves`].
@@ -5647,6 +5663,28 @@ mod tests {
         }
     }
 
+    /// `runs` blind to what #490 moves (HauDrauf, 2026-11-11): the KIND of every soul
+    /// gem `/end` pays is replaced by one placeholder; its count, and whether one is
+    /// paid at all, still count. Identical with #490 on and off
+    /// (`DEEP_FLOOR_END_GEMS_FROM_FLOOR` `u32::MAX`).
+    fn blind_490(runs: &[Payout]) -> Vec<Payout> {
+        let soul_gems = blades_lib::features::beginner_economy::SOUL_GEMS;
+        let mut runs = runs.to_vec();
+        for (_, end) in &mut runs {
+            let gems: u64 = end
+                .stackable_items
+                .iter()
+                .filter(|(id, _)| soul_gems.contains(id))
+                .map(|(_, q)| *q)
+                .sum();
+            end.stackable_items.retain(|id, _| !soul_gems.contains(id));
+            if gems > 0 {
+                end.stackable_items.insert(Uuid::nil(), gems);
+            }
+        }
+        runs
+    }
+
     /// [`payout_digest`] blind to what #407 moves in a run: the count of every soul
     /// gem `/end` pays is zeroed. Rungs, `/end` materials, and which gem kind `/end`
     /// pays (and whether it pays one) all still count.
@@ -5675,12 +5713,17 @@ mod tests {
             (7u32, 1u32, 30usize, MIXED_KILLS, 0x2f20_6b6d_cfe3_5242_u64),
             // Blind to #438 too ([`blind_438`]; 0xbf70_0091_a7e2_266a before it),
             // printed with #438 switched off and the same with it on.
-            (100, 149, 4, DEEP_FLOOR_KILLS, 0xe81a_df8a_9663_3b25),
+            // Blind to #490 too (0xe81a_df8a_9663_3b25 before it), printed with
+            // #490 switched off and the same with it on.
+            (100, 149, 4, DEEP_FLOOR_KILLS, 0x1b5b_7b7a_6575_84d9),
         ] {
-            let runs = blind_438(
+            let mut runs = blind_438(
                 &without_rungs_past_650(&payouts(level, start, count, kills)),
                 level,
             );
+            if start >= abyss_rewards::DEEP_FLOOR_END_GEMS_FROM_FLOOR {
+                runs = blind_490(&runs);
+            }
             assert_eq!(
                 payout_digest_407_blind(&runs),
                 blind,
@@ -5688,7 +5731,7 @@ mod tests {
             );
             for (_, end) in &runs {
                 for (id, q) in &end.stackable_items {
-                    if soul_gems.contains(id) {
+                    if soul_gems.contains(id) || id.is_nil() {
                         assert!(
                             abyss_rewards::END_SOUL_GEM_COUNT.contains(q),
                             "level {level}: /end paid {q} soul gems"
@@ -5711,6 +5754,8 @@ mod tests {
         println!("full {:#x}", payout_digest(&all));
         println!("388 {:#x}", payout_digest_388_blind(&runs));
         println!("407 {:#x}", payout_digest_407_blind(&runs));
+        println!("438+490 {:#x}", payout_digest(&blind_490(&all)));
+        println!("407+490 {:#x}", payout_digest_407_blind(&blind_490(&runs)));
     }
 
     /// Prints the #407-blind digests (`--ignored --nocapture`), to pin them on the
@@ -5899,13 +5944,20 @@ mod tests {
                 );
                 enchanting += usize::from(end_materials.contains(&package[0]));
                 transcendent_ends += usize::from(package[0] == transcendent);
+                // #490: from floor 120 no `/end` gem below Grand.
+                assert!(
+                    !elder_or_lower[..2].contains(&package[0]),
+                    "level {level}: /end paid {} below Grand on floor 149+",
+                    package[0]
+                );
             }
             assert!(
                 (12..=40).contains(&enchanting),
                 "level {level}: /end enchanting on {enchanting}/64"
             );
+            // #490: a quarter of the gem `/end`s (it was half before, >= 8/64).
             assert!(
-                transcendent_ends >= 8,
+                transcendent_ends >= 3,
                 "level {level}: Transcendent on only {transcendent_ends}/64"
             );
         }
