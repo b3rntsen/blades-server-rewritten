@@ -742,6 +742,32 @@ pub fn on_c2s_input(
         debug!("combat: slot {sender} carrier-54 handshake/flow frame (not a swing) — ignored");
         return Vec::new();
     }
+    // Tracker #449, ATTACK CANCEL. gmid 31 `PlayerInputCancelCharge`
+    // (`PvpAvatar$$PlayerInputCancelChargeRpc`, dump.cs:583492) is the client aborting
+    // its own wind-up. Without this branch the frame reached the "unstructured
+    // carrier-0x36 body" fallback at the bottom of this function and was resolved as
+    // a full swing, so cancelling an attack in PvP struck the opponent instead. The
+    // client leaves Charging for Idle, whose `OnEnter` resets the combo, so the
+    // server does the same; the drain then mirrors the Idle to both viewers.
+    if messages::user_message_gmid(user_data) == Some(messages::GMID_PLAYER_INPUT_CANCEL_CHARGE) {
+        if sender < combat.fighters.len() {
+            let f = &mut combat.fighters[sender];
+            let was_charging = f.actor_state() == ActorStateType::Charging;
+            f.charge_press_at = None;
+            f.charge_began_at = None;
+            f.charge_side = None;
+            f.pending_manual_attack = None;
+            if was_charging {
+                f.reset_combo();
+                f.set_actor_state(ActorStateType::Idle, now);
+            }
+            info!(
+                "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=cancelled was_charging={was_charging}",
+                combat.game_session_id, combat.fighters[sender].loadout.display_name,
+            );
+        }
+        return Vec::new();
+    }
 
     // ---- Phase 4.1: the REAL combat-input family, on the generic 0x36 carrier ----
     //
@@ -10178,6 +10204,56 @@ mod phase4_tests {
         let mut f = messages::frame_for_test(w.finish());
         f[0] = 0x84;
         f
+    }
+
+    /// A prod-shaped `PlayerInputCancelCharge` (gmid 31) on the generic 0x36 carrier:
+    /// `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 31}` — the message carries no
+    /// fields of its own (`PlayerInputCancelChargeMessage`, dump.cs:589556).
+    fn make_cancel_charge_frame() -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, 565).byte(1, 56).byte(2, 3).byte(3, 31);
+        let mut f = messages::frame_for_test(w.finish());
+        f[0] = 0x84;
+        f
+    }
+
+    /// Tracker #449: attack cancel. The client aborts a charge with gmid 31
+    /// `PlayerInputCancelCharge` (`PvpAvatar$$PlayerInputCancelChargeRpc`). The
+    /// engine had no branch for it, so the frame fell through to the "unstructured
+    /// carrier-0x36 body" fallback and was resolved as a full swing — a cancel
+    /// HIT the opponent instead of aborting. It must end the charge with no damage,
+    /// and the finger's later release must not swing either.
+    #[test]
+    fn cancel_charge_aborts_the_wind_up_without_a_swing() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        let target_hp = c.fighters[1].health;
+
+        on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let t = now + Duration::from_millis(900);
+        let out = on_c2s_input(&mut c, 0, &make_cancel_charge_frame(), t);
+        assert!(out.is_empty(), "a cancel must emit no damage frames");
+        assert!(c.pending_hits.is_empty(), "a cancel must commit no swing");
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Idle);
+        assert!(c.fighters[0].charge_press_at.is_none());
+
+        let t2 = t + Duration::from_millis(100);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 1.0, false), t2);
+        on_tick(
+            &mut c,
+            t2 + FOLLOW_THROUGH_DELAY + Duration::from_millis(50),
+            false,
+        );
+        assert!(
+            c.pending_hits.is_empty(),
+            "the release after a cancel is no swing"
+        );
+        assert_eq!(
+            c.fighters[1].health, target_hp,
+            "the cancelled attack must not land"
+        );
     }
 
     /// Report #113, the phantom hit: releasing a held block struck the opponent.
