@@ -6432,3 +6432,22 @@ mod level_up_offer_price_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod last_chance_tests {
+    /// #477: the client POSTs `/globalshops/current/lastchance` for a special offer
+    /// in its last-chance window; a 404 there is a communication error before town.
+    #[test]
+    fn last_chance_route_is_registered_and_answers_an_empty_object() {
+        let main = include_str!("main.rs");
+        assert!(
+            main.contains(".service(global_shop::update_last_chance)"),
+            "the lastchance route must be registered with the app"
+        );
+        let src = include_str!("global_shop.rs");
+        assert!(
+            src.contains("/globalshops/current/lastchance\"\n)]\npub async fn update_last_chance(")
+        );
+        assert_eq!(super::last_chance_ack(), serde_json::json!({}));
+    }
+}
