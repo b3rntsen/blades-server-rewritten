@@ -273,6 +273,20 @@ fn window_of(e: &Value) -> Option<(i64, i64)> {
 /// and a player can never buy more of an offer per cycle than retail allowed.
 pub(crate) const ONE_DAY_WINDOWS_440: bool = true;
 
+/// The three store chests (Legendary `11102495…`, Epic `9e4dc391…`, Rare
+/// `11b322d2…`, retail's only ~950-day "evergreen" windows) are served on that full
+/// span, so the shop shows no countdown on them.
+///
+/// NOT RETAIL in effect, though retail-shaped. Tracker #507 (HauDrauf, 2026-11-13):
+/// "Please remove the description and the timer on the chests in the shop." Under
+/// [`ONE_DAY_WINDOWS_440`] the chests were cut into one-day windows like every other
+/// long offer, so they showed a timer under 24 hours on something that never leaves
+/// the shop. The timer is the client counting down to `activeEndDate`; the override
+/// cannot switch it off (`GlobalShopProduct._hideTimeRemaining` and the description
+/// text are APK/asset data). With this on, the end is always more than two and a half
+/// years away. To revert, set this to `false`.
+pub(crate) const STORE_CHESTS_NO_COUNTDOWN_507: bool = true;
+
 const DAY: i64 = 86_400;
 
 /// One way to serve an offer: the retail window `src` whose prices and tracking
@@ -391,7 +405,12 @@ fn slice_into_days<'a>(
 ///
 /// With `one_day` (tracker #440, [`ONE_DAY_WINDOWS_440`]) every window longer than
 /// a day is served as one-day pieces instead; see [`slice_into_days`].
-fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Value> {
+fn replay_calendar_with(
+    windows: &Value,
+    now: i64,
+    one_day: bool,
+    chests_no_countdown: bool,
+) -> Option<Value> {
     let calendar = windows
         .get("globalShopWindows")
         .and_then(Value::as_object)
@@ -485,6 +504,19 @@ fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Valu
             }
         }
         for &(e, s, en) in evergreen {
+            if chests_no_countdown {
+                // #507: the LATEST whole-period shift that has started, so the
+                // ~950-day span runs on for years past `now`. No windowed caps ride
+                // on these offers, so moving the shift every cycle costs nothing.
+                let shift = (now - s).div_euclid(REPLAY_PERIOD).max(0) * REPLAY_PERIOD;
+                candidates.push(Candidate {
+                    start: s + shift,
+                    end: en + shift,
+                    src: e,
+                    tid_shift: shift,
+                });
+                continue;
+            }
             let periods = (now - en + REPLAY_PERIOD - 1)
                 .div_euclid(REPLAY_PERIOD)
                 .max(0);
@@ -538,7 +570,12 @@ fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Valu
 /// The replay as [`current_catalog`] runs it.
 #[cfg(test)]
 fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
-    replay_calendar_with(windows, now, ONE_DAY_WINDOWS_440)
+    replay_calendar_with(
+        windows,
+        now,
+        ONE_DAY_WINDOWS_440,
+        STORE_CHESTS_NO_COUNTDOWN_507,
+    )
 }
 
 /// The catalogue as the client sees it at `now`: retail's calendar replayed (or,
@@ -559,8 +596,23 @@ fn catalog_with(
     now: i64,
     one_day: bool,
 ) -> Value {
-    let replayed = replay_calendar_with(&static_data.global_shop_windows, now, one_day)
-        .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
+    catalog_with_chest_switch(static_data, now, one_day, STORE_CHESTS_NO_COUNTDOWN_507)
+}
+
+/// [`catalog_with`] with the #507 store-chest switch passed explicitly.
+fn catalog_with_chest_switch(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+    one_day: bool,
+    chests_no_countdown: bool,
+) -> Value {
+    let replayed = replay_calendar_with(
+        &static_data.global_shop_windows,
+        now,
+        one_day,
+        chests_no_countdown,
+    )
+    .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
     uncap_sigil_materials(apply_raised_window_caps(apply_authored(
         replayed,
         &static_data.global_shop_authored,
@@ -4110,6 +4162,49 @@ mod report238_calendar_tests {
         }
     }
 
+    /// #507 (HauDrauf): the three store chests must not count down. Under #440 they
+    /// were served as one-day windows, so the shop showed a timer under 24 hours on
+    /// an offer that never leaves. Served on retail's own ~950-day span instead, the
+    /// end is always years away, as retail's was for most of the chests' life.
+    #[test]
+    fn store_chests_do_not_count_down() {
+        let sd = shipped();
+        for id in [
+            "11102495-fde7-4e77-b6c4-d13b9303f1f5",
+            "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+            "9e4dc391-422e-4b25-ba90-faab39e0769f",
+        ] {
+            for t in
+                (REPORTED..REPORTED + 3 * 365 * DAY).step_by((3 * DAY + 5 * 3_600 + 11) as usize)
+            {
+                let e = &current_catalog(&sd, t)["globalShopOverrides"][id];
+                assert!(is_live(e, t), "{id} lapsed at {t}");
+                let left = e["activeEndDate"].as_i64().unwrap() - t;
+                assert!(left > 365 * DAY, "{id} counts down ({left}s left) at {t}");
+            }
+        }
+    }
+
+    /// Only the chests change: every other offer keeps its #440 one-day window.
+    #[test]
+    fn the_chest_switch_leaves_other_offers_alone() {
+        let sd = shipped();
+        let chests = [
+            "11102495-fde7-4e77-b6c4-d13b9303f1f5",
+            "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+            "9e4dc391-422e-4b25-ba90-faab39e0769f",
+        ];
+        for t in [REPORTED, REPORTED + 17 * DAY + 3_600] {
+            let on = current_catalog(&sd, t);
+            let off = catalog_with_chest_switch(&sd, t, ONE_DAY_WINDOWS_440, false);
+            for (id, e) in on["globalShopOverrides"].as_object().unwrap() {
+                if !chests.contains(&id.as_str()) {
+                    assert_eq!(e, &off["globalShopOverrides"][id], "{id} changed");
+                }
+            }
+        }
+    }
+
     /// Deploy-order safety: until the box has `global_shop_windows.json`, the
     /// server must behave exactly as it did before this change.
     #[test]
@@ -5905,6 +6000,17 @@ mod report440_one_day_windows {
             let now = T0 + q * 6 * 3_600;
             let cat = current_catalog(&sd, now);
             for (id, e) in cat["globalShopOverrides"].as_object().unwrap() {
+                // #507 exempts the three store chests: they never count down.
+                if STORE_CHESTS_NO_COUNTDOWN_507
+                    && [
+                        "11102495-fde7-4e77-b6c4-d13b9303f1f5",
+                        "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+                        "9e4dc391-422e-4b25-ba90-faab39e0769f",
+                    ]
+                    .contains(&id.as_str())
+                {
+                    continue;
+                }
                 let (s, en) = window_of(e).unwrap();
                 assert!(s < en && en - s <= DAY, "{id} at {now}: window {s}..{en}");
                 let retail = retail_windows(&sd, id);
