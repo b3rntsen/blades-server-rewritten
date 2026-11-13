@@ -203,6 +203,27 @@ pub fn loadout_backend_hide_helmet(user_data: &[u8]) -> Option<bool> {
         .map(|v| v != 0)
 }
 
+/// The `HideHelmet` flag carried at propId 20 (Bool) of the client's c2s op20
+/// `PlayerInfo` — the identity frame every client sends on connect, BEFORE the
+/// round-start profile goes out. `None` if the frame isn't an op20 or lacks propId 20.
+///
+/// This is the round-1 source of the flag. op61 (see
+/// [`loadout_backend_hide_helmet`]) only arrives at the between-rounds
+/// `AwaitingClientBackendSynchronization` state, so relying on it alone left every
+/// helmet-hider wearing a helmet in round 1 and not in round 2 (report #508).
+/// Layout measured on retail captures (s506/s615/s616, 39 op20 frames, NetData
+/// maxPropId 21): p4 player name, p6 playerSessionId, p7 auth token, p10/p11
+/// client/gld version, p18/p19 telemetry ids, **p20 = the ONLY Bool = HideHelmet**.
+/// Taheen's s616 PlayerInfos carry both `false` and `true`, so it is a live value.
+pub fn player_info_hide_helmet(user_data: &[u8]) -> Option<bool> {
+    if user_message_gmid(user_data) != Some(GameMessageId::PlayerInfo as u8) {
+        return None;
+    }
+    arena_proto::parse_netdata(user_data.get(2..)?)
+        .int(20)
+        .map(|v| v != 0)
+}
+
 /// True iff a carrier-`0x36` c2s frame is `SkipCurrentState` (op57) — the client's
 /// **"Ready"** press on a state it is done with (the loadout screen, the opponent
 /// showcase). `dump.cs` `SkipCurrentStateMessage`; capture-proven c2s-only (it is in
