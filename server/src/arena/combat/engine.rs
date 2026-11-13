@@ -1589,11 +1589,18 @@ impl MatchInstance {
     /// timer verdict; a latched c2s `SkipCurrentState`(57) forces a yes and is consumed.
     ///
     /// Consuming the latch here — at the one place a walk decides to emit — is what keeps
-    /// a Ready press from banking: one op57 advances exactly one state, and an op57 that
-    /// arrives in the same tick the hold expires is not "spent" on a state that was going
-    /// to fire anyway (the latch is only cleared when it was the deciding vote).
+    /// a Ready press from banking: one op57 advances exactly one state. Votes are scoped
+    /// to the state they were cast in, so the set is cleared whenever a state is
+    /// emitted — by a unanimous skip OR by its timer. (It used to survive a timed-out
+    /// state, which let a stale press complete the NEXT state's vote: report #506.)
     fn take_skip_request(&mut self, hold_elapsed: bool) -> bool {
         if hold_elapsed {
+            // The state advances on its timer: every Ready vote cast for it is spent.
+            // Keeping a PARTIAL vote set here carried one player's press through the
+            // live round into the next ChooseLoadout, where the opponent's single
+            // press then "completed" it and closed the loadout screen early for the
+            // player who had not readied there (report #506).
+            self.skip_state_requested.clear();
             return true;
         }
         // EVERY human peer must have pressed Ready. Bots never press it, so the
@@ -2555,6 +2562,31 @@ pub(in crate::arena::combat) mod tests {
         assert!(
             m.take_skip_request(true),
             "an elapsed hold advances with no Ready presses at all"
+        );
+    }
+
+    /// Report #506: a Ready press is a vote for the state it was pressed in. When
+    /// that state ended on its TIMER, the partial vote set survived — only a
+    /// unanimous skip cleared it — so it carried through the live round into the
+    /// next `ChooseLoadout`. Prod (gsid e9514ee0, 2026-11-13): HauDrauf pressed
+    /// Ready on the opponent showcase at 10:24:54, his opponent never did, the
+    /// showcase timed out; after round 1 the opponent pressed Ready 3 s into the
+    /// 20 s loadout screen and the server counted HauDrauf's stale press as the
+    /// second vote — "all 2 player(s) pressed Ready, slots [0, 1]" — closing the
+    /// screen while he was still choosing.
+    #[test]
+    fn a_ready_vote_does_not_survive_a_state_that_timed_out() {
+        let now = std::time::Instant::now();
+        let mut m = super::MatchInstance::new(2, 2, vec![], now);
+        m.skip_state_requested.insert(0);
+        assert!(
+            m.take_skip_request(true),
+            "the hold elapsed — the state advances on its timer"
+        );
+        m.skip_state_requested.insert(1);
+        assert!(
+            !m.take_skip_request(false),
+            "slot 0 pressed Ready in the PREVIOUS state; only slot 1 has readied in this one"
         );
     }
 
@@ -4001,6 +4033,64 @@ pub(in crate::arena::combat) mod tests {
             m.match_state_for_test(),
             MatchState::AwaitingClientBackendSynchronization,
             "one op57 = one state; the latch is consumed, not banked"
+        );
+    }
+
+    /// Report #506, end to end: a Ready press cast before the loadout screen must not
+    /// count on it. Slot 0 presses Ready in the pre-ChooseLoadout dwell, slot 1 does not,
+    /// and ChooseLoadout(8) arrives on its timer. Slot 1 then presses Ready 5 s into the
+    /// 20 s dwell — the loadout screen must stay open for slot 0, who has not readied
+    /// THERE. Before the fix the stale press made it "all 2 player(s) pressed Ready" and
+    /// the walk jumped to AwaitingClientBackendSynchronization (prod gsid e9514ee0).
+    #[test]
+    fn a_stale_ready_press_does_not_close_the_next_loadout_screen() {
+        let (mut m, t0) = live_inst(2);
+        let (_death, t) = swing_until_death(&mut m, 0, t0);
+        assert_eq!(m.phase(), FlowState::NextState);
+
+        // Slot 0 readies before the loadout screen appears; slot 1 does not.
+        let mut now = t + Duration::from_millis(100);
+        m.on_tick(2, now);
+        assert_ne!(m.match_state_for_test(), MatchState::ChooseLoadout);
+        let op57_a = c2s_handshake(m.combat.fighters[0].player_net_object_id, 57);
+        assert!(m.on_c2s(0, &op57_a, now).is_empty());
+
+        // The walk reaches ChooseLoadout on its timer.
+        for _ in 0..60 {
+            now += Duration::from_millis(100);
+            m.on_tick(2, now);
+            if m.match_state_for_test() == MatchState::ChooseLoadout {
+                break;
+            }
+        }
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::ChooseLoadout,
+            "the walk reached the loadout screen"
+        );
+
+        // 5 s into the 20 s dwell, ONLY slot 1 presses Ready.
+        now += Duration::from_secs(5);
+        let op57_b = c2s_handshake(m.combat.fighters[1].player_net_object_id, 57);
+        assert!(m.on_c2s(1, &op57_b, now).is_empty());
+        now += Duration::from_millis(100);
+        m.on_tick(2, now);
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::ChooseLoadout,
+            "slot 0's press belonged to the previous state — the loadout screen stays open"
+        );
+
+        // CONTROL: slot 0 now readies on the loadout screen itself — both have voted
+        // in THIS state, so it advances. Proves the test can see a skip at all.
+        let op57_a2 = c2s_handshake(m.combat.fighters[0].player_net_object_id, 57);
+        assert!(m.on_c2s(0, &op57_a2, now).is_empty());
+        now += Duration::from_millis(100);
+        m.on_tick(2, now);
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::AwaitingClientBackendSynchronization,
+            "both players readied on the loadout screen — the walk advances"
         );
     }
 
