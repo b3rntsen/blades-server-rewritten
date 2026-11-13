@@ -88,7 +88,7 @@ pub fn apply_respec(ch: &mut CompleteCharacter, stamina: u32, magicka: u32) {
 }
 
 /// Gem price of reaching each backpack tier, indexed by the tier bought
-/// (`[1]` = 0 -> 1). Levels 1-8 are retail, measured from the wallet deltas of
+/// (`[1]` = 0 -> 1). Retail prices for levels 1-8 were measured from the wallet deltas of
 /// captured `POST /inventories/current/upgrade` responses (Crazybob2k 0->1 = 10;
 /// Ruukoto 1->2..7->8 = 40, 80, 160, 320, 640, 1280, 2560; Dariex, Nirnroot and
 /// Deathbell agree on every step they cover).
@@ -98,8 +98,12 @@ pub fn apply_respec(ch: &mut CompleteCharacter, stamina: u32, magicka: u32) {
 /// msg 3077: "Ja bitte für 2560, sonst wird es zu teuer"). The client only
 /// offers them once an asset pack adds the matching `InventoryData` rows;
 /// without it the client stops at 8 and never asks.
+///
+/// Tracker #505 (HauDrauf, common-good rule, 2026-11-13): tiers 1-8 sell at
+/// HALF the retail price above; tiers 9-11 keep 2,560. To revert #505, put
+/// tiers 1-8 back to the retail 10, 40, 80, 160, 320, 640, 1280, 2560.
 pub const INVENTORY_UPGRADE_GEM_COST: [u64; 12] =
-    [0, 10, 40, 80, 160, 320, 640, 1280, 2560, 2560, 2560, 2560];
+    [0, 5, 20, 40, 80, 160, 320, 640, 1280, 2560, 2560, 2560];
 
 /// Highest backpack tier the server will sell.
 pub const MAX_INVENTORY_LEVEL: u16 = (INVENTORY_UPGRADE_GEM_COST.len() - 1) as u16;
