@@ -127,6 +127,28 @@ pub struct ArenaConfig {
     /// `busy_fallback_secs` and `recent_fallback_secs` are unchanged for everyone
     /// else. Empty (the default) ⇒ no behaviour change at all.
     pub immediate_bot_users: Vec<Uuid>,
+    /// Earliest a bot may be handed out, in seconds after queueing (env
+    /// `ARENA_BOT_DELAY_MIN_SECS`, default 4). See `bot_delay_max_secs`.
+    pub bot_delay_min_secs: u64,
+    /// Latest moment a lone player's bot is held back to, in seconds after queueing
+    /// (env `ARENA_BOT_DELAY_MAX_SECS`, default 35; `0` = off, today's behaviour).
+    ///
+    /// Tracker #496, decision d40. Bots used to arrive 4–8 s after queueing and a
+    /// human only near the ~30 s last call, so the wait itself said which one was
+    /// coming — and the 5 pre-fight cancels in 94 human pairings (7 days to
+    /// 2026-11-11) all fell 2–33 s after pairing. Each ticket now draws its bot time
+    /// uniformly from `[min, max]`, so the wait no longer tells a bot from a human.
+    /// It is a FLOOR on the bot path only: a human found while it runs still wins.
+    pub bot_delay_max_secs: u64,
+    /// How long a player who cancels AFTER being paired with a human (before the
+    /// fight starts) is held in the queue on their next search (env
+    /// `ARENA_PREFIGHT_CANCEL_COOLDOWN_SECS`, default 120; `0` = off).
+    ///
+    /// Tracker #496, decision d40. The search is accepted as usual (200 `QUEUED`,
+    /// `MatchmakingSearching`, `PotentialMatchCreated` — what retail sent for any
+    /// queued ticket) and simply does not resolve until the cooldown ends. Cancels
+    /// before pairing, and cancels of bot matches, are free. No trophy penalty.
+    pub prefight_cancel_cooldown_secs: u64,
 }
 
 impl ArenaConfig {
@@ -179,6 +201,9 @@ impl ArenaConfig {
                         .collect()
                 })
                 .unwrap_or_default(),
+            bot_delay_min_secs: parse("ARENA_BOT_DELAY_MIN_SECS", 4),
+            bot_delay_max_secs: parse("ARENA_BOT_DELAY_MAX_SECS", 35),
+            prefight_cancel_cooldown_secs: parse("ARENA_PREFIGHT_CANCEL_COOLDOWN_SECS", 120),
         }
     }
 }
