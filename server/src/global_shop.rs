@@ -1095,6 +1095,45 @@ pub async fn get_global_shop_for_character(
     }))
 }
 
+/// `POST /…/globalshops/current/lastchance` — the client tells the server a
+/// town-level-up special offer has run out its normal window and entered its
+/// "last chance" window (`PlayerSpecialOfferController.CheckPlayerOffersForLastChance`).
+///
+/// The client keeps the offer's timers in its own save; `UpdateLastChanceResponse`
+/// carries no fields, so the server only has to acknowledge it. Without this route
+/// every boot of a character holding such an offer ended in a burst of 404s and a
+/// communication error before town (#477: a recovered retail save with a June
+/// offer — 65 refusals, the only caller on the box). Retail's corpus holds no
+/// sample of this call, so the body shape is the response class: empty.
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/lastchance"
+)]
+pub async fn update_last_chance(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+) -> Result<Json<Value>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let character_id = path.into_inner();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows = {
+        use crate::schema::characters::dsl::*;
+        characters
+            .filter(id.eq(character_id))
+            .select(CharacterDbEntryServerState::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap()
+    };
+    get_only_single_character_and_check_permission(rows, &session.session)?;
+    Ok(Json(last_chance_ack()))
+}
+
+/// What [`update_last_chance`] answers: `UpdateLastChanceResponse` has no fields.
+fn last_chance_ack() -> Value {
+    Value::Object(serde_json::Map::new())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PurchaseRequest {
