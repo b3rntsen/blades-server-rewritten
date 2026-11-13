@@ -8,10 +8,11 @@
 //! enchantments).
 //!
 //! The material follows the calendar month, UTC (owner-approved #391, decision
-//! d23, 2026-10-25): Stalhrim through October 2026 (#539), then Amber, Ancient
-//! Nordic, Chaurus, Dark Seducer, Forsworn, Golden Saint, Madness, Nordic Steel
-//! and Stalhrim from November 2026, repeating every nine months
-//! ([`MONTHLY_WEAPON_SETS`], [`material_index_for_month`]).
+//! d23, 2026-10-25): Stalhrim through October 2026 (#539), then Madness, Ancient
+//! Nordic, Chaurus, Dark Seducer, Forsworn, Golden Saint, Nordic Steel and
+//! Stalhrim from November 2026, repeating every eight months ([`MONTHLY_CYCLE`],
+//! [`material_index_for_month`]). Amber is parked (decision d32, #459): its
+//! templates render Dragonbone meshes in the APK.
 //!
 //! HauDrauf's "zwei garantierte Verzauberungen" is the client's label for Arcane
 //! tier 2 — "guaranteed exactly 2 bonus enchantments when enchanted", the phrase
@@ -604,21 +605,40 @@ pub const STALHRIM_SET: usize = 8;
 /// 2026.
 pub const DIVINE_STALHRIM_WEAPONS: [GiftWeapon; 9] = MONTHLY_WEAPON_SETS[STALHRIM_SET].1;
 
+/// Index of the Amber set in [`MONTHLY_WEAPON_SETS`].
+pub const AMBER_SET: usize = 0;
+
+/// Index of the Madness set in [`MONTHLY_WEAPON_SETS`].
+pub const MADNESS_SET: usize = 6;
+
+/// The months' materials, as [`MONTHLY_WEAPON_SETS`] indices in cycle order from
+/// [`MONTHLY_CYCLE_START`] (owner decision d32/#459, 2026-11-10).
+///
+/// Amber is PARKED: its seven of nine templates point at Dragonbone meshes in the
+/// APK, so a gifted "Amber" weapon looks like Dragonbone. Madness (tier 10, level
+/// 45, its own meshes) takes November 2026 instead; December onward is unchanged.
+/// Amber stays in [`MONTHLY_WEAPON_SETS`], so weapons already gifted remain
+/// recognised gift weapons ([`is_gift_weapon`]).
+///
+/// REVERT SWITCH: once the app fix ships, put [`AMBER_SET`] back (e.g.
+/// `&[AMBER_SET, 1, 2, 3, 4, 5, MADNESS_SET, 7, STALHRIM_SET]`, the d23 order).
+pub const MONTHLY_CYCLE: &[usize] = &[MADNESS_SET, 1, 2, 3, 4, 5, 7, STALHRIM_SET];
+
 /// The first month of the monthly cycle: November 2026 (year, month 1-12).
 /// Every earlier month pays Stalhrim.
 pub const MONTHLY_CYCLE_START: (i32, u32) = (2026, 11);
 
 /// The [`MONTHLY_WEAPON_SETS`] index for a calendar month (`month` 1-12):
-/// Stalhrim up to October 2026, then Amber, Ancient Nordic, Chaurus, Dark Seducer,
-/// Forsworn, Golden Saint, Madness, Nordic Steel, Stalhrim from November 2026,
-/// repeating every nine months.
+/// Stalhrim up to October 2026, then [`MONTHLY_CYCLE`] from November 2026
+/// (Madness, Ancient Nordic, Chaurus, Dark Seducer, Forsworn, Golden Saint,
+/// Nordic Steel, Stalhrim), repeating.
 pub fn material_index_for_month(year: i32, month: u32) -> usize {
     let at = i64::from(year) * 12 + i64::from(month) - 1;
     let start = i64::from(MONTHLY_CYCLE_START.0) * 12 + i64::from(MONTHLY_CYCLE_START.1) - 1;
-    if at < start {
+    if at < start || MONTHLY_CYCLE.is_empty() {
         return STALHRIM_SET;
     }
-    ((at - start) % MONTHLY_WEAPON_SETS.len() as i64) as usize
+    MONTHLY_CYCLE[((at - start) % MONTHLY_CYCLE.len() as i64) as usize]
 }
 
 /// The weapon set of the calendar month (UTC) containing `unix_secs`.
@@ -1080,9 +1100,9 @@ mod tests {
         }
     }
 
-    /// #391 (decision d23): the material follows the UTC calendar month.
-    /// October 2026 and before is Stalhrim; November 2026 starts the cycle at
-    /// Amber, July 2027 ends it at Stalhrim, and August 2027 wraps to Amber.
+    /// #391 (decision d23, amended by d32/#459): the material follows the UTC
+    /// calendar month. October 2026 and before is Stalhrim; November 2026 starts
+    /// the cycle at Madness, June 2027 ends it at Stalhrim, July 2027 wraps.
     #[test]
     fn the_material_follows_the_calendar_month() {
         let name = |y: i32, m: u32| MONTHLY_WEAPON_SETS[material_index_for_month(y, m)].0;
@@ -1090,31 +1110,48 @@ mod tests {
         assert_eq!(name(2026, 1), "Stalhrim");
         assert_eq!(name(2025, 12), "Stalhrim");
         let cycle = [
-            ((2026, 11), "Amber"),
+            ((2026, 11), "Madness"),
             ((2026, 12), "Ancient Nordic"),
             ((2027, 1), "Chaurus"),
             ((2027, 2), "Dark Seducer"),
             ((2027, 3), "Forsworn"),
             ((2027, 4), "Golden Saint"),
-            ((2027, 5), "Madness"),
-            ((2027, 6), "Nordic Steel"),
-            ((2027, 7), "Stalhrim"),
-            ((2027, 8), "Amber"),
-            ((2027, 9), "Ancient Nordic"),
-            ((2028, 4), "Stalhrim"),
-            ((2028, 5), "Amber"),
-            ((2028, 12), "Nordic Steel"),
+            ((2027, 5), "Nordic Steel"),
+            ((2027, 6), "Stalhrim"),
+            ((2027, 7), "Madness"),
+            ((2027, 8), "Ancient Nordic"),
+            ((2028, 2), "Stalhrim"),
+            ((2028, 3), "Madness"),
         ];
         for ((y, m), material) in cycle {
             assert_eq!(name(y, m), material, "{y}-{m:02}");
         }
         // The month turns at midnight UTC.
         assert_eq!(weapon_set_at(month_start(2026, 11) - 1).0, "Stalhrim");
-        assert_eq!(weapon_set_at(month_start(2026, 11)).0, "Amber");
+        assert_eq!(weapon_set_at(month_start(2026, 11)).0, "Madness");
         assert_eq!(weapon_set_at(month_start(2027, 1) - 1).0, "Ancient Nordic");
         assert_eq!(weapon_set_at(month_start(2027, 1)).0, "Chaurus");
         assert_eq!(weapon_set_at(OCT_2026).0, "Stalhrim");
         assert_eq!(weapon_set_at(0).0, "Stalhrim");
+    }
+
+    /// #459 (decision d32): Amber is parked — no month of the next decade pays
+    /// it, while an Amber weapon already gifted is still a gift weapon.
+    #[test]
+    fn amber_is_parked_but_already_gifted_amber_stays_a_gift_weapon() {
+        assert_eq!(MONTHLY_WEAPON_SETS[AMBER_SET].0, "Amber");
+        assert_eq!(MONTHLY_WEAPON_SETS[MADNESS_SET].0, "Madness");
+        for y in 2026..2037 {
+            for m in 1..=12 {
+                assert_ne!(material_index_for_month(y, m), AMBER_SET, "{y}-{m:02}");
+            }
+        }
+        for (amber, _, name) in MONTHLY_WEAPON_SETS[AMBER_SET].1 {
+            assert!(is_gift_weapon(amber), "{name} still recognised");
+        }
+        // Every non-parked material still comes up.
+        let used: std::collections::BTreeSet<usize> = MONTHLY_CYCLE.iter().copied().collect();
+        assert_eq!(used.len(), MONTHLY_WEAPON_SETS.len() - 1);
     }
 
     /// Every gift is one of the month's nine, blank (no ENCHANTING) at Arcane II,
