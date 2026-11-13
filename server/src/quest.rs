@@ -8826,10 +8826,12 @@ mod playability_sweep {
             })
             .collect();
 
-        assert_eq!(flat, 128, "flat rewards from quest_rewards.json");
+        // 129: "Tournament: Practice with Noura" ships 0 XP but a Training Dummy
+        // in `reward_preview.items`, so it pays something after all (#446).
+        assert_eq!(flat, 129, "flat rewards from quest_rewards.json");
         // 39 capture-derived ladders + the seven authored retired events (#189).
         assert_eq!(evented, 46, "milestone ladders from event_quests.json");
-        assert_eq!(covered.len(), 174, "174 of 185 quests pay something");
+        assert_eq!(covered.len(), 175, "175 of 185 quests pay something");
         assert!(
             covered.len() as f64 / gd.quests.len() as f64 > 0.80,
             "coverage must stay above 80%"
@@ -8842,6 +8844,48 @@ mod playability_sweep {
             covered.len(),
             "a quest must not appear in both quest_rewards.json and event_quests.json"
         );
+    }
+
+    /// Report #446: "A Friend in Need" ships in two versions, and both announce
+    /// the Large Legendary decoration "Blades Memorial" (`reward_preview.items`).
+    /// Only version B was ever captured completing, so only B paid it; version A
+    /// (Aranande in the Old Arena) paid XP and town points and dropped the
+    /// decoration. The preview IS the item reward — it equals the captured
+    /// `/complete` items on 58 of 58 quests where both exist — so the generator now
+    /// fills uncaptured quests from it.
+    #[test]
+    fn both_friend_in_need_versions_pay_the_blades_memorial() {
+        let sd = static_data();
+        let memorial = Uuid::parse_str("bac2ea83-5cf9-496e-9653-aebfec544c21").unwrap();
+        for (version, raw) in [
+            ("A", "39c8bf84-8c6b-4332-b010-32a82d2aebc4"),
+            ("B", "0dc4f277-abe1-4d7d-8ac2-b470214285cb"),
+        ] {
+            let reward = sd
+                .quest_rewards
+                .get(&Uuid::parse_str(raw).unwrap())
+                .unwrap_or_else(|| panic!("version {version} has a reward"));
+            assert_eq!(
+                reward.stackable_items.get(&memorial),
+                Some(&1),
+                "A Friend in Need version {version} must pay the Blades Memorial"
+            );
+        }
+        // The other previews no capture covered: gold on the first two story
+        // quests, and the Training Dummy decoration for practising with Noura.
+        let gold = Uuid::parse_str("f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2").unwrap();
+        let reward = |raw: &str| {
+            sd.quest_rewards
+                .get(&Uuid::parse_str(raw).unwrap())
+                .cloned()
+        };
+        let coming_home = reward("73ab7435-021e-451a-9944-29e32e72382c").unwrap();
+        assert_eq!(coming_home.currencies.get(&gold), Some(&100));
+        let town_elder = reward("3e382c0a-0ccb-4009-9d24-d168f9fe92a1").unwrap();
+        assert_eq!(town_elder.currencies.get(&gold), Some(&200));
+        let noura = reward("0c9fc46d-9cb3-41b9-9e73-70c331533131").unwrap();
+        let dummy = Uuid::parse_str("c75d1c08-2857-4ebc-9b60-97acc67d8c19").unwrap();
+        assert_eq!(noura.stackable_items.get(&dummy), Some(&1));
     }
 
     /// Every event template ships a complete, usable ladder — five wire tiers, five
