@@ -145,6 +145,16 @@ pub struct Quest {
     /// anything retail sends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job_reward: Option<RewardGrant>,
+    /// The `jobSetup.dungeonTemplateId` a town JOB was rolled in, kept so that
+    /// `/complete` can say where the job was done (cave, forest, Ayleid ruin, stone
+    /// dungeon, arena) without regenerating the board — the stored row otherwise
+    /// carries no trace of it. Read only by the community hunt counter (d48, #498).
+    ///
+    /// `None` on every non-job quest and on job rows written before this field
+    /// existed; like [`Self::job_reward`] it never appears on anything retail sends,
+    /// because job rows are not serialized into `quests[]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_dungeon_template_id: Option<Uuid>,
     pub completed: bool,
 }
 

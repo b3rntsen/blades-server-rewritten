@@ -41,6 +41,7 @@ mod character;
 mod character_data;
 mod character_ops;
 mod chests;
+mod community_hunt;
 mod craft;
 mod credentials;
 mod daily_reward;
@@ -776,6 +777,7 @@ async fn main() -> Result<()> {
                     .service(admin::set_ai_mimic)
                     .service(admin::list_ai_mimics)
                     .service(admin::get_arena_ranking_config)
+                    .service(community_hunt::get_community_hunt_progress)
                     .service(admin::put_arena_ranking_config)
                     .service(admin::get_arena_ranking_config_history)
                     .service(admin::get_arena_h2h_top)
