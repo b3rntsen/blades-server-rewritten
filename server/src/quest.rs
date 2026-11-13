@@ -11650,3 +11650,248 @@ mod report_431_duel_champion {
         assert_eq!(deltas, (4..=8).collect(), "ordinary deltas changed");
     }
 }
+
+/// Tracker #465 (HauDrauf, 2026-11-04): jobs completed after the 05:00 UTC reset
+/// but before the first `/quests` of the new window came back on the board, and a
+/// second completion paid nothing. Against a real Postgres, through the handler's
+/// own rotation; SKIPS without TEST_DATABASE_URL.
+#[cfg(test)]
+mod report465_completed_jobs_stay_off_the_board_db {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+
+    const TABLES: &str = "\
+        CREATE TABLE characters ( \
+            id UUID PRIMARY KEY, user_id UUID NOT NULL, character JSONB NOT NULL, \
+            data JSONB NOT NULL, inventory JSONB NOT NULL, wallet JSONB NOT NULL, \
+            town JSONB, server_state JSONB NOT NULL, source_alt_uuid UUID); \
+        CREATE TABLE quests ( \
+            id UUID NOT NULL, character_id UUID NOT NULL REFERENCES characters(id), \
+            info JSONB NOT NULL, generated_data JSONB NOT NULL, dungeon_state JSONB, \
+            initial_state JSONB, PRIMARY KEY (id, character_id));";
+
+    /// 2026-11-04 05:00 UTC, the reset HauDrauf played through.
+    const RESET: u64 = 1_794_286_800;
+    const DAY: u64 = 86_400;
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction()
+            .await
+            .expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"
+        ))
+        .await
+        .unwrap();
+        conn.batch_execute(TABLES).await.unwrap();
+        Some(conn)
+    }
+
+    struct World {
+        pools: Value,
+        sd: blades_lib::static_data::StaticData,
+        gd: blades_lib::game_data::GameData,
+    }
+
+    fn world() -> &'static World {
+        static WORLD: std::sync::OnceLock<World> = std::sync::OnceLock::new();
+        WORLD.get_or_init(|| {
+            let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            let read = |f: &str| -> String { std::fs::read_to_string(dir.join(f)).expect(f) };
+            World {
+                pools: serde_json::from_str(&read("job_pools.json")).unwrap(),
+                sd: crate::static_loader::load(&dir),
+                gd: serde_json::from_str(&read("parsed.json")).unwrap(),
+            }
+        })
+    }
+
+    /// A level-100 character whose board was last rotated at the PREVIOUS reset.
+    async fn seed_character(conn: &mut AsyncPgConnection) -> CharacterDbEntryCharacterAlone {
+        let (user, id) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut character = blades_lib::user_data::CompleteCharacter::default();
+        character.level = 100;
+        character.last_jobs_reset_time = RESET - DAY;
+        character.job_difficulty_cycle_index = 48;
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, data, inventory, wallet, server_state) \
+             VALUES ($1, $2, $3::jsonb, '{}'::jsonb, '{}'::jsonb, '[]'::jsonb, '{}'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .bind::<diesel::sql_types::Text, _>(serde_json::to_string(&character).unwrap())
+        .execute(conn)
+        .await
+        .unwrap();
+        CharacterDbEntryCharacterAlone {
+            id,
+            user_id: user,
+            character: JsonDbWrapper(character),
+        }
+    }
+
+    fn job_id(job: &Value) -> Uuid {
+        Uuid::parse_str(job["questId"].as_str().unwrap()).unwrap()
+    }
+
+    fn presentation_of(pools: &Value, job: &Value) -> i64 {
+        let pool = job["jobPoolId"].as_str().unwrap();
+        pools["jobPools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["jobPoolId"] == pool)
+            .map_or(0, |p| p["presentation"].as_i64().unwrap_or(0))
+    }
+
+    /// What a `/complete` that crossed the reset leaves behind: the new window's
+    /// rows for `ids`, completed, their dungeon exited (`dungeon_state` NULL).
+    async fn completed_rows(
+        conn: &mut AsyncPgConnection,
+        character: &CharacterDbEntryCharacterAlone,
+        board: &[Value],
+    ) {
+        let w = world();
+        for job in board {
+            let mut row = jobs_gen::job_quest_db_entry_for(
+                job,
+                character.id,
+                &w.gd,
+                &w.sd.quests_daily.level_scaling,
+                &w.pools,
+                100,
+            )
+            .expect("a job row");
+            row.info.0.completed = true;
+            use crate::schema::quests;
+            insert_into(quests::table)
+                .values(&row)
+                .execute(conn)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn fetch(
+        conn: &mut AsyncPgConnection,
+        character: &mut CharacterDbEntryCharacterAlone,
+        now: u64,
+    ) -> Vec<Uuid> {
+        let w = world();
+        let (jobs, _, _) = rotate_job_board_in_tx(
+            conn,
+            &w.pools,
+            &w.gd,
+            &w.sd.quests_daily.level_scaling,
+            character,
+            now,
+        )
+        .await
+        .expect("/quests rotates");
+        jobs.iter().map(job_id).collect()
+    }
+
+    #[tokio::test]
+    async fn jobs_completed_across_the_reset_stay_off_the_first_board_and_after() {
+        let Some(mut conn) = fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — #465 NOT verified");
+            return;
+        };
+        let w = world();
+        let mut character = seed_character(&mut conn).await;
+        // The board a /complete at 05:00:57 handed out: the new window's, rolled
+        // from the clock while lastJobsResetTime still named the old window.
+        let (board, _) = jobs_gen::generate_replenished(
+            &w.pools,
+            character.id,
+            100,
+            character.character.0.job_difficulty_cycle_index,
+            RESET,
+            RESET + 57,
+            &Default::default(),
+        );
+        let gem_jobs: Vec<Value> = board
+            .iter()
+            .filter(|j| presentation_of(&w.pools, j) > 0)
+            .cloned()
+            .collect();
+        assert!(
+            !gem_jobs.is_empty(),
+            "the board carries a featured or boss job"
+        );
+        let standard = board
+            .iter()
+            .find(|j| presentation_of(&w.pools, j) == 0)
+            .cloned()
+            .unwrap();
+        let mut played = gem_jobs.clone();
+        played.push(standard);
+        completed_rows(&mut conn, &character, &played).await;
+        let played: Vec<Uuid> = played.iter().map(job_id).collect();
+
+        // 14:12, the first /quests of the window.
+        let first = fetch(&mut conn, &mut character, RESET + 9 * 3600).await;
+        for id in &played {
+            assert!(
+                !first.contains(id),
+                "completed job {id} is back on the board"
+            );
+        }
+        assert_eq!(character.character.0.last_jobs_reset_time, RESET);
+        // A later fetch in the same window: the completed rows were not pruned.
+        let second = fetch(&mut conn, &mut character, RESET + 10 * 3600).await;
+        for id in &played {
+            assert!(
+                !second.contains(id),
+                "completed job {id} came back on a re-fetch"
+            );
+        }
+        assert_eq!(first, second, "the board is stable within the window");
+    }
+
+    /// Control: the next window starts a fresh board, and the previous window's
+    /// completed rows are pruned (their ids can never recur).
+    #[tokio::test]
+    async fn the_next_window_is_a_fresh_board_and_prunes_the_old_rows() {
+        let Some(mut conn) = fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — #465 NOT verified");
+            return;
+        };
+        let w = world();
+        let mut character = seed_character(&mut conn).await;
+        let (board, _) = jobs_gen::generate_replenished(
+            &w.pools,
+            character.id,
+            100,
+            character.character.0.job_difficulty_cycle_index,
+            RESET,
+            RESET + 57,
+            &Default::default(),
+        );
+        completed_rows(&mut conn, &character, &board[..1]).await;
+        let first = fetch(&mut conn, &mut character, RESET + 3600).await;
+        assert!(!first.contains(&job_id(&board[0])));
+
+        let next = fetch(&mut conn, &mut character, RESET + DAY + 60).await;
+        assert!(next.len() >= 4, "a full board in the next window");
+        assert!(next.iter().all(|id| !first.contains(id)), "all new ids");
+        let left: i64 = diesel::sql_query("SELECT count(*) AS n FROM quests WHERE id = $1")
+            .bind::<diesel::sql_types::Uuid, _>(job_id(&board[0]))
+            .get_result::<Count>(&mut conn)
+            .await
+            .unwrap()
+            .n;
+        assert_eq!(left, 0, "the old window's completed row is pruned");
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
+    }
+}
