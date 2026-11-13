@@ -208,7 +208,7 @@ const NAME_VALIDATED: u64 = 1;
 /// `HasNamedTown && (validationFlags & 1) == 0`, and the main menu runs that
 /// validator before it opens the Arena or the Guilds menu, so a fresh character
 /// that named its town was locked out of both with no request ever sent.
-fn name_town(town: &mut Value, name: &str) {
+pub(crate) fn name_town(town: &mut Value, name: &str) {
     if let Some(obj) = town.as_object_mut() {
         obj.insert("name".to_string(), json!(name));
     }

@@ -1275,7 +1275,11 @@ pub async fn sell_to_shop(
                     outcome.unknown.len()
                 );
             }
-            if !outcome.sold.is_empty() {
+            // Any backpack diff bumps the version — a sale, and since #489 also the
+            // resync a stale sell carries — so the client applies it.
+            if !tracker.modified_backpack.items.is_empty()
+                || !tracker.modified_backpack.stackable_items.is_empty()
+            {
                 entry.inventory.0.backpack_version += 1;
             }
 

@@ -273,6 +273,20 @@ fn window_of(e: &Value) -> Option<(i64, i64)> {
 /// and a player can never buy more of an offer per cycle than retail allowed.
 pub(crate) const ONE_DAY_WINDOWS_440: bool = true;
 
+/// The three store chests (Legendary `11102495…`, Epic `9e4dc391…`, Rare
+/// `11b322d2…`, retail's only ~950-day "evergreen" windows) are served on that full
+/// span, so the shop shows no countdown on them.
+///
+/// NOT RETAIL in effect, though retail-shaped. Tracker #507 (HauDrauf, 2026-11-13):
+/// "Please remove the description and the timer on the chests in the shop." Under
+/// [`ONE_DAY_WINDOWS_440`] the chests were cut into one-day windows like every other
+/// long offer, so they showed a timer under 24 hours on something that never leaves
+/// the shop. The timer is the client counting down to `activeEndDate`; the override
+/// cannot switch it off (`GlobalShopProduct._hideTimeRemaining` and the description
+/// text are APK/asset data). With this on, the end is always more than two and a half
+/// years away. To revert, set this to `false`.
+pub(crate) const STORE_CHESTS_NO_COUNTDOWN_507: bool = true;
+
 const DAY: i64 = 86_400;
 
 /// One way to serve an offer: the retail window `src` whose prices and tracking
@@ -391,7 +405,12 @@ fn slice_into_days<'a>(
 ///
 /// With `one_day` (tracker #440, [`ONE_DAY_WINDOWS_440`]) every window longer than
 /// a day is served as one-day pieces instead; see [`slice_into_days`].
-fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Value> {
+fn replay_calendar_with(
+    windows: &Value,
+    now: i64,
+    one_day: bool,
+    chests_no_countdown: bool,
+) -> Option<Value> {
     let calendar = windows
         .get("globalShopWindows")
         .and_then(Value::as_object)
@@ -485,6 +504,19 @@ fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Valu
             }
         }
         for &(e, s, en) in evergreen {
+            if chests_no_countdown {
+                // #507: the LATEST whole-period shift that has started, so the
+                // ~950-day span runs on for years past `now`. No windowed caps ride
+                // on these offers, so moving the shift every cycle costs nothing.
+                let shift = (now - s).div_euclid(REPLAY_PERIOD).max(0) * REPLAY_PERIOD;
+                candidates.push(Candidate {
+                    start: s + shift,
+                    end: en + shift,
+                    src: e,
+                    tid_shift: shift,
+                });
+                continue;
+            }
             let periods = (now - en + REPLAY_PERIOD - 1)
                 .div_euclid(REPLAY_PERIOD)
                 .max(0);
@@ -538,7 +570,12 @@ fn replay_calendar_with(windows: &Value, now: i64, one_day: bool) -> Option<Valu
 /// The replay as [`current_catalog`] runs it.
 #[cfg(test)]
 fn replay_calendar(windows: &Value, now: i64) -> Option<Value> {
-    replay_calendar_with(windows, now, ONE_DAY_WINDOWS_440)
+    replay_calendar_with(
+        windows,
+        now,
+        ONE_DAY_WINDOWS_440,
+        STORE_CHESTS_NO_COUNTDOWN_507,
+    )
 }
 
 /// The catalogue as the client sees it at `now`: retail's calendar replayed (or,
@@ -559,12 +596,79 @@ fn catalog_with(
     now: i64,
     one_day: bool,
 ) -> Value {
-    let replayed = replay_calendar_with(&static_data.global_shop_windows, now, one_day)
-        .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
-    uncap_sigil_materials(apply_raised_window_caps(apply_authored(
-        replayed,
-        &static_data.global_shop_authored,
-    )))
+    catalog_with_chest_switch(static_data, now, one_day, STORE_CHESTS_NO_COUNTDOWN_507)
+}
+
+/// [`catalog_with`] with the #507 store-chest switch passed explicitly.
+fn catalog_with_chest_switch(
+    static_data: &blades_lib::static_data::StaticData,
+    now: i64,
+    one_day: bool,
+    chests_no_countdown: bool,
+) -> Value {
+    let replayed = replay_calendar_with(
+        &static_data.global_shop_windows,
+        now,
+        one_day,
+        chests_no_countdown,
+    )
+    .unwrap_or_else(|| shift_to_now(&static_data.global_shop_overrides, now));
+    apply_level_up_offer_price(
+        uncap_sigil_materials(apply_raised_window_caps(apply_authored(
+            replayed,
+            &static_data.global_shop_authored,
+        ))),
+        &static_data.level_up_offers,
+    )
+}
+
+/// The Gem price of every player level-up offer (`level_up_offers.json`, the
+/// `PlayerLvlOffer_03` products `/levelup` stamps on `character.globalShopOffers`).
+///
+/// NOT RETAIL. Owner decision d33 (tracker #473, SpaceMunk, 2026-11-10): the
+/// levelling offers sell for 1 green Gem. Retail priced them at 375-1,875 Gems in
+/// the APK catalogue. Retail's own farewell sale re-priced 48 Gem-priced
+/// (`productType` 1) products to 1 Gem through this same override `prices` field,
+/// which is the path the client reads a price from.
+///
+/// REVERT SWITCH: `None` serves no override and the APK's retail price applies.
+pub(crate) const LEVEL_UP_OFFER_GEM_PRICE: Option<u64> = Some(1);
+
+/// The override window of a repriced level-up offer: the APK catalogue's own
+/// window for these products (2018-01-01 .. 2030-01-31 UTC). The offer's 24-hour
+/// countdown runs from the `startTime` `/levelup` stamps, not from this.
+const LEVEL_UP_OFFER_WINDOW: (i64, i64) = (1_514_764_800, 1_896_134_400);
+
+/// Lay a [`LEVEL_UP_OFFER_GEM_PRICE`] override over each level-up offer. Each
+/// product stays once per character (`maxPurchases` 1, the APK's
+/// `perUserMaximum`), which also caps what a 1-Gem price can be bought for. An
+/// entry already in the catalogue for the same product (none ship) is replaced.
+fn apply_level_up_offer_price(mut catalog: Value, level_up_offers: &HashMap<u16, Uuid>) -> Value {
+    let Some(price) = LEVEL_UP_OFFER_GEM_PRICE else {
+        return catalog;
+    };
+    let Some(map) = catalog
+        .get_mut("globalShopOverrides")
+        .and_then(Value::as_object_mut)
+    else {
+        return catalog;
+    };
+    for product in level_up_offers.values() {
+        let id = product.to_string();
+        map.insert(
+            id.clone(),
+            serde_json::json!({
+                "activeStartDate": LEVEL_UP_OFFER_WINDOW.0,
+                "activeEndDate": LEVEL_UP_OFFER_WINDOW.1,
+                "isActive": true,
+                "maxPurchaseLimits": [{ "limit": 0, "purchaseTrackingId": id }],
+                "maxPurchases": 1,
+                "prices": [{ "currencyId": blades_lib::economy::GEMS, "quantity": price }],
+                "purchaseTrackingId": null,
+            }),
+        );
+    }
+    catalog
 }
 
 /// Per-window purchase caps raised above retail's, by product id.
@@ -989,6 +1093,45 @@ pub async fn get_global_shop_for_character(
             ),
         },
     }))
+}
+
+/// `POST /…/globalshops/current/lastchance` — the client tells the server a
+/// town-level-up special offer has run out its normal window and entered its
+/// "last chance" window (`PlayerSpecialOfferController.CheckPlayerOffersForLastChance`).
+///
+/// The client keeps the offer's timers in its own save; `UpdateLastChanceResponse`
+/// carries no fields, so the server only has to acknowledge it. Without this route
+/// every boot of a character holding such an offer ended in a burst of 404s and a
+/// communication error before town (#477: a recovered retail save with a June
+/// offer — 65 refusals, the only caller on the box). Retail's corpus holds no
+/// sample of this call, so the body shape is the response class: empty.
+#[post(
+    "/blades.bgs.services/api/game/v1/public/characters/{character_id}/globalshops/current/lastchance"
+)]
+pub async fn update_last_chance(
+    session: SessionLookedUpMaybe,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<Uuid>,
+) -> Result<Json<Value>, BladeApiError> {
+    let session = session.get_session_or_error()?;
+    let character_id = path.into_inner();
+    let mut conn = app_state.db_pool.get().await.unwrap();
+    let rows = {
+        use crate::schema::characters::dsl::*;
+        characters
+            .filter(id.eq(character_id))
+            .select(CharacterDbEntryServerState::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap()
+    };
+    get_only_single_character_and_check_permission(rows, &session.session)?;
+    Ok(Json(last_chance_ack()))
+}
+
+/// What [`update_last_chance`] answers: `UpdateLastChanceResponse` has no fields.
+fn last_chance_ack() -> Value {
+    Value::Object(serde_json::Map::new())
 }
 
 #[derive(Deserialize)]
@@ -4110,6 +4253,49 @@ mod report238_calendar_tests {
         }
     }
 
+    /// #507 (HauDrauf): the three store chests must not count down. Under #440 they
+    /// were served as one-day windows, so the shop showed a timer under 24 hours on
+    /// an offer that never leaves. Served on retail's own ~950-day span instead, the
+    /// end is always years away, as retail's was for most of the chests' life.
+    #[test]
+    fn store_chests_do_not_count_down() {
+        let sd = shipped();
+        for id in [
+            "11102495-fde7-4e77-b6c4-d13b9303f1f5",
+            "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+            "9e4dc391-422e-4b25-ba90-faab39e0769f",
+        ] {
+            for t in
+                (REPORTED..REPORTED + 3 * 365 * DAY).step_by((3 * DAY + 5 * 3_600 + 11) as usize)
+            {
+                let e = &current_catalog(&sd, t)["globalShopOverrides"][id];
+                assert!(is_live(e, t), "{id} lapsed at {t}");
+                let left = e["activeEndDate"].as_i64().unwrap() - t;
+                assert!(left > 365 * DAY, "{id} counts down ({left}s left) at {t}");
+            }
+        }
+    }
+
+    /// Only the chests change: every other offer keeps its #440 one-day window.
+    #[test]
+    fn the_chest_switch_leaves_other_offers_alone() {
+        let sd = shipped();
+        let chests = [
+            "11102495-fde7-4e77-b6c4-d13b9303f1f5",
+            "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+            "9e4dc391-422e-4b25-ba90-faab39e0769f",
+        ];
+        for t in [REPORTED, REPORTED + 17 * DAY + 3_600] {
+            let on = current_catalog(&sd, t);
+            let off = catalog_with_chest_switch(&sd, t, ONE_DAY_WINDOWS_440, false);
+            for (id, e) in on["globalShopOverrides"].as_object().unwrap() {
+                if !chests.contains(&id.as_str()) {
+                    assert_eq!(e, &off["globalShopOverrides"][id], "{id} changed");
+                }
+            }
+        }
+    }
+
     /// Deploy-order safety: until the box has `global_shop_windows.json`, the
     /// server must behave exactly as it did before this change.
     #[test]
@@ -5462,7 +5648,12 @@ mod raised_window_cap_tests {
     fn unraised(sd: &blades_lib::static_data::StaticData, now: i64) -> Value {
         let replayed = replay_calendar(&sd.global_shop_windows, now)
             .unwrap_or_else(|| shift_to_now(&sd.global_shop_overrides, now));
-        apply_authored(replayed, &sd.global_shop_authored)
+        // The level-up offer repricing (d33) is its own deviation with its own
+        // test; this one isolates the raised caps.
+        apply_level_up_offer_price(
+            apply_authored(replayed, &sd.global_shop_authored),
+            &sd.level_up_offers,
+        )
     }
 
     /// One hour into `product`'s next (or current) window after `after`.
@@ -5905,6 +6096,17 @@ mod report440_one_day_windows {
             let now = T0 + q * 6 * 3_600;
             let cat = current_catalog(&sd, now);
             for (id, e) in cat["globalShopOverrides"].as_object().unwrap() {
+                // #507 exempts the three store chests: they never count down.
+                if STORE_CHESTS_NO_COUNTDOWN_507
+                    && [
+                        "11102495-fde7-4e77-b6c4-d13b9303f1f5",
+                        "11b322d2-1b5e-4e90-bb41-a8d90ca9548b",
+                        "9e4dc391-422e-4b25-ba90-faab39e0769f",
+                    ]
+                    .contains(&id.as_str())
+                {
+                    continue;
+                }
                 let (s, en) = window_of(e).unwrap();
                 assert!(s < en && en - s <= DAY, "{id} at {now}: window {s}..{en}");
                 let retail = retail_windows(&sd, id);
@@ -6192,5 +6394,60 @@ mod report440_one_day_windows {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod level_up_offer_price_tests {
+    use super::*;
+
+    /// d33 (#473): a level-up offer costs [`LEVEL_UP_OFFER_GEM_PRICE`] Gems — the
+    /// served catalogue says so, the purchase check accepts exactly that and
+    /// refuses the retail price, and each offer stays once per character.
+    #[test]
+    fn level_up_offers_sell_for_one_gem_once_per_character() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        assert!(!sd.level_up_offers.is_empty());
+        let now = 1_794_000_000; // 2026-11-07
+        let one_gem = vec![Price {
+            currency_id: blades_lib::economy::GEMS,
+            quantity: 1,
+        }];
+        let served = served_catalog(&sd, now);
+        for product in sd.level_up_offers.values() {
+            let retail = sd.global_shop_prices[product].clone();
+            assert_ne!(retail, one_gem, "retail priced {product} above 1 Gem");
+            assert_eq!(
+                served["globalShopOverrides"][product.to_string()]["prices"],
+                serde_json::json!([{ "currencyId": blades_lib::economy::GEMS, "quantity": 1 }]),
+                "{product} served at 1 Gem"
+            );
+            assert!(validate_purchase_prices(&sd, *product, &one_gem, now).is_ok());
+            assert!(
+                validate_purchase_prices(&sd, *product, &retail, now).is_err(),
+                "the retail price is no longer the price"
+            );
+            assert_eq!(lifetime_purchase_cap(&sd, *product, now), Some(1));
+        }
+    }
+}
+
+#[cfg(test)]
+mod last_chance_tests {
+    /// #477: the client POSTs `/globalshops/current/lastchance` for a special offer
+    /// in its last-chance window; a 404 there is a communication error before town.
+    #[test]
+    fn last_chance_route_is_registered_and_answers_an_empty_object() {
+        let main = include_str!("main.rs");
+        assert!(
+            main.contains(".service(global_shop::update_last_chance)"),
+            "the lastchance route must be registered with the app"
+        );
+        let src = include_str!("global_shop.rs");
+        assert!(
+            src.contains("/globalshops/current/lastchance\"\n)]\npub async fn update_last_chance(")
+        );
+        assert_eq!(super::last_chance_ack(), serde_json::json!({}));
     }
 }

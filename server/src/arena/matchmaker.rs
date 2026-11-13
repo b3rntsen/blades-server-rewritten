@@ -172,6 +172,50 @@ fn abandon_matched_ticket(
     Some(game_session_id)
 }
 
+/// The cancel path, with the #496 cooldown: abandon the match a cancelled ticket was
+/// resolved into (see [`abandon_matched_ticket`]) and, if that match was against a
+/// HUMAN and never started, hold this player's next search for
+/// `prefight_cancel_cooldown_secs`. Returns the abandoned match and the cooldown's end,
+/// if one was started.
+///
+/// Free cases, on purpose: a cancel while still searching (no match yet), a cancel of
+/// a bot match (nobody else was kept waiting), and a cancel once the fight filled
+/// (`abandon_unfilled` refuses — leaving a fight is a concession, already a loss).
+fn cancel_matched_ticket(
+    active_tickets: &ActiveTickets,
+    registry: &MatchRegistry,
+    cooldown_secs: u64,
+    user_id: Uuid,
+    ticket_id: Uuid,
+    now: Instant,
+) -> Option<(Uuid, Option<Instant>)> {
+    let vs_human = active_tickets.matched_vs_human(user_id, ticket_id);
+    let game_session_id = abandon_matched_ticket(active_tickets, registry, user_id, ticket_id)?;
+    let cooldown = (vs_human && cooldown_secs > 0).then(|| {
+        let until = now + Duration::from_secs(cooldown_secs);
+        active_tickets.start_cooldown(user_id, until);
+        until
+    });
+    Some((game_session_id, cooldown))
+}
+
+/// When a lone ticket that started waiting at `since` may first be handed a BOT
+/// (#496, decision d40). `u` is a uniform draw in `[0, 1)`; the result is uniform over
+/// `[bot_delay_min_secs, bot_delay_max_secs]` after `since`.
+///
+/// `bot_delay_max_secs == 0` turns it off: the floor is `since` itself, i.e. no
+/// constraint beyond the tier deadline — exactly the behaviour before #496. A harness
+/// user (`ARENA_IMMEDIATE_BOT_USERS`) is never held either.
+fn bot_floor(config: &ArenaConfig, since: Instant, immediate: bool, u: f64) -> Instant {
+    if immediate || config.bot_delay_max_secs == 0 {
+        return since;
+    }
+    let lo = config.bot_delay_min_secs.min(config.bot_delay_max_secs) as f64;
+    let hi = config.bot_delay_max_secs as f64;
+    let u = u.clamp(0.0, 1.0);
+    since + Duration::from_secs_f64(lo + (hi - lo) * u)
+}
+
 /// A command handed to the matchmaker actor over its single channel. Cancellation is
 /// routed through the SAME channel as enqueue so the actor (the sole owner of the
 /// `waiting` slot) can actually DEQUEUE a cancelled ticket — a `cancel` handler can't
@@ -378,7 +422,9 @@ fn last_call_partner(
 ) -> Option<usize> {
     let mut best: Option<(usize, i64, Duration)> = None;
     for (i, (skill, since, user)) in candidates.iter().enumerate() {
-        if *user == lone_user {
+        // A ticket still under a pre-fight-cancel cooldown (#496) is held: its `since`
+        // is the cooldown's end, in the future.
+        if *user == lone_user || *since > now {
             continue;
         }
         let waited = now.saturating_duration_since(*since);
@@ -1583,6 +1629,9 @@ mod human_priority_tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         }
     }
 
@@ -2438,6 +2487,9 @@ mod bot_pick_tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         // No DB pool → the function's first early return. `block_on` because the
         // path never awaits anything real once `db` is None.
@@ -3603,11 +3655,17 @@ pub struct ArenaGlobal {
 struct ActiveTicket {
     ticket_id: Uuid,
     game_session_id: Option<Uuid>,
+    /// The match this ticket was resolved into has a HUMAN opponent (not a bot).
+    /// Only such a match makes a pre-fight cancel cost a cooldown (#496).
+    vs_human: bool,
 }
 
 #[derive(Default)]
 pub struct ActiveTickets {
     by_user: Mutex<HashMap<Uuid, ActiveTicket>>,
+    /// Users who cancelled after being paired with a human, and until when their
+    /// next search is held (`ArenaConfig::prefight_cancel_cooldown_secs`, #496).
+    cooldowns: Mutex<HashMap<Uuid, Instant>>,
 }
 
 impl ActiveTickets {
@@ -3641,6 +3699,7 @@ impl ActiveTickets {
                     ActiveTicket {
                         ticket_id,
                         game_session_id: None,
+                        vs_human: false,
                     },
                 );
                 ticket_id
@@ -3649,6 +3708,21 @@ impl ActiveTickets {
     }
 
     fn mark_matched(&self, user_id: Uuid, ticket_id: Uuid, game_session_id: Uuid) {
+        self.mark_matched_with(user_id, ticket_id, game_session_id, false);
+    }
+
+    /// [`mark_matched`](Self::mark_matched) for a human-vs-human pairing.
+    fn mark_matched_vs_human(&self, user_id: Uuid, ticket_id: Uuid, game_session_id: Uuid) {
+        self.mark_matched_with(user_id, ticket_id, game_session_id, true);
+    }
+
+    fn mark_matched_with(
+        &self,
+        user_id: Uuid,
+        ticket_id: Uuid,
+        game_session_id: Uuid,
+        vs_human: bool,
+    ) {
         let mut by_user = self.by_user.lock().unwrap();
         if matches!(by_user.get(&user_id), Some(ticket) if ticket.ticket_id == ticket_id) {
             by_user.insert(
@@ -3656,9 +3730,29 @@ impl ActiveTickets {
                 ActiveTicket {
                     ticket_id,
                     game_session_id: Some(game_session_id),
+                    vs_human,
                 },
             );
         }
+    }
+
+    /// Was `ticket_id` (this user's live ticket) paired with a human?
+    fn matched_vs_human(&self, user_id: Uuid, ticket_id: Uuid) -> bool {
+        let by_user = self.by_user.lock().unwrap();
+        by_user
+            .get(&user_id)
+            .is_some_and(|t| t.ticket_id == ticket_id && t.vs_human)
+    }
+
+    fn start_cooldown(&self, user_id: Uuid, until: Instant) {
+        self.cooldowns.lock().unwrap().insert(user_id, until);
+    }
+
+    /// Until when this user's searches are held, if a cooldown is running at `now`.
+    fn cooldown_until(&self, user_id: Uuid, now: Instant) -> Option<Instant> {
+        let mut cooldowns = self.cooldowns.lock().unwrap();
+        cooldowns.retain(|_, until| *until > now);
+        cooldowns.get(&user_id).copied()
     }
 
     /// The match this user's live ticket was resolved into, if `ticket_id` is that
@@ -3977,6 +4071,9 @@ async fn matchmaker_loop(
     // never move backwards into the past when the arena empties out. See [`next_floor`].
     let mut floors: std::collections::HashMap<Uuid, (Instant, u8)> =
         std::collections::HashMap::new();
+    // Per-ticket earliest moment a BOT may be handed out (#496, [`bot_floor`]): drawn
+    // once, the first time the ticket's deadline is looked at, so it does not re-roll.
+    let mut bot_floors: std::collections::HashMap<Uuid, Instant> = std::collections::HashMap::new();
     // The HTTP admission flag prevents normal arrivals during a deploy, while this
     // actor-owned flag closes the smaller race where a handler passed that check just
     // before the drain started and sends Enqueue just after the drain command.
@@ -3992,6 +4089,7 @@ async fn matchmaker_loop(
         let cutoff = Instant::now();
         arrivals.retain(|(_, at)| cutoff.saturating_duration_since(*at) <= window);
         floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
+        bot_floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
 
         let oldest_ticket = waiting.iter().min_by_key(|(_, s)| *s);
         let oldest = oldest_ticket.map(|(_, s)| *s);
@@ -4011,11 +4109,16 @@ async fn matchmaker_loop(
             let recent = oldest_user
                 .map(|me| others_recent(&arrivals, me, window, cutoff))
                 .unwrap_or(0);
-            // Everyone in `waiting` except the ticket whose deadline this is.
-            let waiting_others = waiting.len().saturating_sub(1);
-            let others_live = registry.live_human_count();
             let now = Instant::now();
             let tid = oldest_tid.expect("waiting is non-empty");
+            // Everyone in `waiting` this ticket could actually be paired with: not
+            // itself, not its own account, and not held by a #496 cooldown (a held
+            // ticket's `since` is the cooldown's end, in the future).
+            let waiting_others = waiting
+                .iter()
+                .filter(|(t, s)| t.ticket_id != tid && Some(t.user_id) != oldest_user && *s <= now)
+                .count();
+            let others_live = registry.live_human_count();
             let immediate = oldest_user
                 .map(|u| is_immediate_bot_user(&config, u))
                 .unwrap_or(false);
@@ -4030,7 +4133,18 @@ async fn matchmaker_loop(
                 now,
             );
             floors.insert(tid, (floor, tier));
-            let deadline = floor;
+            // #496: the bot is never handed out before this ticket's randomised bot
+            // floor, so the wait no longer says "bot" (4-8 s) vs "human" (~30 s). Only
+            // while nobody else is waiting — a human present is paired at `floor`, and a
+            // human arriving meanwhile pairs on enqueue, both unaffected.
+            let bot_at = *bot_floors
+                .entry(tid)
+                .or_insert_with(|| bot_floor(&config, since, immediate, rand::random::<f64>()));
+            let deadline = if waiting_others == 0 {
+                floor.max(bot_at)
+            } else {
+                floor
+            };
             if now >= deadline {
                 // Pop the oldest — the one whose deadline just fired.
                 let idx = waiting
@@ -4092,16 +4206,28 @@ async fn matchmaker_loop(
                     if let Some(game_session_id) =
                         resolve(&registry, &config, &db, &[partner, lone], 0).await
                     {
-                        active_tickets.mark_matched(
+                        active_tickets.mark_matched_vs_human(
                             partner_user_id,
                             partner_ticket_id,
                             game_session_id,
                         );
-                        active_tickets.mark_matched(lone_user_id, lone_ticket_id, game_session_id);
+                        active_tickets.mark_matched_vs_human(
+                            lone_user_id,
+                            lone_ticket_id,
+                            game_session_id,
+                        );
                     } else {
                         active_tickets.remove(partner_user_id, partner_ticket_id);
                         active_tickets.remove(lone_user_id, lone_ticket_id);
                     }
+                    continue;
+                }
+
+                // The human we were going to pair with turned out to be gone. Too early
+                // for a bot (#496): back in the queue until the bot floor. No spin — the
+                // stale ticket is dropped, so the next pass waits on `bot_at`.
+                if Instant::now() < bot_at {
+                    waiting.push((lone, since));
                     continue;
                 }
 
@@ -4207,7 +4333,12 @@ async fn matchmaker_loop(
                 .await;
             continue;
         }
-        arrivals.push((req.user_id, Instant::now()));
+        // #496: a player in the pre-fight-cancel cooldown is not someone the others
+        // should hold the queue open for — they cannot be paired until it ends.
+        let hold = active_tickets.cooldown_until(req.user_id, Instant::now());
+        if hold.is_none() {
+            arrivals.push((req.user_id, Instant::now()));
+        }
         record_match_queued(&db, req.ticket_id, req.user_id).await;
         // Push the captured 3-frame progression's first two frames now; the
         // `Succeeded` frame follows once the match resolves (pair or fallback). Sent to
@@ -4227,6 +4358,23 @@ async fn matchmaker_loop(
 
         if draining {
             waiting.push((req, Instant::now()));
+            continue;
+        }
+
+        // #496: a player who cancelled after being paired with a human waits out the
+        // cooldown. The ticket is accepted and stays "searching" — what retail sent for
+        // any queued ticket — but is neither paired nor given a bot until it ends: its
+        // `since` is the cooldown's end, which every pairing path treats as not-yet-here.
+        if let Some(until) = hold {
+            info!(
+                "matchmaker: ticket {} (user {}) held {:.0}s — pre-fight cancel cooldown",
+                req.ticket_id,
+                req.user_id,
+                until
+                    .saturating_duration_since(Instant::now())
+                    .as_secs_f32(),
+            );
+            waiting.push((req, until));
             continue;
         }
 
@@ -4257,7 +4405,7 @@ async fn matchmaker_loop(
             // devices on one account both queueing is the ordinary way this
             // happens, and the result is a match that hangs at "Connecting"
             // for both rather than an obvious failure.
-            if cand.user_id == req.user_id {
+            if cand.user_id == req.user_id || *since > now {
                 continue;
             }
             let waited = now.saturating_duration_since(*since);
@@ -4296,8 +4444,16 @@ async fn matchmaker_loop(
                 if let Some(game_session_id) =
                     resolve(&registry, &config, &db, &[first, req], 0).await
                 {
-                    active_tickets.mark_matched(first_user_id, first_ticket_id, game_session_id);
-                    active_tickets.mark_matched(req_user_id, req_ticket_id, game_session_id);
+                    active_tickets.mark_matched_vs_human(
+                        first_user_id,
+                        first_ticket_id,
+                        game_session_id,
+                    );
+                    active_tickets.mark_matched_vs_human(
+                        req_user_id,
+                        req_ticket_id,
+                        game_session_id,
+                    );
                 } else {
                     active_tickets.remove(first_user_id, first_ticket_id);
                     active_tickets.remove(req_user_id, req_ticket_id);
@@ -4936,14 +5092,21 @@ pub async fn cancel_match(
     // the match never filled, let the sweep release whoever is waiting in it now
     // instead of after the full connect deadline (#375: on 2026-10-01 21:11:01 the
     // no-show cancelled seven seconds after being paired; the opponent waited 41 more).
-    if let Some(game_session_id) = abandon_matched_ticket(
+    if let Some((game_session_id, cooldown)) = cancel_matched_ticket(
         &app_state.arena.active_tickets,
         &app_state.arena.registry,
+        app_state.arena.config.prefight_cancel_cooldown_secs,
         session.session.user_id,
         ticket_id,
+        Instant::now(),
     ) {
         info!(
-            "matchmaker: ticket {ticket_id} cancelled after it was matched — match {game_session_id} will be released"
+            "matchmaker: ticket {ticket_id} cancelled after it was matched — match {game_session_id} will be released{}",
+            if cooldown.is_some() {
+                " (paired with a human: next search held by the pre-fight cancel cooldown, #496)"
+            } else {
+                ""
+            }
         );
     }
     app_state
@@ -4986,6 +5149,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         }
     }
 
@@ -5096,6 +5262,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5186,6 +5355,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5289,6 +5461,9 @@ mod tests {
             busy_fallback_secs: 600,
             recent_fallback_secs: 600,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5364,6 +5539,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5430,6 +5608,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5524,6 +5705,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 6,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5606,6 +5790,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5671,6 +5858,9 @@ mod tests {
             busy_fallback_secs: 600,
             recent_fallback_secs: 600,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5728,6 +5918,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
@@ -5825,6 +6018,9 @@ mod tests {
             busy_fallback_secs: 600,
             recent_fallback_secs: 600,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
@@ -6004,6 +6200,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -6077,6 +6276,9 @@ mod tests {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let ticket_id = Uuid::new_v4();
         let (rms, mut recv) = unbounded_channel();
@@ -6666,6 +6868,9 @@ mod no_show_375 {
             busy_fallback_secs: 230,
             recent_fallback_secs: 30,
             recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -6984,5 +7189,259 @@ mod no_show_375 {
         assert_eq!(active.matched_game_session(user, ticket), Some(gsid));
         assert_eq!(active.matched_game_session(user, Uuid::new_v4()), None);
         assert_eq!(active.matched_game_session(Uuid::new_v4(), ticket), None);
+    }
+}
+
+/// Tracker #496, decision d40: make quitting a human match before it starts pointless.
+/// (A) the bot's arrival time is randomised over the human range, so the wait no longer
+/// says which is coming; (C) cancelling after being paired with a human holds the next
+/// search for a cooldown.
+#[cfg(test)]
+mod pre_fight_quits_496 {
+    use super::*;
+    use std::time::Duration as StdDuration;
+
+    fn config(solo: u64, bot_min: u64, bot_max: u64, cooldown: u64) -> ArenaConfig {
+        ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 4,
+            max_queued_players: 64,
+            solo_fallback_secs: solo,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
+            busy_fallback_secs: 230,
+            // The "someone queued lately" tier is not under test here; 0 keeps the
+            // timings about the feature itself.
+            recent_fallback_secs: 0,
+            recent_window_secs: 300,
+            bot_delay_min_secs: bot_min,
+            bot_delay_max_secs: bot_max,
+            prefight_cancel_cooldown_secs: cooldown,
+        }
+    }
+
+    fn ticket(
+        user_id: Uuid,
+        skill: Option<Skill>,
+    ) -> (
+        TicketRequest,
+        tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+    ) {
+        let (tx, rx) = unbounded_channel();
+        (
+            TicketRequest {
+                via_vpn: false,
+                expected_udp_ip: None,
+                ticket_id: Uuid::new_v4(),
+                user_id,
+                character_id: None,
+                rms: RmsHandle::Direct(tx),
+                skill,
+            },
+            rx,
+        )
+    }
+
+    /// The first frame that RESOLVES a ticket (DB-less, both a bot and a human pair end
+    /// in `Failed` from resolve's guards), or `None` if none arrives by `within`.
+    async fn resolution(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+        within: StdDuration,
+    ) -> Option<StdDuration> {
+        let start = tokio::time::Instant::now();
+        let deadline = start + within;
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(
+                msg,
+                MatchmakingMessage::Failed { .. } | MatchmakingMessage::Succeeded { .. }
+            ) {
+                return Some(start.elapsed());
+            }
+        }
+        None
+    }
+
+    fn spawn(
+        config: ArenaConfig,
+        active: Arc<ActiveTickets>,
+    ) -> UnboundedSender<MatchmakerCommand> {
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            MatchRegistry::new(4),
+            active,
+            None,
+        ));
+        tx
+    }
+
+    #[test]
+    fn the_bot_floor_spans_the_configured_range() {
+        let c = config(4, 4, 35, 0);
+        let t0 = Instant::now();
+        assert_eq!(
+            bot_floor(&c, t0, false, 0.0),
+            t0 + StdDuration::from_secs(4)
+        );
+        assert_eq!(
+            bot_floor(&c, t0, false, 1.0),
+            t0 + StdDuration::from_secs(35)
+        );
+        let mid = bot_floor(&c, t0, false, 0.5) - t0;
+        assert!((mid.as_secs_f64() - 19.5).abs() < 1e-6, "{mid:?}");
+        assert_eq!(
+            bot_floor(&c, t0, true, 0.9),
+            t0,
+            "the harness is never held"
+        );
+        assert_eq!(
+            bot_floor(&config(4, 4, 0, 0), t0, false, 0.9),
+            t0,
+            "max 0 = off: no floor, today's behaviour"
+        );
+    }
+
+    /// A lone player is not handed a bot at the tier deadline any more, but at the
+    /// randomised bot floor — the 4-8 s "bot" tell is gone.
+    #[tokio::test]
+    async fn a_lone_player_gets_the_bot_no_earlier_than_the_floor() {
+        let tx = spawn(config(0, 2, 2, 0), Arc::new(ActiveTickets::default()));
+        let (t, mut rx) = ticket(Uuid::new_v4(), None);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        let at = resolution(&mut rx, StdDuration::from_secs(5))
+            .await
+            .expect("the bot still comes");
+        assert!(
+            at >= StdDuration::from_millis(1900),
+            "bot handed out after {at:?}, before the 2 s floor"
+        );
+    }
+
+    /// …and a human who shows up during that window still wins — even one outside the
+    /// bracket, who is paired at last call instead of waiting for the bot floor.
+    #[tokio::test]
+    async fn a_human_found_during_the_bot_window_still_wins() {
+        let tx = spawn(config(0, 30, 30, 0), Arc::new(ActiveTickets::default()));
+        let (a, mut rx_a) = ticket(
+            Uuid::new_v4(),
+            Some(Skill {
+                level: 10,
+                trophies: 0,
+            }),
+        );
+        tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
+        tokio::time::sleep(StdDuration::from_millis(300)).await;
+        let (b, mut rx_b) = ticket(
+            Uuid::new_v4(),
+            Some(Skill {
+                level: 70,
+                trophies: 3000,
+            }),
+        );
+        tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
+        assert!(
+            resolution(&mut rx_a, StdDuration::from_secs(4))
+                .await
+                .is_some(),
+            "A must be paired with the human, not held for the 30 s bot floor"
+        );
+        assert!(
+            resolution(&mut rx_b, StdDuration::from_secs(1))
+                .await
+                .is_some()
+        );
+    }
+
+    fn two_slot_match(registry: &MatchRegistry) -> Uuid {
+        let gsid = Uuid::new_v4();
+        assert!(registry.allocate(
+            &["psess-a".to_string(), "psess-b".to_string()],
+            Vec::new(),
+            gsid
+        ));
+        gsid
+    }
+
+    #[test]
+    fn only_a_cancel_after_a_human_pairing_starts_the_cooldown() {
+        let registry = MatchRegistry::new(4);
+        let now = Instant::now();
+
+        // Paired with a human, match not started: cooldown.
+        let active = ActiveTickets::default();
+        let (user, t) = (Uuid::new_v4(), Uuid::new_v4());
+        active.reserve_or_existing(user, t, &registry);
+        let gsid = two_slot_match(&registry);
+        active.mark_matched_vs_human(user, t, gsid);
+        let (_, until) = cancel_matched_ticket(&active, &registry, 120, user, t, now).unwrap();
+        assert_eq!(until, Some(now + StdDuration::from_secs(120)));
+        assert_eq!(active.cooldown_until(user, now), until);
+        assert_eq!(
+            active.cooldown_until(user, now + StdDuration::from_secs(121)),
+            None,
+            "it ends"
+        );
+
+        // Paired with a bot: free.
+        let active = ActiveTickets::default();
+        let (user, t) = (Uuid::new_v4(), Uuid::new_v4());
+        active.reserve_or_existing(user, t, &registry);
+        active.mark_matched(user, t, two_slot_match(&registry));
+        let (_, until) = cancel_matched_ticket(&active, &registry, 120, user, t, now).unwrap();
+        assert_eq!(until, None);
+        assert_eq!(active.cooldown_until(user, now), None);
+
+        // Still searching (not matched): free.
+        let active = ActiveTickets::default();
+        let (user, t) = (Uuid::new_v4(), Uuid::new_v4());
+        active.reserve_or_existing(user, t, &registry);
+        assert!(cancel_matched_ticket(&active, &registry, 120, user, t, now).is_none());
+        assert_eq!(active.cooldown_until(user, now), None);
+
+        // Switched off.
+        let active = ActiveTickets::default();
+        let (user, t) = (Uuid::new_v4(), Uuid::new_v4());
+        active.reserve_or_existing(user, t, &registry);
+        active.mark_matched_vs_human(user, t, two_slot_match(&registry));
+        let (_, until) = cancel_matched_ticket(&active, &registry, 0, user, t, now).unwrap();
+        assert_eq!(until, None, "0 = off");
+    }
+
+    /// A player in the cooldown is accepted and left "searching": not paired with the
+    /// next human, not given a bot, until it ends — then matched as normal.
+    #[tokio::test]
+    async fn a_player_in_the_cooldown_is_held_then_matched() {
+        let active = Arc::new(ActiveTickets::default());
+        let quitter = Uuid::new_v4();
+        active.start_cooldown(quitter, Instant::now() + StdDuration::from_secs(2));
+        let tx = spawn(config(0, 0, 0, 120), active.clone());
+
+        let (q, mut rx_q) = ticket(quitter, None);
+        tx.send(MatchmakerCommand::Enqueue(q)).unwrap();
+        tokio::time::sleep(StdDuration::from_millis(200)).await;
+        let (other, mut rx_o) = ticket(Uuid::new_v4(), None);
+        tx.send(MatchmakerCommand::Enqueue(other)).unwrap();
+
+        assert!(
+            resolution(&mut rx_o, StdDuration::from_secs(1))
+                .await
+                .is_some(),
+            "the other player is not kept waiting on someone in a cooldown"
+        );
+        assert_eq!(
+            resolution(&mut rx_q, StdDuration::from_millis(1200)).await,
+            None,
+            "the quitter must not be paired or given a bot during the cooldown"
+        );
+        assert!(
+            resolution(&mut rx_q, StdDuration::from_secs(3))
+                .await
+                .is_some(),
+            "after the cooldown the search resolves as normal"
+        );
     }
 }

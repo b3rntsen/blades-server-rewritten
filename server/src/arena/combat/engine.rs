@@ -421,6 +421,10 @@ pub struct MatchInstance {
     /// Ivan's client froze on the setup screen twice on 2026-10-01; the bot
     /// beat a player who never saw the round and he kept both losses.
     saw_in_round_c2s: [bool; 2],
+    /// Whether the round-start Avatar + op54 PROFILE burst has gone out. A HideHelmet
+    /// learned before it (op20 on connect) just rides that burst; one learned after it
+    /// needs a profile re-broadcast.
+    round_start_actors_sent: bool,
     /// s2c ENet reliable sequence (used by the raw-socket dev path framing).
     s2c_seq: u16,
     last_heartbeat: Instant,
@@ -546,6 +550,7 @@ impl MatchInstance {
         let debug_hold_window = super::debug_hold_window();
         MatchInstance {
             saw_in_round_c2s: [false; 2],
+            round_start_actors_sent: false,
             combat,
             ranking,
             s2c_seq: 0,
@@ -831,6 +836,20 @@ impl MatchInstance {
             return out;
         }
 
+        // op20 PlayerInfo (c2s) — the identity frame each client sends on connect.
+        // Its propId 20 is the player's HideHelmet toggle, and it is the only copy of
+        // that flag that arrives BEFORE the round-start op54 profile: op61 below is
+        // sent only between rounds. Reading op61 alone is report #508 — helmet-hiders
+        // wore their helmet in round 1 and lost it in round 2. Record it; if the
+        // profile has already gone out (a reconnect re-sends op20), refresh it.
+        if let Some(hide) = messages::player_info_hide_helmet(user_data) {
+            if self.set_hide_helmet(sender, hide) && self.round_start_actors_sent {
+                self.broadcast_profile_of(&mut out, sender);
+            }
+            // Fall through: op20 is otherwise a handshake frame (psid binding happens
+            // in the registry before it reaches us).
+        }
+
         // op61 LoadoutClientBackendSynchronized (c2s) — the client reports its OWN
         // loadout-backend sync (+ a HideHelmet cosmetic flag) at a round transition.
         // Capture-proven CLIENT→SERVER only (s506 #3523229 + every retail match); the
@@ -843,15 +862,8 @@ impl MatchInstance {
             // avatar toggle, and the opponent's client only learns it from the op54
             // profile we build. Record it, and if it changed after that profile was
             // already broadcast, re-broadcast so the opponent's avatar matches.
-            let mut profile_changed = false;
-            if let Some(hide) = messages::loadout_backend_hide_helmet(user_data) {
-                if let Some(f) = self.combat.fighters.get_mut(sender) {
-                    if f.loadout.hide_helmet != hide {
-                        f.loadout.hide_helmet = hide;
-                        profile_changed = true;
-                    }
-                }
-            }
+            let profile_changed = messages::loadout_backend_hide_helmet(user_data)
+                .is_some_and(|hide| self.set_hide_helmet(sender, hide));
             if profile_changed {
                 debug!(
                     "combat c2s: slot {sender} op61 HideHelmet changed — re-broadcasting profile"
@@ -1244,6 +1256,7 @@ impl MatchInstance {
                     // `LoadoutJSON` it needs, which races into the zoomed-out / immobile-
                     // opponent "Setting up…" stall seen on Pixel.
                     self.broadcast_round_start_actors(&mut out);
+                    self.round_start_actors_sent = true;
                     self.broadcast_stat_updates(&mut out);
                 }
                 if elapsed >= SPAWN_HANDSHAKE_HOLD {
@@ -1589,11 +1602,18 @@ impl MatchInstance {
     /// timer verdict; a latched c2s `SkipCurrentState`(57) forces a yes and is consumed.
     ///
     /// Consuming the latch here — at the one place a walk decides to emit — is what keeps
-    /// a Ready press from banking: one op57 advances exactly one state, and an op57 that
-    /// arrives in the same tick the hold expires is not "spent" on a state that was going
-    /// to fire anyway (the latch is only cleared when it was the deciding vote).
+    /// a Ready press from banking: one op57 advances exactly one state. Votes are scoped
+    /// to the state they were cast in, so the set is cleared whenever a state is
+    /// emitted — by a unanimous skip OR by its timer. (It used to survive a timed-out
+    /// state, which let a stale press complete the NEXT state's vote: report #506.)
     fn take_skip_request(&mut self, hold_elapsed: bool) -> bool {
         if hold_elapsed {
+            // The state advances on its timer: every Ready vote cast for it is spent.
+            // Keeping a PARTIAL vote set here carried one player's press through the
+            // live round into the next ChooseLoadout, where the opponent's single
+            // press then "completed" it and closed the loadout screen early for the
+            // player who had not readied there (report #506).
+            self.skip_state_requested.clear();
             return true;
         }
         // EVERY human peer must have pressed Ready. Bots never press it, so the
@@ -2392,6 +2412,18 @@ impl MatchInstance {
         }
     }
 
+    /// Record `slot`'s own HideHelmet toggle (op20 or op61). Returns whether it
+    /// changed, i.e. whether a profile already sent to the opponent is now stale.
+    fn set_hide_helmet(&mut self, slot: usize, hide: bool) -> bool {
+        match self.combat.fighters.get_mut(slot) {
+            Some(f) if f.loadout.hide_helmet != hide => {
+                f.loadout.hide_helmet = hide;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Send ONE fighter's op54 PROFILE to every OTHER fighter — the per-actor half of
     /// [`Self::broadcast_round_start_actors`], split out so the between-rounds
     /// `PlayerLoadoutReady`(op36) path can refresh a single player's profile without
@@ -2555,6 +2587,31 @@ pub(in crate::arena::combat) mod tests {
         assert!(
             m.take_skip_request(true),
             "an elapsed hold advances with no Ready presses at all"
+        );
+    }
+
+    /// Report #506: a Ready press is a vote for the state it was pressed in. When
+    /// that state ended on its TIMER, the partial vote set survived — only a
+    /// unanimous skip cleared it — so it carried through the live round into the
+    /// next `ChooseLoadout`. Prod (gsid e9514ee0, 2026-11-13): HauDrauf pressed
+    /// Ready on the opponent showcase at 10:24:54, his opponent never did, the
+    /// showcase timed out; after round 1 the opponent pressed Ready 3 s into the
+    /// 20 s loadout screen and the server counted HauDrauf's stale press as the
+    /// second vote — "all 2 player(s) pressed Ready, slots [0, 1]" — closing the
+    /// screen while he was still choosing.
+    #[test]
+    fn a_ready_vote_does_not_survive_a_state_that_timed_out() {
+        let now = std::time::Instant::now();
+        let mut m = super::MatchInstance::new(2, 2, vec![], now);
+        m.skip_state_requested.insert(0);
+        assert!(
+            m.take_skip_request(true),
+            "the hold elapsed — the state advances on its timer"
+        );
+        m.skip_state_requested.insert(1);
+        assert!(
+            !m.take_skip_request(false),
+            "slot 0 pressed Ready in the PREVIOUS state; only slot 1 has readied in this one"
         );
     }
 
@@ -3016,6 +3073,114 @@ pub(in crate::arena::combat) mod tests {
     ///
     /// Before the fix `player_profile` hardcoded `.bool(6, false)`, so every opponent
     /// rendered with their helmet on. Reverting that hardcode turns this test RED.
+    /// A c2s op20 `PlayerInfo` in the retail shape (s506/s615/s616): Player obj,
+    /// role Autonomous, gmid 20, identity strings, p20 Bool HideHelmet.
+    fn op20_player_info(player_obj: i32, name: &str, hide_helmet: bool) -> Vec<u8> {
+        let mut w = arena_proto::NetDataWriter::new();
+        w.int(0, player_obj)
+            .byte(1, 57)
+            .byte(2, 3)
+            .byte(3, 20)
+            .string(4, name)
+            .string(5, "38c987fd-c42b-4ea6-b869-c8d4c03055f9")
+            .string(6, "psess-a02cc6d2-4f68-6cb6-6599-05c28c5ed98e")
+            .string(7, "token")
+            .string(10, "1.31.0.3481802.17285707")
+            .byte(12, 11)
+            .int(13, 1008)
+            .int(14, 2131)
+            .byte(15, 1)
+            .int(16, 86)
+            .int(17, 78)
+            .bool(20, hide_helmet)
+            .string(21, "9e33d31d-8fa6-4809-8f88-9c8dc5d65f3f");
+        messages::frame_for_test(w.finish())
+    }
+
+    /// Report #508: "many players wear their helmet in round 1 but not in round 2".
+    ///
+    /// The client reports HideHelmet twice: in its op20 `PlayerInfo` on connect
+    /// (propId 20), and in op61 — which it sends only at the between-rounds
+    /// `AwaitingClientBackendSynchronization` state. We read only op61, so the
+    /// round-START profile always said "helmet on", and the op61 at the first round
+    /// transition flipped it off for round 2. The op20 value must reach the round-1
+    /// profile. Removing the op20 read turns this RED.
+    #[test]
+    fn round_one_profile_carries_hide_helmet_from_player_info() {
+        let now = Instant::now();
+        let mk = |name: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.to_string();
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
+            l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+            l
+        };
+        let is_profile = |b: &[u8]| {
+            b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
+        };
+        let mut m = MatchInstance::new(2, 2, vec![mk("Alice"), mk("Bob")], now);
+        // Both clients connect and send PlayerInfo; Bob hides his helmet.
+        let bob_obj = m.combat.fighters[1].player_net_object_id;
+        let alice_obj = m.combat.fighters[0].player_net_object_id;
+        let early = m.on_c2s(1, &op20_player_info(bob_obj, "Bob", true), now);
+        m.on_c2s(0, &op20_player_info(alice_obj, "Alice", false), now);
+        assert!(
+            !early.iter().any(|(_, b)| is_profile(b)),
+            "op20 before the round-start burst must not send a profile early"
+        );
+
+        m.on_tick(2, now);
+        let setup = m.on_tick(2, now + MATCH_SETUP_STAGGER);
+        let to_alice = setup
+            .iter()
+            .find(|(v, b)| *v == 0 && is_profile(b))
+            .expect("round-start profile of Bob to Alice");
+        assert_eq!(
+            arena_proto::parse_netdata(&to_alice.1[2..]).int(6),
+            Some(1),
+            "round 1: Alice must see Bob WITHOUT a helmet"
+        );
+        let to_bob = setup
+            .iter()
+            .find(|(v, b)| *v == 1 && is_profile(b))
+            .expect("round-start profile of Alice to Bob");
+        assert_eq!(
+            arena_proto::parse_netdata(&to_bob.1[2..]).int(6),
+            Some(0),
+            "Alice keeps her helmet"
+        );
+
+        // Round transition: Bob's op61 repeats the same value — no flip, no resend.
+        let op61 = messages::loadout_client_backend_synchronized(
+            bob_obj,
+            crate::arena::combat::state::NetRole::Autonomous,
+            true,
+        );
+        let out = m.on_c2s(1, &op61, now + MATCH_SETUP_STAGGER);
+        assert!(
+            !out.iter().any(|(_, b)| is_profile(b)),
+            "an unchanged op61 is not a change"
+        );
+    }
+
+    #[test]
+    fn player_info_hide_helmet_reads_prop_20() {
+        assert_eq!(
+            messages::player_info_hide_helmet(&op20_player_info(115, "Flappety", true)),
+            Some(true)
+        );
+        assert_eq!(
+            messages::player_info_hide_helmet(&op20_player_info(115, "Taheen", false)),
+            Some(false)
+        );
+        let op61 = messages::loadout_client_backend_synchronized(
+            115,
+            crate::arena::combat::state::NetRole::Autonomous,
+            true,
+        );
+        assert_eq!(messages::player_info_hide_helmet(&op61), None);
+    }
+
     #[test]
     fn profile_relays_the_senders_hide_helmet() {
         let now = Instant::now();
@@ -4001,6 +4166,64 @@ pub(in crate::arena::combat) mod tests {
             m.match_state_for_test(),
             MatchState::AwaitingClientBackendSynchronization,
             "one op57 = one state; the latch is consumed, not banked"
+        );
+    }
+
+    /// Report #506, end to end: a Ready press cast before the loadout screen must not
+    /// count on it. Slot 0 presses Ready in the pre-ChooseLoadout dwell, slot 1 does not,
+    /// and ChooseLoadout(8) arrives on its timer. Slot 1 then presses Ready 5 s into the
+    /// 20 s dwell — the loadout screen must stay open for slot 0, who has not readied
+    /// THERE. Before the fix the stale press made it "all 2 player(s) pressed Ready" and
+    /// the walk jumped to AwaitingClientBackendSynchronization (prod gsid e9514ee0).
+    #[test]
+    fn a_stale_ready_press_does_not_close_the_next_loadout_screen() {
+        let (mut m, t0) = live_inst(2);
+        let (_death, t) = swing_until_death(&mut m, 0, t0);
+        assert_eq!(m.phase(), FlowState::NextState);
+
+        // Slot 0 readies before the loadout screen appears; slot 1 does not.
+        let mut now = t + Duration::from_millis(100);
+        m.on_tick(2, now);
+        assert_ne!(m.match_state_for_test(), MatchState::ChooseLoadout);
+        let op57_a = c2s_handshake(m.combat.fighters[0].player_net_object_id, 57);
+        assert!(m.on_c2s(0, &op57_a, now).is_empty());
+
+        // The walk reaches ChooseLoadout on its timer.
+        for _ in 0..60 {
+            now += Duration::from_millis(100);
+            m.on_tick(2, now);
+            if m.match_state_for_test() == MatchState::ChooseLoadout {
+                break;
+            }
+        }
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::ChooseLoadout,
+            "the walk reached the loadout screen"
+        );
+
+        // 5 s into the 20 s dwell, ONLY slot 1 presses Ready.
+        now += Duration::from_secs(5);
+        let op57_b = c2s_handshake(m.combat.fighters[1].player_net_object_id, 57);
+        assert!(m.on_c2s(1, &op57_b, now).is_empty());
+        now += Duration::from_millis(100);
+        m.on_tick(2, now);
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::ChooseLoadout,
+            "slot 0's press belonged to the previous state — the loadout screen stays open"
+        );
+
+        // CONTROL: slot 0 now readies on the loadout screen itself — both have voted
+        // in THIS state, so it advances. Proves the test can see a skip at all.
+        let op57_a2 = c2s_handshake(m.combat.fighters[0].player_net_object_id, 57);
+        assert!(m.on_c2s(0, &op57_a2, now).is_empty());
+        now += Duration::from_millis(100);
+        m.on_tick(2, now);
+        assert_eq!(
+            m.match_state_for_test(),
+            MatchState::AwaitingClientBackendSynchronization,
+            "both players readied on the loadout screen — the walk advances"
         );
     }
 
