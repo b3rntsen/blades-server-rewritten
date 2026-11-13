@@ -59,6 +59,34 @@ pub fn has_mandatory_properties(template: Uuid) -> bool {
     table().contains_key(&template)
 }
 
+/// Properties a ready-made (fixed-template) weapon is GRANTED with on top of its
+/// template's own, as `(template, ENCHANTING property, tier)`. NOT retail.
+///
+/// HauDrauf's rule (tracker #494, 2026-11-11): Witsplinter ("Geistessplitter",
+/// `SigilShop_Ultimate_Witsplinter`) is the only ready-made LIGHT weapon in the
+/// Sigil shop, and its template carries Ravage Magicka but not Ravage Stamina,
+/// while the ready-made heavy and normal ones (Serpentstrike, Breathtaker,
+/// Spiderfang, Thunderfell, Captain Kordan's Saber) carry both at tier 10. It
+/// gets the weapon Ravage Stamina at the template's tier, so it has the pair too.
+/// Revert: delete the entry.
+const GRANT_EXTRA_ENCHANTING: &[(Uuid, Uuid, u64)] = &[(
+    // Witsplinter
+    Uuid::from_u128(0x3d9627f1_81db_496e_8769_6e545d779fa3),
+    crate::enchant_pity::RAVAGE_STAMINA,
+    10,
+)];
+
+/// The ENCHANTING properties a newly granted instance of `template` carries on
+/// top of its template's mandatory ones — empty for every template but the
+/// few in [`GRANT_EXTRA_ENCHANTING`].
+pub fn grant_extra_enchanting(template: Uuid) -> Vec<blades_lib::user_data::ItemSingleProperty> {
+    GRANT_EXTRA_ENCHANTING
+        .iter()
+        .filter(|(t, _, _)| *t == template)
+        .map(|&(_, id, tier)| blades_lib::user_data::ItemSingleProperty { id, tier })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

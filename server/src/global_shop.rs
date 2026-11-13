@@ -1323,15 +1323,22 @@ fn grant_from_offer_contents_with_enchanting(
             } else {
                 repair_data.max_durability(entry.item_template_id, entry.tempering_level)?
             };
+            let mut authored_enchanting: Vec<blades_lib::user_data::ItemSingleProperty> = entry
+                .enchanting
+                .iter()
+                .map(|p| blades_lib::user_data::ItemSingleProperty {
+                    id: p.id,
+                    tier: p.tier,
+                })
+                .collect();
+            // A ready-made weapon given an extra Ravage by rule (#494).
+            for extra in crate::fixed_templates::grant_extra_enchanting(entry.item_template_id) {
+                if !authored_enchanting.iter().any(|p| p.id == extra.id) {
+                    authored_enchanting.push(extra);
+                }
+            }
             let properties = blades_lib::user_data::ItemPropertiesAll {
-                enchanting: entry
-                    .enchanting
-                    .iter()
-                    .map(|p| blades_lib::user_data::ItemSingleProperty {
-                        id: p.id,
-                        tier: p.tier,
-                    })
-                    .collect(),
+                enchanting: authored_enchanting,
                 // The rolled grade when this offer leaves it to a roll, the
                 // authored one otherwise.
                 grading: rolled_grading.clone().unwrap_or_else(|| {
@@ -3227,7 +3234,13 @@ mod offer_contents_fallback {
             ) else {
                 continue;
             };
-            if built.items.len() != 1 {
+            if built.items.len() != 1
+                || !crate::fixed_templates::grant_extra_enchanting(
+                    built.items[0].item.item_template_id,
+                )
+                .is_empty()
+            {
+                // Not retail by rule (#494); see `fixed_templates`.
                 continue;
             }
             compared += 1;
@@ -3249,6 +3262,66 @@ mod offer_contents_fallback {
             matched * 100 >= compared * 90,
             "only {matched}/{compared} reconstructions match the recorded retail instance"
         );
+    }
+
+    /// Tracker #494 (HauDrauf's rule): the ready-made light weapon Witsplinter is
+    /// sold with BOTH weapon Ravages, like the ready-made heavy and one-handed
+    /// ones. Its template authors only Ravage Magicka; the grant adds Stamina.
+    /// Red before the rule: the granted instance had no ENCHANTING at all.
+    #[test]
+    fn witsplinter_is_sold_with_double_ravage() {
+        use crate::enchant_pity::{RAVAGE_MAGICKA, RAVAGE_STAMINA};
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let offer_id = Uuid::parse_str("00a7ea9f-d096-414e-a904-49db79bb9eb6").unwrap();
+        let contents = sd
+            .global_shop_offer_contents
+            .get(&offer_id)
+            .expect("SigilShop_Ultimate_Witsplinter offer present");
+        let witsplinter = contents.contents[0].item_template_id;
+        let template = crate::arena::combat::gamedata::mandatory_properties(
+            &witsplinter.as_hyphenated().to_string(),
+        );
+        assert!(
+            template
+                .iter()
+                .any(|(p, _)| p.parse::<Uuid>().unwrap() == RAVAGE_MAGICKA)
+        );
+        assert!(
+            !template
+                .iter()
+                .any(|(p, _)| p.parse::<Uuid>().unwrap() == RAVAGE_STAMINA)
+        );
+        let r = grant_from_offer_contents_with_enchanting(
+            Some(contents),
+            &repair_data(),
+            item_table(),
+            &sd.enchanting,
+            7,
+        )
+        .expect("Witsplinter offer grantable");
+        let item = &r.items[0].item;
+        assert_eq!(item.item_template_id, witsplinter);
+        assert_eq!(
+            item.properties.enchanting,
+            vec![blades_lib::user_data::ItemSingleProperty {
+                id: RAVAGE_STAMINA,
+                tier: 10
+            }]
+        );
+        assert_eq!(item.grade, None);
+
+        // Control: another ready-made weapon (Maul of the Aureal) is unchanged.
+        let maul = Uuid::parse_str("0a483ead-7f07-49a9-8063-13ca864acc67").unwrap();
+        let r = grant_from_offer_contents_with_enchanting(
+            sd.global_shop_offer_contents.get(&maul),
+            &repair_data(),
+            item_table(),
+            &sd.enchanting,
+            7,
+        )
+        .expect("Maul offer grantable");
+        assert!(r.items[0].item.properties.enchanting.is_empty());
     }
 
     /// Tracker #403: a THEMED Sigil ring — APK-authored GRADING and ENCHANTING —
