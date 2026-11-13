@@ -2722,6 +2722,19 @@ pub(crate) async fn complete_quest_in_tx(
     let wallet = entry.wallet.0.clone();
     let character = entry.character.0.clone();
     let is_job = jobs_gen::is_job_row(&quest_entry.info.0);
+    if is_job {
+        // Community hunt counter (d48, #498): a no-op unless an event window is
+        // open, and it cannot fail this completion — see `community_hunt`.
+        crate::community_hunt::record_job_completion(
+            conn,
+            user_id,
+            character_id,
+            quest_id,
+            jobs_gen::location_type(quest_entry.info.0.job_dungeon_template_id),
+            now,
+        )
+        .await;
+    }
     let mut response_quests = Vec::new();
     let mut response_jobs = Vec::new();
     let mut response_generated_data = Vec::new();
@@ -4148,6 +4161,41 @@ pub(crate) mod jobs_gen {
         v.as_str().map(|s| s.to_string())
     }
 
+    /// Where a job was done, as the job board names its kit: `cave`, `forest`,
+    /// `dungeon` (the stone kit), `ayleid`, or `arena` for a Duel's arena layout.
+    /// `unknown` for no template or one the board does not know.
+    ///
+    /// Read off the same `job_localization.json` the board's names are rolled from,
+    /// so the counter and the job's displayed location cannot disagree: a job named
+    /// `UI.Jobs.Location.Name.Cave.*` counts as a cave.
+    pub fn location_type(dungeon_template_id: Option<Uuid>) -> &'static str {
+        let Some(id) = dungeon_template_id else {
+            return "unknown";
+        };
+        let id = id.to_string();
+        let Some(entry) = job_localization()
+            .get("dungeons")
+            .and_then(|d| d.get(id.as_str()))
+        else {
+            return "unknown";
+        };
+        match entry.get("kitName").and_then(|k| k.as_str()) {
+            Some("Kit_Cave_Name") => "cave",
+            Some("Kit_Forest_Name") => "forest",
+            Some("Kit_StoneDungeon_Name") => "dungeon",
+            Some("Kit_Ayleid_Name") => "ayleid",
+            Some(_) => "unknown",
+            None if entry["locations"].as_array().is_some_and(|l| {
+                l.iter()
+                    .any(|v| v.as_str().is_some_and(|s| s.starts_with("UI.Arena.")))
+            }) =>
+            {
+                "arena"
+            }
+            None => "unknown",
+        }
+    }
+
     fn kit_name(dungeon_template_id: &str) -> Option<String> {
         job_localization()
             .get("dungeons")?
@@ -4738,6 +4786,11 @@ pub(crate) mod jobs_gen {
             rewards: None,
             final_reward: None,
             job_reward: Some(job_completion_reward(job)),
+            job_dungeon_template_id: job
+                .get("jobSetup")
+                .and_then(|s| s.get("dungeonTemplateId"))
+                .and_then(|v| v.as_str())
+                .and_then(|v| Uuid::parse_str(v).ok()),
             completed: false,
         };
         Some(QuestDbEntry {
@@ -9293,6 +9346,7 @@ mod completed_quests_key_tests {
             rewards: None,
             final_reward: None,
             job_reward: None,
+            job_dungeon_template_id: None,
             completed: false,
         }
     }
@@ -9375,6 +9429,7 @@ mod story_quest_difficulty_repair {
             rewards: None,
             final_reward: None,
             job_reward: None,
+            job_dungeon_template_id: None,
         }
     }
 
@@ -11020,12 +11075,12 @@ mod report365_event_row_heal_tests {
 ///
 /// They SKIP without TEST_DATABASE_URL (CI provides one) rather than failing.
 #[cfg(test)]
-mod report353_quest_town_xp_db {
+pub(crate) mod report353_quest_town_xp_db {
     use super::*;
     use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
     use std::sync::OnceLock;
 
-    const NOW: i64 = 1_777_852_800;
+    pub(crate) const NOW: i64 = 1_777_852_800;
     /// MQ04 "Rebuild the Town Hall": retail capture 6206 paid `townXp` 200 and
     /// answered `town: {levelInfo: {level: 1, experiencePoints: 725},
     /// validationFlags: 0}` — the town stood at 525 one request earlier (6202).
@@ -11046,10 +11101,10 @@ mod report353_quest_town_xp_db {
             info JSONB NOT NULL, generated_data JSONB NOT NULL, dungeon_state JSONB, \
             initial_state JSONB, PRIMARY KEY (id, character_id));";
 
-    struct World {
+    pub(crate) struct World {
         dir: std::path::PathBuf,
         sd: blades_lib::static_data::StaticData,
-        gd: blades_lib::game_data::GameData,
+        pub(crate) gd: blades_lib::game_data::GameData,
         building_upgrades: Value,
         repair: RepairData,
     }
@@ -11058,7 +11113,7 @@ mod report353_quest_town_xp_db {
         serde_json::from_str(&std::fs::read_to_string(dir.join("parsed.json")).unwrap()).unwrap()
     }
 
-    fn world() -> &'static World {
+    pub(crate) fn world() -> &'static World {
         static WORLD: OnceLock<World> = OnceLock::new();
         WORLD.get_or_init(|| {
             let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
@@ -11075,7 +11130,7 @@ mod report353_quest_town_xp_db {
         })
     }
 
-    fn statics() -> crate::town::TownStatics<'static> {
+    pub(crate) fn statics() -> crate::town::TownStatics<'static> {
         let w = world();
         crate::town::TownStatics {
             static_data_path: &w.dir,
@@ -11084,7 +11139,7 @@ mod report353_quest_town_xp_db {
         }
     }
 
-    async fn fixture() -> Option<AsyncPgConnection> {
+    pub(crate) async fn fixture() -> Option<AsyncPgConnection> {
         let url = std::env::var("TEST_DATABASE_URL").ok()?;
         let mut conn = AsyncPgConnection::establish(&url)
             .await
@@ -11121,7 +11176,7 @@ mod report353_quest_town_xp_db {
 
     /// A character holding one quest row built from `quest`; returns
     /// `(user, character, quest_id)`.
-    async fn seed(conn: &mut AsyncPgConnection, quest: Value) -> (Uuid, Uuid, Uuid) {
+    pub(crate) async fn seed(conn: &mut AsyncPgConnection, quest: Value) -> (Uuid, Uuid, Uuid) {
         let (user, character, quest_id) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         diesel::sql_query(
             "INSERT INTO characters (id, user_id, character, data, inventory, wallet, town, server_state) \
@@ -11164,7 +11219,7 @@ mod report353_quest_town_xp_db {
         (user, character, quest_id)
     }
 
-    fn quest_row(kind: &str, gld: Uuid) -> Value {
+    pub(crate) fn quest_row(kind: &str, gld: Uuid) -> Value {
         json!({
             "version": 1, "type": kind, "objectiveStatuses": {},
             "difficultyLevel": -1, "seed": 1, "gldQuestId": gld, "completed": false,
@@ -11187,7 +11242,7 @@ mod report353_quest_town_xp_db {
             .expect("a town")
     }
 
-    async fn complete(
+    pub(crate) async fn complete(
         conn: &mut AsyncPgConnection,
         (user, character, quest): (Uuid, Uuid, Uuid),
     ) -> Value {

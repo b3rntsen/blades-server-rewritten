@@ -78,6 +78,7 @@ pub fn generate_quest_data(
         final_reward: None,
         // Not a town job: jobs are built by `server::quest::jobs_gen`, never here.
         job_reward: None,
+        job_dungeon_template_id: None,
     };
 
     // Nil-dungeon (dialogue-only) quests have no dungeon to generate — short-circuit to a
@@ -401,6 +402,7 @@ fn dialogue_quest(
         rewards: None,
         final_reward: None,
         job_reward: None,
+        job_dungeon_template_id: None,
     }
 }
 
