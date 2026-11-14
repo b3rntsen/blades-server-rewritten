@@ -397,6 +397,141 @@ pub async fn get_arena_h2h_guilds(
     Ok(Json(value))
 }
 
+// ---- Humans: the season's matches -------------------------------------------
+
+/// A player in [`H2hMatchesResponse`]: the alt and its name (empty when the alt
+/// no longer exists). Public: no account id.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct H2hMatchPlayer {
+    pub character_id: Uuid,
+    pub alt_key: Uuid,
+    pub name: String,
+}
+
+/// One match; `a`/`b` index [`H2hMatchesResponse::players`].
+#[derive(Serialize, Debug, PartialEq)]
+pub struct H2hMatchRow {
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub a: usize,
+    pub b: usize,
+    pub a_rounds: i64,
+    pub b_rounds: i64,
+    pub a_before: i64,
+    pub a_after: i64,
+    pub b_before: i64,
+    pub b_after: i64,
+}
+
+#[derive(Serialize)]
+pub struct H2hMatchesResponse {
+    pub season: Option<H2hSeasonSummary>,
+    pub players: Vec<H2hMatchPlayer>,
+    pub matches: Vec<H2hMatchRow>,
+}
+
+/// Index the log's players and name them from the board rows (all of them,
+/// `min_games` 0), so a name is sent once however many matches it played.
+pub fn h2h_matches_payload(
+    log: Vec<ranking::H2hMatchLogEntry>,
+    named: &[ranking::H2hBoardEntry],
+) -> (Vec<H2hMatchPlayer>, Vec<H2hMatchRow>) {
+    let names: HashMap<ranking::H2hKey, &str> = named
+        .iter()
+        .map(|e| {
+            (
+                ranking::H2hKey::new(e.character_id, e.alt_key),
+                e.name.as_str(),
+            )
+        })
+        .collect();
+    let mut index: HashMap<ranking::H2hKey, usize> = HashMap::new();
+    let mut players = Vec::new();
+    let mut idx = |k: ranking::H2hKey, players: &mut Vec<H2hMatchPlayer>| {
+        *index.entry(k).or_insert_with(|| {
+            players.push(H2hMatchPlayer {
+                character_id: k.character_id,
+                alt_key: k.alt_key,
+                name: names.get(&k).copied().unwrap_or("").to_string(),
+            });
+            players.len() - 1
+        })
+    };
+    let matches = log
+        .into_iter()
+        .map(|m| H2hMatchRow {
+            at: m.at,
+            a: idx(m.a, &mut players),
+            b: idx(m.b, &mut players),
+            a_rounds: m.a_rounds,
+            b_rounds: m.b_rounds,
+            a_before: m.a_before,
+            a_after: m.a_after,
+            b_before: m.b_before,
+            b_after: m.b_after,
+        })
+        .collect();
+    (players, matches)
+}
+
+/// `GET /api/dev/v1/arena-ranking/h2h-matches?season=current|all|<uuid>` — every
+/// human-vs-human match of the season with the ratings it moved, replayed exactly
+/// as the reconcile that writes the board replays it.
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-matches")]
+pub async fn get_arena_h2h_matches(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<BoardQuery>,
+) -> Result<Json<Value>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let selection = ranking::parse_h2h_season_selection(query.season.as_deref())
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 86))?;
+    let key = format!("h2h-matches:{selection:?}");
+    if let Some(v) = cached(&key) {
+        return Ok(Json(v));
+    }
+    let cfg = ranking::load(&app_state.db_pool).await.config.h2h_rating;
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(BladeApiError::generic_internal_error)?;
+    let season = match selection {
+        ranking::H2hSeasonSelection::AllTime => None,
+        ranking::H2hSeasonSelection::Current => active_season(&mut conn).await?,
+        ranking::H2hSeasonSelection::Season(season_id) => Some(
+            diesel::sql_query(
+                "SELECT id, name, starts_at, ends_at FROM arena_seasons WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(season_id)
+            .get_result::<H2hSeasonSummary>(&mut conn)
+            .await
+            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 87))?,
+        ),
+    };
+    let (players, matches) =
+        if matches!(selection, ranking::H2hSeasonSelection::Current) && season.is_none() {
+            (Vec::new(), Vec::new())
+        } else {
+            let season_id = season.as_ref().map(|s| s.id);
+            let log = ranking::load_h2h_match_log(&mut conn, &cfg, season_id)
+                .await
+                .map_err(|e| {
+                    log::warn!("arena h2h match log failed: {e}");
+                    BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 88)
+                })?;
+            let named = ranking::h2h_board(&mut conn, season_id, 0, ALL_BOARD_ROWS).await?;
+            h2h_matches_payload(log, &named)
+        };
+    let value = serde_json::to_value(H2hMatchesResponse {
+        season,
+        players,
+        matches,
+    })
+    .map_err(BladeApiError::generic_internal_error)?;
+    store(key, &value);
+    Ok(Json(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,6 +546,52 @@ mod tests {
             ties: 0,
             matches,
         }
+    }
+
+    /// Players are sent once and referenced by index; an alt the board cannot
+    /// name (deleted) still appears, with an empty name.
+    #[test]
+    fn match_payload_indexes_and_names_players_once() {
+        let k = |n: u128| ranking::H2hKey::new(Uuid::from_u128(n), Uuid::from_u128(n + 100));
+        let at = chrono::DateTime::<chrono::Utc>::from_timestamp(1_762_000_000, 0).unwrap();
+        let m = |a, b| ranking::H2hMatchLogEntry {
+            at,
+            a,
+            b,
+            a_rounds: 2,
+            b_rounds: 0,
+            a_before: 1000,
+            a_after: 1024,
+            b_before: 1000,
+            b_after: 976,
+        };
+        let entry = |n: u128, name: &str| ranking::H2hBoardEntry {
+            rank: 1,
+            character_id: Uuid::from_u128(n),
+            alt_key: Uuid::from_u128(n + 100),
+            name: name.into(),
+            level: 10,
+            guild_id: None,
+            guild_name: None,
+            rating: 1000,
+            wins: 0,
+            losses: 0,
+            ties: 0,
+            matches: 0,
+            last_match_at: None,
+        };
+        let (players, rows) = h2h_matches_payload(
+            vec![m(k(1), k(2)), m(k(2), k(3)), m(k(1), k(3))],
+            &[entry(1, "Ana"), entry(2, "Bo")],
+        );
+        assert_eq!(
+            players.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Ana", "Bo", ""]
+        );
+        assert_eq!(
+            rows.iter().map(|r| (r.a, r.b)).collect::<Vec<_>>(),
+            [(0, 1), (1, 2), (0, 2)]
+        );
     }
 
     /// The humans guild score is the game's guild rule on h2h ratings: the SAME

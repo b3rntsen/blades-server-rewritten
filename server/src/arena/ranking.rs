@@ -669,7 +669,7 @@ impl H2hRatingState {
 /// (tracker #373). `alt_key` is the match row's `source_alt_uuid`; for a row
 /// recorded before alts were tracked, the alt live now; for a character that has
 /// never had an alt id, the character id itself — see [`H2H_REPLAY_ROWS_CTE`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize)]
 pub struct H2hKey {
     pub character_id: Uuid,
     pub alt_key: Uuid,
@@ -820,6 +820,75 @@ fn apply_h2h_row<K: Ord + Copy>(
     let (a, b) = apply_h2h_rating(config, a, b, outcome);
     ratings.insert(a_id, a);
     ratings.insert(b_id, b);
+}
+
+/// One human-vs-human match as the rating replay saw it: both sides, the score
+/// and each side's rating before and after. The website's per-player match
+/// lists and head-to-head matrix are built from this (tracker: "see the matches
+/// of everyone" on the Top 100), so they show the board's own numbers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct H2hMatchLogEntry {
+    pub at: DateTime<Utc>,
+    pub a: H2hKey,
+    pub b: H2hKey,
+    pub a_rounds: i64,
+    pub b_rounds: i64,
+    pub a_before: i64,
+    pub a_after: i64,
+    pub b_before: i64,
+    pub b_after: i64,
+}
+
+/// Replay `rows` (already in `recorded_at, id` order and already restricted to
+/// one season, or all-time) through [`apply_h2h_row`] — the step the reconcile
+/// uses — recording each match. The last `*_after` of a key is its rating in
+/// [`replay_h2h_ratings_by_season`] for the same rows.
+pub fn h2h_match_log<I>(config: &H2hRatingConfig, rows: I) -> Vec<H2hMatchLogEntry>
+where
+    I: IntoIterator<Item = (DateTime<Utc>, H2hKey, H2hKey, MatchOutcome)>,
+{
+    let mut ratings: BTreeMap<H2hKey, H2hRatingState> = BTreeMap::new();
+    let mut log = Vec::new();
+    for (at, a, b, outcome) in rows {
+        let before = |k: &H2hKey| ratings.get(k).map(|s| s.rating).unwrap_or(config.start);
+        let (a_before, b_before) = (before(&a), before(&b));
+        apply_h2h_row(config, &mut ratings, a, b, outcome);
+        log.push(H2hMatchLogEntry {
+            at,
+            a,
+            b,
+            a_rounds: outcome.rounds_won as i64,
+            b_rounds: outcome.rounds_lost as i64,
+            a_before,
+            a_after: ratings[&a].rating,
+            b_before,
+            b_after: ratings[&b].rating,
+        });
+    }
+    log
+}
+
+/// The match log of one season (`Some(id)`) or of all time (`None`), from the
+/// same rows (`H2H_REPLAY_ROWS_CTE`) and order the reconcile replays.
+pub async fn load_h2h_match_log(
+    conn: &mut AsyncPgConnection,
+    config: &H2hRatingConfig,
+    season: Option<Uuid>,
+) -> Result<Vec<H2hMatchLogEntry>, anyhow::Error> {
+    let rows = load_h2h_replay_rows(conn).await?;
+    Ok(h2h_match_log(
+        config,
+        rows.iter()
+            .filter(|r| season.is_none() || r.season_id == season)
+            .map(|r| {
+                (
+                    r.recorded_at,
+                    r.key(),
+                    r.opponent_key(),
+                    MatchOutcome::new(r.rounds_won.max(0) as u8, r.rounds_lost.max(0) as u8),
+                )
+            }),
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1282,6 +1351,67 @@ mod tests {
 
     fn loss02() -> MatchOutcome {
         MatchOutcome::new(0, 2)
+    }
+
+    /// The match log is the reconcile's replay, step by step: every match carries
+    /// the ratings it moved, and each player's last `after` is the rating the
+    /// season board stores for them.
+    #[test]
+    fn match_log_ends_at_the_season_board_ratings() {
+        let cfg = H2hRatingConfig::default();
+        let season = Uuid::from_u128(9);
+        let k = |n: u128| H2hKey::new(Uuid::from_u128(n), Uuid::from_u128(n + 100));
+        let t = |m: i64| DateTime::<Utc>::from_timestamp(1_762_000_000 + m * 60, 0).unwrap();
+        let games = [
+            (k(1), k(2), win20()),
+            (k(1), k(3), MatchOutcome::new(2, 1)),
+            (k(2), k(3), loss02()),
+            (k(3), k(1), MatchOutcome::new(1, 1)),
+            (k(1), k(2), win20()),
+        ];
+        let log = h2h_match_log(
+            &cfg,
+            games
+                .iter()
+                .enumerate()
+                .map(|(i, (a, b, o))| (t(i as i64), *a, *b, *o)),
+        );
+        assert_eq!(log.len(), 5);
+        // First match: both start at 1000, provisional K 48, an even match.
+        assert_eq!(
+            (
+                log[0].a_before,
+                log[0].a_after,
+                log[0].b_before,
+                log[0].b_after
+            ),
+            (1000, 1024, 1000, 976)
+        );
+        assert_eq!((log[1].a_rounds, log[1].b_rounds), (2, 1));
+        // Each match starts from where the previous one left that player.
+        assert_eq!(log[1].a_before, log[0].a_after);
+        assert_eq!(log[2].a_before, log[0].b_after);
+        let board = replay_h2h_ratings_by_season(
+            &cfg,
+            games.iter().map(|(a, b, o)| (Some(season), *a, *b, *o)),
+        );
+        let season_board = &board.seasons[&season];
+        for (key, state) in season_board {
+            let last = log
+                .iter()
+                .rev()
+                .find_map(|m| {
+                    if m.a == *key {
+                        Some(m.a_after)
+                    } else if m.b == *key {
+                        Some(m.b_after)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(last, state.rating, "{key:?}");
+        }
     }
 
     #[test]

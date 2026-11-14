@@ -785,6 +785,7 @@ async fn main() -> Result<()> {
                     .service(arena::top100_boards::get_arena_game_top)
                     .service(arena::top100_boards::get_arena_game_guilds)
                     .service(arena::top100_boards::get_arena_h2h_guilds)
+                    .service(arena::top100_boards::get_arena_h2h_matches)
                     .service(admin::rebuild_arena_h2h_ratings)
                     .service(admin::get_current_character)
                     .service(admin::set_current_character_name)
