@@ -22,6 +22,7 @@ pub mod pvp_tuning;
 pub mod ranking;
 pub mod season_rewards;
 pub mod season_store;
+pub mod monthly_matches;
 pub mod top100_boards;
 pub mod udp;
 

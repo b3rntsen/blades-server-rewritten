@@ -48,14 +48,14 @@ fn cache() -> &'static Mutex<HashMap<String, (Instant, Value)>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn cached(key: &str) -> Option<Value> {
+pub(crate) fn cached(key: &str) -> Option<Value> {
     let map = cache().lock().ok()?;
     map.get(key)
         .filter(|(at, _)| at.elapsed() < CACHE_TTL)
         .map(|(_, v)| v.clone())
 }
 
-fn store(key: String, value: &Value) {
+pub(crate) fn store(key: String, value: &Value) {
     if let Ok(mut map) = cache().lock() {
         map.retain(|_, (at, _)| at.elapsed() < CACHE_TTL);
         if map.len() >= CACHE_MAX_KEYS {
