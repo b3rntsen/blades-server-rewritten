@@ -2224,6 +2224,7 @@ fn apply_ability_impact(
     use super::state::AbilityTag;
     let mut out: Vec<(usize, Vec<u8>)> = Vec::new();
     let mut last_hit_total = 0.0f32;
+    let mut last_hit_poison = 0.0f32;
     // Did the TARGET's guard take this cast's hit? Guardbreaker and Staggering Bash
     // ship the SAME `_damageToCauseStagger` but opposite block conditions, and
     // Harrying Bash is gated on it too, so `apply_shipped_effects` needs to know.
@@ -2387,6 +2388,7 @@ fn apply_ability_impact(
             target_blocked = resolved.blocked;
             let emitted = emit_damage_with_outcome(combat, sender, target_slot, &resolved, now);
             last_hit_total = emitted.health_damage;
+            last_hit_poison = emitted.poison_damage;
             out.extend(emitted.frames);
             // A weapon maneuver's hit increments the chain (01 F), and the maneuver's
             // end then resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R9).
@@ -2434,6 +2436,7 @@ fn apply_ability_impact(
             target_blocked = resolved.blocked;
             let emitted = emit_damage_with_outcome(combat, sender, target_slot, &resolved, now);
             last_hit_total = emitted.health_damage;
+            last_hit_poison = emitted.poison_damage;
             out.extend(emitted.frames);
             // THUNDERSTORM is not a DoT — it ships `_numberOfBolts` (3) over a
             // `_duration` (9 s) and a per-BOLT `_damage`, so `channel_ticks` (which
@@ -2537,15 +2540,13 @@ fn apply_ability_impact(
             // (`_damageToCauseParalyze` / `_duration`), applied by
             // `apply_status_conditioning` via the caster's `paralyze_rank`.
             if tag == AbilityTag::Paralyze {
-                // Threshold is checked against the Poison THIS CAST actually landed
-                // (post-negation — `resolved.components` is what survived Ward/Absorb),
-                // not the sliding window. See `try_paralyze`.
-                let cast_poison: f32 = resolved
-                    .components
-                    .iter()
-                    .filter(|(t, _)| *t == super::state::DamageType::Poison)
-                    .map(|(_, v)| *v)
-                    .sum();
+                // Threshold is checked against the Poison THIS CAST actually landed,
+                // AFTER Ward/Absorb/Dodge negation, not the sliding window. See
+                // `try_paralyze`. This used to sum `resolved.components`, which a
+                // comment called post-negation but is not: `emit_damage` drains the
+                // pools on a local copy. So a Ward that swallowed the whole Paralyze
+                // (no HP lost, op66 DamageNegated on the wire) still paralysed (#512).
+                let cast_poison: f32 = last_hit_poison;
                 out.extend(try_paralyze(
                     combat,
                     sender,
@@ -3747,6 +3748,11 @@ struct EmittedDamage {
     frames: Vec<(usize, Vec<u8>)>,
     /// Health-type damage after block, resistance, Ward/Absorb/Dodge, and overflow.
     health_damage: f32,
+    /// Poison damage this hit still carried AFTER Ward/Absorb/Dodge negation — what the
+    /// client's `OnDamage` sees, since `ResolveDamageNegationInstance@0x1c569b4`
+    /// subtracts the negated amount from the hit's own `DamageList` in place. A hit a
+    /// pool swallowed whole carries 0. Paralyze's threshold reads this (#512).
+    poison_damage: f32,
 }
 
 fn emit_damage(
@@ -3820,6 +3826,15 @@ fn emit_damage_with_outcome(
         .map(|(_, v)| *v)
         .sum();
     neg.negated = total <= 0.0;
+    let poison_damage: f32 = if neg.negated {
+        0.0
+    } else {
+        components
+            .iter()
+            .filter(|(t, _)| *t == super::state::DamageType::Poison)
+            .map(|(_, v)| *v)
+            .sum()
+    };
 
     // Whole hit eaten by a Ward/Absorb pool → emit DamageNegated(66), apply the Absorb
     // heal-back, and DO NOT reduce HP (the hit dealt 0). [status-resistance-spec §4]
@@ -3887,6 +3902,7 @@ fn emit_damage_with_outcome(
         return EmittedDamage {
             frames: out,
             health_damage: 0.0,
+            poison_damage,
         };
     }
     let total: f32 = components
@@ -4071,7 +4087,7 @@ fn emit_damage_with_outcome(
         return EmittedDamage {
             frames: out,
             health_damage: total,
-        };
+        poison_damage,        };
     }
 
     // REFLECTING BASH: send part of what just landed back at the attacker, capped by
@@ -4129,7 +4145,7 @@ fn emit_damage_with_outcome(
         return EmittedDamage {
             frames: out,
             health_damage: total,
-        };
+        poison_damage,        };
     }
     if shield_retaliates {
         out.extend(apply_shield_enchant_retaliation(
@@ -4142,7 +4158,7 @@ fn emit_damage_with_outcome(
             return EmittedDamage {
                 frames: out,
                 health_damage: total,
-            };
+            poison_damage,            };
         }
     }
 
@@ -4163,7 +4179,7 @@ fn emit_damage_with_outcome(
     EmittedDamage {
         frames: out,
         health_damage: total,
-    }
+    poison_damage,    }
 }
 
 fn apply_shield_enchant_retaliation(
@@ -13321,6 +13337,68 @@ mod shipped_effects_tests {
         assert!(
             !c.fighters[1].is_paralyzed(),
             "a cast that dealt no poison must not paralyse, however poisoned the target is"
+        );
+    }
+
+    /// #512 (HauDrauf vs Dwalin, 2026-11-14 10:51:22): Dwalin cast a rank-12 Paralyze,
+    /// HauDrauf answered with a rank-1 Ward during its wind-up, the Ward swallowed the
+    /// whole hit (no HP lost, op66 DamageNegated) — and he was paralysed anyway with
+    /// `cast_poison=212.3`, the PRE-Ward number. Drives the real impact path, because
+    /// the `try_paralyze`-only test above passed while the call site fed it raw poison.
+    #[test]
+    fn report512_a_ward_that_eats_the_paralyze_prevents_the_paralysis() {
+        use super::super::state::AbilityTag;
+        let paralyze = "9fdc4d52-ce90-44f8-9b5d-21f31e27dbda";
+        let now = Instant::now();
+
+        let mut control = combat2(now);
+        let hp0 = control.fighters[1].health;
+        let _ = apply_ability_impact(
+            &mut control,
+            0,
+            1,
+            paralyze,
+            12,
+            AbilityTag::Paralyze,
+            false,
+            now,
+            true,
+        );
+        assert!(
+            control.fighters[1].health < hp0,
+            "control: the Paralyze hit lands"
+        );
+        assert!(
+            control.fighters[1].is_paralyzed(),
+            "control: an unwarded rank-12 Paralyze paralyses"
+        );
+
+        let mut warded = combat2(now);
+        let hp0 = warded.fighters[1].health;
+        let _ = apply_ward(&mut warded, 1, 1, now);
+        let out = apply_ability_impact(
+            &mut warded,
+            0,
+            1,
+            paralyze,
+            12,
+            AbilityTag::Paralyze,
+            false,
+            now,
+            true,
+        );
+        assert_eq!(
+            warded.fighters[1].health, hp0,
+            "the Ward negated the whole hit"
+        );
+        let negated = messages::damage_negated(warded.fighters[1].net_object_id);
+        assert!(
+            out.iter().any(|(_, f)| *f == negated),
+            "op66 DamageNegated was sent"
+        );
+        assert!(
+            !warded.fighters[1].is_paralyzed(),
+            "a Paralyze the Ward swallowed whole must not paralyse"
         );
     }
 
