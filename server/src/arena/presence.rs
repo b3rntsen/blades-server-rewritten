@@ -102,6 +102,51 @@ pub struct HeatCell {
 }
 
 #[derive(QueryableByName)]
+struct LiveCounts {
+    #[diesel(sql_type = BigInt)]
+    in_match: i64,
+    #[diesel(sql_type = BigInt)]
+    queuing: i64,
+}
+
+/// The two "right now" counts, computed so that **one person is one person**.
+///
+/// Each user is classified by their NEWEST ticket in the match window:
+///
+/// * queuing — that newest ticket is an unresolved `searching` row inside
+///   [`QUEUE_WINDOW_MIN`];
+/// * in a match — not queuing, and some ticket of theirs matched inside
+///   [`MATCH_WINDOW_MIN`].
+///
+/// The two sets are disjoint, so the page's `in_match + queuing` total never
+/// counts the same player twice. Before this (#509) the counts were two
+/// independent `COUNT(DISTINCT)`s, and a ticket that never resolves to `matched`
+/// — a `MatchmakingFailed` or a cancel leaves its row `searching` forever — kept
+/// its player "queuing" for five minutes after they had re-queued and were
+/// already fighting a bot. A lone player saw "2 in the arena" and read the second
+/// one as an opponent who was never there.
+fn live_counts_sql() -> String {
+    format!(
+        "WITH recent AS ( \
+             SELECT user_id, status, resolved_at, recorded_at FROM arena_matches \
+             WHERE recorded_at > now() - interval '{MATCH_WINDOW_MIN} minutes' \
+         ), latest AS ( \
+             SELECT DISTINCT ON (user_id) user_id, status, resolved_at, recorded_at \
+             FROM recent ORDER BY user_id, recorded_at DESC \
+         ), queuing AS ( \
+             SELECT user_id FROM latest \
+             WHERE status = 'searching' AND resolved_at IS NULL \
+               AND recorded_at > now() - interval '{QUEUE_WINDOW_MIN} minutes' \
+         ) \
+         SELECT \
+             (SELECT COUNT(DISTINCT user_id) FROM recent \
+               WHERE status = 'matched' \
+                 AND user_id NOT IN (SELECT user_id FROM queuing))::bigint AS in_match, \
+             (SELECT COUNT(*) FROM queuing)::bigint AS queuing"
+    )
+}
+
+#[derive(QueryableByName)]
 struct CountRow {
     #[diesel(sql_type = BigInt)]
     n: i64,
@@ -135,22 +180,10 @@ async fn build(
 
     // `get_result::<CountRow>` is the idiom the rest of this module uses for a
     // scalar count; `load` leaves diesel unable to infer the row type here.
-    let in_match_recent = sql_query(format!(
-        "SELECT COUNT(DISTINCT user_id) AS n FROM arena_matches \
-         WHERE status = 'matched' AND recorded_at > now() - interval '{MATCH_WINDOW_MIN} minutes'"
-    ))
-    .get_result::<CountRow>(&mut conn)
-    .await?
-    .n;
-
-    let queuing_recent = sql_query(format!(
-        "SELECT COUNT(DISTINCT user_id) AS n FROM arena_matches \
-         WHERE status = 'searching' AND resolved_at IS NULL \
-           AND recorded_at > now() - interval '{QUEUE_WINDOW_MIN} minutes'"
-    ))
-    .get_result::<CountRow>(&mut conn)
-    .await?
-    .n;
+    let live = sql_query(live_counts_sql())
+        .get_result::<LiveCounts>(&mut conn)
+        .await?;
+    let (in_match_recent, queuing_recent) = (live.in_match, live.queuing);
 
     let humans_24h = sql_query(
         "SELECT COUNT(DISTINCT user_id) AS n FROM arena_matches \
@@ -232,5 +265,110 @@ mod tests {
         let json = serde_json::to_string(&cell).expect("serialises");
         assert!(json.contains("\"dow\":0"));
         assert!(json.contains("\"humans\":1"));
+    }
+
+    mod db_live_counts {
+        use super::*;
+        use diesel_async::{AsyncConnection, AsyncPgConnection};
+        use uuid::Uuid;
+
+        async fn fixture() -> Option<AsyncPgConnection> {
+            let url = std::env::var("TEST_DATABASE_URL").ok()?;
+            let mut conn = AsyncPgConnection::establish(&url)
+                .await
+                .expect("TEST_DATABASE_URL is set but unreachable");
+            conn.begin_test_transaction()
+                .await
+                .expect("test transaction");
+            let schema = format!("t{}", Uuid::new_v4().simple());
+            for stmt in [
+                format!("CREATE SCHEMA {schema}"),
+                format!("SET LOCAL search_path TO {schema}"),
+                "CREATE TABLE arena_matches ( \
+                     ticket_id UUID PRIMARY KEY, user_id UUID NOT NULL, status TEXT NOT NULL, \
+                     game_session_id UUID, paired BOOLEAN NOT NULL DEFAULT FALSE, \
+                     recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_at TIMESTAMPTZ)"
+                    .to_string(),
+            ] {
+                sql_query(stmt).execute(&mut conn).await.unwrap();
+            }
+            Some(conn)
+        }
+
+        /// `ago` seconds back; `resolved` = the row resolved to `matched`.
+        async fn ticket(conn: &mut AsyncPgConnection, user: Uuid, ago: i64, matched: bool) {
+            let (status, resolved) = if matched {
+                ("matched", format!("now() - interval '{} seconds'", ago - 5))
+            } else {
+                ("searching", "NULL".to_string())
+            };
+            sql_query(format!(
+                "INSERT INTO arena_matches (ticket_id, user_id, status, recorded_at, resolved_at) \
+                 VALUES ('{}', '{user}', '{status}', now() - interval '{ago} seconds', {resolved})",
+                Uuid::new_v4()
+            ))
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        async fn counts(conn: &mut AsyncPgConnection) -> (i64, i64) {
+            let c = sql_query(live_counts_sql())
+                .get_result::<LiveCounts>(conn)
+                .await
+                .unwrap();
+            (c.in_match, c.queuing)
+        }
+
+        /// #509, replayed from prod 2026-11-14 05:15-05:20 UTC: one player, alone.
+        /// His first ticket hit MatchmakingFailed (row stays `searching`), he
+        /// re-queued 25 s later and fought a bot. The page must show ONE person,
+        /// fighting — not "1 fighting + 1 queuing" that reads as an opponent.
+        #[tokio::test]
+        async fn a_lone_player_with_a_failed_ticket_is_counted_once() {
+            let Some(mut conn) = fixture().await else {
+                return;
+            };
+            let haudrauf = Uuid::new_v4();
+            ticket(&mut conn, haudrauf, 100, false).await; // failed, never resolved
+            ticket(&mut conn, haudrauf, 75, true).await; // re-queued → vs bot
+            assert_eq!(counts(&mut conn).await, (1, 0));
+        }
+
+        /// A newer search outranks an older match: the player is queuing, once.
+        #[tokio::test]
+        async fn a_player_requeueing_after_a_match_is_queuing_not_both() {
+            let Some(mut conn) = fixture().await else {
+                return;
+            };
+            let p = Uuid::new_v4();
+            ticket(&mut conn, p, 200, true).await;
+            ticket(&mut conn, p, 10, false).await;
+            assert_eq!(counts(&mut conn).await, (0, 1));
+        }
+
+        /// Two different people still count as two.
+        #[tokio::test]
+        async fn two_people_are_two() {
+            let Some(mut conn) = fixture().await else {
+                return;
+            };
+            let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+            ticket(&mut conn, a, 60, true).await;
+            ticket(&mut conn, b, 10, false).await;
+            assert_eq!(counts(&mut conn).await, (1, 1));
+        }
+
+        /// Outside the windows nobody is "now".
+        #[tokio::test]
+        async fn old_rows_count_for_nothing() {
+            let Some(mut conn) = fixture().await else {
+                return;
+            };
+            let p = Uuid::new_v4();
+            ticket(&mut conn, p, 3600, true).await;
+            ticket(&mut conn, p, 400, false).await; // stale search, > 5 min
+            assert_eq!(counts(&mut conn).await, (0, 0));
+        }
     }
 }
