@@ -149,6 +149,13 @@ pub struct ArenaConfig {
     /// queued ticket) and simply does not resolve until the cooldown ends. Cancels
     /// before pairing, and cancels of bot matches, are free. No trophy penalty.
     pub prefight_cancel_cooldown_secs: u64,
+    /// Tracker #506 (decision d45): keep a dropped human's match slot for a grace
+    /// period and resume a reconnect from a NEW IP when it carries the slot's ENet
+    /// CONNECT data and the slot's account has been seen at that IP. Env
+    /// `ARENA_RECONNECT_NEW_IP` (default on; `0` = pre-#506 behaviour) and
+    /// `ARENA_RECONNECT_GRACE_SECS` (default 20). See
+    /// [`ReconnectPolicy`](crate::arena::match_registry::ReconnectPolicy).
+    pub reconnect: crate::arena::match_registry::ReconnectPolicy,
 }
 
 impl ArenaConfig {
@@ -204,6 +211,10 @@ impl ArenaConfig {
             bot_delay_min_secs: parse("ARENA_BOT_DELAY_MIN_SECS", 4),
             bot_delay_max_secs: parse("ARENA_BOT_DELAY_MAX_SECS", 35),
             prefight_cancel_cooldown_secs: parse("ARENA_PREFIGHT_CANCEL_COOLDOWN_SECS", 120),
+            reconnect: crate::arena::match_registry::ReconnectPolicy::from_env_values(
+                env::var("ARENA_RECONNECT_NEW_IP").ok().as_deref(),
+                env::var("ARENA_RECONNECT_GRACE_SECS").ok().as_deref(),
+            ),
         }
     }
 }

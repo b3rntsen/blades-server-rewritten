@@ -580,9 +580,22 @@ async fn main() -> Result<()> {
                         let is_from_blades_api =
                             req.uri().path().starts_with("/blades.bgs.services/");
                         let session_fut = req.extract::<SessionLookedUpMaybe>();
+                        // #506: who is at which IP, for resuming a match after the
+                        // phone changes network (see `ReconnectPolicy`).
+                        let client_ip = arena::matchmaker::trusted_client_ip(req.request());
+                        let arena_registry = req
+                            .app_data::<actix_web::web::Data<Arc<ServerGlobal>>>()
+                            .map(|g| g.arena.registry.clone());
                         let res_fut = srv.call(req);
                         async move {
                             let maybe_session = session_fut.await?;
+                            if let (Ok(session), Some(ip), Some(registry)) = (
+                                maybe_session.get_session_or_error(),
+                                client_ip,
+                                arena_registry,
+                            ) {
+                                registry.note_account_ip(session.session.user_id, ip);
+                            }
                             let request_index =
                                 maybe_session.get_session_or_error().ok().map(|session| {
                                     session

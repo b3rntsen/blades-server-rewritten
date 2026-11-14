@@ -161,6 +161,7 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
     loop {
         while pump(&mut host, &registry, &mut peer_at) {}
         let now = std::time::Instant::now();
+        service_reconnects(&mut host, &registry, &mut peer_at, now);
         // Server-initiated combat output (flow-control heartbeat, damage, etc.).
         // The retail ENet CHANNEL is chosen per-message by (carrier, GameMessageId)
         // in `messages::retail_channel` and threaded here from the registry (computed
@@ -306,23 +307,7 @@ fn pump(
                 // new ENet peer from a new source port, keeps its key, and waits for
                 // the server to speak. Move its slot here and speak first.
                 if let Some(rebind) = registry.note_connect(addr, data) {
-                    info!(
-                        "arena-enet: {} reconnected as {addr} mid-match; replaying {} \
-                         current-state frame(s) and dropping the old peer",
-                        rebind.old_addr,
-                        rebind.replay.len(),
-                    );
-                    // Reset (not disconnect) the abandoned generation: the client has
-                    // already let it go, a reset raises no Disconnect event, and a
-                    // late datagram from it can no longer pull the slot back through
-                    // `rebind_encrypted_peer`.
-                    if let Some(old_pid) = peer_at.remove(&rebind.old_addr) {
-                        host.peer_mut(old_pid).reset();
-                    }
-                    registry.forget_connect(&rebind.old_addr);
-                    for (channel, bytes) in &rebind.replay {
-                        send_to(host, peer_at, &addr, *channel, bytes);
-                    }
+                    apply_reconnect(host, registry, peer_at, addr, rebind);
                 }
             }
         }
@@ -354,10 +339,17 @@ fn pump(
                     return true;
                 }
                 registry.forget_connect(&addr);
+                let now = std::time::Instant::now();
+                // #506: a human who drops out of a live match keeps the slot for a
+                // grace period, so a reconnect (possibly from a new network) has
+                // something to resume. `expire_parked` concedes it afterwards.
+                if registry.park_departed(&addr, now) {
+                    peer_at.remove(&addr);
+                    return true;
+                }
                 // If the peer left a live match, its opponent wins by concession;
                 // send the immediate victory frames down the same encrypt+send path.
                 // The match-end walk then rides the tick loop as for a normal win.
-                let now = std::time::Instant::now();
                 for (target, channel, bytes) in registry.peer_departed(&addr, now) {
                     send_to(host, peer_at, &target, channel, &bytes);
                 }
@@ -374,6 +366,52 @@ fn pump(
         }
     }
     true
+}
+
+/// Move a reconnecting client's slot to its new ENet peer (#430, #506): drop the
+/// abandoned generation and speak first with the current state.
+fn apply_reconnect(
+    host: &mut ArenaHost,
+    registry: &MatchRegistry,
+    peer_at: &mut HashMap<std::net::SocketAddr, PeerID>,
+    addr: std::net::SocketAddr,
+    rebind: crate::arena::match_registry::EncryptedPeerRebind,
+) {
+    info!(
+        "arena-enet: {} reconnected as {addr} mid-match; replaying {} \
+         current-state frame(s) and dropping the old peer",
+        rebind.old_addr,
+        rebind.replay.len(),
+    );
+    // Reset (not disconnect) the abandoned generation: the client has already let
+    // it go, a reset raises no Disconnect event, and a late datagram from it can no
+    // longer pull the slot back through `rebind_encrypted_peer`. A parked slot that
+    // comes back on its exact old address has no old generation left to drop.
+    if rebind.old_addr != addr {
+        if let Some(old_pid) = peer_at.remove(&rebind.old_addr) {
+            host.peer_mut(old_pid).reset();
+        }
+        registry.forget_connect(&rebind.old_addr);
+    }
+    for (channel, bytes) in &rebind.replay {
+        send_to(host, peer_at, &addr, *channel, bytes);
+    }
+}
+
+/// Per-iteration #506 work: concede parked slots whose grace ran out, and resume
+/// reconnects whose account proof arrived after the ENet connect.
+fn service_reconnects(
+    host: &mut ArenaHost,
+    registry: &MatchRegistry,
+    peer_at: &mut HashMap<std::net::SocketAddr, PeerID>,
+    now: std::time::Instant,
+) {
+    for (target, channel, bytes) in registry.expire_parked(now) {
+        send_to(host, peer_at, &target, channel, &bytes);
+    }
+    for (addr, rebind) in registry.recheck_reconnects() {
+        apply_reconnect(host, registry, peer_at, addr, rebind);
+    }
 }
 
 enum Act {
@@ -1097,6 +1135,165 @@ mod tests {
             "the abandoned ENet generation is dropped, so its timeout cannot concede"
         );
         assert_eq!(registry.active_count(), 1);
+        assert_eq!(registry.debug_list()[0].peers[0].rebind_count, 1);
+    }
+
+    /// #506 through the real ENet host: the client's peer DROPS (the server sees a
+    /// Disconnect, as when HauDrauf's phone left mobile data at fight start) and
+    /// only then does the client reconnect. Pre-#506 the drop removed the solo
+    /// match and the reconnect had nothing to join; with the grace it is parked and
+    /// resumed. (Loopback has one IP, so the new-IP identity rule is covered by the
+    /// registry tests; this proves the host wiring: park, resume, replay.)
+    fn reconnect_after_the_peer_dropped(
+        policy: crate::arena::match_registry::ReconnectPolicy,
+    ) -> (Arc<MatchRegistry>, Client, HashMap<SocketAddr, PeerID>) {
+        const DATA: u32 = 0xd35d_8a97; // HauDrauf's CONNECT data, match edceb0b5
+        let registry = MatchRegistry::new_with_reconnect(4, policy);
+        assert!(registry.allocate_with_bots(
+            &["haudrauf".to_string()],
+            vec![Default::default(), Default::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server_sock.local_addr().unwrap();
+        let mut server = Host::new(
+            BladesEnetSocket::new(server_sock),
+            HostSettings {
+                peer_limit: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut peer_at = HashMap::new();
+        let mut old = Client::connect_with_data(server_addr, DATA);
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            old.drain();
+            if old.connected {
+                break;
+            }
+        }
+        assert!(old.connected);
+        let (client_sk, client_pk) = gen_keypair();
+        old.send_plain(&hs_c2s(&client_pk));
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            old.drain();
+            if !old.inbox.is_empty() {
+                break;
+            }
+        }
+        let reply = old.inbox.first().expect("key exchange reply");
+        let mut server_pk = [0u8; 32];
+        server_pk.copy_from_slice(&reply[14..46]);
+        let mut nonce = [0u8; 8];
+        nonce.copy_from_slice(&reply[47..55]);
+        old.crypto = Some(CryptoCtx {
+            key: x25519_shared(&client_sk, &server_pk),
+            nonce,
+        });
+        old.inbox.clear();
+        let mut vnow = std::time::Instant::now();
+        for _ in 0..160 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            vnow += Duration::from_millis(250);
+            for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                send_to(&mut server, &peer_at, &addr, channel, &bytes);
+            }
+            server.flush();
+            old.drain();
+            if old.inbox.iter().any(|m| m.ends_with(b"StateTimeout")) {
+                break;
+            }
+        }
+        assert_eq!(
+            registry.debug_list()[0].phase,
+            "StateTimeout",
+            "round is live"
+        );
+
+        // The old peer drops; the server processes the Disconnect.
+        let old_addr = old.addr();
+        old.host.peer_mut(old.pid).disconnect(0);
+        for _ in 0..2000 {
+            old.host.flush();
+            service_reconnects(
+                &mut server,
+                &registry,
+                &mut peer_at,
+                std::time::Instant::now(),
+            );
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            if !peer_at.contains_key(&old_addr) {
+                break;
+            }
+        }
+        assert!(!peer_at.contains_key(&old_addr), "server saw the drop");
+
+        // Then the client reconnects: new socket, same CONNECT data and key, silent.
+        let mut replacement = Client::connect_with_data(server_addr, DATA);
+        replacement.crypto = old.crypto.clone();
+        for _ in 0..2000 {
+            service_reconnects(
+                &mut server,
+                &registry,
+                &mut peer_at,
+                std::time::Instant::now(),
+            );
+            while pump(&mut server, &registry, &mut peer_at) {}
+            server.flush();
+            replacement.drain();
+            if replacement.connected
+                && replacement
+                    .inbox
+                    .iter()
+                    .any(|m| m.ends_with(b"StateTimeout"))
+            {
+                break;
+            }
+        }
+        (registry, replacement, peer_at)
+    }
+
+    #[test]
+    fn without_the_grace_a_dropped_solo_match_is_gone_before_the_reconnect() {
+        let (registry, replacement, _) =
+            reconnect_after_the_peer_dropped(crate::arena::match_registry::ReconnectPolicy::OFF);
+        assert_eq!(
+            registry.active_count(),
+            0,
+            "the #506 failure: match removed on drop"
+        );
+        assert!(!registry.is_active(&replacement.addr()));
+        assert!(
+            replacement.inbox.is_empty(),
+            "the reconnect is sent nothing"
+        );
+    }
+
+    #[test]
+    fn with_the_grace_a_dropped_peer_reconnects_into_its_parked_match() {
+        let (registry, replacement, peer_at) = reconnect_after_the_peer_dropped(
+            crate::arena::match_registry::ReconnectPolicy::from_env_values(None, None),
+        );
+        assert_eq!(
+            registry.active_count(),
+            1,
+            "the match was kept for the grace"
+        );
+        assert!(registry.is_active(&replacement.addr()));
+        assert!(peer_at.contains_key(&replacement.addr()));
+        assert!(
+            replacement
+                .inbox
+                .iter()
+                .any(|m| m.ends_with(b"StateTimeout")),
+            "the silent replacement is sent the live state"
+        );
         assert_eq!(registry.debug_list()[0].peers[0].rebind_count, 1);
     }
 

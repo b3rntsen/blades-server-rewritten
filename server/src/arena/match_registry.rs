@@ -104,6 +104,64 @@ pub struct ReclaimedPeer {
 /// possibly wrong, but deterministic and self-consistent — and log an `error!`.
 const SLOT_BIND_GRACE: Duration = Duration::from_secs(3);
 
+/// Cap on the authenticated source IPs remembered per fighter slot (#506). A phone
+/// moves between two or three networks in a match; the cap only bounds memory.
+const MAX_SEEN_IPS_PER_SLOT: usize = 8;
+
+/// How the registry treats a human peer that drops out of a live match (#506).
+///
+/// Tracker #506 (HauDrauf, 2026-11-13 10:34 UTC, match edceb0b5): his phone left
+/// mobile data for Wi-Fi at fight start. The ENet peer from 109.42.48.34 dropped,
+/// the match had no other human, so it was removed the same instant, and the
+/// client's reconnect from 62.157.57.164 (same CONNECT data `0xd35d8a97`) one
+/// moment later had nothing to join. #430's resume needed the same IP and a
+/// match that still existed.
+///
+/// `grace`: keep the dropped player's slot (crypto, fighter slot, CONNECT data)
+/// parked for this long instead of conceding at once. `None` = concede on drop.
+///
+/// `new_ip`: also accept a reconnect from a DIFFERENT IP, but only when it carries
+/// the slot's ENet CONNECT data AND the slot's account has made an authenticated
+/// HTTP request from that IP during this match (its matchmaking ticket counts).
+/// That is the identity the server can actually check: the reconnecting ENet peer
+/// sends nothing but its CONNECT data, and HauDrauf's ticket came from the very
+/// Wi-Fi address his reconnect came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReconnectPolicy {
+    pub grace: Option<Duration>,
+    pub new_ip: bool,
+}
+
+impl ReconnectPolicy {
+    /// Pre-#506 behaviour: concede on drop, same-IP resume only.
+    pub const OFF: Self = Self {
+        grace: None,
+        new_ip: false,
+    };
+
+    /// `ARENA_RECONNECT_NEW_IP` (default on; `0`/`false`/`no`/`off` restores the
+    /// pre-#506 behaviour entirely) and `ARENA_RECONNECT_GRACE_SECS` (default 20;
+    /// `0` = no parking, the match still has to be alive for a reconnect).
+    pub fn from_env_values(switch: Option<&str>, grace_secs: Option<&str>) -> Self {
+        let on = switch.is_none_or(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        });
+        if !on {
+            return Self::OFF;
+        }
+        let secs = grace_secs
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(20);
+        Self {
+            grace: (secs > 0).then(|| Duration::from_secs(secs)),
+            new_ip: true,
+        }
+    }
+}
+
 /// A connected player within a match: its peer address + the agreed crypto.
 struct PlayerConn {
     addr: SocketAddr,
@@ -128,6 +186,11 @@ struct PlayerConn {
     /// `MatchRegistry::connect_data`). `None` on the psid harness path, which has
     /// no ENet connect.
     connect_data: Option<u32>,
+    /// Set when this player's ENet peer dropped and its slot is parked for a
+    /// reconnect (#506, see [`ReconnectPolicy`]). A parked player stays in
+    /// `players` (its slot, crypto and CONNECT data are what a reconnect resumes)
+    /// but not in `addr_index`; frames addressed to it go nowhere.
+    dropped_at: Option<Instant>,
 }
 
 /// A live match: up to `capacity` players sharing one authoritative instance and
@@ -167,6 +230,13 @@ struct Match {
     /// addresses are retained; two clients behind one NAT remain ambiguous and use
     /// a later identity-bearing frame rather than being guessed here.
     expected_ip_to_slot: HashMap<IpAddr, usize>,
+    /// Account (`users.id`) of each ticket/fighter slot, when the matchmaker said
+    /// (#506). Bots have no entry.
+    slot_accounts: Vec<Option<Uuid>>,
+    /// Source IPs from which each slot's account made an authenticated request
+    /// during this match, seeded with its matchmaking ticket's ingress IP (#506).
+    /// A reconnect from a NEW IP is only accepted from one of these.
+    slot_seen_ips: Vec<Vec<IpAddr>>,
     /// `peer address → fighter slot` — the **authoritative** addressing table, in both
     /// directions (inbound sender resolution and outbound target resolution). Populated
     /// as early as each path allows:
@@ -192,6 +262,20 @@ struct Match {
 }
 
 impl Match {
+    /// Has the account holding `player`'s fighter slot made an authenticated
+    /// request from `ip` during this match (#506)? False for a slot with no known
+    /// account or no authoritative fighter binding.
+    fn slot_account_seen_at(&self, player: &PlayerConn, ip: IpAddr) -> bool {
+        let Some(&slot) = self.peer_to_slot.get(&player.addr) else {
+            return false;
+        };
+        self.slot_accounts.get(slot).copied().flatten().is_some()
+            && self
+                .slot_seen_ips
+                .get(slot)
+                .is_some_and(|seen| seen.contains(&ip))
+    }
+
     /// Whether this reservation may still accept a brand-new ENet connection.
     ///
     /// A match that filled once is never a matchmaking target again. After one
@@ -410,6 +494,12 @@ pub struct MatchRegistry {
     /// client). Held here from the ENet Connect event until op-0x38 admission
     /// copies it onto the [`PlayerConn`]; dropped when the address disconnects.
     connect_data: Mutex<HashMap<SocketAddr, u32>>,
+    /// #506 reconnect policy (grace parking + new-IP resume).
+    reconnect: ReconnectPolicy,
+    /// Set when an account sighting added a new IP to a live slot, so the ENet
+    /// thread re-checks connected-but-unbound peers once (see
+    /// [`MatchRegistry::recheck_reconnects`]).
+    reconnect_recheck: std::sync::atomic::AtomicBool,
     next_order: std::sync::atomic::AtomicU64, // monotonic match-allocation order
     pub max_matches: usize,
     /// When set, every admitted peer's per-match (key, nonce) is fire-and-forget
@@ -505,7 +595,13 @@ pub struct DebugInjectResult {
 impl MatchRegistry {
     /// Test/dev constructor: no key submission.
     pub fn new(max_matches: usize) -> Arc<Self> {
-        Self::new_with_submitter(max_matches, None)
+        Self::new_with_submitter(max_matches, None, ReconnectPolicy::OFF)
+    }
+
+    /// Test constructor with a given #506 reconnect policy.
+    #[cfg(test)]
+    pub fn new_with_reconnect(max_matches: usize, reconnect: ReconnectPolicy) -> Arc<Self> {
+        Self::new_with_submitter(max_matches, None, reconnect)
     }
 
     /// Test-only: build a registry with the DEBUG-HOLD sweep-disable flag forced
@@ -518,6 +614,8 @@ impl MatchRegistry {
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
             connect_data: Mutex::new(HashMap::new()),
+            reconnect: ReconnectPolicy::OFF,
+            reconnect_recheck: std::sync::atomic::AtomicBool::new(false),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter: None,
@@ -536,6 +634,8 @@ impl MatchRegistry {
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
             connect_data: Mutex::new(HashMap::new()),
+            reconnect: ReconnectPolicy::OFF,
+            reconnect_recheck: std::sync::atomic::AtomicBool::new(false),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter: None,
@@ -550,6 +650,7 @@ impl MatchRegistry {
     pub fn new_with_submitter(
         max_matches: usize,
         key_submitter: Option<Arc<KeySubmitter>>,
+        reconnect: ReconnectPolicy,
     ) -> Arc<Self> {
         let debug_hold_window = crate::arena::combat::debug_hold_window();
         let now = Instant::now();
@@ -559,6 +660,8 @@ impl MatchRegistry {
             matches: Mutex::new(HashMap::new()),
             addr_index: Mutex::new(HashMap::new()),
             connect_data: Mutex::new(HashMap::new()),
+            reconnect,
+            reconnect_recheck: std::sync::atomic::AtomicBool::new(false),
             next_order: std::sync::atomic::AtomicU64::new(0),
             max_matches,
             key_submitter,
@@ -690,6 +793,17 @@ impl MatchRegistry {
                 _permit: permit,
                 psid_to_slot,
                 expected_ip_to_slot,
+                slot_accounts: vec![None; capacity],
+                slot_seen_ips: (0..capacity)
+                    .map(|slot| {
+                        expected_peer_ips
+                            .get(slot)
+                            .copied()
+                            .flatten()
+                            .into_iter()
+                            .collect()
+                    })
+                    .collect(),
                 peer_to_slot: HashMap::new(),
                 full_at: None,
                 fallback_logged: false,
@@ -750,6 +864,7 @@ impl MatchRegistry {
             rebind_count: 0,
             rtt_ewma: None,
             connect_data: None,
+            dropped_at: None,
         });
         if m.players.len() >= m.capacity {
             m.reached_capacity = true;
@@ -818,6 +933,7 @@ impl MatchRegistry {
             rebind_count: 0,
             rtt_ewma: None,
             connect_data,
+            dropped_at: None,
         });
         if m.players.len() >= m.capacity {
             m.reached_capacity = true;
@@ -1114,8 +1230,17 @@ impl MatchRegistry {
     /// Left alone, because they are not reconnects: a match that has finished (a
     /// re-queue from the same process carries the same `data`), and an IP that a
     /// fresh reservation is waiting for (matchmaking just gave it a new match).
+    ///
+    /// #506 widens this, behind [`ReconnectPolicy::new_ip`]: the IP may differ when
+    /// the slot's account has made an authenticated request from the new IP during
+    /// this match (see [`ReconnectPolicy`]). The CONNECT `data` must still match,
+    /// and the slot may be live or parked (its peer already dropped).
     pub fn note_connect(&self, peer: SocketAddr, data: u32) -> Option<EncryptedPeerRebind> {
         self.connect_data.lock().unwrap().insert(peer, data);
+        self.try_reconnect_rebind(peer, data)
+    }
+
+    fn try_reconnect_rebind(&self, peer: SocketAddr, data: u32) -> Option<EncryptedPeerRebind> {
         if data == 0 {
             return None;
         }
@@ -1130,15 +1255,22 @@ impl MatchRegistry {
         {
             return None;
         }
-        let mut candidate: Option<(Uuid, usize, SocketAddr)> = None;
+        let mut candidate: Option<(Uuid, usize, SocketAddr, bool)> = None;
         for (gsid, m) in matches.iter() {
             if m.instance.is_finished() {
                 continue;
             }
             for (player_idx, player) in m.players.iter().enumerate() {
-                if player.connect_data != Some(data)
-                    || player.addr.ip() != peer.ip()
-                    || player.addr == peer
+                if player.connect_data != Some(data) {
+                    continue;
+                }
+                // The exact old address only comes back for a parked slot (its
+                // address left `addr_index` when the peer dropped).
+                if player.addr == peer && player.dropped_at.is_none() {
+                    continue;
+                }
+                let same_ip = player.addr.ip() == peer.ip();
+                if !same_ip && !(self.reconnect.new_ip && m.slot_account_seen_at(player, peer.ip()))
                 {
                     continue;
                 }
@@ -1146,18 +1278,164 @@ impl MatchRegistry {
                     warn!("match registry: refusing ambiguous reconnect rebind for {peer}");
                     return None;
                 }
-                candidate = Some((*gsid, player_idx, player.addr));
+                candidate = Some((*gsid, player_idx, player.addr, same_ip));
             }
         }
-        let (gsid, player_idx, old_peer) = candidate?;
+        let (gsid, player_idx, old_peer, same_ip) = candidate?;
         let m = matches
             .get_mut(&gsid)
             .expect("reconnect candidate match exists");
+        let parked = m.players[player_idx].dropped_at.is_some();
         info!(
             "match registry: reconnect rebind {old_peer} → {peer} in match {gsid} \
-             (same ENet connect data {data:#010x})"
+             (same ENet connect data {data:#010x}; {}{})",
+            if same_ip {
+                "same IP"
+            } else {
+                "new IP seen on the slot's authenticated account"
+            },
+            if parked { "; slot was parked" } else { "" },
         );
         Some(migrate_player(m, &mut addr_index, player_idx, peer))
+    }
+
+    /// Record that `account` made an authenticated HTTP request from `ip` (#506).
+    /// Only accounts holding a slot in an unfinished match are remembered, on that
+    /// match, so this is a no-op for everyone not fighting. Called for every
+    /// authenticated request, so it holds one short lock and allocates nothing in
+    /// the common case.
+    pub fn note_account_ip(&self, account: Uuid, ip: IpAddr) {
+        if !self.reconnect.new_ip {
+            return;
+        }
+        let mut added = false;
+        for m in self.matches.lock().unwrap().values_mut() {
+            if m.instance.is_finished() {
+                continue;
+            }
+            for slot in 0..m.slot_accounts.len() {
+                if m.slot_accounts[slot] != Some(account) {
+                    continue;
+                }
+                let seen = &mut m.slot_seen_ips[slot];
+                if !seen.contains(&ip) && seen.len() < MAX_SEEN_IPS_PER_SLOT {
+                    seen.push(ip);
+                    added = true;
+                    info!(
+                        "match registry: match {} slot {slot} account {account} seen at {ip}",
+                        m.game_session_id
+                    );
+                }
+            }
+        }
+        if added {
+            self.reconnect_recheck
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    /// Tell match `game_session_id` which account holds each ticket slot (#506),
+    /// in ticket order (the order its `player_session_ids` were allocated in).
+    pub fn set_slot_accounts(&self, game_session_id: Uuid, accounts: &[Option<Uuid>]) {
+        if let Some(m) = self.matches.lock().unwrap().get_mut(&game_session_id) {
+            for (slot, account) in accounts.iter().enumerate().take(m.slot_accounts.len()) {
+                m.slot_accounts[slot] = *account;
+            }
+        }
+    }
+
+    /// After an account sighting added an IP (#506), retry every connected peer
+    /// that is not in a match: its reconnect may have arrived before the request
+    /// that proves who it is. Returns the new address with its rebind, for the ENet
+    /// thread to apply exactly as a connect-time rebind. Cheap when nothing changed.
+    pub fn recheck_reconnects(&self) -> Vec<(SocketAddr, EncryptedPeerRebind)> {
+        if !self
+            .reconnect_recheck
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Vec::new();
+        }
+        let waiting: Vec<(SocketAddr, u32)> = {
+            let addr_index = self.addr_index.lock().unwrap();
+            self.connect_data
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(addr, data)| **data != 0 && !addr_index.contains_key(addr))
+                .map(|(addr, data)| (*addr, *data))
+                .collect()
+        };
+        waiting
+            .into_iter()
+            .filter_map(|(addr, data)| Some((addr, self.try_reconnect_rebind(addr, data)?)))
+            .collect()
+    }
+
+    /// The ENet peer at `peer` dropped. When [`ReconnectPolicy::grace`] is set and
+    /// it was a player in an unfinished match, park its slot instead of conceding
+    /// (#506) and return true; the caller then skips [`Self::peer_departed`]. A
+    /// parked slot is resumed by a reconnect or conceded by
+    /// [`Self::expire_parked`] once the grace runs out.
+    pub fn park_departed(&self, peer: &SocketAddr, now: Instant) -> bool {
+        let Some(grace) = self.reconnect.grace else {
+            return false;
+        };
+        let mut addr_index = self.addr_index.lock().unwrap();
+        let Some(gsid) = addr_index.get(peer).copied() else {
+            return false;
+        };
+        let mut matches = self.matches.lock().unwrap();
+        let Some(m) = matches.get_mut(&gsid) else {
+            return false;
+        };
+        if m.instance.is_finished() {
+            return false;
+        }
+        let Some(player) = m.players.iter_mut().find(|p| &p.addr == peer) else {
+            return false;
+        };
+        player.dropped_at = Some(now);
+        addr_index.remove(peer);
+        // The ENet peer at this address is gone; only a NEW connect may resume it.
+        self.connect_data.lock().unwrap().remove(peer);
+        info!(
+            "match registry: {peer} dropped from match {gsid}; slot parked {grace:?} for a reconnect"
+        );
+        true
+    }
+
+    /// Concede every parked slot whose grace has run out (#506), exactly as an
+    /// immediate departure would have. Returns the frames to send to survivors.
+    pub fn expire_parked(&self, now: Instant) -> Vec<(SocketAddr, u8, Vec<u8>)> {
+        let Some(grace) = self.reconnect.grace else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut matches = self.matches.lock().unwrap();
+        let mut emptied = Vec::new();
+        for (gsid, m) in matches.iter_mut() {
+            let expired: Vec<SocketAddr> = m
+                .players
+                .iter()
+                .filter(|p| {
+                    p.dropped_at
+                        .is_some_and(|at| now.saturating_duration_since(at) >= grace)
+                })
+                .map(|p| p.addr)
+                .collect();
+            for addr in expired {
+                info!("match registry: {addr} did not reconnect to match {gsid} within {grace:?}");
+                out.extend(depart_player(m, &addr, now));
+            }
+            if m.players.is_empty() {
+                emptied.push(*gsid);
+            }
+        }
+        for gsid in emptied {
+            matches.remove(&gsid);
+            info!("match registry: match {gsid} empty, removed");
+        }
+        out
     }
 
     /// Forget the CONNECT `data` of an address whose ENet peer is gone.
@@ -1274,40 +1552,10 @@ impl MatchRegistry {
         let mut out = Vec::new();
         let mut matches = self.matches.lock().unwrap();
         if let Some(m) = matches.get_mut(&gsid) {
-            let departed_slot = m.peer_to_slot.get(peer).copied();
-            let opponent_present = m.players.iter().any(|p| &p.addr != peer);
-            if opponent_present {
-                if let Some(slot) = departed_slot {
-                    for (target, mut user_data) in m.instance.concede_by_departure(slot, now) {
-                        let Some(target_addr) = m.peer_for_slot(target) else {
-                            continue;
-                        };
-                        if &target_addr == peer {
-                            continue; // never address the peer that just left
-                        }
-                        let Some(tp) = m.players.iter().find(|p| p.addr == target_addr) else {
-                            continue;
-                        };
-                        let channel = crate::arena::combat::messages::retail_channel(&user_data);
-                        let (key, nonce, addr) = (tp.crypto.key, tp.crypto.nonce, tp.addr);
-                        chacha20_legacy_xor(&mut user_data, &key, &nonce);
-                        out.push((addr, channel, user_data));
-                    }
-                }
-            }
-            // Drop the departed peer. The match survives on its remaining player(s);
-            // an empty match is removed (freeing its permit), same as `remove`.
-            m.players.retain(|p| &p.addr != peer);
-            m.peer_to_slot.remove(peer);
+            out = depart_player(m, peer, now);
             if m.players.is_empty() {
                 matches.remove(&gsid);
                 info!("match registry: match {gsid} empty, removed");
-            } else {
-                info!(
-                    "match registry: {peer} left match {gsid} [{}/{}] — opponent awarded the match",
-                    m.players.len(),
-                    m.capacity
-                );
             }
         }
         out
@@ -1805,6 +2053,45 @@ fn extract_fighter_slot_from_playerinfo(
     None
 }
 
+/// Concede `peer`'s fighter slot to the opponent (if any) and drop the peer from
+/// `m`. The caller removes `m` when it is left empty.
+fn depart_player(m: &mut Match, peer: &SocketAddr, now: Instant) -> Vec<(SocketAddr, u8, Vec<u8>)> {
+    let mut out = Vec::new();
+    let gsid = m.game_session_id;
+    let departed_slot = m.peer_to_slot.get(peer).copied();
+    let opponent_present = m.players.iter().any(|p| &p.addr != peer);
+    if opponent_present {
+        if let Some(slot) = departed_slot {
+            for (target, mut user_data) in m.instance.concede_by_departure(slot, now) {
+                let Some(target_addr) = m.peer_for_slot(target) else {
+                    continue;
+                };
+                if &target_addr == peer {
+                    continue; // never address the peer that just left
+                }
+                let Some(tp) = m.players.iter().find(|p| p.addr == target_addr) else {
+                    continue;
+                };
+                let channel = crate::arena::combat::messages::retail_channel(&user_data);
+                let (key, nonce, addr) = (tp.crypto.key, tp.crypto.nonce, tp.addr);
+                chacha20_legacy_xor(&mut user_data, &key, &nonce);
+                out.push((addr, channel, user_data));
+            }
+        }
+    }
+    // Drop the departed peer. The match survives on its remaining player(s).
+    m.players.retain(|p| &p.addr != peer);
+    m.peer_to_slot.remove(peer);
+    if !m.players.is_empty() {
+        info!(
+            "match registry: {peer} left match {gsid} [{}/{}] — opponent awarded the match",
+            m.players.len(),
+            m.capacity
+        );
+    }
+    out
+}
+
 /// Move connected player `player_idx` of `m` to `peer`, keeping its crypto and
 /// fighter slot, and build the current-state replay its new ENet generation needs.
 fn migrate_player(
@@ -1815,6 +2102,7 @@ fn migrate_player(
 ) -> EncryptedPeerRebind {
     let old_peer = m.players[player_idx].addr;
     m.players[player_idx].addr = peer;
+    m.players[player_idx].dropped_at = None;
     m.players[player_idx].rebind_count = m.players[player_idx].rebind_count.saturating_add(1);
     if let Some(slot) = m.peer_to_slot.remove(&old_peer) {
         m.peer_to_slot.insert(peer, slot);
@@ -2823,5 +3111,233 @@ mod tests {
             !reg.tick_matches(t0).is_empty(),
             "a solo match must start on the first tick after its peer connects"
         );
+    }
+
+    // ---- #506: grace parking + reconnect from a new IP -------------------------
+
+    const D45: ReconnectPolicy = ReconnectPolicy {
+        grace: Some(Duration::from_secs(20)),
+        new_ip: true,
+    };
+    /// HauDrauf's match edceb0b5 (2026-11-13 10:34 UTC): ticket from his Wi-Fi,
+    /// match connection from mobile data, reconnect from the Wi-Fi.
+    const HD_DATA: u32 = 0xd35d_8a97;
+    fn hd_wifi_ip() -> IpAddr {
+        "62.157.57.164".parse().unwrap()
+    }
+    fn hd_mobile() -> SocketAddr {
+        "109.42.48.34:56397".parse().unwrap()
+    }
+    fn hd_wifi() -> SocketAddr {
+        "62.157.57.164:38494".parse().unwrap()
+    }
+
+    /// A solo-vs-bot match for `account`, whose ticket came from `ticket_ip`, with
+    /// the human connected from `addr` under `data`.
+    fn hd_match(
+        reg: &MatchRegistry,
+        account: Uuid,
+        ticket_ip: IpAddr,
+        addr: SocketAddr,
+        data: u32,
+    ) {
+        let gsid = Uuid::new_v4();
+        assert!(reg.allocate_with_bots_and_peer_ips(
+            &["hd".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+            1,
+            &[Some(ticket_ip)],
+            MatchRankingContext::default(),
+        ));
+        reg.set_slot_accounts(gsid, &[Some(account)]);
+        assert!(reg.note_connect(addr, data).is_none(), "first connect");
+        reg.admit_connection(addr, &[3u8; 32]).expect("admitted");
+    }
+
+    /// The #506 failure, replayed: with the pre-#506 behaviour the drop removed the
+    /// match and the Wi-Fi reconnect had nothing to join.
+    #[test]
+    fn without_the_switch_a_dropped_solo_match_is_gone_and_the_new_ip_cannot_rejoin() {
+        let reg = MatchRegistry::new_with_reconnect(4, ReconnectPolicy::OFF);
+        hd_match(&reg, Uuid::new_v4(), hd_wifi_ip(), hd_mobile(), HD_DATA);
+        assert!(!reg.park_departed(&hd_mobile(), Instant::now()));
+        reg.peer_departed(&hd_mobile(), Instant::now());
+        assert_eq!(reg.active_count(), 0);
+        assert!(reg.note_connect(hd_wifi(), HD_DATA).is_none());
+    }
+
+    #[test]
+    fn new_ip_reconnect_with_the_slots_account_rejoins_the_parked_match() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        let account = Uuid::new_v4();
+        hd_match(&reg, account, hd_wifi_ip(), hd_mobile(), HD_DATA);
+        let t0 = Instant::now();
+        assert!(
+            reg.park_departed(&hd_mobile(), t0),
+            "the drop parks the slot"
+        );
+        assert!(!reg.is_active(&hd_mobile()));
+        assert_eq!(reg.active_count(), 1, "the match survives the drop");
+        assert!(reg.expire_parked(t0 + Duration::from_secs(9)).is_empty());
+
+        let rebind = reg
+            .note_connect(hd_wifi(), HD_DATA)
+            .expect("same CONNECT data, from an IP his account's ticket came from");
+        assert_eq!(rebind.old_addr, hd_mobile());
+        assert!(reg.is_active(&hd_wifi()));
+        assert!(
+            reg.expire_parked(t0 + Duration::from_secs(60)).is_empty(),
+            "a resumed slot is no longer parked"
+        );
+        assert_eq!(reg.active_count(), 1);
+        assert_eq!(reg.debug_list()[0].peers[0].rebind_count, 1);
+    }
+
+    /// The reconnect can also beat the old peer's timeout: the slot is still live.
+    #[test]
+    fn new_ip_reconnect_also_takes_over_a_slot_whose_old_peer_has_not_timed_out() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        hd_match(&reg, Uuid::new_v4(), hd_wifi_ip(), hd_mobile(), HD_DATA);
+        let rebind = reg.note_connect(hd_wifi(), HD_DATA).expect("rebind");
+        assert_eq!(rebind.old_addr, hd_mobile());
+        assert!(reg.is_active(&hd_wifi()));
+        assert!(!reg.is_active(&hd_mobile()));
+        assert!(
+            reg.peer_departed(&hd_mobile(), Instant::now()).is_empty(),
+            "the abandoned peer's late timeout does not touch the match"
+        );
+        assert_eq!(reg.active_count(), 1);
+    }
+
+    #[test]
+    fn new_ip_reconnect_seen_only_on_another_account_is_refused() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        let account = Uuid::new_v4();
+        let stranger = Uuid::new_v4();
+        // Ticket from mobile this time, so the Wi-Fi IP is not yet tied to him.
+        hd_match(&reg, account, hd_mobile().ip(), hd_mobile(), HD_DATA);
+        assert!(reg.park_departed(&hd_mobile(), Instant::now()));
+        reg.note_account_ip(stranger, hd_wifi_ip());
+        assert!(
+            reg.note_connect(hd_wifi(), HD_DATA).is_none(),
+            "same CONNECT data, but the slot's account was never seen at this IP"
+        );
+        assert!(reg.recheck_reconnects().is_empty());
+        assert!(!reg.is_active(&hd_wifi()));
+
+        // A different CONNECT data word is refused even with the right account.
+        let other: SocketAddr = "62.157.57.164:40001".parse().unwrap();
+        reg.note_account_ip(account, hd_wifi_ip());
+        assert!(reg.note_connect(other, 0x1234_5678).is_none());
+
+        // ...while the parked reconnect that arrived first resumes as soon as his
+        // own authenticated request from the Wi-Fi shows up.
+        let resumed = reg.recheck_reconnects();
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].0, hd_wifi());
+        assert_eq!(resumed[0].1.old_addr, hd_mobile());
+        assert!(reg.is_active(&hd_wifi()));
+        assert!(!reg.is_active(&other));
+    }
+
+    #[test]
+    fn after_the_grace_the_parked_match_is_gone() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        hd_match(&reg, Uuid::new_v4(), hd_wifi_ip(), hd_mobile(), HD_DATA);
+        let t0 = Instant::now();
+        assert!(reg.park_departed(&hd_mobile(), t0));
+        reg.expire_parked(t0 + Duration::from_secs(19));
+        assert_eq!(reg.active_count(), 1, "still inside the 20 s grace");
+        reg.expire_parked(t0 + Duration::from_secs(20));
+        assert_eq!(
+            reg.active_count(),
+            0,
+            "grace over: the solo match is removed"
+        );
+        assert!(reg.note_connect(hd_wifi(), HD_DATA).is_none());
+        assert_eq!(reg.available_permits(), 4, "its capacity permit is freed");
+    }
+
+    /// PvP: the opponent is not awarded the match on the drop, only when the
+    /// grace runs out.
+    #[test]
+    fn a_pvp_drop_concedes_only_when_the_grace_expires() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        let gsid = Uuid::new_v4();
+        assert!(reg.allocate(
+            &["slot-zero".to_string(), "slot-one".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+        ));
+        let dropped: SocketAddr = "10.99.0.47:41000".parse().unwrap();
+        let survivor: SocketAddr = "10.99.0.48:42000".parse().unwrap();
+        reg.admit(dropped, "slot-zero", &[3u8; 32]).unwrap();
+        reg.admit(survivor, "slot-one", &[5u8; 32]).unwrap();
+        let t0 = Instant::now();
+        assert!(reg.park_departed(&dropped, t0));
+        assert_eq!(reg.matches.lock().unwrap()[&gsid].players.len(), 2);
+        reg.expire_parked(t0 + Duration::from_secs(20));
+        let matches = reg.matches.lock().unwrap();
+        let m = &matches[&gsid];
+        assert_eq!(m.players.len(), 1, "the dropped player is gone");
+        assert_eq!(m.players[0].addr, survivor);
+        assert!(!m.peer_to_slot.contains_key(&dropped));
+    }
+
+    /// #430's same-IP resume is unchanged with the switch on, and needs no account.
+    #[test]
+    fn same_ip_reconnect_is_unchanged_with_the_switch_on() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        assert!(reg.allocate_with_bots(
+            &["solo".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let old: SocketAddr = "84.130.178.201:54465".parse().unwrap();
+        assert!(reg.note_connect(old, HD_DATA).is_none());
+        reg.admit_connection(old, &[3u8; 32]).expect("admitted");
+        let housemate: SocketAddr = "84.130.178.201:40000".parse().unwrap();
+        assert!(reg.note_connect(housemate, 0x1234_5678).is_none());
+        let stranger: SocketAddr = "10.99.0.48:38184".parse().unwrap();
+        assert!(
+            reg.note_connect(stranger, HD_DATA).is_none(),
+            "same data from another IP, no account proof: refused as before"
+        );
+        let new: SocketAddr = "84.130.178.201:38184".parse().unwrap();
+        assert_eq!(reg.note_connect(new, HD_DATA).unwrap().old_addr, old);
+        assert!(reg.is_active(&new));
+    }
+
+    /// A parked slot can come back on its exact old address.
+    #[test]
+    fn a_parked_slot_resumes_on_its_old_address() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        hd_match(&reg, Uuid::new_v4(), hd_wifi_ip(), hd_mobile(), HD_DATA);
+        assert!(reg.park_departed(&hd_mobile(), Instant::now()));
+        let rebind = reg.note_connect(hd_mobile(), HD_DATA).expect("resume");
+        assert_eq!(rebind.old_addr, hd_mobile());
+        assert!(reg.is_active(&hd_mobile()));
+    }
+
+    #[test]
+    fn reconnect_policy_env_values() {
+        assert_eq!(ReconnectPolicy::from_env_values(None, None), D45);
+        assert_eq!(
+            ReconnectPolicy::from_env_values(Some("0"), Some("20")),
+            ReconnectPolicy::OFF
+        );
+        assert_eq!(
+            ReconnectPolicy::from_env_values(Some("off"), None),
+            ReconnectPolicy::OFF
+        );
+        assert_eq!(
+            ReconnectPolicy::from_env_values(Some("1"), Some("45")).grace,
+            Some(Duration::from_secs(45))
+        );
+        let no_park = ReconnectPolicy::from_env_values(None, Some("0"));
+        assert_eq!(no_park.grace, None);
+        assert!(no_park.new_ip);
     }
 }
