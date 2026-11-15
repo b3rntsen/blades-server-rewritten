@@ -1259,6 +1259,81 @@ mod tests {
         (registry, replacement, peer_at)
     }
 
+    /// Regression from #603: the per-loop reconnect service ran before any peer
+    /// dialled and removed the freshly allocated match, so the client's op-0x38
+    /// found no free slot and hung on "Connecting". Drive the production loop
+    /// order (service_reconnects, pump, tick) with the switch ON before connecting.
+    #[test]
+    fn a_fresh_match_survives_the_reconnect_service_until_its_player_joins() {
+        let registry = MatchRegistry::new_with_reconnect(
+            4,
+            crate::arena::match_registry::ReconnectPolicy::from_env_values(None, None),
+        );
+        let gsid = Uuid::new_v4();
+        assert!(registry.allocate_with_bots_and_peer_ips(
+            &["haudrauf".to_string()],
+            vec![Default::default(), Default::default()],
+            gsid,
+            1,
+            &[None],
+            Default::default(),
+        ));
+        registry.set_slot_accounts(gsid, &[Some(Uuid::new_v4())]);
+        let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server_sock.local_addr().unwrap();
+        let mut server = Host::new(
+            BladesEnetSocket::new(server_sock),
+            HostSettings {
+                peer_limit: 4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut peer_at = HashMap::new();
+        let loop_once = |server: &mut ArenaHost, peer_at: &mut HashMap<SocketAddr, PeerID>| {
+            while pump(server, &registry, peer_at) {}
+            let now = std::time::Instant::now();
+            service_reconnects(server, &registry, peer_at, now);
+            for (addr, channel, bytes) in registry.tick_matches(now) {
+                send_to(server, peer_at, &addr, channel, &bytes);
+            }
+            server.flush();
+        };
+        for _ in 0..50 {
+            loop_once(&mut server, &mut peer_at);
+        }
+        assert_eq!(registry.active_count(), 1, "nobody has dialled yet");
+        let mut client = Client::connect_with_data(server_addr, 0xd35d_8a97);
+        for _ in 0..2000 {
+            loop_once(&mut server, &mut peer_at);
+            client.drain();
+            if client.connected {
+                break;
+            }
+        }
+        assert!(client.connected);
+        let (_sk, pk) = gen_keypair();
+        client.send_plain(&hs_c2s(&pk));
+        for _ in 0..2000 {
+            loop_once(&mut server, &mut peer_at);
+            client.drain();
+            if !client.inbox.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            registry.is_active(&client.addr()),
+            "the op-0x38 joined the match"
+        );
+        assert!(
+            client
+                .inbox
+                .first()
+                .is_some_and(|r| r.starts_with(&[0xBE, 0x38])),
+            "and got the key-exchange reply"
+        );
+    }
+
     #[test]
     fn without_the_grace_a_dropped_solo_match_is_gone_before_the_reconnect() {
         let (registry, replacement, _) =

@@ -1423,6 +1423,13 @@ impl MatchRegistry {
                 })
                 .map(|p| p.addr)
                 .collect();
+            // Only a match THIS expiry emptied is removed here. A match that has no
+            // players because nobody has dialled yet is `sweep_expired`'s concern;
+            // removing it made every fresh match vanish before its op-0x38 (#603
+            // regression, prod 2026-11-15).
+            if expired.is_empty() {
+                continue;
+            }
             for addr in expired {
                 info!("match registry: {addr} did not reconnect to match {gsid} within {grace:?}");
                 out.extend(depart_player(m, &addr, now));
@@ -3319,6 +3326,42 @@ mod tests {
         let rebind = reg.note_connect(hd_mobile(), HD_DATA).expect("resume");
         assert_eq!(rebind.old_addr, hd_mobile());
         assert!(reg.is_active(&hd_mobile()));
+    }
+
+    /// Regression from #603 (prod 2026-11-15 00:25 UTC): `expire_parked` runs every
+    /// ENet loop and removed EVERY match with no players, including one just
+    /// allocated whose peers had not dialled yet, so every op-0x38 found "NO fresh
+    /// match has a free slot". A match nobody has joined is the sweep's business.
+    #[test]
+    fn the_parked_sweep_leaves_a_fresh_match_for_its_players() {
+        let reg = MatchRegistry::new_with_reconnect(4, D45);
+        let gsid = Uuid::new_v4();
+        assert!(reg.allocate_with_bots_and_peer_ips(
+            &["a".to_string(), "b".to_string()],
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+            0,
+            &[None, None],
+            MatchRankingContext::default(),
+        ));
+        reg.set_slot_accounts(gsid, &[Some(Uuid::new_v4()), Some(Uuid::new_v4())]);
+        let now = Instant::now();
+        for i in 0..50 {
+            assert!(
+                reg.expire_parked(now + Duration::from_millis(2 * i))
+                    .is_empty()
+            );
+        }
+        assert_eq!(
+            reg.active_count(),
+            1,
+            "the fresh match must survive the sweep"
+        );
+        let a: SocketAddr = "10.99.0.47:41000".parse().unwrap();
+        let b: SocketAddr = "10.99.0.48:42000".parse().unwrap();
+        assert!(reg.admit_connection(a, &[3u8; 32]).is_some());
+        assert!(reg.admit_connection(b, &[5u8; 32]).is_some());
+        assert!(reg.is_active(&a) && reg.is_active(&b));
     }
 
     #[test]
