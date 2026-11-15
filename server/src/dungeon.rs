@@ -2555,7 +2555,8 @@ mod event_run_lifecycle_db {
             initial_state JSONB, PRIMARY KEY (id, character_id));";
     const EVENT_TABLES: &str =
         include_str!("../../migrations/2026-09-04-000000-0000_add_event_quest_tables/up.sql");
-    /// What an alt switch reads and writes besides the character (#334).
+    /// What an alt switch reads and writes besides the character (#334), and
+    /// the match history a snapshot hands to the outgoing alt.
     const ALT_TABLES: &str = "\
         CREATE TABLE character_versions ( \
             id UUID PRIMARY KEY, character_id UUID NOT NULL, user_id UUID NOT NULL, \
@@ -2566,7 +2567,10 @@ mod event_run_lifecycle_db {
             reason TEXT NOT NULL DEFAULT 'import', \
             saved_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM now())::bigint); \
         CREATE TABLE device_bindings ( \
-            device_id TEXT PRIMARY KEY, user_id UUID, active_alt_uuid UUID);";
+            device_id TEXT PRIMARY KEY, user_id UUID, active_alt_uuid UUID); \
+        CREATE TABLE arena_match_results ( \
+            id UUID PRIMARY KEY, character_id UUID NOT NULL, win BOOLEAN NOT NULL, \
+            source_alt_uuid UUID);";
 
     struct World {
         sd: StaticData,

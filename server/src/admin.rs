@@ -390,6 +390,32 @@ SELECT $1, c.id, $3, COALESCE(c.source_alt_uuid, $4),
  WHERE c.id = $2
 "#;
 
+/// Hand the outgoing occupant its own unlabelled arena history.
+///
+/// A match result is stamped with the live row's alt when it is recorded, so a
+/// character that has never had an alt id records `NULL` — read as "the alt live
+/// now" by every season reader (`leaderboards::RANKED_CTE`). That reading is only
+/// true while the same occupant stays live. The moment it is kept as a version
+/// and something else takes the row (a first new alt, an import of another alt),
+/// "the alt live now" is somebody else, and every season win the original earned
+/// silently moved to the newcomer: the parked character dropped to 0 wins on the
+/// Top 100 while a fresh level-1 alt showed its hundreds.
+///
+/// So the label this snapshot was just filed under — the alt that played those
+/// matches — is written onto them now, while it is still the right answer. This
+/// is the rule the 2026-10-10 backfill already applied ("the alt that played a
+/// match is the label on the first snapshot taken after it"), applied at the
+/// moment it becomes true instead of once. A `NULL` label stamps nothing.
+const STAMP_UNLABELLED_MATCHES_SQL: &str = r#"
+UPDATE arena_match_results r
+   SET source_alt_uuid = v.source_alt_uuid
+  FROM character_versions v
+ WHERE v.id = $1
+   AND v.source_alt_uuid IS NOT NULL
+   AND r.character_id = v.character_id
+   AND r.source_alt_uuid IS NULL
+"#;
+
 async fn snapshot_character(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
@@ -439,6 +465,10 @@ async fn snapshot_character_parking(
         // about to write over a row it believes exists.
         return Err(diesel::result::Error::NotFound);
     }
+    diesel::sql_query(STAMP_UNLABELLED_MATCHES_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(version_id)
+        .execute(conn)
+        .await?;
     if park_quests {
         park_quests_in_version(conn, character_id, version_id).await?;
         park_events_in_version(conn, character_id, version_id).await?;
@@ -6653,6 +6683,101 @@ mod tests {
                     .source_alt_uuid,
                 Some(own),
                 "a row that knows its alt is filed under it"
+            );
+        }
+
+        /// Top 100 "all matches": a player's season wins only ever go up.
+        ///
+        /// A character that never had an alt id records its match results with
+        /// no alt (`NULL` = "the alt live now"). Before the fix, starting its
+        /// first new alt moved every one of those wins to the fresh level-1
+        /// character and left the parked original at 0 — on prod that is
+        /// Yaskrava's 400 or Flappety's 101 the moment either taps "new alt".
+        /// The wins must stay with the character that earned them, through the
+        /// new alt AND the switch back.
+        #[tokio::test]
+        async fn season_wins_stay_with_the_character_that_earned_them_across_alts() {
+            let mut c = db!();
+            let (season, hint, level1) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character(&mut c, "Yaskrava", 60, 10).await;
+            add_user_row(&mut c, uid).await;
+            let now = chrono::Utc::now().timestamp();
+            let mut sql = format!(
+                "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                     VALUES ('{season}', 3, 'S', {}, {}, 'active'); \
+                 UPDATE characters SET character = character || \
+                     '{{\"pvpTrophies\":400,\"pvpSeasonId\":\"{season}\"}}'::jsonb \
+                   WHERE id = '{cid}'; ",
+                now - 86_400,
+                now + 86_400,
+            );
+            // Three wins and a loss this season, recorded before any alt existed;
+            // one win from before the season, which must never count.
+            for (win, ago) in [
+                (true, 600),
+                (true, 500),
+                (false, 400),
+                (true, 300),
+                (true, 90_000),
+            ] {
+                sql += &format!(
+                    "INSERT INTO arena_match_results (id, character_id, win, recorded_at) \
+                     VALUES ('{}', '{cid}', {win}, to_timestamp({})); ",
+                    Uuid::new_v4(),
+                    now - ago,
+                );
+            }
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, &sql)
+                .await
+                .unwrap();
+
+            async fn board(c: &mut AsyncPgConnection) -> Vec<(String, i64)> {
+                crate::arena::leaderboards::ranked_entries(c, 100, 0)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|e| (e.character_name, e.number_of_matches_won))
+                    .collect()
+            }
+            assert_eq!(board(&mut c).await, vec![("Yaskrava".to_string(), 3)]);
+
+            // First new alt; the original is kept under the device's hint.
+            let req = NewAltRequest {
+                outgoing_alt_uuid: Some(hint),
+                name: Some("Newbie".into()),
+                ..new_alt(uid, level1)
+            };
+            apply_new_alt(&mut c, &req, &appearance_cost())
+                .await
+                .unwrap();
+            // The newcomer earns cups of its own (so it is on the board too)...
+            diesel_async::SimpleAsyncConnection::batch_execute(
+                &mut c,
+                &format!(
+                    "UPDATE characters SET character = character || \
+                       '{{\"pvpTrophies\":5,\"pvpSeasonId\":\"{season}\"}}'::jsonb \
+                     WHERE id = '{cid}'"
+                ),
+            )
+            .await
+            .unwrap();
+            let mut after_new_alt = board(&mut c).await;
+            after_new_alt.sort();
+            assert_eq!(
+                after_new_alt,
+                vec![("Newbie".to_string(), 0), ("Yaskrava".to_string(), 3)],
+                "the parked original keeps its 3 wins; the level-1 alt has none"
+            );
+
+            // ...and switching back brings the original home with all three.
+            apply_switch_alt(&mut c, &switch(uid, hint, None))
+                .await
+                .unwrap();
+            let mut back = board(&mut c).await;
+            back.sort();
+            assert_eq!(
+                back,
+                vec![("Newbie".to_string(), 0), ("Yaskrava".to_string(), 3)]
             );
         }
 
