@@ -149,6 +149,41 @@ pub struct ArenaConfig {
     /// queued ticket) and simply does not resolve until the cooldown ends. Cancels
     /// before pairing, and cancels of bot matches, are free. No trophy penalty.
     pub prefight_cancel_cooldown_secs: u64,
+    /// **Humans first** (owner, 2026-11-15; env `ARENA_HUMANS_FIRST_COOLDOWN_SECS`,
+    /// default 60; `0` = off, the tiered fallback alone decides).
+    ///
+    /// While humans are matching — a human-vs-human match is in progress, or one
+    /// ended less than this many seconds ago — a waiting player is never handed an
+    /// AI; they wait for a human. (A second human standing in the queue needs no gate:
+    /// last call pairs them.) Once nobody has fought anybody for this long, the
+    /// ordinary tiers below apply unchanged. 60 s is the owner's number: long enough
+    /// for both fighters to clear the results card and press Fight again.
+    pub humans_first_cooldown_secs: u64,
+    /// Safety valve on the humans-first gate (env `ARENA_HUMANS_FIRST_MAX_WAIT_SECS`,
+    /// default 300; `0` = no valve). A player who has waited this long gets the
+    /// ordinary fallback even while others are fighting. With FIFO pairing a waiter
+    /// is the next partner of whoever frees up first, so this only fires when a
+    /// human match runs unusually long or its players walk away mid-cycle; 300 s
+    /// covers one full match plus the results card.
+    pub humans_first_max_wait_secs: u64,
+    /// Humans-first cooldown for an ACTIVE player (env
+    /// `ARENA_HUMANS_FIRST_ACTIVE_COOLDOWN_SECS`, default 180). Owner, 2026-11-15:
+    /// "we want to optimise for human vs human fights; active players will want a bit
+    /// longer wait instead of getting AI". 180 s covers a results card, menus and a
+    /// re-queue: on 2026-11-15 RonnieRaider and LagorPing queued 79-96 s after each
+    /// other's matches ended and were each handed an AI.
+    pub humans_first_active_cooldown_secs: u64,
+    /// Safety valve for an ACTIVE player (env `ARENA_HUMANS_FIRST_ACTIVE_MAX_WAIT_SECS`,
+    /// default 600; `0` = none) — two full matches plus results.
+    pub humans_first_active_max_wait_secs: u64,
+    /// A player is ACTIVE with at least this many human-vs-human tickets inside
+    /// `active_window_days` (env `ARENA_ACTIVE_MIN_H2H`, default 10; `0` = nobody is
+    /// active). On prod (2026-11-15, last 28 days) 24 players had any h2h; 16 had >= 10.
+    pub active_min_h2h: u64,
+    /// Rolling window for `active_min_h2h` (env `ARENA_ACTIVE_WINDOW_DAYS`, default 28).
+    /// Rolling rather than "this season" so a season rollover does not turn every
+    /// regular casual for its first days.
+    pub active_window_days: u64,
 }
 
 impl ArenaConfig {
@@ -204,6 +239,18 @@ impl ArenaConfig {
             bot_delay_min_secs: parse("ARENA_BOT_DELAY_MIN_SECS", 4),
             bot_delay_max_secs: parse("ARENA_BOT_DELAY_MAX_SECS", 35),
             prefight_cancel_cooldown_secs: parse("ARENA_PREFIGHT_CANCEL_COOLDOWN_SECS", 120),
+            humans_first_cooldown_secs: parse("ARENA_HUMANS_FIRST_COOLDOWN_SECS", 60),
+            humans_first_max_wait_secs: parse("ARENA_HUMANS_FIRST_MAX_WAIT_SECS", 300),
+            humans_first_active_cooldown_secs: parse(
+                "ARENA_HUMANS_FIRST_ACTIVE_COOLDOWN_SECS",
+                180,
+            ),
+            humans_first_active_max_wait_secs: parse(
+                "ARENA_HUMANS_FIRST_ACTIVE_MAX_WAIT_SECS",
+                600,
+            ),
+            active_min_h2h: parse("ARENA_ACTIVE_MIN_H2H", 10),
+            active_window_days: parse("ARENA_ACTIVE_WINDOW_DAYS", 28),
         }
     }
 }

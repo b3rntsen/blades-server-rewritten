@@ -433,6 +433,16 @@ pub struct MatchRegistry {
     /// Monotonic end of a production hold. `None` is used only by the test-only
     /// forced hold constructor.
     debug_hold_expires_at: Option<Instant>,
+    /// When the most recent human-vs-human match (two peer slots, both of which
+    /// connected) left the registry — finished, swept, or emptied. The matchmaker's
+    /// humans-first gate keeps AI fallback closed for
+    /// `ArenaConfig::humans_first_cooldown_secs` after this (owner, 2026-11-15).
+    last_pvp_end: Mutex<Option<Instant>>,
+    /// When each recently retired match left the registry, by game session id —
+    /// any match, bot or human. The matchmaker knows who played in which match, so
+    /// this is how it learns when another player's fight ended (humans first: their
+    /// end starts the cooldown). Pruned to the last hour.
+    ended: Mutex<HashMap<Uuid, Instant>>,
 }
 
 /// **DEBUG/experimental.** One queued packet injection: raw decrypted s2c
@@ -502,6 +512,14 @@ pub struct DebugInjectResult {
     pub ciphertext_len: usize,
 }
 
+/// How long [`MatchRegistry::match_ended_at`] remembers a retired match.
+const ENDED_MEMORY: Duration = Duration::from_secs(3600);
+
+/// A match between humans: at least two peer slots, all of which filled once.
+fn is_pvp(m: &Match) -> bool {
+    m.capacity >= 2 && m.reached_capacity
+}
+
 impl MatchRegistry {
     /// Test/dev constructor: no key submission.
     pub fn new(max_matches: usize) -> Arc<Self> {
@@ -524,6 +542,8 @@ impl MatchRegistry {
             debug_inject_queue: Mutex::new(Vec::new()),
             debug_hold: hold,
             debug_hold_expires_at: None,
+            last_pvp_end: Mutex::new(None),
+            ended: Mutex::new(HashMap::new()),
         })
     }
 
@@ -542,6 +562,8 @@ impl MatchRegistry {
             debug_inject_queue: Mutex::new(Vec::new()),
             debug_hold: true,
             debug_hold_expires_at: Some(expires_at),
+            last_pvp_end: Mutex::new(None),
+            ended: Mutex::new(HashMap::new()),
         })
     }
 
@@ -567,6 +589,8 @@ impl MatchRegistry {
             // tests + normal operation). Same parse as the MatchInstance flag.
             debug_hold: debug_hold_window.is_some(),
             debug_hold_expires_at: debug_hold_window.map(|window| now + window),
+            last_pvp_end: Mutex::new(None),
+            ended: Mutex::new(HashMap::new()),
         })
     }
 
@@ -1175,7 +1199,10 @@ impl MatchRegistry {
         if let Some(m) = matches.get_mut(&gsid) {
             m.players.retain(|p| &p.addr != peer);
             if m.players.is_empty() {
-                matches.remove(&gsid); // drops the permit → frees a Semaphore slot
+                if let Some(m) = matches.remove(&gsid) {
+                    // drops the permit → frees a Semaphore slot
+                    self.note_retired(&m, Instant::now());
+                }
                 info!("match registry: match {gsid} empty, removed");
             } else {
                 info!(
@@ -1329,6 +1356,54 @@ impl MatchRegistry {
             .map(|m| m.players.len())
             .sum()
     }
+    /// Human-vs-human matches in progress: two (or more) peer slots, every one of
+    /// which connected at least once, not yet through the post-match walk.
+    ///
+    /// The humans-first gate's "people are fighting each other" signal. Distinct from
+    /// [`live_human_count`](Self::live_human_count), which also counts a human in a bot
+    /// match. An allocated pair whose opponent never connected is not counted — it is a
+    /// reservation, not a fight, and the sweep reclaims it.
+    pub fn live_pvp_count(&self) -> usize {
+        self.matches
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|m| is_pvp(m) && !m.instance.is_finished())
+            .count()
+    }
+
+    /// When match `game_session_id` left the registry, if it did within the last hour.
+    pub fn match_ended_at(&self, game_session_id: Uuid) -> Option<Instant> {
+        self.ended.lock().unwrap().get(&game_session_id).copied()
+    }
+
+    /// When the last human-vs-human match left the registry, if one has.
+    pub fn last_pvp_end(&self) -> Option<Instant> {
+        *self.last_pvp_end.lock().unwrap()
+    }
+
+    /// Record a retiring match's end for the humans-first cooldown. Only a real
+    /// human-vs-human fight counts; a solo-vs-bot match or a never-joined pair does not.
+    fn note_retired(&self, m: &Match, now: Instant) {
+        {
+            let mut ended = self.ended.lock().unwrap();
+            ended.retain(|_, at| now.saturating_duration_since(*at) < ENDED_MEMORY);
+            ended.insert(m.game_session_id, now);
+        }
+        if is_pvp(m) {
+            let mut last = self.last_pvp_end.lock().unwrap();
+            if last.map_or(true, |t| t < now) {
+                *last = Some(now);
+            }
+        }
+    }
+
+    /// Test seam: pretend a human-vs-human match ended at `at`.
+    #[cfg(test)]
+    pub(crate) fn set_last_pvp_end_for_test(&self, at: Option<Instant>) {
+        *self.last_pvp_end.lock().unwrap() = at;
+    }
+
     /// Every character uuid currently inside a live match.
     ///
     /// Owner's rule, 2026-09-23: a bot "should be a copy, not the character
@@ -1422,6 +1497,7 @@ impl MatchRegistry {
                 .collect();
             for gsid in dead {
                 if let Some(m) = matches.remove(&gsid) {
+                    self.note_retired(&m, now);
                     let reason = if m.players.len() < m.capacity {
                         if m.abandoned {
                             "opponent never connected; ticket cancelled"
@@ -1540,6 +1616,7 @@ impl MatchRegistry {
         let mut addrs = Vec::new();
         for gsid in &finished {
             if let Some(m) = matches.remove(gsid) {
+                self.note_retired(&m, Instant::now());
                 for p in &m.players {
                     addrs.push(p.addr);
                 }
