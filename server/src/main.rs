@@ -39,6 +39,7 @@ mod authentification;
 mod challenge;
 mod character;
 mod character_data;
+mod character_names;
 mod character_ops;
 mod chests;
 mod community_hunt;
@@ -768,6 +769,8 @@ async fn main() -> Result<()> {
                     .service(admin::rebuild_arena_h2h_ratings)
                     .service(admin::get_current_character)
                     .service(admin::set_current_character_name)
+                    .service(character_names::backfill_character_names)
+                    .service(character_names::undo_character_name_backfill)
                     .service(admin::set_current_town_name)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)

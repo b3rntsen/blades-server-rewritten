@@ -17,7 +17,7 @@ use blades_lib::user_data::{
     SingleEquippedItem, Treasury,
 };
 use diesel::{ExpressionMethods, QueryDsl, SelectableHelper, insert_into};
-use diesel_async::RunQueryDsl;
+use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -135,6 +135,12 @@ async fn create_characters(
     .await
     .map_err(|e| {
         log::error!("character creation failed: {e}");
+        if crate::character_names::is_name_conflict(&e) {
+            // CHARACTER 102 / TAG_ID_NO_MORE_AVAILABLE 802: the client's own
+            // "There are too many adventurers with that exact name already.
+            // Please pick another one." (UI.Error.NoMoreIDAvailable, button Ok).
+            return BladeApiError::new(actix_web::http::StatusCode::BAD_REQUEST, 102, 802);
+        }
         BladeApiError::new(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 3, 0)
     })?;
     Ok(web::Json(created))
@@ -278,34 +284,47 @@ pub(crate) async fn build_starter_character(
     name: String,
     customization: serde_json::Value,
 ) -> Result<CharacterCreationResponse, diesel::result::Error> {
-    let FreshCharacter {
-        character: new_character,
-        data: new_data,
-        inventory,
-        wallet,
-    } = fresh_character(&app_state.appearance_change_cost, name, customization);
-
     let character_uuid = Uuid::new_v4();
-
-    let to_insert = CharacterDbEntry {
-        id: character_uuid,
-        user_id: owner,
-        character: JsonDbWrapper(new_character),
-        data: JsonDbWrapper(new_data),
-        wallet: JsonDbWrapper(wallet),
-        inventory: JsonDbWrapper(inventory.clone()),
-        // Fresh character → no captured town; get_town serves default_town.json.
-        town: None,
-    };
-
     let mut conn = app_state
         .db_pool
         .get()
         .await
         .map_err(|_| diesel::result::Error::BrokenTransactionManager)?;
-    insert_into(characters::table)
-        .values(&to_insert)
-        .execute(&mut conn)
+    let appearance_cost = app_state.appearance_change_cost.clone();
+
+    // One transaction: the name is settled (placeholder -> generated name, taken
+    // -> numbered) under its advisory lock and written before the lock goes.
+    let (to_insert, inventory) = conn
+        .transaction::<_, diesel::result::Error, _>(|conn| {
+            async move {
+                let name =
+                    crate::character_names::settle_name(conn, owner, character_uuid, &name).await?;
+                let mut customization = customization;
+                crate::character_names::set_customization_name(&mut customization, &name);
+                let FreshCharacter {
+                    character: new_character,
+                    data: new_data,
+                    inventory,
+                    wallet,
+                } = fresh_character(&appearance_cost, name, customization);
+                let to_insert = CharacterDbEntry {
+                    id: character_uuid,
+                    user_id: owner,
+                    character: JsonDbWrapper(new_character),
+                    data: JsonDbWrapper(new_data),
+                    wallet: JsonDbWrapper(wallet),
+                    inventory: JsonDbWrapper(inventory.clone()),
+                    // Fresh character → no captured town; get_town serves default_town.json.
+                    town: None,
+                };
+                insert_into(characters::table)
+                    .values(&to_insert)
+                    .execute(conn)
+                    .await?;
+                Ok((to_insert, inventory))
+            }
+            .scope_boxed()
+        })
         .await?;
 
     // Best-effort: the allowance is already in the wallet above, and a character
