@@ -302,6 +302,9 @@ pub struct TicketRequest {
     /// A regular human-vs-human player (`ArenaConfig::active_min_h2h`)? They wait
     /// longer for a human before an AI (humans first).
     pub active: bool,
+    /// The alt's "Fight AI" setting ([`crate::arena::fight_ai`]). `false` = never an AI
+    /// opponent: the ticket waits for a human however long that takes.
+    pub fights_ai: bool,
 }
 
 /// A queued player's strength, read once at enqueue.
@@ -605,6 +608,26 @@ fn humans_matching_until(
         open
     };
     Some(valve.map_or(until, |v| until.min(v)))
+}
+
+/// **Fight AI off** (per alt, [`crate::arena::fight_ai`]): the queue's next deadline
+/// when its oldest ticket refuses an AI.
+///
+/// With somebody else it could be paired with, the deadline is unchanged — at last call
+/// it meets that human like anyone else. With nobody, there is nothing a deadline could
+/// lead to except a bot, so it never fires: the loop just looks again every
+/// [`FALLBACK_REEVALUATE`]. Every other ticket keeps its own deadline untouched.
+fn no_ai_deadline(
+    fights_ai: bool,
+    waiting_others: usize,
+    deadline: Instant,
+    now: Instant,
+) -> Instant {
+    if fights_ai || waiting_others > 0 {
+        deadline
+    } else {
+        now + FALLBACK_REEVALUATE
+    }
 }
 
 /// Status of a recorded matchmaking ticket, for the web /arena activity feed.
@@ -4397,6 +4420,27 @@ async fn matchmaker_loop(
             } else {
                 floor
             };
+            let oldest_fights_ai = oldest_ticket.map(|(t, _)| t.fights_ai).unwrap_or(true);
+            // A Fight-AI-off ticket alone never reaches the deadline branch, where a gone
+            // client is noticed — so notice it here, or a player who closed the app keeps
+            // a ticket (and its reservation) that a later search would be handed.
+            if !oldest_fights_ai && waiting_others == 0 {
+                let gone = match oldest_ticket {
+                    Some((t, _)) => t.rms.is_gone().await,
+                    None => false,
+                };
+                if gone {
+                    waiting.retain(|(t, _)| t.ticket_id != tid);
+                    if let Some(user) = oldest_user {
+                        active_tickets.remove_queued(user, tid);
+                    }
+                    info!(
+                        "matchmaker: Fight-AI-off ticket {tid} abandoned (RMS gone) — dropped"
+                    );
+                    continue;
+                }
+            }
+            let deadline = no_ai_deadline(oldest_fights_ai, waiting_others, deadline, now);
             if now >= deadline {
                 // Pop the oldest — the one whose deadline just fired.
                 let idx = waiting
@@ -4464,6 +4508,13 @@ async fn matchmaker_loop(
                     continue;
                 }
 
+                // Fight AI off for this alt: nobody to pair, so back in the queue — no
+                // valve, no tier ever hands this player an AI. No spin: with nobody
+                // else waiting, the next pass's deadline is `no_ai_deadline`'s re-check.
+                if !lone.fights_ai {
+                    waiting.push((lone, since));
+                    continue;
+                }
                 // The human we were going to pair with turned out to be gone. Too early
                 // for a bot (#496): back in the queue until the bot floor. No spin — the
                 // stale ticket is dropped, so the next pass waits on `bot_at`.
@@ -4601,6 +4652,12 @@ async fn matchmaker_loop(
             arrivals.push((req.user_id, Instant::now()));
         }
         record_match_queued(&db, req.ticket_id, req.user_id).await;
+        if !req.fights_ai {
+            info!(
+                "matchmaker: ticket {} — Fight AI is off for this alt: waits for a human, never an AI",
+                req.ticket_id
+            );
+        }
         // Push the captured 3-frame progression's first two frames now; the
         // `Succeeded` frame follows once the match resolves (pair or fallback). Sent to
         // the client's CURRENT live rms sender (re-fetched by `RmsHandle::send`).
@@ -5349,6 +5406,9 @@ pub async fn create_match(
     let character_id = body.player_id;
     let skill = load_skill(&app_state, session.session.user_id, character_id).await;
     let active = load_active(&app_state, session.session.user_id).await;
+    // The alt's "Fight AI" setting, read here for the same reason as the skill.
+    let fights_ai =
+        crate::arena::fight_ai::fights_ai(&app_state.db_pool, session.session.user_id).await;
 
     let via_vpn = req.headers().get("X-Newblades-Device-Ip").is_some();
     let expected_udp_ip = ["X-Newblades-Device-Ip", "X-Real-IP"]
@@ -5382,6 +5442,7 @@ pub async fn create_match(
             // whereas a public client told 10.99.0.1 can reach nothing.
             via_vpn,
             expected_udp_ip,
+            fights_ai,
         }))
         .map_err(|_| {
             app_state
@@ -5620,6 +5681,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_a),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
@@ -5631,6 +5693,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_b),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -5723,6 +5786,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_a),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
@@ -5734,6 +5798,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_b),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -5834,6 +5899,7 @@ mod tests {
             rms: RmsHandle::Direct(rms),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
         let deadline = tokio::time::Instant::now() + window;
@@ -5921,6 +5987,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_a),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6000,6 +6067,7 @@ mod tests {
                 level: 62,
                 trophies: 610,
             }),
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6017,6 +6085,7 @@ mod tests {
                 level: 44,
                 trophies: 210,
             }),
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6103,6 +6172,7 @@ mod tests {
                 level: 50,
                 trophies: 400,
             }),
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6123,6 +6193,7 @@ mod tests {
                 level: 50,
                 trophies: 400,
             }),
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6195,6 +6266,7 @@ mod tests {
             rms: RmsHandle::Direct(rms),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6269,6 +6341,7 @@ mod tests {
             rms: RmsHandle::Direct(rms),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6347,6 +6420,7 @@ mod tests {
             rms: RmsHandle::Direct(rms),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6447,6 +6521,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_a),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
         tx.send(MatchmakerCommand::Enqueue(TicketRequest {
@@ -6458,6 +6533,7 @@ mod tests {
             rms: RmsHandle::Direct(rms_dup),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6634,6 +6710,7 @@ mod tests {
             rms: RmsHandle::Direct(rms),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -6707,6 +6784,7 @@ mod tests {
             rms: RmsHandle::Direct(rms),
             active: false,
             skill: None,
+            fights_ai: true,
         }];
 
         // No DB makes both load calls return starter(); the bot guard is what turns
@@ -7314,6 +7392,7 @@ mod no_show_375 {
             rms: RmsHandle::Session(a),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
         tokio::time::sleep(StdDuration::from_millis(150)).await;
@@ -7329,6 +7408,7 @@ mod no_show_375 {
             rms: RmsHandle::Direct(rms_b),
             active: false,
             skill: None,
+            fights_ai: true,
         }))
         .unwrap();
 
@@ -7672,6 +7752,7 @@ mod pre_fight_quits_496 {
                 rms: RmsHandle::Direct(tx),
                 active: false,
                 skill,
+                fights_ai: true,
             },
             rx,
         )
@@ -7940,6 +8021,7 @@ mod humans_first_tests {
                     level: 50,
                     trophies,
                 }),
+                fights_ai: true,
             },
             rx,
         )
@@ -8491,5 +8573,187 @@ mod humans_first_tests {
         .unwrap();
         assert_eq!(recent_h2h_tickets(&mut conn, me, 28).await, 2);
         assert_eq!(recent_h2h_tickets(&mut conn, me, 60).await, 3);
+    }
+}
+
+/// Fight AI off (per alt, owner 2026-11-15): "People can then choose to queue up, and
+/// if anyone pops in, they get human fights, no AI fights."
+#[cfg(test)]
+mod fight_ai_off_tests {
+    use super::*;
+    use std::time::Duration as StdDuration;
+
+    /// Every fallback as short as it goes and the humans-first gate off (or its valve
+    /// at 1 s), so any wait seen here is the Fight AI setting's.
+    fn config(humans_first_cooldown: u64, valve: u64) -> ArenaConfig {
+        ArenaConfig {
+            solo_fallback_secs: 0,
+            busy_fallback_secs: 0,
+            recent_fallback_secs: 0,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
+            immediate_bot_users: Vec::new(),
+            humans_first_cooldown_secs: humans_first_cooldown,
+            humans_first_max_wait_secs: valve,
+            ..ArenaConfig::from_env()
+        }
+    }
+
+    fn ticket(
+        fights_ai: bool,
+        level: i32,
+        trophies: i64,
+    ) -> (
+        TicketRequest,
+        tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+    ) {
+        let (tx, rx) = unbounded_channel();
+        (
+            TicketRequest {
+                ticket_id: Uuid::new_v4(),
+                user_id: Uuid::new_v4(),
+                character_id: None,
+                rms: RmsHandle::Direct(tx),
+                via_vpn: false,
+                expected_udp_ip: None,
+                skill: Some(Skill { level, trophies }),
+                active: false,
+                fights_ai,
+            },
+            rx,
+        )
+    }
+
+    /// DB-less, a bot and a human pair both END in `Failed` from resolve's guards, so
+    /// "resolved" is the observable. A Fight-AI-off ticket alone must never resolve.
+    async fn resolved(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+        within: StdDuration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(
+                msg,
+                MatchmakingMessage::Failed { .. } | MatchmakingMessage::Succeeded { .. }
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn spawn(config: ArenaConfig, registry: Arc<MatchRegistry>) -> UnboundedSender<MatchmakerCommand> {
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry,
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
+        tx
+    }
+
+    #[test]
+    fn the_deadline_never_fires_for_a_lone_no_ai_ticket() {
+        let now = Instant::now();
+        let due = now - StdDuration::from_secs(600);
+        assert!(no_ai_deadline(false, 0, due, now) > now, "alone: never due");
+        assert_eq!(no_ai_deadline(false, 1, due, now), due, "a human waiting: last call as usual");
+        assert_eq!(no_ai_deadline(true, 0, due, now), due, "Fight AI on: unchanged");
+    }
+
+    /// The control for the tests below: the same config hands a default player an AI
+    /// at once, so a silent no-AI ticket is the setting, not a slow fallback.
+    #[tokio::test]
+    async fn a_default_player_still_gets_the_ai_promptly() {
+        let tx = spawn(config(0, 0), MatchRegistry::new(8));
+        let (t, mut rx) = ticket(true, 50, 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(
+            resolved(&mut rx, StdDuration::from_millis(3000)).await,
+            "default (Fight AI on) behaviour changed: no AI fallback"
+        );
+    }
+
+    /// Past every fallback tier AND the humans-first safety valve (1 s here, with a
+    /// human match just ended so the gate engages and then opens): still no AI.
+    #[tokio::test]
+    async fn a_no_ai_player_never_gets_a_bot_past_every_fallback_and_valve() {
+        let registry = MatchRegistry::new(8);
+        registry.set_last_pvp_end_for_test(Some(Instant::now()));
+        let tx = spawn(config(60, 1), registry);
+        let (t, mut rx) = ticket(false, 50, 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(
+            !resolved(&mut rx, StdDuration::from_millis(5000)).await,
+            "a Fight-AI-off player was handed an AI"
+        );
+    }
+
+    /// Two no-AI players far outside each other's bracket still meet: nothing else
+    /// could resolve them, so a resolution is the pairing.
+    #[tokio::test]
+    async fn two_no_ai_players_pair_with_each_other() {
+        let tx = spawn(config(0, 0), MatchRegistry::new(8));
+        let (a, mut rx_a) = ticket(false, 10, 0);
+        tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
+        assert!(!resolved(&mut rx_a, StdDuration::from_millis(2500)).await, "A got an AI");
+        let (b, mut rx_b) = ticket(false, 90, 5000);
+        tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
+        assert!(resolved(&mut rx_b, StdDuration::from_millis(3000)).await, "B not paired");
+        assert!(resolved(&mut rx_a, StdDuration::from_millis(500)).await, "A not paired");
+    }
+
+    /// "If anyone pops in, they get human fights": a default player arriving while a
+    /// no-AI player waits is paired with them, not given a bot of their own.
+    #[tokio::test]
+    async fn a_default_player_who_pops_in_takes_the_waiting_human() {
+        let tx = spawn(config(0, 0), MatchRegistry::new(8));
+        let (a, mut rx_a) = ticket(false, 50, 400);
+        tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
+        assert!(!resolved(&mut rx_a, StdDuration::from_millis(2500)).await, "A got an AI");
+        let (b, mut rx_b) = ticket(true, 50, 420);
+        tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
+        assert!(resolved(&mut rx_b, StdDuration::from_millis(3000)).await, "B not resolved");
+        assert!(
+            resolved(&mut rx_a, StdDuration::from_millis(500)).await,
+            "B was given something other than the waiting human"
+        );
+    }
+
+    /// A no-AI player whose client has gone (channel closed) is dropped with its
+    /// reservation — otherwise the next search from that account would be handed the
+    /// dead ticket. (Alone, the ticket never reaches the deadline branch that notices.)
+    #[tokio::test]
+    async fn an_abandoned_no_ai_ticket_releases_its_reservation() {
+        let registry = MatchRegistry::new(8);
+        let active = Arc::new(ActiveTickets::default());
+        let (cmd_tx, cmd_rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            cmd_rx,
+            config(0, 0),
+            registry.clone(),
+            active.clone(),
+            None,
+        ));
+        let (a, rx_a) = ticket(false, 50, 400);
+        let (user, tid) = (a.user_id, a.ticket_id);
+        cmd_tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
+        tokio::time::sleep(StdDuration::from_millis(300)).await;
+        let probe = Uuid::new_v4();
+        assert_eq!(
+            active.reserve_or_existing(user, probe, &registry),
+            tid,
+            "control: while the client is there its ticket is the live one"
+        );
+        drop(rx_a);
+        tokio::time::sleep(StdDuration::from_millis(2600)).await;
+        assert_eq!(
+            active.reserve_or_existing(user, probe, &registry),
+            probe,
+            "the gone client's ticket still holds the account's reservation"
+        );
     }
 }

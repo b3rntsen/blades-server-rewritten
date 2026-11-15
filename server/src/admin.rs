@@ -5997,6 +5997,57 @@ mod tests {
             assert_eq!(live(&mut c, cid).await.character["level"], 41);
         }
 
+        /// Fight AI (owner, 2026-11-15) is set per ALT: switching away parks the
+        /// alt with its setting, the arriving alt brings its own, and switching back
+        /// finds it again — nothing has to be copied through the version.
+        #[tokio::test]
+        async fn the_fight_ai_setting_stays_with_its_alt_across_switch_alt() {
+            let mut c = db!();
+            diesel_async::SimpleAsyncConnection::batch_execute(
+                &mut c,
+                include_str!(
+                    "../../migrations/2026-11-15-000000-0000_arena_alt_fight_ai/up.sql"
+                ),
+            )
+            .await
+            .unwrap();
+            use crate::arena::fight_ai::{live_alt_fights_ai, set_fight_ai};
+            let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 100, Some(alt_b)).await;
+            // B exists as a kept version; then A goes live.
+            snapshot_character(&mut c, cid, uid, None, "import", false)
+                .await
+                .unwrap();
+            diesel::sql_query("UPDATE characters SET source_alt_uuid = $2 WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .bind::<diesel::sql_types::Uuid, _>(alt_a)
+                .execute(&mut c)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                live_alt_fights_ai(&mut c, uid).await.unwrap(),
+                Some((alt_a, true)),
+                "no row = Fight AI on"
+            );
+            set_fight_ai(&mut c, uid, alt_a, false).await.unwrap();
+            assert_eq!(live_alt_fights_ai(&mut c, uid).await.unwrap(), Some((alt_a, false)));
+
+            apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+            assert_eq!(
+                live_alt_fights_ai(&mut c, uid).await.unwrap(),
+                Some((alt_b, true)),
+                "the arriving alt has its own setting, not the parked one's"
+            );
+
+            apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+            assert_eq!(
+                live_alt_fights_ai(&mut c, uid).await.unwrap(),
+                Some((alt_a, false)),
+                "back on A, its Fight AI = off survived being parked"
+            );
+        }
+
         /// #387: alts share the live row's id, so a loot or purchase roll
         /// seeded by it alone dealt two alts one sequence. Only a LATER alt is
         /// folded into the roll; the original — unstamped at first, then kept

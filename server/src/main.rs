@@ -770,6 +770,8 @@ async fn main() -> Result<()> {
                     .service(admin::restore_character_version)
                     .service(admin::list_alts)
                     .service(admin::switch_alt)
+                    .service(arena::fight_ai::get_fight_ai)
+                    .service(arena::fight_ai::set_fight_ai_route)
                     .service(admin::new_alt)
                     .service(testchar::mark_test_character)
                     .service(testchar::set_test_character_level)
