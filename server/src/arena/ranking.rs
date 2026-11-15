@@ -953,6 +953,12 @@ struct H2hReplayRow {
 /// a test alt is live, an old unstamped or one-sided match of the same account
 /// must still count for the real alt that fought it. (Every match recorded since
 /// alts were tracked is stamped at record time, so a test alt's fights are.)
+///
+/// A match belongs to the newest season whose window holds it, but never to a
+/// `scheduled` one: a scheduled season's `starts_at` is only a plan (activation
+/// rewrites it to the moment it goes live), so a season queued to start "now"
+/// would otherwise take every match off the running season's board (tracker
+/// #517). `arena_economy::h2h_season_at` applies the same rule live.
 pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
     WITH sided AS ( \
          SELECT r.id, r.game_session_id, r.recorded_at, r.character_id, r.opponent_character_id, \
@@ -1002,6 +1008,7 @@ pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
              SELECT id FROM arena_seasons s \
              WHERE r.recorded_at >= to_timestamp(s.starts_at) \
                AND r.recorded_at < to_timestamp(s.ends_at) \
+               AND s.status <> 'scheduled' \
              ORDER BY s.starts_at DESC LIMIT 1 \
          ) s ON true \
      ), replay_rows AS ( \
@@ -2011,8 +2018,8 @@ mod tests {
 
         async fn seed_season(conn: &mut AsyncPgConnection, id: Uuid, start: i64, end: i64) {
             diesel::sql_query(
-                "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
-                 VALUES ($1, 1, 'test', $2, $3)",
+                "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                 VALUES ($1, 1, 'test', $2, $3, 'ended')",
             )
             .bind::<diesel::sql_types::Uuid, _>(id)
             .bind::<diesel::sql_types::BigInt, _>(start)
@@ -2276,6 +2283,69 @@ mod tests {
             assert_eq!(second, report);
             assert_eq!(all_time(&mut conn).await, first_all);
             assert_eq!(seasonal(&mut conn).await, first_seasons);
+        }
+
+        /// Tracker #517: a season queued (`scheduled`) with a `starts_at` inside the
+        /// running season took every later match off the running season's board
+        /// and match feed. A match belongs to the active season until the queued
+        /// one is actually opened.
+        #[tokio::test]
+        async fn a_scheduled_season_does_not_take_matches_from_the_active_one() {
+            let Some(mut conn) = fixture().await else {
+                eprintln!("SKIP: TEST_DATABASE_URL unset — h2h season attribution not verified");
+                return;
+            };
+            let (active, queued) = (Uuid::from_u128(1000), Uuid::from_u128(2000));
+            // Active 2023-11-14 22:13:20 → +10 days; queued from +1 day (overlapping).
+            seed_season(&mut conn, active, 1_700_000_000, 1_700_864_000).await;
+            diesel::sql_query("UPDATE arena_seasons SET status = 'active' WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(active)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            diesel::sql_query(
+                "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+                 VALUES ($1, 2, 'queued', 1700086400, 1702000000, 'scheduled')",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(queued)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+            let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+            seed_character(&mut conn, a).await;
+            seed_character(&mut conn, b).await;
+            for (n, at) in [
+                (10, "2023-11-14 23:00:00+00"),
+                (11, "2023-11-16 05:36:43+00"),
+            ] {
+                seed_match(&mut conn, Uuid::from_u128(n), a, b, at, true, true, (2, 0)).await;
+            }
+
+            let cfg = H2hRatingConfig::default();
+            reconcile_h2h_ratings_with_config(&mut conn, &cfg, false)
+                .await
+                .unwrap();
+            let seasons = seasonal(&mut conn).await;
+            assert!(
+                seasons
+                    .iter()
+                    .all(|r| r.season_id == active && r.matches == 2),
+                "both matches are rated in the active season, none in the queued one: {seasons:?}"
+            );
+            let log = load_h2h_match_log(&mut conn, &cfg, Some(active))
+                .await
+                .unwrap();
+            assert_eq!(
+                log.len(),
+                2,
+                "the active season's match feed holds the later match"
+            );
+            assert!(
+                load_h2h_match_log(&mut conn, &cfg, Some(queued))
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
         }
 
         #[tokio::test]
