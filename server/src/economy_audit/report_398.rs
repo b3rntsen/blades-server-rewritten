@@ -359,7 +359,10 @@ const PINNED_BELOW_45: [(&str, u64); 9] = [
     // #461 (HauDrauf, 2026-11-04) re-pins quests and event_dungeons in the 2026-11-14b
     // batch: the seven enchanting ingredients drop equally often in quest, job and
     // event loot at every level.
-    ("quests", 0x38d2_54b3_fb43_9c3e),
+    // #521 re-pins quests (2026-11-15): the digest covers the whole quest body, and
+    // an accepted gated quest now lists only its prerequisite-free objectives (was
+    // 0x38d2_54b3_fb43_9c3e). Rewards and dungeon data are untouched.
+    ("quests", 0xdec4_7c84_7bae_6360),
     ("event_dungeons", 0xa38a_4214_0438_3fdf),
     // #431 re-pins jobs in the 2026-11-10 batch: a Duel's champion is +8 over the
     // job and capped at 70 (was 0x1455_a9aa_6819_838d with a 4-8 delta).

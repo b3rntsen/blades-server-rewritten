@@ -39,6 +39,7 @@ mod authentification;
 mod challenge;
 mod character;
 mod character_data;
+mod character_names;
 mod character_ops;
 mod chests;
 mod community_hunt;
@@ -414,7 +415,19 @@ async fn main() -> Result<()> {
                 data
             };
 
-            let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"));
+            // Levels past retail's 100 (#425) stay off until ARENA_MAX_PLAYER_LEVEL
+            // is raised, which waits on the client pack that extends the client's
+            // own level table: a stock client hangs on load at level 101.
+            let max_player_level = blades_lib::features::level_up::max_level_from_env(
+                std::env::var("ARENA_MAX_PLAYER_LEVEL").ok().as_deref(),
+            );
+            let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"))
+                .with_max_level(max_player_level);
+            log::info!(
+                "[level] player level cap {} (ARENA_MAX_PLAYER_LEVEL; retail {})",
+                level_up_data.max_level(),
+                blades_lib::features::level_up::RETAIL_MAX_LEVEL
+            );
             let events_json = load_static_json("event_quests.json");
             let events_data = EventQuestData::from_json(&events_json);
 
@@ -769,6 +782,8 @@ async fn main() -> Result<()> {
                     .service(admin::rebuild_arena_h2h_ratings)
                     .service(admin::get_current_character)
                     .service(admin::set_current_character_name)
+                    .service(character_names::backfill_character_names)
+                    .service(character_names::undo_character_name_backfill)
                     .service(admin::set_current_town_name)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)

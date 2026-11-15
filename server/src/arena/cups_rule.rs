@@ -745,6 +745,18 @@ mod tests {
             .unwrap()
         }
 
+        /// The Top 100 "all matches" board's `wins`, keyed by board id, sorted.
+        async fn board_wins(c: &mut AsyncPgConnection) -> Vec<(Uuid, i64)> {
+            let mut w: Vec<(Uuid, i64)> = crate::arena::leaderboards::ranked_entries(c, 100, 0)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|e| (e.character_id, e.number_of_matches_won))
+                .collect();
+            w.sort();
+            w
+        }
+
         async fn counter(c: &mut AsyncPgConnection, table: &str, id: Uuid) -> i64 {
             diesel::sql_query(format!(
                 "SELECT 'x' AS what, (character->>'pvpTrophies')::bigint AS v FROM {table} WHERE id = '{id}'"
@@ -837,6 +849,18 @@ mod tests {
             assert_eq!(parked_b, 105);
             assert_eq!(counter(&mut c, "characters", cid2).await, 28);
             let original = snapshot(&mut c).await;
+            // Top 100 "all matches" wins, per alt: a count of win rows, which a
+            // recalculation never touches. Pinned here and after each flip.
+            let wins_before = board_wins(&mut c).await;
+            assert_eq!(
+                wins_before,
+                {
+                    let mut e = vec![(cid, 81), (cid2, 1), (alt_b, 1)];
+                    e.sort();
+                    e
+                },
+                "alt A 80 AI + 1 h2h, parked alt B 1 h2h, cid2 1"
+            );
             let again = recalculate(&mut c, &classic_cfg, false).await.unwrap();
             assert_eq!(
                 (
@@ -857,6 +881,11 @@ mod tests {
             // alt A: +20 (|−20|) → 20 + 78*32 = 2516 → then 2 wins at +1 → 2518,
             // AI loss 0, voided 0, h2h 2-0 |40|/2=20 → 2538, h2h 1-2 |−10|/2=5 → 2543
             assert_eq!(counter(&mut c, "characters", cid).await, 2543);
+            assert_eq!(
+                board_wins(&mut c).await,
+                wins_before,
+                "a cups-rule recalculation (#614) must not move a single win"
+            );
             // alt B: 15+50=65 → +15=80 → 35+50=85 → 165
             let b_now = diesel::sql_query(format!(
                 "SELECT 'x' AS what, (character->>'pvpTrophies')::bigint AS v FROM character_versions \
@@ -913,6 +942,7 @@ mod tests {
             let back = recalculate(&mut c, &classic_cfg, false).await.unwrap();
             assert_eq!(back.rows_rewritten, done.rows_rewritten);
             assert_eq!(snapshot(&mut c).await, original);
+            assert_eq!(board_wins(&mut c).await, wins_before);
         }
 
         /// A live result written under HauDrauf keeps its classic value, so a

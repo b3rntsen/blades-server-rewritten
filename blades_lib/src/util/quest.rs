@@ -48,9 +48,13 @@ pub fn generate_quest_data(
     };
 
     let difficulty_level = scaling.enemy_level(player_level);
+    // Only the objectives the quest graph lets start at once are active on
+    // accept; a gated one appears when the client activates it (see
+    // [`objective_prerequisites`]).
     let objective_statuses: HashMap<Uuid, ObjectiveStatus> = dungeon_info
         .objectives
         .iter()
+        .filter(|(id, _o)| objective_prerequisites(quest_id, **id).is_empty())
         .map(|(id, _o)| {
             (
                 *id,
@@ -116,6 +120,69 @@ pub fn generate_quest_data(
     crate::features::high_level_materials::pay_dungeon(&mut generated_dungeon_data, player_level);
 
     Ok((quest, Some(generated_dungeon_data)))
+}
+
+static OBJECTIVE_PREREQUISITES_RAW: &str = include_str!("../quest_objective_prerequisites.json");
+
+#[derive(serde::Deserialize)]
+struct PrerequisiteEntry {
+    prerequisites: HashMap<Uuid, Vec<Uuid>>,
+}
+
+fn prerequisite_table() -> &'static HashMap<Uuid, PrerequisiteEntry> {
+    static TABLE: std::sync::OnceLock<HashMap<Uuid, PrerequisiteEntry>> =
+        std::sync::OnceLock::new();
+    TABLE.get_or_init(|| serde_json::from_str(OBJECTIVE_PREREQUISITES_RAW).unwrap_or_default())
+}
+
+/// The objectives that must be `Completed` before `objective` of `quest` may start.
+///
+/// From each APK quest holder's `ObjectivesToCompleteBefore` (41 quests carry at
+/// least one such gate, e.g. GH01 "The Justiciar Cometh": talk to Aranande ->
+/// talk to Henrik -> return to Aranande). MEASURED: every one of 50 captured
+/// retail `/accept` responses — 17 of them for gated quests — lists exactly the
+/// objectives with no prerequisite, and nothing else. The client sends a gated
+/// objective's `Active` itself, in the same `/objectives` POST that completes
+/// its prerequisite.
+pub fn objective_prerequisites(quest: Uuid, objective: Uuid) -> &'static [Uuid] {
+    prerequisite_table()
+        .get(&quest)
+        .and_then(|e| e.prerequisites.get(&objective))
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+/// Take back the objectives an older accept switched on before their turn (#521).
+///
+/// Until this fix `/accept` marked EVERY objective `Active`, so a stored GH01 row
+/// read "talk to Henrik" and "return to Aranande" as already running while
+/// "talk to Aranande" was still open — a state retail never produced, and the
+/// quest no player on this server ever got past. An objective is dropped only if
+/// it is untouched (`Active`, progress 0, not completed) and one of its
+/// prerequisites is not `Completed`; anything the player has actually advanced is
+/// left alone. Returns whether the row changed.
+pub fn drop_premature_objectives(quest: &mut Quest) -> bool {
+    let gld = quest.gld_quest_id;
+    let premature: Vec<Uuid> = quest
+        .objective_statuses
+        .iter()
+        .filter(|(_, st)| {
+            matches!(st.status, QuestStatus::Active) && !st.completed && st.progress == 0.0
+        })
+        .filter(|(id, _)| {
+            objective_prerequisites(gld, **id).iter().any(|pre| {
+                !quest
+                    .objective_statuses
+                    .get(pre)
+                    .is_some_and(|p| matches!(p.status, QuestStatus::Completed))
+            })
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in &premature {
+        quest.objective_statuses.remove(id);
+    }
+    !premature.is_empty()
 }
 
 /// A quest dungeon's generated data: every stage of its variant family (#260).
@@ -1118,5 +1185,117 @@ mod report_461_even_effect_ingredients {
                 );
             }
         }
+    }
+}
+
+/// Report #521: Henrik Seven-Swords never offered his "The Justiciar Cometh" line.
+///
+/// His dialogue is reached only while GH01 is active with "talk to Aranande"
+/// `Completed` and "talk to Henrik" `Active` (APK `OldBlademasterOtherQuestsDialogue`
+/// -> `OldBlademasterGH01Dialogue`). Our accept served all three objectives
+/// `Active` from the start; retail served only the first.
+#[cfg(test)]
+mod report_521_objective_gates {
+    use super::*;
+    use crate::static_data::QuestLevelScaling;
+
+    const GH01: Uuid = Uuid::from_u128(0x095b8109_0e57_400d_bcf4_70e10df8cdbf);
+    const TALK_ARANANDE: Uuid = Uuid::from_u128(0xaf3320f1_5331_4e56_91c4_95ead0190929);
+    const TALK_HENRIK: Uuid = Uuid::from_u128(0x2b4ba889_eb4c_4c82_bfb2_717127af52ed);
+    const RETURN_ARANANDE: Uuid = Uuid::from_u128(0xc70cb947_b927_40c0_b987_200eedfb14ee);
+    // MQ04 "Rebuild the Town Hall": two objectives, neither gated.
+    const MQ04: Uuid = Uuid::from_u128(0x3b478dfa_73bb_42df_a420_05cf83d015bc);
+
+    fn game_data() -> GameData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        serde_json::from_str(&std::fs::read_to_string(path).expect("read parsed.json"))
+            .expect("parse game data")
+    }
+
+    fn st(status: QuestStatus, progress: f64) -> ObjectiveStatus {
+        ObjectiveStatus {
+            completed: matches!(status, QuestStatus::Completed),
+            status,
+            progress,
+        }
+    }
+
+    #[test]
+    fn the_prerequisite_table_parses_and_knows_gh01() {
+        assert!(
+            prerequisite_table().len() >= 41,
+            "{}",
+            prerequisite_table().len()
+        );
+        assert_eq!(objective_prerequisites(GH01, TALK_HENRIK), &[TALK_ARANANDE]);
+        assert_eq!(
+            objective_prerequisites(GH01, RETURN_ARANANDE),
+            &[TALK_HENRIK]
+        );
+        assert!(objective_prerequisites(GH01, TALK_ARANANDE).is_empty());
+    }
+
+    /// Retail `/accept` of GH01 (capture 64052): `{af3320f1: Active}` and nothing else.
+    #[test]
+    fn accepting_gh01_starts_only_talk_to_aranande() {
+        let (quest, _) =
+            generate_quest_data(&game_data(), GH01, 38, &QuestLevelScaling::default()).unwrap();
+        let keys: Vec<Uuid> = quest.objective_statuses.keys().copied().collect();
+        assert_eq!(keys, vec![TALK_ARANANDE]);
+    }
+
+    /// The control: a quest with no gates still starts every objective, as retail did.
+    #[test]
+    fn an_ungated_quest_still_starts_every_objective() {
+        let (quest, _) =
+            generate_quest_data(&game_data(), MQ04, 10, &QuestLevelScaling::default()).unwrap();
+        assert_eq!(quest.objective_statuses.len(), 2);
+    }
+
+    fn stored_gh01(statuses: &[(Uuid, ObjectiveStatus)]) -> Quest {
+        let (mut q, _) =
+            generate_quest_data(&game_data(), GH01, 38, &QuestLevelScaling::default()).unwrap();
+        q.objective_statuses = statuses.iter().cloned().collect();
+        q
+    }
+
+    /// Rim Rusefm's stored row: all three `Active`, nothing done.
+    #[test]
+    fn an_all_active_row_is_cut_back_to_its_first_objective() {
+        let mut q = stored_gh01(&[
+            (TALK_ARANANDE, st(QuestStatus::Active, 0.0)),
+            (TALK_HENRIK, st(QuestStatus::Active, 0.0)),
+            (RETURN_ARANANDE, st(QuestStatus::Active, 0.0)),
+        ]);
+        assert!(drop_premature_objectives(&mut q));
+        let keys: Vec<Uuid> = q.objective_statuses.keys().copied().collect();
+        assert_eq!(keys, vec![TALK_ARANANDE]);
+    }
+
+    /// Hexe / Gamermaus404: Aranande done, so Henrik is legitimately active —
+    /// only "return to Aranande" goes.
+    #[test]
+    fn a_row_past_the_first_gate_keeps_the_objective_it_unlocked() {
+        let mut q = stored_gh01(&[
+            (TALK_ARANANDE, st(QuestStatus::Completed, 1.0)),
+            (TALK_HENRIK, st(QuestStatus::Active, 0.0)),
+            (RETURN_ARANANDE, st(QuestStatus::Active, 0.0)),
+        ]);
+        assert!(drop_premature_objectives(&mut q));
+        assert!(q.objective_statuses.contains_key(&TALK_HENRIK));
+        assert!(!q.objective_statuses.contains_key(&RETURN_ARANANDE));
+    }
+
+    /// Already retail-shaped rows, and progress the player made, are never touched.
+    #[test]
+    fn a_retail_shaped_or_advanced_row_is_left_alone() {
+        let mut retail = stored_gh01(&[(TALK_ARANANDE, st(QuestStatus::Active, 0.0))]);
+        assert!(!drop_premature_objectives(&mut retail));
+        let mut advanced = stored_gh01(&[
+            (TALK_ARANANDE, st(QuestStatus::Active, 0.0)),
+            (TALK_HENRIK, st(QuestStatus::Active, 0.5)),
+        ]);
+        assert!(!drop_premature_objectives(&mut advanced));
+        assert_eq!(advanced.objective_statuses.len(), 2);
     }
 }
