@@ -780,6 +780,7 @@ async fn main() -> Result<()> {
                     .service(community_hunt::get_community_hunt_progress)
                     .service(admin::put_arena_ranking_config)
                     .service(admin::get_arena_ranking_config_history)
+                    .service(arena::cups_rule::post_cups_rule_recalculate)
                     .service(admin::get_arena_h2h_top)
                     .service(admin::list_arena_h2h_seasons)
                     .service(arena::top100_boards::get_arena_game_top)

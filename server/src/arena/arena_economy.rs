@@ -76,8 +76,12 @@ pub struct MatchEconomyOutcome {
     /// straight into the backpack when the account count confirms the milestone.
     /// `None` on every other fight.
     pub card_weapon: Option<blades_lib::economy::RewardItem>,
-    /// Signed trophy swing (already Elo-weighted by the engine).
+    /// Signed trophy swing (already Elo-weighted by the engine), under the
+    /// selected cups rule.
     pub trophy_delta: i64,
+    /// d54: what the classic rule pays for the same match (== `trophy_delta`
+    /// while the rule is `classic`).
+    pub classic_trophy_delta: i64,
     /// Rounds this player won (drives the chest meter).
     pub rounds_won: u8,
     /// Rounds the opponent won.
@@ -693,10 +697,10 @@ async fn insert_match_audit(
          (id, character_id, opponent_character_id, game_session_id, win, \
           rounds_won, rounds_lost, gold, character_xp, trophy_delta, \
           trophies_after, matchmaking_trophies_after, arena, arena_level, chest_meter, \
-          recorded_at, is_h2h, source_alt_uuid) \
+          recorded_at, is_h2h, source_alt_uuid, classic_trophy_delta) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
                  to_timestamp($16), $17, \
-                 (SELECT source_alt_uuid FROM characters WHERE id = $2))",
+                 (SELECT source_alt_uuid FROM characters WHERE id = $2), $18)",
     )
     .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
     .bind::<diesel::sql_types::Uuid, _>(a.character_id)
@@ -715,6 +719,7 @@ async fn insert_match_audit(
     .bind::<diesel::sql_types::BigInt, _>(a.meter)
     .bind::<diesel::sql_types::BigInt, _>(outcome.completed_at_secs)
     .bind::<diesel::sql_types::Bool, _>(outcome.h2h)
+    .bind::<diesel::sql_types::BigInt, _>(outcome.classic_trophy_delta)
     .execute(conn)
     .await?;
     Ok(())
@@ -1080,6 +1085,7 @@ mod tests {
             finished_fight: true,
             card_weapon: None,
             trophy_delta: 30,
+            classic_trophy_delta: 30,
             rounds_won: 2,
             rounds_lost: 0,
             win: true,
@@ -1321,6 +1327,7 @@ mod tests {
             finished_fight: gems > 0,
             card_weapon: None,
             trophy_delta: 0,
+            classic_trophy_delta: 0,
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },
             win,
@@ -1394,7 +1401,7 @@ mod tests {
                  game_session_id UUID, win BOOLEAN NOT NULL, rounds_won INTEGER NOT NULL DEFAULT 0, \
                  rounds_lost INTEGER NOT NULL DEFAULT 0, gold BIGINT NOT NULL DEFAULT 0, \
                  character_xp BIGINT NOT NULL DEFAULT 0, trophy_delta BIGINT NOT NULL DEFAULT 0, \
-                 trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
+                 classic_trophy_delta BIGINT, trophies_after BIGINT NOT NULL DEFAULT 0, matchmaking_trophies_after BIGINT NOT NULL DEFAULT 0, \
                  arena INTEGER NOT NULL DEFAULT 1, arena_level INTEGER NOT NULL DEFAULT 1, \
                  chest_meter BIGINT NOT NULL DEFAULT 0, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
                  is_h2h BOOLEAN NOT NULL DEFAULT false, source_alt_uuid UUID)",
@@ -1467,6 +1474,7 @@ mod tests {
             finished_fight: true,
             card_weapon: None,
             trophy_delta: if win { 24 } else { -24 },
+            classic_trophy_delta: if win { 24 } else { -24 },
             rounds_won: if win { 2 } else { 0 },
             rounds_lost: if win { 0 } else { 2 },
             win,

@@ -73,6 +73,8 @@ diesel::table! {
         /// The alt that played this match. NULL = recorded before alts were
         /// tracked; read as the alt live now.
         source_alt_uuid -> Nullable<Uuid>,
+        /// d54: what the classic rule paid. NULL = `trophy_delta` is classic.
+        classic_trophy_delta -> Nullable<Int8>,
     }
 }
 

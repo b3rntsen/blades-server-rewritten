@@ -255,8 +255,62 @@ impl Default for H2hRatingConfig {
     }
 }
 
+/// Which rule turns a match into a season trophy change (owner decision d54).
+///
+/// `Classic` is the table below exactly as it shipped. `Haudrauf2500` is
+/// HauDrauf's rule (tracker #515), decided on the player's total BEFORE the
+/// match:
+///
+/// * below 2500 — the classic change with its sign dropped (a loss pays what it
+///   would have cost), the h2h `flat_award` still added on top;
+/// * from 2500 — an AI win +1, an AI loss 0, an h2h match half the classic
+///   change without the award (`|base| / 2`, rounded down), no award.
+///
+/// It is a transform of the classic change, so the classic value is always
+/// recoverable and every stored match keeps it (`classic_trophy_delta`); see
+/// [`crate::arena::cups_rule`] for the recalculation in both directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum CupsRule {
+    #[default]
+    #[serde(rename = "classic")]
+    Classic,
+    #[serde(rename = "haudrauf_2500")]
+    Haudrauf2500,
+}
+
+impl CupsRule {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Haudrauf2500 => "haudrauf_2500",
+        }
+    }
+}
+
+/// The total from which [`CupsRule::Haudrauf2500`] stops paying full trophies.
+pub const HAUDRAUF_THRESHOLD: i64 = 2500;
+
+/// One match under [`CupsRule::Haudrauf2500`], from the classic change split
+/// into its `base` (the fixed / Elo part) and the h2h `award`, and the player's
+/// total before the match.
+pub fn haudrauf_delta(base: i64, award: i64, h2h: bool, win: bool, own_before: i64) -> i64 {
+    if own_before < HAUDRAUF_THRESHOLD {
+        base.abs() + award
+    } else if h2h {
+        base.abs() / 2
+    } else if win {
+        1
+    } else {
+        0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankingConfig {
+    /// d54: default `classic`, so a config row written before this field
+    /// existed (and every fresh database) keeps today's numbers.
+    #[serde(default)]
+    pub cups_rule: CupsRule,
     #[serde(default)]
     pub bot: BotConfig,
     #[serde(default)]
@@ -272,6 +326,7 @@ pub struct RankingConfig {
 impl Default for RankingConfig {
     fn default() -> Self {
         Self {
+            cups_rule: CupsRule::Classic,
             bot: BotConfig::default(),
             human: HumanConfig::default(),
             elo: EloConfig::default(),
@@ -532,7 +587,31 @@ pub struct TrophyDeltaInput {
     pub h2h_pair_matches_today: usize,
 }
 
+/// The trophy change the selected [`CupsRule`] pays for this match.
 pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
+    let (base, award) = classic_parts(config, input);
+    match config.cups_rule {
+        CupsRule::Classic => base + award,
+        CupsRule::Haudrauf2500 => haudrauf_delta(
+            base,
+            award,
+            input.h2h,
+            input.outcome.win,
+            input.own_trophies,
+        ),
+    }
+}
+
+/// What the classic rule pays for this match, whatever rule is selected. Stored
+/// beside every result (`arena_match_results.classic_trophy_delta`) so a switch
+/// of rule can always be recalculated back.
+pub fn classic_trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
+    let (base, award) = classic_parts(config, input);
+    base + award
+}
+
+/// The classic change as `(base, h2h award)`.
+fn classic_parts(config: &RankingConfig, input: TrophyDeltaInput) -> (i64, i64) {
     if input.h2h {
         return match config.human.mode {
             HumanMode::Flat => {
@@ -541,18 +620,21 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
                 } else {
                     0
                 };
-                config.human.fixed.delta(input.outcome) + award
+                (config.human.fixed.delta(input.outcome), award)
             }
-            HumanMode::Fixed => config.human.fixed.delta(input.outcome),
-            HumanMode::Elo => elo_delta(
-                &config.elo,
-                input.outcome,
-                input.own_trophies,
-                input.opponent_trophies_for_pricing,
+            HumanMode::Fixed => (config.human.fixed.delta(input.outcome), 0),
+            HumanMode::Elo => (
+                elo_delta(
+                    &config.elo,
+                    input.outcome,
+                    input.own_trophies,
+                    input.opponent_trophies_for_pricing,
+                ),
+                0,
             ),
         };
     }
-    match config.bot.mode {
+    let base = match config.bot.mode {
         BotMode::Fixed => config.bot.fixed.delta(input.outcome),
         BotMode::Elo => {
             let delta = elo_delta(
@@ -567,7 +649,29 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
                 delta
             }
         }
+    };
+    (base, 0)
+}
+
+/// Split a STORED classic change back into `(base, award)` for a replay.
+///
+/// An h2h row under `Flat` paid `fixed(outcome) + award` with award either 0 or
+/// `flat_award`; anything else (a config that has since changed, an Elo-era row)
+/// is taken as all base. AI rows are all base.
+pub fn split_stored_classic(
+    config: &RankingConfig,
+    stored: i64,
+    h2h: bool,
+    outcome: MatchOutcome,
+) -> (i64, i64) {
+    if h2h && config.human.mode == HumanMode::Flat {
+        let base = config.human.fixed.delta(outcome);
+        let award = stored - base;
+        if award == 0 || award == config.human.flat_award {
+            return (base, award);
+        }
     }
+    (stored, 0)
 }
 
 pub fn elo_delta(
@@ -1425,6 +1529,7 @@ mod tests {
     fn defaults_serialize_to_contract_json() {
         let got = serde_json::to_value(RankingConfig::default()).unwrap();
         let expected = json!({
+            "cups_rule": "classic",
             "bot": {
                 "pricing": "own",
                 "jitter": 50,

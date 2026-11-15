@@ -1951,16 +1951,18 @@ impl MatchInstance {
             // match does not retroactively raise its own payout.
             let arena = arena_ladder::tier_for_trophies(p.high_water).arena;
             let payout = arena_ladder::match_reward(level, outcome, arena);
-            let trophy_delta = ranking::trophy_delta(
-                &self.ranking.config,
-                ranking::TrophyDeltaInput {
-                    outcome,
-                    own_trophies: p.trophies,
-                    opponent_trophies_for_pricing: opponent_trophies,
-                    h2h: h2h_match,
-                    h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
-                },
-            );
+            let delta_input = ranking::TrophyDeltaInput {
+                outcome,
+                own_trophies: p.trophies,
+                opponent_trophies_for_pricing: opponent_trophies,
+                h2h: h2h_match,
+                h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
+            };
+            let trophy_delta = ranking::trophy_delta(&self.ranking.config, delta_input);
+            // d54: what the classic rule pays, stored beside the payout so a
+            // switch of rule can be recalculated back losslessly.
+            let classic_trophy_delta =
+                ranking::classic_trophy_delta(&self.ranking.config, delta_input);
 
             // Post-match counters, computed once so the card and the durable write are
             // literally the same numbers.
@@ -2327,6 +2329,11 @@ impl MatchInstance {
                     finished_fight: finish.is_finished(),
                     card_weapon: card_weapon.clone(),
                     trophy_delta: if void_result { 0 } else { trophy_delta },
+                    classic_trophy_delta: if void_result {
+                        0
+                    } else {
+                        classic_trophy_delta
+                    },
                     rounds_won,
                     rounds_lost,
                     win: is_winner && !void_result,
