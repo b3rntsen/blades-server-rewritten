@@ -48,6 +48,12 @@ impl BladeApiError {
         self.error_code
     }
 
+    /// The envelope's service id — with `error_code()`, the key the client looks
+    /// the error up by in its `HttpErrorsHandling` table.
+    pub fn service_id(&self) -> u64 {
+        self.service_id
+    }
+
     pub fn unauthorized() -> Self {
         Self::new(StatusCode::UNAUTHORIZED, 1, 200)
     }

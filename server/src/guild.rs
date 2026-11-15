@@ -3609,6 +3609,71 @@ pub async fn create_exchange(
     }))
 }
 
+/// Retail's GUILD_EXCHANGE service id. Donate refusals go out under it, with a
+/// code from the client's own `HttpErrorsHandling` table
+/// (`data/guild_exchange_http_errors.csv`, the service-127 rows of
+/// `sharedassets0.assets`), so the client finds a row and handles the refusal.
+/// Tracker #520: an exchange filled two seconds earlier by another guildmate
+/// answered 409 / service 9008 / code 13 — no row — and the client rebooted.
+const GUILD_EXCHANGE_SERVICE_ID: u64 = 127;
+/// `GUILD_EXCHANGE_NOT_EXIST` — "Ok" button; in the member-action context the
+/// client shows `UI.Message.Guild.ExchangeComplete` and resyncs the guild.
+const EXCHANGE_NOT_EXIST: u64 = 300;
+/// `GUILD_EXCHANGE_REQUESTED_AMOUNT_REACHED` — "Ok" button
+/// (`UI.Error.GuildExchangeRequestedAmountReached`); in the member-action context
+/// `UI.Message.Guild.ExchangeComplete` and a guild resync.
+const EXCHANGE_AMOUNT_REACHED: u64 = 303;
+/// `INVENTORY_HAS_NO_ITEM_TO_DONATE`.
+const EXCHANGE_NO_ITEM_TO_DONATE: u64 = 200;
+
+/// Every GUILD_EXCHANGE refusal is HTTP 400 in the client's table.
+fn exchange_refusal(code: u64) -> BladeApiError {
+    BladeApiError::new(StatusCode::BAD_REQUEST, GUILD_EXCHANGE_SERVICE_ID, code)
+}
+
+/// The request a donate lands on, locked `FOR NO KEY UPDATE` so two donors to
+/// the same request serialise: the second one waits for the first to commit and
+/// then sees its `donation_sum`. A request that is already full — or gone — is
+/// refused with retail's code BEFORE anything is debited (#520).
+///
+/// A DONATE NAMES NO EXCHANGE ID. The client sends only
+/// `{requesterUserId, requesterCharacterId, itemTemplateId}`, so when a player
+/// has more than one open request for the SAME item the three do not identify a
+/// row — production once held two Grand Soul Gem requests from one character,
+/// one full at 10/10 and one open at 0/1. All candidates are read, oldest first,
+/// and the first one that still needs items wins ([`pick_candidate`]); "some
+/// other request of theirs is full" must not be mistaken for "this request is
+/// full" (reported 2026-09-19).
+async fn pick_donatable_exchange(
+    conn: &mut AsyncPgConnection,
+    guild_id: &str,
+    req: &DonateRequest,
+) -> Result<GuildExchangeRow, BladeApiError> {
+    use crate::schema::guild_exchanges::dsl as ge;
+    let candidates: Vec<GuildExchangeRow> = ge::guild_exchanges
+        .filter(ge::guild_id.eq(guild_id))
+        .filter(ge::requester_character_id.eq(req.requester_character_id))
+        .filter(ge::item_template_id.eq(req.item_template_id))
+        .filter(ge::redeemed.eq(false))
+        .order((ge::creation_time.asc(), ge::id.asc()))
+        .select(GuildExchangeRow::as_select())
+        .for_no_key_update()
+        .load(conn)
+        .await?;
+    if candidates.is_empty() {
+        return Err(exchange_refusal(EXCHANGE_NOT_EXIST));
+    }
+    let pick = pick_candidate(&candidates);
+    let exchange = candidates.into_iter().nth(pick).expect("non-empty");
+    // A guildmate may give to the same request more than once (#462). What is
+    // never allowed is giving past `requestedAmount`: those items could never be
+    // redeemed, since redemption is capped at the requested amount.
+    if exchange.requested_amount - exchange.donation_sum <= 0 {
+        return Err(exchange_refusal(EXCHANGE_AMOUNT_REACHED));
+    }
+    Ok(exchange)
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DonateRequest {
@@ -3655,25 +3720,7 @@ pub async fn donate_exchange(
 
     conn.transaction(move |conn| {
         async move {
-            // Find the exchange (must be in same guild, not redeemed).
-            //
-            // A DONATE NAMES NO EXCHANGE ID. The client sends only
-            // `{requesterUserId, requesterCharacterId, itemTemplateId}`, so when a
-            // player has more than one open request for the SAME item the three of
-            // them do not identify a row — and nothing stops that: production holds
-            // two Grand Soul Gem requests from one character, one already full at
-            // 10/10 and one open at 0/1.
-            //
-            // This used to take whatever the database returned first, with no
-            // ORDER BY. Landing on the full one answers 409 while the player is
-            // looking at the open one, and the client restarts rather than showing
-            // the error. Reported 2026-09-19.
-            //
-            // So all candidates are read, in a deterministic order, and the first
-            // one this donor can actually give to wins. The refusals below are
-            // unchanged and still fire when NO candidate is donatable — the point
-            // is that "some other request of theirs is full" must not be mistaken
-            // for "this request is full".
+            // The request is found (and locked) by `pick_donatable_exchange`.
             // Nobody funds their own request.
             //
             // MEASURED: 3,198 donations across 1,350 captured retail exchanges,
@@ -3697,49 +3744,11 @@ pub async fn donate_exchange(
             }
 
             use crate::schema::guild_exchanges::dsl as ge;
-            let candidates: Vec<GuildExchangeRow> = ge::guild_exchanges
-                .filter(ge::guild_id.eq(&m.guild_id))
-                .filter(ge::requester_character_id.eq(req.requester_character_id))
-                .filter(ge::item_template_id.eq(req.item_template_id))
-                .filter(ge::redeemed.eq(false))
-                .order((ge::creation_time.asc(), ge::id.asc()))
-                .select(GuildExchangeRow::as_select())
-                .for_no_key_update()
-                .load(conn)
-                .await?;
-            if candidates.is_empty() {
-                return Err(BladeApiError::new(
-                    StatusCode::NOT_FOUND,
-                    GUILD_SERVICE_ID,
-                    11,
-                ));
-            }
-            // Oldest request that still needs items. Falling back to the
-            // first candidate keeps the existing refusal codes meaningful: with
-            // nothing donatable, the checks below explain WHY.
-            let pick = pick_candidate(&candidates);
-            let exchange: GuildExchangeRow = candidates.into_iter().nth(pick).expect("non-empty");
-
-            // A guildmate may give to the same request more than once (#462,
-            // HauDrauf's rule; retail refused a second donation). Each donation is
-            // one stored `maxDonationAmount` share (#500: a quarter of the
-            // request), capped below by what is left.
-
-            // Never donate more than the request still needs. The amount was always
-            // the full `maxDonationAmount`, so the last donor to a nearly-complete
-            // request overshot it — spending items that the requester can never
-            // redeem, since redemption is capped at `requestedAmount`.
+            let exchange = pick_donatable_exchange(conn, &m.guild_id, &req).await?;
             let remaining = (exchange.requested_amount - exchange.donation_sum).max(0);
-            if remaining == 0 {
-                return Err(BladeApiError::new(
-                    StatusCode::CONFLICT,
-                    GUILD_SERVICE_ID,
-                    13,
-                ));
-            }
             // Debit the donor's stackable — up to `maxDonationAmount`, capped by what
             // the request still needs and by what the donor holds. A donor holding
-            // none still gets the economy refusal from `consume_stackable`.
+            // none is refused from `consume_stackable` (retail's code 200).
             let mut entry = load_economy(conn, donor_character_id, donor_user_id).await?;
             let owned = entry
                 .inventory
@@ -3756,7 +3765,12 @@ pub async fn donate_exchange(
                 donate_amount,
                 &mut tracker,
             )
-            .map_err(BladeApiError::from_economy)?;
+            .map_err(|e| match e {
+                blades_lib::economy::EconomyError::InsufficientStackable { .. } => {
+                    exchange_refusal(EXCHANGE_NO_ITEM_TO_DONATE)
+                }
+                e => BladeApiError::from_economy(e),
+            })?;
             entry.inventory.0.backpack_version += 1;
 
             // Pay the donor and stamp the character the way retail's response does
@@ -4403,9 +4417,9 @@ mod donating_with_several_requests_for_one_item {
     fn the_candidate_query_is_deterministically_ordered() {
         let src = include_str!("guild.rs");
         let body = src
-            .split("pub async fn donate_exchange(")
+            .split("async fn pick_donatable_exchange(")
             .nth(1)
-            .expect("the handler")
+            .expect("the candidate lookup")
             .split("\n#[")
             .next()
             .unwrap();
@@ -4477,8 +4491,8 @@ mod self_donation_is_refused {
             .find("req.requester_user_id == donor_user_id")
             .expect("the self-donation check");
         let query = body
-            .find("ge::guild_exchanges")
-            .expect("the candidate query");
+            .find("pick_donatable_exchange(")
+            .expect("the candidate lookup");
         assert!(
             check < query,
             "the self-donation check must precede the candidate lookup"
@@ -4487,7 +4501,15 @@ mod self_donation_is_refused {
 
     #[test]
     fn the_candidate_query_keys_on_character_not_stale_user() {
-        let body = donate_body();
+        // The query lives in `pick_donatable_exchange` since #520.
+        let src = include_str!("guild.rs");
+        let body = src
+            .split("\nasync fn pick_donatable_exchange(")
+            .nth(1)
+            .expect("the candidate lookup")
+            .split("\n}\n")
+            .next()
+            .unwrap();
         assert!(
             body.contains("ge::requester_character_id.eq(req.requester_character_id)"),
             "donate lookup must follow the requester character id"
@@ -4973,5 +4995,203 @@ mod partial_collect_keeps_the_request_open {
             collect_unpaid_donations(&mut c, CHARACTER).await.unwrap(),
             vec![]
         );
+    }
+}
+
+/// Tracker #520 — HauDrauf donated to a request Hexe had filled two seconds
+/// earlier and the game rebooted.
+///
+/// Prod, 2026-11-15: Hexe's donate 200 at 14:00:05, HauDrauf's donate 409 at
+/// 14:00:07 — service 9008 / code 13, which has no row in the client's
+/// `HttpErrorsHandling` table, so the client fell through to a resync. Retail's
+/// table has the exact case: GUILD_EXCHANGE (127) / 303
+/// `GUILD_EXCHANGE_REQUESTED_AMOUNT_REACHED`, HTTP 400, button "Ok" (member
+/// context: `UI.Message.Guild.ExchangeComplete` + guild resync). A request that is
+/// gone is 127 / 300 `GUILD_EXCHANGE_NOT_EXIST`, same handling.
+#[cfg(test)]
+mod donate_to_a_filled_request {
+    use super::*;
+    use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, SimpleAsyncConnection};
+
+    const EXCHANGE_ERRORS: &str = include_str!("../../data/guild_exchange_http_errors.csv");
+    const REQUESTER: Uuid = Uuid::from_u128(0x5201);
+    const CHARACTER: Uuid = Uuid::from_u128(0x5202);
+    const ITEM: Uuid = Uuid::from_u128(0x5203);
+
+    /// `(service id, http code, error code, UserOption1)` of every client row.
+    fn client_rows() -> Vec<(u64, u16, u64, String)> {
+        let mut lines = EXCHANGE_ERRORS.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(',').collect();
+        let col = |name: &str| header.iter().position(|h| *h == name).unwrap();
+        let (svc, http, code, opt) = (
+            col("Service ID"),
+            col("HTTP Code"),
+            col("Error Code"),
+            col("UserOption1"),
+        );
+        lines
+            .map(|l| {
+                let f: Vec<&str> = l.split(',').collect();
+                (
+                    f[svc].parse().unwrap(),
+                    f[http].parse().unwrap(),
+                    f[code].parse().unwrap(),
+                    f[opt].to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// The refusal must be a row the client knows AND one it answers with "Ok"
+    /// rather than a resync — the difference between a dialog and a reboot.
+    fn assert_handled_gracefully(err: &BladeApiError) {
+        let status = actix_web::ResponseError::status_code(err).as_u16();
+        let rows = client_rows();
+        let row = rows
+            .iter()
+            .find(|(s, h, c, _)| *s == err.service_id() && *h == status && *c == err.error_code())
+            .unwrap_or_else(|| {
+                panic!(
+                    "{status} / service {} / code {} has no row in the client's table",
+                    err.service_id(),
+                    err.error_code()
+                )
+            });
+        assert_eq!(row.3, "Ok", "the client must show a dialog, not resync");
+    }
+
+    #[test]
+    fn the_committed_table_is_the_clients_exchange_service() {
+        let rows = client_rows();
+        assert!(rows.len() >= 20);
+        assert!(rows.iter().all(|(s, ..)| *s == 127 || *s == 1044));
+    }
+
+    #[test]
+    fn the_refusals_the_donate_route_can_send_are_in_the_table() {
+        assert_handled_gracefully(&exchange_refusal(EXCHANGE_AMOUNT_REACHED));
+        assert_handled_gracefully(&exchange_refusal(EXCHANGE_NOT_EXIST));
+        let empty = exchange_refusal(EXCHANGE_NO_ITEM_TO_DONATE);
+        assert!(
+            client_rows()
+                .iter()
+                .any(|(s, h, c, _)| (*s, *h, *c) == (empty.service_id(), 400, empty.error_code()))
+        );
+    }
+
+    /// Control: what we sent before is not in the table — this is the bug.
+    #[test]
+    fn the_old_409_is_unknown_to_the_client() {
+        let old = BladeApiError::new(StatusCode::CONFLICT, GUILD_SERVICE_ID, 13);
+        assert!(
+            !client_rows()
+                .iter()
+                .any(|(s, _, c, _)| *s == old.service_id() && *c == old.error_code())
+        );
+    }
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — donate race NOT verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        diesel::sql_query(format!("CREATE SCHEMA {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        diesel::sql_query(format!("SET LOCAL search_path TO {schema}"))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        for ddl in [
+            include_str!("../../migrations/2026-06-20-020000-0000_add_guild_exchanges/up.sql"),
+            include_str!(
+                "../../migrations/2026-10-26-000000-0000_guild_exchange_partial_redeem/up.sql"
+            ),
+        ] {
+            conn.batch_execute(ddl).await.unwrap();
+        }
+        Some(conn)
+    }
+
+    async fn request(c: &mut AsyncPgConnection, sum: i64, redeemed: bool) {
+        diesel::sql_query(
+            "INSERT INTO guild_exchanges (id, guild_id, requester_user_id, \
+                 requester_character_id, item_template_id, requested_amount, \
+                 max_donation_amount, donation_sum, redeemed, creation_time) \
+                 VALUES ('x', 'g', $1, $2, $3, 20, 5, $4, $5, 100)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(REQUESTER)
+        .bind::<diesel::sql_types::Uuid, _>(CHARACTER)
+        .bind::<diesel::sql_types::Uuid, _>(ITEM)
+        .bind::<diesel::sql_types::BigInt, _>(sum)
+        .bind::<diesel::sql_types::Bool, _>(redeemed)
+        .execute(c)
+        .await
+        .unwrap();
+    }
+
+    fn donate() -> DonateRequest {
+        DonateRequest {
+            requester_user_id: REQUESTER,
+            requester_character_id: CHARACTER,
+            item_template_id: ITEM,
+        }
+    }
+
+    /// The reported race: the first donor fills the request, the second donor's
+    /// donate arrives after. The lookup runs before any debit, so the refusal
+    /// also means the second donor is not charged.
+    #[tokio::test]
+    async fn the_second_donor_after_fulfilment_gets_retails_amount_reached() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, 20, false).await;
+        let err = match pick_donatable_exchange(&mut c, "g", &donate()).await {
+            Err(e) => e,
+            Ok(_) => panic!("a full request must refuse the donation"),
+        };
+        assert_eq!(
+            (err.service_id(), err.error_code()),
+            (GUILD_EXCHANGE_SERVICE_ID, EXCHANGE_AMOUNT_REACHED)
+        );
+        assert_handled_gracefully(&err);
+    }
+
+    /// The requester collected and the request closed before the donate landed.
+    #[tokio::test]
+    async fn a_closed_request_gets_retails_not_exist() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, 20, true).await;
+        let err = match pick_donatable_exchange(&mut c, "g", &donate()).await {
+            Err(e) => e,
+            Ok(_) => panic!("a closed request must refuse the donation"),
+        };
+        assert_eq!(
+            (err.service_id(), err.error_code()),
+            (GUILD_EXCHANGE_SERVICE_ID, EXCHANGE_NOT_EXIST)
+        );
+        assert_handled_gracefully(&err);
+    }
+
+    /// Control: a request that still needs items is picked, not refused.
+    #[tokio::test]
+    async fn an_open_request_is_still_donatable() {
+        let Some(mut c) = fixture().await else {
+            return;
+        };
+        request(&mut c, 15, false).await;
+        let row = pick_donatable_exchange(&mut c, "g", &donate())
+            .await
+            .unwrap_or_else(|_| panic!("15/20 is open"));
+        assert_eq!(row.donation_sum, 15);
     }
 }
