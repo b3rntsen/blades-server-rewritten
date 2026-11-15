@@ -413,28 +413,77 @@ pub async fn freeze_standings(
 /// from this table, and 12,507 from a flat sum. The residuals on the rest are tens of
 /// trophies against totals of 3–5k, and they track how many members were missing from
 /// the board — which is what an undercount of the 10% tail looks like.
-const GUILD_MEMBER_WEIGHT: [f64; 20] = [
-    0.30, 0.30, 0.30, 0.30, // ranks 1-4
-    0.25, 0.25, 0.25, 0.25, // ranks 5-8
-    0.20, 0.20, 0.20, 0.20, // 9-12
-    0.15, 0.15, 0.15, 0.15, // 13-16
-    0.10, 0.10, 0.10, 0.10, // 17-20
+const GUILD_MEMBER_WEIGHT_PCT: [i64; 20] = [
+    30, 30, 30, 30, // ranks 1-4
+    25, 25, 25, 25, // ranks 5-8
+    20, 20, 20, 20, // 9-12
+    15, 15, 15, 15, // 13-16
+    10, 10, 10, 10, // 17-20
 ];
 
-/// A guild's score from its members' individual scores: sorted best first, each
-/// weighted by its standing INSIDE the guild ([`GUILD_MEMBER_WEIGHT`]); members past
-/// the 20th add nothing. The one implementation of the guild rule — the season
-/// ladder uses it on trophies, and the website's human-vs-human guild board
-/// (`arena::top100_boards::get_arena_h2h_guilds`) uses it on h2h ratings, so the two cannot drift.
-pub fn guild_weighted_score(mut member_scores: Vec<i64>) -> i64 {
+/// One member's part of a guild score ([`guild_weighted_shares`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct GuildShare {
+    /// Where this member was in the input slice.
+    pub index: usize,
+    /// The member's own score (season trophies, or h2h rating).
+    pub score: i64,
+    /// Standing inside the guild, 1-based, best first.
+    pub rank_in_guild: usize,
+    /// The member's weight in percent: 30/25/20/15/10, or 0 past the 20th.
+    pub weight_pct: i64,
+    /// `score * weight_pct`, i.e. the contribution in HUNDREDTHS of a point —
+    /// exact, so the parts add up to the guild score with no float drift.
+    pub contribution_centi: i64,
+}
+
+/// Each member's share of the guild score, best member first. THE guild rule:
+/// [`guild_weighted_score`] is the rounded sum of these, so a per-member breakdown
+/// (the website's guild member list) cannot disagree with the score it explains.
+///
+/// Sorted highest score first; equal scores keep their input order (their shares
+/// are equal anyway). Members past the 20th get weight 0.
+pub fn guild_weighted_shares(member_scores: &[i64]) -> Vec<GuildShare> {
+    let mut order: Vec<usize> = (0..member_scores.len()).collect();
     // Highest first: the weight is for the member's standing in the guild.
-    member_scores.sort_unstable_by(|a, b| b.cmp(a));
-    let score: f64 = member_scores
-        .iter()
-        .zip(GUILD_MEMBER_WEIGHT.iter())
-        .map(|(t, w)| *t as f64 * w)
-        .sum();
-    score.round() as i64
+    order.sort_by(|a, b| member_scores[*b].cmp(&member_scores[*a]));
+    order
+        .into_iter()
+        .enumerate()
+        .map(|(pos, index)| {
+            let score = member_scores[index];
+            let weight_pct = GUILD_MEMBER_WEIGHT_PCT.get(pos).copied().unwrap_or(0);
+            GuildShare {
+                index,
+                score,
+                rank_in_guild: pos + 1,
+                weight_pct,
+                contribution_centi: score * weight_pct,
+            }
+        })
+        .collect()
+}
+
+/// The guild score from its members' shares: their sum, rounded to a whole point
+/// (half away from zero).
+pub fn guild_score_from_shares(shares: &[GuildShare]) -> i64 {
+    let centi: i64 = shares.iter().map(|s| s.contribution_centi).sum();
+    if centi >= 0 {
+        (centi + 50) / 100
+    } else {
+        -((-centi + 50) / 100)
+    }
+}
+
+/// A guild's score from its members' individual scores: sorted best first, each
+/// weighted by its standing INSIDE the guild ([`GUILD_MEMBER_WEIGHT_PCT`]); members
+/// past the 20th add nothing. The one implementation of the guild rule — the season
+/// ladder uses it on trophies, and the website's human-vs-human guild board
+/// (`arena::top100_boards::get_arena_h2h_guilds`) uses it on h2h ratings, so the two
+/// cannot drift. Built on [`guild_weighted_shares`], which the website's per-member
+/// breakdown (`arena::top100_boards::get_arena_guild_members`) serves.
+pub fn guild_weighted_score(member_scores: Vec<i64>) -> i64 {
+    guild_score_from_shares(&guild_weighted_shares(&member_scores))
 }
 
 pub fn guild_standings_from(season_id: Uuid, standings: &[StandingRow]) -> Vec<GuildStandingRow> {
@@ -688,6 +737,62 @@ mod tests {
         let g = guild_standings_from(Uuid::nil(), &st);
         assert_eq!(g[0].members, 25, "the count still reports what was there");
         assert_eq!(g[0].trophies, 400, "but only 20 members are weighted");
+    }
+
+    /// The per-member breakdown IS the score: its rounded sum equals
+    /// `guild_weighted_score`, for every guild size including the overflow past 20
+    /// and half-point sums (0.15 * an odd score ends in .x5).
+    #[test]
+    fn the_shares_add_up_to_the_guild_score() {
+        for n in 0..=25usize {
+            let scores: Vec<i64> = (0..n as i64)
+                .map(|i| 1001 + 37 * i - (i % 3) * 211)
+                .collect();
+            let shares = guild_weighted_shares(&scores);
+            assert_eq!(shares.len(), n);
+            assert_eq!(
+                guild_score_from_shares(&shares),
+                guild_weighted_score(scores.clone())
+            );
+            // Best first, ranks 1..n, each share exactly score * weight.
+            for (i, s) in shares.iter().enumerate() {
+                assert_eq!(s.rank_in_guild, i + 1);
+                assert_eq!(s.score, scores[s.index]);
+                assert_eq!(s.contribution_centi, s.score * s.weight_pct);
+                if i > 0 {
+                    assert!(shares[i - 1].score >= s.score);
+                }
+            }
+            assert!(
+                shares
+                    .iter()
+                    .skip(20)
+                    .all(|s| s.weight_pct == 0 && s.contribution_centi == 0)
+            );
+        }
+        // 0.30 * (1200 + 1100 + 1000 + 990) + 0.25 * 950 = 1524.5 -> 1525 (half up).
+        let shares = guild_weighted_shares(&[950, 1200, 1100, 1000, 990]);
+        assert_eq!(
+            shares
+                .iter()
+                .map(|s| (s.score, s.weight_pct))
+                .collect::<Vec<_>>(),
+            [(1200, 30), (1100, 30), (1000, 30), (990, 30), (950, 25)]
+        );
+        assert_eq!(
+            shares.iter().map(|s| s.contribution_centi).sum::<i64>(),
+            152_450
+        );
+        assert_eq!(guild_score_from_shares(&shares), 1525);
+    }
+
+    /// A member with no season trophies is listed and contributes exactly 0.
+    #[test]
+    fn a_zero_score_member_contributes_zero() {
+        let shares = guild_weighted_shares(&[0, 500]);
+        assert_eq!(shares[1].score, 0);
+        assert_eq!(shares[1].contribution_centi, 0);
+        assert_eq!(guild_score_from_shares(&shares), 150);
     }
 
     /// Two runs over the same ladder must produce the same guild order, or the

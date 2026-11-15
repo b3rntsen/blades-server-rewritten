@@ -648,16 +648,18 @@ mod tests {
         assert!(body[..guard].contains("incoming_alt.is_none()"));
     }
 
+    /// The guild ladder has no per-match increment a test alt could leak into: a
+    /// match schedules `guild::recompute_guild_trophies`, which reads
+    /// `FREEZE_STANDINGS_SQL` — and that skips test alts.
     #[test]
-    fn the_live_guild_trophy_increment_checks_the_marker() {
-        let src = include_str!("arena/arena_economy.rs");
-        let update = src
-            .find("UPDATE guilds SET trophies = GREATEST")
-            .expect("the per-match guild increment exists");
-        let check = src[..update]
-            .rfind("testchar::live_alt_is_test")
-            .expect("it checks the marker");
-        assert!(update - check < 1200, "the check guards this very update");
+    fn the_guild_trophy_ladder_skips_test_alts() {
+        let economy = include_str!("arena/arena_economy.rs");
+        assert!(!economy.contains("UPDATE guilds SET trophies"));
+        assert!(economy.contains("schedule_guild_trophy_recompute"));
+        assert!(
+            crate::arena::season_store::FREEZE_STANDINGS_SQL.contains("test_characters"),
+            "the recompute's standings leave test alts out"
+        );
     }
 
     #[test]

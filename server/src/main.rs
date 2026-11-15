@@ -488,47 +488,7 @@ async fn main() -> Result<()> {
             {
                 let pool = server_global.db_pool.clone();
                 actix_web::rt::spawn(async move {
-                    use crate::schema::arena_seasons;
-                    use diesel::{
-                        ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper,
-                    };
-                    use diesel_async::RunQueryDsl;
-                    match pool.get().await {
-                        Ok(mut c) => {
-                            let active: Option<crate::arena::season_store::SeasonRow> =
-                                arena_seasons::table
-                                    .filter(arena_seasons::status.eq("active"))
-                                    .select(crate::arena::season_store::SeasonRow::as_select())
-                                    .order(arena_seasons::starts_at.desc())
-                                    .first(&mut c)
-                                    .await
-                                    .optional()
-                                    .unwrap_or(None);
-                            match active {
-                                Some(season) => {
-                                    match crate::guild::recompute_guild_trophies(&mut c, &season)
-                                        .await
-                                    {
-                                        Ok(n) => log::info!(
-                                            "guild trophies recomputed for {n} guild(s) \
-                                             (season {})",
-                                            season.id
-                                        ),
-                                        Err(e) => {
-                                            log::warn!("guild trophy recompute failed: {e}")
-                                        }
-                                    }
-                                }
-                                // No active season means no season trophies to total.
-                                // Leaving the column alone is right: it already reads 0
-                                // after the previous season's reset.
-                                None => {
-                                    log::info!("guild trophy recompute skipped: no active season")
-                                }
-                            }
-                        }
-                        Err(e) => log::warn!("guild trophy recompute: no db connection: {e}"),
-                    }
+                    crate::guild::recompute_guild_trophies_for_active_season(&pool).await;
                 });
             }
 
@@ -798,6 +758,7 @@ async fn main() -> Result<()> {
                     .service(arena::top100_boards::get_arena_game_top)
                     .service(arena::top100_boards::get_arena_game_guilds)
                     .service(arena::top100_boards::get_arena_h2h_guilds)
+                    .service(arena::top100_boards::get_arena_guild_members)
                     .service(arena::top100_boards::get_arena_h2h_matches)
                     .service(arena::monthly_matches::get_arena_monthly_matches)
                     .service(admin::rebuild_arena_h2h_ratings)

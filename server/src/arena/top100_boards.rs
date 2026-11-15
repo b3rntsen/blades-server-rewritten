@@ -34,7 +34,13 @@ use uuid::Uuid;
 use crate::{
     ServerGlobal,
     admin::{H2hSeasonSummary, IMPORT_SERVICE_ID, check_import_token},
-    arena::{leaderboards::LeaderboardEntry, ranking, season_store::guild_weighted_score},
+    arena::{
+        leaderboards::LeaderboardEntry,
+        ranking,
+        season_store::{
+            self, guild_score_from_shares, guild_weighted_score, guild_weighted_shares,
+        },
+    },
     error::BladeApiError,
 };
 
@@ -336,21 +342,14 @@ pub fn h2h_guild_members(entries: Vec<ranking::H2hBoardEntry>) -> Vec<H2hGuildMe
 /// Every board row, not a top 100: a guild's score needs all its ranked members.
 const ALL_BOARD_ROWS: i64 = i64::MAX;
 
-/// `GET /api/dev/v1/arena-ranking/h2h-guilds?season=current|all|<uuid>&limit=N`.
-#[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-guilds")]
-pub async fn get_arena_h2h_guilds(
-    req: HttpRequest,
-    app_state: web::Data<Arc<ServerGlobal>>,
-    query: web::Query<BoardQuery>,
-) -> Result<Json<Value>, BladeApiError> {
-    check_import_token(&app_state, &req)?;
-    let limit = clamp_limit(query.limit);
-    let selection = ranking::parse_h2h_season_selection(query.season.as_deref())
-        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 84))?;
-    let key = format!("h2h-guilds:{selection:?}:{limit}");
-    if let Some(v) = cached(&key) {
-        return Ok(Json(v));
-    }
+/// The whole human player board for a season selection — every listed alt, not a
+/// top 100 — with the season it is for and the `min_games_listed` it was cut at.
+/// Shared by the guild board and the guild member breakdown, so both read the same
+/// members.
+async fn h2h_board_entries(
+    app_state: &ServerGlobal,
+    selection: ranking::H2hSeasonSelection,
+) -> Result<(Option<H2hSeasonSummary>, Vec<ranking::H2hBoardEntry>, i32), BladeApiError> {
     let min_games = ranking::load(&app_state.db_pool)
         .await
         .config
@@ -361,8 +360,7 @@ pub async fn get_arena_h2h_guilds(
         .get()
         .await
         .map_err(BladeApiError::generic_internal_error)?;
-    let (season, entries): (Option<H2hSeasonSummary>, Vec<ranking::H2hBoardEntry>) = match selection
-    {
+    let (season, entries) = match selection {
         ranking::H2hSeasonSelection::AllTime => (
             None,
             ranking::h2h_board(&mut conn, None, min_games, ALL_BOARD_ROWS).await?,
@@ -389,10 +387,341 @@ pub async fn get_arena_h2h_guilds(
             (Some(season), entries)
         }
     };
+    Ok((season, entries, min_games))
+}
+
+/// `GET /api/dev/v1/arena-ranking/h2h-guilds?season=current|all|<uuid>&limit=N`.
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/h2h-guilds")]
+pub async fn get_arena_h2h_guilds(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<BoardQuery>,
+) -> Result<Json<Value>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let limit = clamp_limit(query.limit);
+    let selection = ranking::parse_h2h_season_selection(query.season.as_deref())
+        .map_err(|_| BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 84))?;
+    let key = format!("h2h-guilds:{selection:?}:{limit}");
+    if let Some(v) = cached(&key) {
+        return Ok(Json(v));
+    }
+    let (season, entries, _) = h2h_board_entries(&app_state, selection).await?;
     let members = h2h_guild_members(entries);
     let rows = h2h_guild_board(members, limit as usize);
     let value = serde_json::to_value(H2hGuildsResponse { season, rows })
         .map_err(BladeApiError::generic_internal_error)?;
+    store(key, &value);
+    Ok(Json(value))
+}
+
+// ---- Guild member breakdown -------------------------------------------------
+
+/// One member going into a guild score: their own score on the board the guild is
+/// scored from (season trophies for "all matches", h2h rating for "humans").
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuildMemberScore {
+    pub character_id: Uuid,
+    /// The alt (`None` for a character from before alts were tracked).
+    pub alt_key: Option<Uuid>,
+    pub name: String,
+    pub score: i64,
+    /// The member's rank on the matching website player top 100, if on it.
+    pub board_rank: Option<i64>,
+}
+
+/// One member's line in a guild's score breakdown.
+#[derive(Serialize, Debug, PartialEq)]
+pub struct GuildMemberShareRow {
+    pub rank_in_guild: usize,
+    pub character_id: Uuid,
+    pub alt_key: Option<Uuid>,
+    pub name: String,
+    pub score: i64,
+    /// 30/25/20/15/10, or 0 past the 20th member.
+    pub weight_pct: i64,
+    /// What this member adds to the guild score, in points (two decimals).
+    pub contribution: f64,
+    /// The same, exact, in hundredths of a point.
+    pub contribution_centi: i64,
+    pub board_rank: Option<i64>,
+}
+
+/// A guild's score, member by member — [`guild_weighted_shares`], the function
+/// [`guild_weighted_score`] itself is built on, so the breakdown's total IS the
+/// guild score (returned first). Best member first.
+pub fn guild_member_breakdown(members: Vec<GuildMemberScore>) -> (i64, Vec<GuildMemberShareRow>) {
+    let scores: Vec<i64> = members.iter().map(|m| m.score).collect();
+    let shares = guild_weighted_shares(&scores);
+    let score = guild_score_from_shares(&shares);
+    let rows = shares
+        .iter()
+        .map(|s| {
+            let m = &members[s.index];
+            GuildMemberShareRow {
+                rank_in_guild: s.rank_in_guild,
+                character_id: m.character_id,
+                alt_key: m.alt_key,
+                name: m.name.clone(),
+                score: s.score,
+                weight_pct: s.weight_pct,
+                contribution: s.contribution_centi as f64 / 100.0,
+                contribution_centi: s.contribution_centi,
+                board_rank: m.board_rank,
+            }
+        })
+        .collect();
+    (score, rows)
+}
+
+/// A current guild member who adds nothing because they are not ranked on that
+/// board: no arena match this season ("all matches"), or fewer than `min_games`
+/// human-vs-human matches ("humans").
+#[derive(Serialize, Debug, PartialEq)]
+pub struct UnrankedGuildMember {
+    pub character_id: Uuid,
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct GuildMembersResponse {
+    /// `game` (All matches) or `h2h` (Humans).
+    pub board: &'static str,
+    pub season: Option<H2hSeasonSummary>,
+    pub guild_id: String,
+    pub name: String,
+    /// The guild score the breakdown adds up to.
+    pub score: i64,
+    /// `game` only: the stored `guilds.trophies` the in-game board shows. Equal to
+    /// `score` except in the seconds between a match and the next recompute.
+    pub board_score: Option<i64>,
+    /// `h2h` only: the matches a member needs to be ranked.
+    pub min_games: Option<i32>,
+    pub members: Vec<GuildMemberShareRow>,
+    pub unranked: Vec<UnrankedGuildMember>,
+}
+
+#[derive(Deserialize)]
+pub struct GuildMembersQuery {
+    pub guild_id: String,
+    #[serde(default)]
+    pub board: Option<String>,
+    #[serde(default)]
+    pub season: Option<String>,
+}
+
+#[derive(diesel::QueryableByName)]
+struct GuildHead {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    name: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    trophies: i64,
+}
+
+#[derive(diesel::QueryableByName)]
+struct RosterRow {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    source_alt_uuid: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    name: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct NameRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    name: String,
+}
+
+/// The guild's current roster (live alts), operator test alts left out as every
+/// ladder leaves them out.
+const GUILD_ROSTER_SQL: &str = "\
+    SELECT c.id AS character_id, c.source_alt_uuid, \
+           COALESCE(c.character ->> 'name', '') AS name \
+    FROM guild_members gm \
+    JOIN characters c ON c.id = gm.character_id \
+    WHERE gm.guild_id = $1 \
+      AND NOT EXISTS (SELECT 1 FROM test_characters tc \
+                      WHERE tc.alt_uuid = COALESCE(c.source_alt_uuid, c.id))";
+
+/// `GET /api/dev/v1/arena-ranking/guild-members?guild_id=X&board=game|h2h&season=…`
+/// — how a guild's score on the website's top 100 is made up, member by member.
+///
+/// - `board=game` (default): the "All matches" guild board. Members are the
+///   guild's rows of the season standings ([`season_store::freeze_standings`]),
+///   scored with [`season_store::guild_standings_from`]'s rule — the exact computation
+///   `guild::recompute_guild_trophies` writes into `guilds.trophies`.
+/// - `board=h2h`: the "Humans" guild board. Members are the guild's rows of the
+///   human player board, exactly the input [`get_arena_h2h_guilds`] scores.
+#[get("/blades.bgs.services/api/dev/v1/arena-ranking/guild-members")]
+pub async fn get_arena_guild_members(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    query: web::Query<GuildMembersQuery>,
+) -> Result<Json<Value>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let bad = || BladeApiError::new(StatusCode::BAD_REQUEST, IMPORT_SERVICE_ID, 84);
+    let guild_id = query.guild_id.trim().to_string();
+    if guild_id.is_empty() || guild_id.len() > 64 {
+        return Err(bad());
+    }
+    let h2h = match query.board.as_deref().unwrap_or("game") {
+        "game" => false,
+        "h2h" => true,
+        _ => return Err(bad()),
+    };
+    let selection = if h2h {
+        Some(ranking::parse_h2h_season_selection(query.season.as_deref()).map_err(|_| bad())?)
+    } else {
+        None
+    };
+    let key = format!("guild-members:{h2h}:{selection:?}:{guild_id}");
+    if let Some(v) = cached(&key) {
+        return Ok(Json(v));
+    }
+
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(BladeApiError::generic_internal_error)?;
+    let head: GuildHead = diesel::sql_query("SELECT name, trophies FROM guilds WHERE id = $1")
+        .bind::<diesel::sql_types::Text, _>(&guild_id)
+        .get_result(&mut conn)
+        .await
+        .optional()?
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 85))?;
+    let roster: Vec<RosterRow> = diesel::sql_query(GUILD_ROSTER_SQL)
+        .bind::<diesel::sql_types::Text, _>(&guild_id)
+        .get_results(&mut conn)
+        .await?;
+
+    let response = if let Some(selection) = selection {
+        drop(conn);
+        let (season, entries, min_games) = h2h_board_entries(&app_state, selection).await?;
+        let members: Vec<GuildMemberScore> = entries
+            .into_iter()
+            .filter(|e| e.guild_id.as_deref() == Some(guild_id.as_str()))
+            .map(|e| GuildMemberScore {
+                character_id: e.character_id,
+                alt_key: Some(e.alt_key),
+                name: e.name,
+                score: e.rating as i64,
+                board_rank: (e.rank <= 100).then_some(e.rank),
+            })
+            .collect();
+        let unranked = roster
+            .into_iter()
+            .filter(|r| {
+                let alt = r.source_alt_uuid.unwrap_or(r.character_id);
+                !members
+                    .iter()
+                    .any(|m| m.character_id == r.character_id && m.alt_key == Some(alt))
+            })
+            .map(|r| UnrankedGuildMember {
+                character_id: r.character_id,
+                name: r.name,
+            })
+            .collect();
+        let (score, members) = guild_member_breakdown(members);
+        GuildMembersResponse {
+            board: "h2h",
+            season,
+            guild_id,
+            name: head.name,
+            score,
+            board_score: None,
+            min_games: Some(min_games),
+            members,
+            unranked,
+        }
+    } else {
+        let season_row: Option<season_store::SeasonRow> = {
+            use crate::schema::arena_seasons;
+            use diesel::{ExpressionMethods, QueryDsl, SelectableHelper};
+            arena_seasons::table
+                .filter(arena_seasons::status.eq("active"))
+                .select(season_store::SeasonRow::as_select())
+                .order(arena_seasons::starts_at.desc())
+                .first(&mut conn)
+                .await
+                .optional()?
+        };
+        let standings = match &season_row {
+            Some(s) => season_store::freeze_standings(&mut conn, s).await?,
+            None => Vec::new(),
+        };
+        // The game player board, for links: live characters only.
+        let on_board: HashMap<Uuid, i64> =
+            crate::arena::leaderboards::ranked_entries(&mut conn, 100, 0)
+                .await?
+                .into_iter()
+                .map(|e| (e.character_id, e.rank))
+                .collect();
+        let mut members = Vec::new();
+        for st in standings
+            .iter()
+            .filter(|s| s.guild_id.as_deref() == Some(guild_id.as_str()))
+        {
+            let live = roster.iter().find(|r| {
+                r.character_id == st.character_id && r.source_alt_uuid == st.source_alt_uuid
+            });
+            let name = match live {
+                Some(r) => r.name.clone(),
+                // An alt switched out but still in this guild: its newest version.
+                None => diesel::sql_query(
+                    "SELECT COALESCE(character ->> 'name', '') AS name FROM character_versions \
+                     WHERE character_id = $1 AND source_alt_uuid IS NOT DISTINCT FROM $2 \
+                     ORDER BY saved_at DESC LIMIT 1",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(st.character_id)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(st.source_alt_uuid)
+                .get_result::<NameRow>(&mut conn)
+                .await
+                .optional()?
+                .map(|n| n.name)
+                .unwrap_or_default(),
+            };
+            members.push(GuildMemberScore {
+                character_id: st.character_id,
+                alt_key: st.source_alt_uuid,
+                name,
+                score: st.trophies,
+                board_rank: live.and_then(|_| on_board.get(&st.character_id).copied()),
+            });
+        }
+        let unranked = roster
+            .into_iter()
+            .filter(|r| {
+                !members
+                    .iter()
+                    .any(|m| m.character_id == r.character_id && m.alt_key == r.source_alt_uuid)
+            })
+            .map(|r| UnrankedGuildMember {
+                character_id: r.character_id,
+                name: r.name,
+            })
+            .collect();
+        let (score, members) = guild_member_breakdown(members);
+        let season = season_row.map(|s| H2hSeasonSummary {
+            id: s.id,
+            name: s.name,
+            starts_at: s.starts_at,
+            ends_at: s.ends_at,
+        });
+        GuildMembersResponse {
+            board: "game",
+            season,
+            guild_id,
+            name: head.name,
+            score,
+            board_score: Some(head.trophies),
+            min_games: None,
+            members,
+            unranked,
+        }
+    };
+    let value = serde_json::to_value(response).map_err(BladeApiError::generic_internal_error)?;
     store(key, &value);
     Ok(Json(value))
 }
@@ -611,6 +940,85 @@ mod tests {
         assert_eq!(rows[0].matches, 20);
     }
 
+    fn scored(n: u128, score: i64) -> GuildMemberScore {
+        GuildMemberScore {
+            character_id: Uuid::from_u128(n),
+            alt_key: Some(Uuid::from_u128(n + 100)),
+            name: format!("P{n}"),
+            score,
+            board_rank: None,
+        }
+    }
+
+    /// The member breakdown adds up to the score the humans guild board shows for
+    /// the same members — it is the same function, not a copy.
+    #[test]
+    fn guild_member_breakdown_totals_the_h2h_guild_score() {
+        let ratings = [1200, 950, 1100, 1000, 990, 1310, 1007];
+        let board = h2h_guild_board(ratings.iter().map(|r| member("a", *r, 4)).collect(), 100);
+        let (score, rows) = guild_member_breakdown(
+            ratings
+                .iter()
+                .enumerate()
+                .map(|(i, r)| scored(i as u128, *r as i64))
+                .collect(),
+        );
+        assert_eq!(score, board[0].score);
+        let centi: i64 = rows.iter().map(|r| r.contribution_centi).sum();
+        assert_eq!((centi + 50) / 100, score);
+        assert_eq!(rows[0].score, 1310, "best member first");
+        assert_eq!(rows[0].weight_pct, 30);
+        assert_eq!(rows[4].weight_pct, 25);
+        assert_eq!(rows[4].contribution, rows[4].score as f64 * 0.25);
+        assert_eq!(
+            rows.iter().map(|r| r.rank_in_guild).collect::<Vec<_>>(),
+            (1..=7).collect::<Vec<_>>()
+        );
+    }
+
+    /// The same on the "All matches" side: the breakdown equals the season guild
+    /// ladder (`guild_standings_from`, what `guilds.trophies` is recomputed from),
+    /// including members on 0 trophies and a guild past 20 members.
+    #[test]
+    fn guild_member_breakdown_totals_the_season_guild_ladder() {
+        for n in [1usize, 3, 7, 20, 23] {
+            let trophies: Vec<i64> = (0..n as i64).map(|i| (i * 53) % 310).collect();
+            let standings: Vec<season_store::StandingRow> = trophies
+                .iter()
+                .enumerate()
+                .map(|(i, t)| season_store::StandingRow {
+                    season_id: Uuid::nil(),
+                    character_id: Uuid::from_u128(i as u128),
+                    source_alt_uuid: None,
+                    rank: i as i32 + 1,
+                    trophies: *t,
+                    matches: 1,
+                    wins: 0,
+                    guild_id: Some("g".into()),
+                    high_water: *t,
+                    arena: 0,
+                    arena_level: 0,
+                })
+                .collect();
+            let ladder = season_store::guild_standings_from(Uuid::nil(), &standings);
+            let (score, rows) = guild_member_breakdown(
+                trophies
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| scored(i as u128, *t))
+                    .collect(),
+            );
+            assert_eq!(score, ladder[0].trophies, "{n} members");
+            assert_eq!(rows.len(), n);
+            assert!(
+                rows.iter()
+                    .filter(|r| r.score == 0)
+                    .all(|r| r.contribution_centi == 0)
+            );
+            assert!(rows.iter().skip(20).all(|r| r.weight_pct == 0));
+        }
+    }
+
     /// CONTROL: a flat sum would rank the bigger, weaker guild first; the rank-
     /// weighted rule must not.
     #[test]
@@ -701,7 +1109,12 @@ mod tests {
         );
         let src = include_str!("top100_boards.rs");
         let handler = &src[src.find("pub async fn get_arena_h2h_guilds(").unwrap()..];
-        assert!(handler[..handler.find("\n}\n").unwrap()].contains("ranking::h2h_board("));
+        assert!(handler[..handler.find("\n}\n").unwrap()].contains("h2h_board_entries("));
+        let entries = &src[src.find("async fn h2h_board_entries(").unwrap()..];
+        assert!(entries[..entries.find("\n}\n").unwrap()].contains("ranking::h2h_board("));
+        // The member breakdown reads the same members.
+        let breakdown = &src[src.find("pub async fn get_arena_guild_members(").unwrap()..];
+        assert!(breakdown[..breakdown.find("\n}\n").unwrap()].contains("h2h_board_entries("));
     }
 
     /// The website's "All matches" player rows are the in-game entries, field for

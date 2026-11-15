@@ -518,44 +518,12 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                         .await?;
                 }
 
-                // GUILD TROPHIES. `guilds.trophies` is the guild's running trophy
-                // total — it is what `GET /guilds/leaderboard` orders on and what the
-                // client shows on every guild card. It was written once, as 0, at guild
-                // creation and never again, so every guild sat at 0 and the "top guilds"
-                // ladder was really ordering by guild id.
-                //
-                // The aggregation rule is the one `season_store::guild_standings_from`
-                // already encodes: a guild's trophies are the SUM of its members'
-                // trophies. Applied here as the same delta the character just took, so
-                // the total tracks play without a full re-scan on every match.
-                //
-                // Clamped at 0 for the same reason the character's own count is:
-                // retail cards bottom out at zero and never go negative.
-                //
-                // An operator test alt adds nothing (`crate::testchar`): its cups
-                // were not earned, and this running total is the guild board until
-                // the next recompute from `FREEZE_STANDINGS_SQL`, which skips it too.
-                if o.trophy_delta != 0
-                    && !crate::testchar::live_alt_is_test(&mut conn, character_id).await?
-                {
-                    use crate::schema::{guild_members, guilds};
-                    let guild_of: Option<String> = guild_members::table
-                        .filter(guild_members::character_id.eq(character_id))
-                        .select(guild_members::guild_id)
-                        .first(&mut conn)
-                        .await
-                        .optional()?;
-                    if let Some(gid) = guild_of {
-                        let _ = guilds::table; // keep the import meaningful for the reader
-                        diesel::sql_query(
-                            "UPDATE guilds SET trophies = GREATEST(trophies + $1, 0) WHERE id = $2",
-                        )
-                        .bind::<diesel::sql_types::BigInt, _>(o.trophy_delta)
-                        .bind::<diesel::sql_types::Text, _>(&gid)
-                        .execute(&mut conn)
-                        .await?;
-                    }
-                }
+                // GUILD TROPHIES are NOT bumped here any more. The per-match bump
+                // added the character's full trophy delta — a flat sum — to a column
+                // every recompute writes as the rank-weighted guild score, so the
+                // guild board drifted upward between restarts. The match instead
+                // schedules the one real computation once its result row exists
+                // (`guild::schedule_guild_trophy_recompute`, after Phase 2 below).
 
                 Ok(Some(AppliedOutcome {
                     fight_tally,
@@ -650,6 +618,12 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
             "arena giveaway: character {} earned {} Gems for fighting inside the window",
             a.character_id, a.giveaway_gems
         );
+    }
+
+    // The guild ladder reads `arena_match_results`, written just below; the
+    // recompute is delayed (`GUILD_RECOMPUTE_DELAY`), so it sees this match.
+    if outcome.trophy_delta != 0 {
+        crate::guild::schedule_guild_trophy_recompute(pool.clone());
     }
 
     // Phase 2 — the audit row, OUTSIDE the reward transaction above (see the doc

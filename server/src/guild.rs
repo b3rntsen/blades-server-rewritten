@@ -988,25 +988,93 @@ pub async fn recompute_guild_trophies(
     conn: &mut diesel_async::AsyncPgConnection,
     season: &crate::arena::season_store::SeasonRow,
 ) -> Result<usize, diesel::result::Error> {
-    use diesel_async::RunQueryDsl;
     let standings = crate::arena::season_store::freeze_standings(conn, season).await?;
     let guilds_now = crate::arena::season_store::guild_standings_from(season.id, &standings);
 
-    // Zero every guild first: a guild that scored nothing this season, or lost the
-    // members who scored, must fall back to 0 rather than keep a stale total.
-    diesel::sql_query("UPDATE guilds SET trophies = 0")
-        .execute(conn)
-        .await?;
+    // One transaction: the zeroing below must never be visible on its own, or a
+    // leaderboard read in between would show every guild at 0.
+    conn.transaction::<_, diesel::result::Error, _>(|conn| {
+        async move {
+            // Zero every guild first: a guild that scored nothing this season, or
+            // lost the members who scored, must fall back to 0 rather than keep a
+            // stale total.
+            diesel::sql_query("UPDATE guilds SET trophies = 0")
+                .execute(conn)
+                .await?;
+            let mut written = 0usize;
+            for g in &guilds_now {
+                written += diesel::sql_query("UPDATE guilds SET trophies = $1 WHERE id = $2")
+                    .bind::<diesel::sql_types::BigInt, _>(g.trophies)
+                    .bind::<diesel::sql_types::Text, _>(&g.guild_id)
+                    .execute(conn)
+                    .await?;
+            }
+            Ok(written)
+        }
+        .scope_boxed()
+    })
+    .await
+}
 
-    let mut written = 0usize;
-    for g in &guilds_now {
-        written += diesel::sql_query("UPDATE guilds SET trophies = $1 WHERE id = $2")
-            .bind::<diesel::sql_types::BigInt, _>(g.trophies)
-            .bind::<diesel::sql_types::Text, _>(&g.guild_id)
-            .execute(conn)
-            .await?;
+/// [`recompute_guild_trophies`] for the active season, if there is one. Logs and
+/// swallows failures: a stale ladder must never take anything else down.
+pub async fn recompute_guild_trophies_for_active_season(pool: &crate::DbPool) {
+    use crate::schema::arena_seasons;
+    let mut c = match pool.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("guild trophy recompute: no db connection: {e}");
+            return;
+        }
+    };
+    let active: Option<crate::arena::season_store::SeasonRow> = arena_seasons::table
+        .filter(arena_seasons::status.eq("active"))
+        .select(crate::arena::season_store::SeasonRow::as_select())
+        .order(arena_seasons::starts_at.desc())
+        .first(&mut c)
+        .await
+        .optional()
+        .unwrap_or(None);
+    match active {
+        Some(season) => match recompute_guild_trophies(&mut c, &season).await {
+            Ok(n) => log::info!(
+                "guild trophies recomputed for {n} guild(s) (season {})",
+                season.id
+            ),
+            Err(e) => log::warn!("guild trophy recompute failed: {e}"),
+        },
+        // No active season means no season trophies to total. Leaving the column
+        // alone is right: it already reads 0 after the previous season's reset.
+        None => log::info!("guild trophy recompute skipped: no active season"),
     }
-    Ok(written)
+}
+
+/// How long after a match the guild ladder is recomputed. Matches inside the
+/// window share one recompute (the standings query scans the whole season).
+pub const GUILD_RECOMPUTE_DELAY: std::time::Duration = std::time::Duration::from_secs(20);
+
+static GUILD_RECOMPUTE_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Bring `guilds.trophies` up to date after a match changed someone's trophies.
+///
+/// The column used to be bumped per match by the character's FULL trophy delta —
+/// a flat sum — while every recompute writes the rank-weighted score
+/// ([`crate::arena::season_store::guild_weighted_score`]). So between restarts the
+/// guild board drifted upward: on 2026-11-15, six hours after a restart, New
+/// Bladers read 13,830 against a weighted 11,623. Now a match schedules the one
+/// real computation instead, debounced by [`GUILD_RECOMPUTE_DELAY`].
+pub fn schedule_guild_trophy_recompute(pool: crate::DbPool) {
+    use std::sync::atomic::Ordering;
+    if GUILD_RECOMPUTE_PENDING.swap(true, Ordering::SeqCst) {
+        return; // one is already queued; it will see this match too
+    }
+    actix_web::rt::spawn(async move {
+        actix_web::rt::time::sleep(GUILD_RECOMPUTE_DELAY).await;
+        // Cleared BEFORE the scan, so a match landing during it queues another.
+        GUILD_RECOMPUTE_PENDING.store(false, Ordering::SeqCst);
+        recompute_guild_trophies_for_active_season(&pool).await;
+    });
 }
 
 // ---- Leaderboard ---------------------------------------------------------------
