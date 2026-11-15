@@ -818,13 +818,16 @@ struct H2hSeasonAtRow {
     id: Uuid,
 }
 
+/// The season a match completed at `completed_at_secs` is rated in. Same rule as
+/// the reconcile's replay (`ranking::H2H_REPLAY_ROWS_CTE`): never a `scheduled`
+/// season, whose `starts_at` is only a plan (#517).
 async fn h2h_season_at(
     conn: &mut AsyncPgConnection,
     completed_at_secs: i64,
 ) -> Result<Option<Uuid>, anyhow::Error> {
     let row: Option<H2hSeasonAtRow> = diesel::sql_query(
         "SELECT id FROM arena_seasons \
-         WHERE starts_at <= $1 AND ends_at > $1 \
+         WHERE starts_at <= $1 AND ends_at > $1 AND status <> 'scheduled' \
          ORDER BY starts_at DESC LIMIT 1",
     )
     .bind::<diesel::sql_types::BigInt, _>(completed_at_secs)
@@ -1647,8 +1650,8 @@ mod tests {
         let game_session_id = Uuid::from_u128(99);
 
         diesel::sql_query(
-            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
-             VALUES ($1, 1, 'test', 1700000000, 1700002000)",
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+             VALUES ($1, 1, 'test', 1700000000, 1700002000, 'active')",
         )
         .bind::<diesel::sql_types::Uuid, _>(season)
         .execute(&mut conn)
@@ -1722,8 +1725,8 @@ mod tests {
         let game_session_id = Uuid::from_u128(99);
 
         diesel::sql_query(
-            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
-             VALUES ($1, 1, 'test', 1700000000, 1700002000)",
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+             VALUES ($1, 1, 'test', 1700000000, 1700002000, 'active')",
         )
         .bind::<diesel::sql_types::Uuid, _>(season)
         .execute(&mut conn)
@@ -1778,6 +1781,31 @@ mod tests {
     /// The live increment keys by alt as the reconcile does (tracker #373): a
     /// user who fights as one alt, switches, and fights as another gets two
     /// board rows, and the reconcile afterwards changes nothing.
+    /// Tracker #517: a queued (`scheduled`) season whose window already covers the
+    /// match must not receive the live season increment; the active season does.
+    #[tokio::test]
+    async fn live_season_is_never_a_scheduled_one() {
+        let Some(mut conn) = h2h_fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — live h2h season lookup not verified");
+            return;
+        };
+        let (active, queued) = (Uuid::from_u128(10), Uuid::from_u128(20));
+        diesel::sql_query(
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+             VALUES ($1, 1, 'active', 1700000000, 1700864000, 'active'), \
+                    ($2, 2, 'queued', 1700086400, 1702000000, 'scheduled')",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(active)
+        .bind::<diesel::sql_types::Uuid, _>(queued)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            h2h_season_at(&mut conn, 1_700_100_000).await.unwrap(),
+            Some(active)
+        );
+    }
+
     #[tokio::test]
     async fn live_increment_rates_each_alt_and_agrees_with_reconcile() {
         let Some(mut conn) = h2h_fixture().await else {
@@ -1786,8 +1814,8 @@ mod tests {
         };
         let cfg = ranking::H2hRatingConfig::default();
         diesel::sql_query(
-            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at) \
-             VALUES ($1, 1, 'test', 1700000000, 1700002000)",
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status) \
+             VALUES ($1, 1, 'test', 1700000000, 1700002000, 'active')",
         )
         .bind::<diesel::sql_types::Uuid, _>(Uuid::from_u128(10))
         .execute(&mut conn)
