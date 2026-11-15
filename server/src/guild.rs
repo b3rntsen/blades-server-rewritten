@@ -2368,6 +2368,73 @@ async fn remove_other_member(
     Ok(())
 }
 
+/// Who removed a member through the website's guild management
+/// (`guild_manage.rs`) — it decides what the board says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeatRemover {
+    /// The guild's own Grand Master, from their profile. Exactly the in-game
+    /// kick: a `KICK` entry authored by the Grand Master.
+    GrandMaster { user_id: Uuid, character_id: Uuid },
+    /// A site operator (admin). Posts the `LEAVE` an alt departure posts,
+    /// authored by the member themselves: a `KICK` needs an author the client
+    /// can name, and naming the guild's Grand Master would say they did
+    /// something they did not. LEAVE is the shape #439 proved every client
+    /// renders.
+    Operator,
+}
+
+/// Remove a LIVE guild seat on behalf of the website, the way the game's own
+/// kick does: board entry, removal + succession, re-join cooldown. Runs inside
+/// the caller's transaction. Returns the heir when the member held the guild.
+///
+/// Authorisation is the caller's job (`guild_manage::plan_kick`): this only
+/// performs the removal it was handed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn remove_seat_for_website(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    target_stored_user_id: Uuid,
+    target_user_id: Uuid,
+    target_character_id: Uuid,
+    target_rank: GuildRank,
+    remover: SeatRemover,
+    ts: i64,
+) -> Result<Option<Uuid>, BladeApiError> {
+    match remover {
+        SeatRemover::GrandMaster {
+            user_id,
+            character_id,
+        } => {
+            append_message(
+                conn,
+                gid,
+                user_id,
+                character_id,
+                "KICK",
+                json!({ "type": "KICK", "kickedUserId": target_user_id }),
+            )
+            .await?;
+        }
+        SeatRemover::Operator => {
+            append_message(
+                conn,
+                gid,
+                target_user_id,
+                target_character_id,
+                "LEAVE",
+                json!({}),
+            )
+            .await?;
+        }
+    }
+    let heir = remove_member_and_succeed(conn, gid, target_stored_user_id, target_rank, ts).await?;
+    if let Some(heir) = heir {
+        append_promote_message(conn, gid, target_user_id, target_character_id, heir).await?;
+    }
+    record_removal(conn, gid, target_user_id, ts, false).await?;
+    Ok(heir)
+}
+
 /// `POST /guilds/current/kick/{memberUserId}`.
 ///
 /// Authorisation is the retail matrix: the actor must hold kick authority AND
@@ -4974,4 +5041,17 @@ mod partial_collect_keeps_the_request_open {
             vec![]
         );
     }
+}
+
+/// [`recompute_guild_trophies`] for the active season on a test connection.
+#[cfg(test)]
+pub(crate) async fn recompute_guild_trophies_for_tests(conn: &mut AsyncPgConnection) {
+    use crate::schema::arena_seasons;
+    let season: crate::arena::season_store::SeasonRow = arena_seasons::table
+        .filter(arena_seasons::status.eq("active"))
+        .select(crate::arena::season_store::SeasonRow::as_select())
+        .first(conn)
+        .await
+        .expect("an active season");
+    recompute_guild_trophies(conn, &season).await.unwrap();
 }
