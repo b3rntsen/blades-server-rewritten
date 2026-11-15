@@ -299,6 +299,9 @@ pub struct TicketRequest {
     /// unknown player is never blocked from matching, only from being used as a
     /// reason to block someone else.
     pub skill: Option<Skill>,
+    /// A regular human-vs-human player (`ArenaConfig::active_min_h2h`)? They wait
+    /// longer for a human before an AI (humans first).
+    pub active: bool,
 }
 
 /// A queued player's strength, read once at enqueue.
@@ -404,9 +407,8 @@ pub fn compatible(a: Option<Skill>, b: Option<Skill>, waited: Duration) -> bool 
 /// the bracket is dropped entirely.
 ///
 /// Among those present it takes the CLOSEST in trophies, tie-broken by longest
-/// waiting. (The in-bracket path is FIFO instead — see `in_bracket_partner`. Last call
-/// is already serving the queue's oldest ticket, so arrival order is honoured; the
-/// trophy preference only picks among the younger ones.)
+/// waiting. Last call always serves the queue's OLDEST ticket, so this is the same
+/// rule as [`pairing_round`]: the longest waiter is paired, with its best match.
 ///
 /// NEVER THE SAME ACCOUNT. Two tickets from one user — a second phone, or a
 /// re-queue whose old ticket has not been reaped — would otherwise be paired
@@ -447,72 +449,156 @@ fn last_call_partner(
     best.map(|(i, _, _)| i)
 }
 
-/// The in-bracket partner for a newly queued ticket: among the waiting tickets this
-/// one may meet ([`compatible`], not its own account, not cooldown-held), the one who
-/// has WAITED LONGEST. First come, first served (owner, 2026-11-15).
+/// One pairing round over the queue (owner, 2026-11-15): *"Longest-waiter is more
+/// important than closest match. If there are multiple (>3), then make the better
+/// match, as long as the longest waiting get one at the same time."*
 ///
-/// This used to take the closest in trophies. With a handful of players that let two
-/// people who had just fought — similar ratings, re-queuing seconds apart — pair with
-/// each other again ahead of someone already standing in the queue. The bracket still
-/// decides who is allowed; arrival order decides who goes first.
+/// 1. The OLDEST ticket that anybody is allowed to meet is paired first, with its best
+///    match — the closest in trophies among those it may meet, ties to the longer wait.
+/// 2. Everyone left pairs greedily by closest trophies, best pair first.
 ///
-/// Returns `(index, trophy gap, how long they waited)`.
-fn in_bracket_partner(
-    candidates: &[(Option<Skill>, Instant, Uuid)],
-    req: Option<Skill>,
-    req_user: Uuid,
-    now: Instant,
-) -> Option<(usize, i64, Duration)> {
-    candidates
+/// "Allowed to meet" is [`compatible`] at the LONGER of the two waits (the bracket a
+/// waiting ticket has earned is not taken away by a newcomer), never the same account,
+/// never a cooldown-held ticket (#496: `since` in the future). A ticket nobody may
+/// meet yet stays queued; its deadline is last call, which drops the bracket.
+///
+/// Before this, a newcomer took the closest waiting ticket, so two players fresh from a
+/// fight — similar ratings, re-queuing seconds apart — re-paired ahead of someone
+/// already standing in the queue.
+///
+/// Returns index pairs into `queue`, the first of each the older ticket.
+fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<(usize, usize)> {
+    let gap = |i: usize, j: usize| match (queue[i].0, queue[j].0) {
+        (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
+        _ => i64::MAX,
+    };
+    let may_meet = |i: usize, j: usize| {
+        let (a, b) = (&queue[i], &queue[j]);
+        let waited = now
+            .saturating_duration_since(a.1)
+            .max(now.saturating_duration_since(b.1));
+        a.2 != b.2 && compatible(a.0, b.0, waited)
+    };
+    let mut free: Vec<usize> = (0..queue.len()).filter(|&i| queue[i].1 <= now).collect();
+    free.sort_by_key(|&i| queue[i].1);
+    let mut pairs = Vec::new();
+
+    // 1. The longest waiter who has any partner gets one, its best.
+    let first = free.iter().enumerate().find_map(|(pos, &o)| {
+        free.iter()
+            .filter(|&&j| j != o && may_meet(o, j))
+            .min_by_key(|&&j| (gap(o, j), queue[j].1))
+            .map(|&j| (pos, o, j))
+    });
+    if let Some((_, o, j)) = first {
+        pairs.push((o, j));
+        free.retain(|&k| k != o && k != j);
+    }
+
+    // 2. The rest by best match.
+    loop {
+        let mut best: Option<(i64, Instant, usize, usize)> = None;
+        for (x, &i) in free.iter().enumerate() {
+            for &j in &free[x + 1..] {
+                if !may_meet(i, j) {
+                    continue;
+                }
+                // `free` is in age order, so `i` is the older; ties go to the older pair.
+                let key = (gap(i, j), queue[i].1, i, j);
+                if best.is_none_or(|b| (key.0, key.1) < (b.0, b.1)) {
+                    best = Some(key);
+                }
+            }
+        }
+        let Some((_, _, i, j)) = best else { break };
+        pairs.push((i, j));
+        free.retain(|&k| k != i && k != j);
+    }
+    pairs
+}
+
+/// What OTHER humans have been doing, for the humans-first gate: is one of them in a
+/// match right now (bot or human — they will be free soon), and when were they last
+/// seen otherwise (their latest queue, or the end of their latest match)?
+///
+/// `match_users` is the matchmaker's own record of who it put into which match; the
+/// registry says which of those are still live and when the others ended. A match
+/// whose only human is `me` is not someone else matching.
+fn others_activity(
+    arrivals: &[(Uuid, Instant)],
+    match_users: &std::collections::HashMap<Uuid, Vec<Uuid>>,
+    registry: &MatchRegistry,
+    me: Uuid,
+) -> (bool, Option<Instant>) {
+    let mut live = false;
+    let mut last = arrivals
         .iter()
-        .enumerate()
-        // Never pair an account with itself (see `last_call_partner`); a held ticket's
-        // `since` is its cooldown's end, in the future.
-        .filter(|(_, (_, since, user))| *user != req_user && *since <= now)
-        .filter(|(_, (skill, since, _))| {
-            compatible(*skill, req, now.saturating_duration_since(*since))
-        })
-        .min_by_key(|(_, (_, since, _))| *since)
-        .map(|(i, (skill, since, _))| {
-            let gap = match (skill, req) {
-                (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
-                _ => i64::MAX,
-            };
-            (i, gap, now.saturating_duration_since(*since))
-        })
+        .filter(|(u, _)| *u != me)
+        .map(|(_, at)| *at)
+        .max();
+    for (gsid, users) in match_users {
+        if !users.iter().any(|u| *u != me) {
+            continue;
+        }
+        if registry.has_match(*gsid) {
+            live = true;
+        } else if let Some(end) = registry.match_ended_at(*gsid) {
+            last = last.max(Some(end));
+        }
+    }
+    // A human-vs-human fight the matchmaker did not see start (e.g. before a restart)
+    // still counts.
+    if registry.live_pvp_count() > 0 {
+        live = true;
+    }
+    (live, last.max(registry.last_pvp_end()))
 }
 
 /// **Humans first** (owner, 2026-11-15): while humans are matching, nobody gets an AI.
+/// *"We want to optimise for human vs human fights. Active players will want a bit
+/// longer wait instead of getting AI."*
 ///
-/// "Matching" is a human-vs-human match in progress, or one that ended less than
-/// [`ArenaConfig::humans_first_cooldown_secs`] ago — the fighters are on the results
-/// card and about to press Fight again. (A second human standing in the queue needs no
-/// gate: the deadline is last call, which pairs them.) A human playing an AI is not
-/// "matching"; the ordinary `busy` tier covers that.
+/// "Matching" is another human in a match right now (`others_live`), or another human
+/// seen — queueing, or finishing a match — less than the cooldown ago. The cooldown is
+/// [`ArenaConfig::humans_first_cooldown_secs`] (60 s) for a casual player and
+/// [`ArenaConfig::humans_first_active_cooldown_secs`] (180 s) for an `active` one. A
+/// second human standing in the queue needs no gate: the pairing round or last call
+/// pairs them.
 ///
 /// Returns `Some(t)` while an AI is not allowed — re-check no earlier than `t` — and
-/// `None` when the ordinary tiered fallback may proceed. Never holds a ticket past
-/// `since + humans_first_max_wait_secs` (the safety valve; 0 = no valve).
+/// `None` when the ordinary tiered fallback may proceed. Never holds a ticket past the
+/// safety valve (`humans_first_max_wait_secs` 300 s / `…_active_…` 600 s; 0 = none).
 fn humans_matching_until(
     config: &ArenaConfig,
-    live_pvp: usize,
-    last_pvp_end: Option<Instant>,
+    active: bool,
+    others_live: bool,
+    last_other_activity: Option<Instant>,
     since: Instant,
     now: Instant,
 ) -> Option<Instant> {
-    if config.humans_first_cooldown_secs == 0 {
+    let (cooldown, max_wait) = if active {
+        (
+            config.humans_first_active_cooldown_secs,
+            config.humans_first_active_max_wait_secs,
+        )
+    } else {
+        (
+            config.humans_first_cooldown_secs,
+            config.humans_first_max_wait_secs,
+        )
+    };
+    if cooldown == 0 {
         return None;
     }
-    let valve = (config.humans_first_max_wait_secs > 0)
-        .then(|| since + Duration::from_secs(config.humans_first_max_wait_secs));
+    let valve = (max_wait > 0).then(|| since + Duration::from_secs(max_wait));
     if valve.is_some_and(|v| now >= v) {
         return None;
     }
-    let until = if live_pvp > 0 {
+    let until = if others_live {
         // Nobody knows when a fight ends; look again shortly.
         now + FALLBACK_REEVALUATE
     } else {
-        let open = last_pvp_end? + Duration::from_secs(config.humans_first_cooldown_secs);
+        let open = last_other_activity? + Duration::from_secs(cooldown);
         if now >= open {
             return None;
         }
@@ -1710,6 +1796,10 @@ mod human_priority_tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         }
     }
 
@@ -2570,6 +2660,10 @@ mod bot_pick_tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         // No DB pool → the function's first early return. `block_on` because the
         // path never awaits anything real once `db` is None.
@@ -4128,6 +4222,13 @@ fn fallback_deadline(
 /// somebody else is mid-match, and it is recomputed every pass — so if that player
 /// finishes and does not return, the deadline drops back to the solo one instead of
 /// stranding whoever is waiting.
+fn oldest_ticket_active(waiting: &[(TicketRequest, Instant)]) -> bool {
+    waiting
+        .iter()
+        .min_by_key(|(_, s)| *s)
+        .is_some_and(|(t, _)| t.active)
+}
+
 async fn matchmaker_loop(
     mut rx: UnboundedReceiver<MatchmakerCommand>,
     config: ArenaConfig,
@@ -4160,6 +4261,10 @@ async fn matchmaker_loop(
     // Per-ticket earliest moment a BOT may be handed out (#496, [`bot_floor`]): drawn
     // once, the first time the ticket's deadline is looked at, so it does not re-roll.
     let mut bot_floors: std::collections::HashMap<Uuid, Instant> = std::collections::HashMap::new();
+    // Which users the matchmaker put into which match (game session id), so the
+    // humans-first gate can tell another player's fight from this player's own.
+    let mut match_users: std::collections::HashMap<Uuid, Vec<Uuid>> =
+        std::collections::HashMap::new();
     // Tickets currently held by the humans-first gate, so its log line fires on change.
     let mut gated: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     // The HTTP admission flag prevents normal arrivals during a deploy, while this
@@ -4175,7 +4280,33 @@ async fn matchmaker_loop(
         // keep quoting a player who left an hour ago.
         let window = Duration::from_secs(config.recent_window_secs);
         let cutoff = Instant::now();
-        arrivals.retain(|(_, at)| cutoff.saturating_duration_since(*at) <= window);
+        // Keep arrivals as long as either reader needs them: the recent tier, or the
+        // humans-first cooldown (which can be longer for an active player).
+        let keep = window.max(Duration::from_secs(
+            config
+                .humans_first_cooldown_secs
+                .max(config.humans_first_active_cooldown_secs),
+        ));
+        arrivals.retain(|(_, at)| cutoff.saturating_duration_since(*at) <= keep);
+        match_users.retain(|gsid, _| {
+            registry.has_match(*gsid)
+                || registry
+                    .match_ended_at(*gsid)
+                    .is_some_and(|end| cutoff.saturating_duration_since(end) <= keep)
+        });
+        // Brackets widen while tickets wait, so two that could not meet a moment ago
+        // may meet now. Cheap: the queue holds a handful of tickets.
+        if !draining && waiting.len() >= 2 {
+            run_pairing_round(
+                &mut waiting,
+                &registry,
+                &config,
+                &db,
+                &active_tickets,
+                &mut match_users,
+            )
+            .await;
+        }
         floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
         bot_floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
         gated.retain(|tid| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
@@ -4231,10 +4362,18 @@ async fn matchmaker_loop(
                 .or_insert_with(|| bot_floor(&config, since, immediate, rand::random::<f64>()));
             // Humans first: while people are fighting each other (or just did), no AI.
             // Only gates the bot; a human in the queue is still paired at `floor`.
+            let oldest_active = oldest_ticket_active(&waiting);
+            let (others_fighting, others_seen) = others_activity(
+                &arrivals,
+                &match_users,
+                &registry,
+                oldest_user.expect("waiting"),
+            );
             let gate = humans_matching_until(
                 &config,
-                registry.live_pvp_count(),
-                registry.last_pvp_end(),
+                oldest_active,
+                others_fighting,
+                others_seen,
                 since,
                 now,
             );
@@ -4243,16 +4382,13 @@ async fn matchmaker_loop(
                     gated.insert(tid);
                     info!(
                         "matchmaker: holding ticket {tid} for a human — humans are matching \
-                         (live pvp {}, cooldown {}s) — no AI",
-                        registry.live_pvp_count(),
-                        config.humans_first_cooldown_secs,
+                         (other in a match: {others_fighting}, active player: {oldest_active}) — no AI",
                     );
                 } else {
                     gated.remove(&tid);
                     info!(
-                        "matchmaker: ticket {tid} — no human matching for {}s (or waited past \
-                         {}s); ordinary fallback applies",
-                        config.humans_first_cooldown_secs, config.humans_first_max_wait_secs,
+                        "matchmaker: ticket {tid} — no other human seen inside the cooldown (or \
+                         past the max wait; active player: {oldest_active}); ordinary fallback applies",
                     );
                 }
             }
@@ -4315,27 +4451,16 @@ async fn matchmaker_loop(
                         partner.ticket_id,
                         partner_since.elapsed().as_secs_f32(),
                     );
-                    let partner_user_id = partner.user_id;
-                    let partner_ticket_id = partner.ticket_id;
-                    let lone_user_id = lone.user_id;
-                    let lone_ticket_id = lone.ticket_id;
-                    if let Some(game_session_id) =
-                        resolve(&registry, &config, &db, &[partner, lone], 0).await
-                    {
-                        active_tickets.mark_matched_vs_human(
-                            partner_user_id,
-                            partner_ticket_id,
-                            game_session_id,
-                        );
-                        active_tickets.mark_matched_vs_human(
-                            lone_user_id,
-                            lone_ticket_id,
-                            game_session_id,
-                        );
-                    } else {
-                        active_tickets.remove(partner_user_id, partner_ticket_id);
-                        active_tickets.remove(lone_user_id, lone_ticket_id);
-                    }
+                    resolve_pair(
+                        partner,
+                        lone,
+                        &registry,
+                        &config,
+                        &db,
+                        &active_tickets,
+                        &mut match_users,
+                    )
+                    .await;
                     continue;
                 }
 
@@ -4348,10 +4473,13 @@ async fn matchmaker_loop(
                 }
                 // Humans first, re-checked at the moment of handing out the AI: the
                 // partner last call expected may have vanished while others still fight.
+                let (fighting_now, seen_last) =
+                    others_activity(&arrivals, &match_users, &registry, lone.user_id);
                 if humans_matching_until(
                     &config,
-                    registry.live_pvp_count(),
-                    registry.last_pvp_end(),
+                    lone.active,
+                    fighting_now,
+                    seen_last,
                     since,
                     Instant::now(),
                 )
@@ -4373,6 +4501,7 @@ async fn matchmaker_loop(
                 let lone_ticket_id = lone.ticket_id;
                 if let Some(game_session_id) = resolve(&registry, &config, &db, &[lone], 1).await {
                     active_tickets.mark_matched(lone_user_id, lone_ticket_id, game_session_id);
+                    match_users.insert(game_session_id, vec![lone_user_id]);
                 } else {
                     active_tickets.remove(lone_user_id, lone_ticket_id);
                 }
@@ -4526,60 +4655,99 @@ async fn matchmaker_loop(
         }
         waiting = live;
 
-        // Pick an opponent inside the bracket: the longest-waiting one who qualifies
-        // (FIFO, see `in_bracket_partner`), so a player fresh from a fight cannot jump
-        // ahead of someone already standing in the queue.
-        let shape: Vec<(Option<Skill>, Instant, Uuid)> = waiting
-            .iter()
-            .map(|(t, s)| (t.skill, *s, t.user_id))
-            .collect();
-        let best = in_bracket_partner(&shape, req.skill, req.user_id, Instant::now());
-
-        match best {
-            Some((idx, gap, waited)) => {
-                let (first, _) = waiting.remove(idx);
-                info!(
-                    "matchmaker: paired {} with {} (trophy gap {}, opponent waited {:.1}s)",
-                    req.ticket_id,
-                    first.ticket_id,
-                    if gap == i64::MAX { -1 } else { gap },
-                    waited.as_secs_f32(),
-                );
-                let first_user_id = first.user_id;
-                let first_ticket_id = first.ticket_id;
-                let req_user_id = req.user_id;
-                let req_ticket_id = req.ticket_id;
-                if let Some(game_session_id) =
-                    resolve(&registry, &config, &db, &[first, req], 0).await
-                {
-                    active_tickets.mark_matched_vs_human(
-                        first_user_id,
-                        first_ticket_id,
-                        game_session_id,
-                    );
-                    active_tickets.mark_matched_vs_human(
-                        req_user_id,
-                        req_ticket_id,
-                        game_session_id,
-                    );
-                } else {
-                    active_tickets.remove(first_user_id, first_ticket_id);
-                    active_tickets.remove(req_user_id, req_ticket_id);
-                }
-            }
-            None => {
-                if !waiting.is_empty() {
-                    info!(
-                        "matchmaker: {} queued — {} other(s) waiting but none inside the bracket yet",
-                        req.ticket_id,
-                        waiting.len()
-                    );
-                }
-                waiting.push((req, Instant::now()));
-            }
+        // Into the queue, then one pairing round over everybody standing in it: the
+        // longest waiter first with its best match, then the rest by best match
+        // (`pairing_round`). A player fresh from a fight cannot jump the queue.
+        let (new_tid, others) = (req.ticket_id, waiting.len());
+        waiting.push((req, Instant::now()));
+        let paired = run_pairing_round(
+            &mut waiting,
+            &registry,
+            &config,
+            &db,
+            &active_tickets,
+            &mut match_users,
+        )
+        .await;
+        if !paired.contains(&new_tid) && others > 0 {
+            info!(
+                "matchmaker: {new_tid} queued — {others} other(s) waiting but none paired with it yet"
+            );
         }
     }
     warn!("matchmaker: queue closed, actor exiting");
+}
+
+/// Resolve a human pair and record who is in the match (humans first reads it).
+async fn resolve_pair(
+    first: TicketRequest,
+    second: TicketRequest,
+    registry: &MatchRegistry,
+    config: &ArenaConfig,
+    db: &Option<DbPool>,
+    active_tickets: &ActiveTickets,
+    match_users: &mut std::collections::HashMap<Uuid, Vec<Uuid>>,
+) {
+    let (u1, t1, u2, t2) = (
+        first.user_id,
+        first.ticket_id,
+        second.user_id,
+        second.ticket_id,
+    );
+    if let Some(game_session_id) = resolve(registry, config, db, &[first, second], 0).await {
+        active_tickets.mark_matched_vs_human(u1, t1, game_session_id);
+        active_tickets.mark_matched_vs_human(u2, t2, game_session_id);
+        match_users.insert(game_session_id, vec![u1, u2]);
+    } else {
+        active_tickets.remove(u1, t1);
+        active_tickets.remove(u2, t2);
+    }
+}
+
+/// Run [`pairing_round`] over `waiting` and resolve every pair it returns. Returns the
+/// ticket ids that were paired.
+async fn run_pairing_round(
+    waiting: &mut Vec<(TicketRequest, Instant)>,
+    registry: &MatchRegistry,
+    config: &ArenaConfig,
+    db: &Option<DbPool>,
+    active_tickets: &ActiveTickets,
+    match_users: &mut std::collections::HashMap<Uuid, Vec<Uuid>>,
+) -> Vec<Uuid> {
+    let now = Instant::now();
+    let shape: Vec<(Option<Skill>, Instant, Uuid)> = waiting
+        .iter()
+        .map(|(t, s)| (t.skill, *s, t.user_id))
+        .collect();
+    let pairs = pairing_round(&shape, now);
+    if pairs.is_empty() {
+        return Vec::new();
+    }
+    let mut slots: Vec<Option<(TicketRequest, Instant)>> =
+        std::mem::take(waiting).into_iter().map(Some).collect();
+    let mut paired = Vec::new();
+    for (i, j) in pairs {
+        let (Some((a, a_since)), Some((b, b_since))) = (slots[i].take(), slots[j].take()) else {
+            continue;
+        };
+        let gap = match (a.skill, b.skill) {
+            (Some(x), Some(y)) => (x.trophies - y.trophies).abs(),
+            _ => -1,
+        };
+        info!(
+            "matchmaker: paired {} (waited {:.1}s) with {} (waited {:.1}s), trophy gap {}",
+            a.ticket_id,
+            now.saturating_duration_since(a_since).as_secs_f32(),
+            b.ticket_id,
+            now.saturating_duration_since(b_since).as_secs_f32(),
+            gap,
+        );
+        paired.push(a.ticket_id);
+        paired.push(b.ticket_id);
+        resolve_pair(a, b, registry, config, db, active_tickets, match_users).await;
+    }
+    *waiting = slots.into_iter().flatten().collect();
+    paired
 }
 
 /// Allocate ONE match for these tickets (1 = solo/bot, 2 = a PvP pair) and push
@@ -4974,6 +5142,50 @@ struct MatchTicket {
 const DRAIN_CREATE_WAIT: Duration = Duration::from_secs(5);
 const DRAIN_CREATE_POLL: Duration = Duration::from_millis(50);
 
+/// Paired (human-vs-human) tickets `user_id` queued in the last `days` days.
+async fn recent_h2h_tickets(
+    conn: &mut diesel_async::AsyncPgConnection,
+    user_id: Uuid,
+    days: u64,
+) -> u64 {
+    use diesel_async::RunQueryDsl;
+    #[derive(diesel::QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        count: i64,
+    }
+    diesel::sql_query(
+        "SELECT COUNT(*) AS count FROM arena_matches \
+         WHERE user_id = $1 AND paired \
+           AND recorded_at > now() - make_interval(days => $2)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .bind::<diesel::sql_types::Integer, _>(days.min(3650) as i32)
+    .get_result::<CountRow>(conn)
+    .await
+    .map(|r| r.count.max(0) as u64)
+    .unwrap_or(0)
+}
+
+/// Is this player ACTIVE — a regular at human-vs-human fights? At least
+/// `ArenaConfig::active_min_h2h` paired tickets in the last `active_window_days`.
+/// Humans first gives an active player a longer wait for a human before an AI.
+///
+/// `arena_matches` is the human-only ticket log and is indexed on `recorded_at`, so
+/// the window bounds the scan. A failed lookup is "casual": the shorter wait, which is
+/// today's behaviour.
+async fn load_active(app_state: &Arc<ServerGlobal>, user_id: Uuid) -> bool {
+    let config = &app_state.arena.config;
+    if config.active_min_h2h == 0 {
+        return false;
+    }
+    let Ok(mut conn) = app_state.db_pool.get().await else {
+        return false;
+    };
+    let count = recent_h2h_tickets(&mut conn, user_id, config.active_window_days).await;
+    count >= config.active_min_h2h
+}
+
 /// The queueing player's level and trophies, for the pairing bracket.
 ///
 /// Returns `None` rather than an error on any failure — no character, no database,
@@ -5136,6 +5348,7 @@ pub async fn create_match(
     // where an account id belongs. We used to bind this body to `_body` and discard it.
     let character_id = body.player_id;
     let skill = load_skill(&app_state, session.session.user_id, character_id).await;
+    let active = load_active(&app_state, session.session.user_id).await;
 
     let via_vpn = req.headers().get("X-Newblades-Device-Ip").is_some();
     let expected_udp_ip = ["X-Newblades-Device-Ip", "X-Real-IP"]
@@ -5156,6 +5369,7 @@ pub async fn create_match(
             user_id: session.session.user_id,
             character_id,
             rms: RmsHandle::Session(session.session.clone()),
+            active,
             skill,
             // The mitm addon stamps X-Newblades-Device-Ip from the client's
             // WireGuard peer IP; edge-nginx ERASES it on the public path
@@ -5262,6 +5476,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         }
     }
 
@@ -5377,6 +5595,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5396,6 +5618,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_a),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5406,6 +5629,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_b),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5472,6 +5696,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5493,6 +5721,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_a),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5503,6 +5732,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_b),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5580,6 +5810,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5598,6 +5832,7 @@ mod tests {
             user_id: user,
             character_id: None,
             rms: RmsHandle::Direct(rms),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5660,6 +5895,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5680,6 +5919,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_a),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5731,6 +5971,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5751,6 +5995,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_a),
+            active: false,
             skill: Some(Skill {
                 level: 62,
                 trophies: 610,
@@ -5767,6 +6012,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_b),
+            active: false,
             skill: Some(Skill {
                 level: 44,
                 trophies: 210,
@@ -5830,6 +6076,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5848,6 +6098,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_a),
+            active: false,
             skill: Some(Skill {
                 level: 50,
                 trophies: 400,
@@ -5867,6 +6118,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_b),
+            active: false,
             skill: Some(Skill {
                 level: 50,
                 trophies: 400,
@@ -5917,6 +6169,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5937,6 +6193,7 @@ mod tests {
             user_id: uid,
             character_id: None,
             rms: RmsHandle::Direct(rms),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -5987,6 +6244,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -6006,6 +6267,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -6049,6 +6311,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
@@ -6079,6 +6345,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -6151,6 +6418,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
@@ -6174,6 +6445,7 @@ mod tests {
             user_id,
             character_id: None,
             rms: RmsHandle::Direct(rms_a),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -6184,6 +6456,7 @@ mod tests {
             user_id,
             character_id: None,
             rms: RmsHandle::Direct(rms_dup),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -6335,6 +6608,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -6355,6 +6632,7 @@ mod tests {
             user_id: uid,
             character_id: None,
             rms: RmsHandle::Direct(rms),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -6413,6 +6691,10 @@ mod tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let ticket_id = Uuid::new_v4();
         let (rms, mut recv) = unbounded_channel();
@@ -6423,6 +6705,7 @@ mod tests {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms),
+            active: false,
             skill: None,
         }];
 
@@ -7007,6 +7290,10 @@ mod no_show_375 {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -7025,6 +7312,7 @@ mod no_show_375 {
             user_id: a.user_id,
             character_id: None,
             rms: RmsHandle::Session(a),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -7039,6 +7327,7 @@ mod no_show_375 {
             user_id: Uuid::new_v4(),
             character_id: None,
             rms: RmsHandle::Direct(rms_b),
+            active: false,
             skill: None,
         }))
         .unwrap();
@@ -7358,6 +7647,10 @@ mod pre_fight_quits_496 {
             prefight_cancel_cooldown_secs: cooldown,
             humans_first_cooldown_secs: 0,
             humans_first_max_wait_secs: 0,
+            humans_first_active_cooldown_secs: 0,
+            humans_first_active_max_wait_secs: 0,
+            active_min_h2h: 0,
+            active_window_days: 28,
         }
     }
 
@@ -7377,6 +7670,7 @@ mod pre_fight_quits_496 {
                 user_id,
                 character_id: None,
                 rms: RmsHandle::Direct(tx),
+                active: false,
                 skill,
             },
             rx,
@@ -7618,6 +7912,10 @@ mod humans_first_tests {
             prefight_cancel_cooldown_secs: 0,
             humans_first_cooldown_secs: cooldown,
             humans_first_max_wait_secs: max_wait,
+            humans_first_active_cooldown_secs: cooldown,
+            humans_first_active_max_wait_secs: max_wait,
+            active_min_h2h: 10,
+            active_window_days: 28,
         }
     }
 
@@ -7637,6 +7935,7 @@ mod humans_first_tests {
                 user_id,
                 character_id: None,
                 rms: RmsHandle::Direct(tx),
+                active: false,
                 skill: Some(Skill {
                     level: 50,
                     trophies,
@@ -7761,22 +8060,22 @@ mod humans_first_tests {
         let since = Instant::now();
         let now = since + StdDuration::from_secs(10);
         assert!(
-            humans_matching_until(&c, 1, None, since, now).is_some(),
+            humans_matching_until(&c, false, true, None, since, now).is_some(),
             "live h2h"
         );
         let ended = now - StdDuration::from_secs(20);
         assert_eq!(
-            humans_matching_until(&c, 0, Some(ended), since, now),
+            humans_matching_until(&c, false, false, Some(ended), since, now),
             Some(ended + StdDuration::from_secs(60)),
             "ended 20 s ago: closed until 60 s after the end"
         );
         let long_ago = now - StdDuration::from_secs(61);
         assert_eq!(
-            humans_matching_until(&c, 0, Some(long_ago), since, now),
+            humans_matching_until(&c, false, false, Some(long_ago), since, now),
             None
         );
         assert_eq!(
-            humans_matching_until(&c, 0, None, since, now),
+            humans_matching_until(&c, false, false, None, since, now),
             None,
             "never fought"
         );
@@ -7787,10 +8086,13 @@ mod humans_first_tests {
         let c = config(60, 300);
         let since = Instant::now();
         let now = since + StdDuration::from_secs(301);
-        assert_eq!(humans_matching_until(&c, 1, None, since, now), None);
+        assert_eq!(
+            humans_matching_until(&c, false, true, None, since, now),
+            None
+        );
         // And it never holds a waiter past the valve.
         let early = since + StdDuration::from_secs(290);
-        let until = humans_matching_until(&c, 0, Some(early), since, early).unwrap();
+        let until = humans_matching_until(&c, false, false, Some(early), since, early).unwrap();
         assert_eq!(until, since + StdDuration::from_secs(300));
     }
 
@@ -7798,7 +8100,10 @@ mod humans_first_tests {
     fn a_zero_cooldown_turns_the_gate_off() {
         let c = config(0, 300);
         let now = Instant::now();
-        assert_eq!(humans_matching_until(&c, 3, Some(now), now, now), None);
+        assert_eq!(
+            humans_matching_until(&c, false, true, Some(now), now, now),
+            None
+        );
         assert_eq!(
             ArenaConfig::from_env().humans_first_cooldown_secs,
             60,
@@ -7813,36 +8118,197 @@ mod humans_first_tests {
 
     // ---- FIFO -----------------------------------------------------------------------
 
-    /// Both waiting tickets are inside the newcomer's bracket; the one who has waited
-    /// longer is taken even though the other is closer in trophies.
-    #[test]
-    fn the_newcomer_takes_the_longest_waiter_not_the_closest() {
-        let now = Instant::now();
-        let (old, young) = (Uuid::new_v4(), Uuid::new_v4());
-        let shape = vec![
-            (
-                Some(Skill {
-                    level: 50,
-                    trophies: 400,
-                }),
-                now - StdDuration::from_secs(5),
-                young,
-            ),
-            (
-                Some(Skill {
-                    level: 50,
-                    trophies: 520,
-                }),
-                now - StdDuration::from_secs(40),
-                old,
-            ),
-        ];
-        let me = Some(Skill {
+    fn sk(trophies: i64) -> Option<Skill> {
+        Some(Skill {
             level: 50,
-            trophies: 400,
-        });
-        let (idx, _, _) = in_bracket_partner(&shape, me, Uuid::new_v4(), now).unwrap();
-        assert_eq!(shape[idx].2, old);
+            trophies,
+        })
+    }
+
+    /// Owner: "Longest-waiter is more important than closest match." The oldest ticket
+    /// is paired this round, with ITS best match — even when the two younger ones would
+    /// suit each other better.
+    #[test]
+    fn the_longest_waiter_is_paired_first_with_its_best_match() {
+        let now = Instant::now();
+        let ago = |s: u64| now - StdDuration::from_secs(s);
+        let shape = vec![
+            (sk(500), ago(40), Uuid::new_v4()), // oldest
+            (sk(400), ago(5), Uuid::new_v4()),
+            (sk(410), now, Uuid::new_v4()), // newcomer
+        ];
+        let pairs = pairing_round(&shape, now);
+        assert_eq!(
+            pairs,
+            vec![(0, 2)],
+            "oldest takes its closest (410), 400 waits"
+        );
+    }
+
+    /// "If there are multiple (>3), then make the better match, as long as the longest
+    /// waiting get one at the same time."
+    #[test]
+    fn with_more_than_three_the_rest_pair_by_best_match() {
+        let now = Instant::now();
+        let ago = |s: u64| now - StdDuration::from_secs(s);
+        let shape = vec![
+            (sk(1000), ago(90), Uuid::new_v4()), // oldest
+            (sk(100), ago(60), Uuid::new_v4()),
+            (sk(900), ago(50), Uuid::new_v4()),
+            (sk(110), ago(40), Uuid::new_v4()),
+        ];
+        let mut pairs = pairing_round(&shape, now);
+        pairs.sort();
+        assert_eq!(pairs, vec![(0, 2), (1, 3)]);
+    }
+
+    /// An oldest ticket nobody is allowed to meet yet does not block the others; last
+    /// call will pair it at its deadline.
+    #[test]
+    fn an_unmatchable_oldest_does_not_block_the_rest() {
+        let now = Instant::now();
+        let ago = |s: u64| now - StdDuration::from_secs(s);
+        let shape = vec![
+            (sk(5000), ago(3), Uuid::new_v4()),
+            (sk(400), ago(2), Uuid::new_v4()),
+            (sk(410), now, Uuid::new_v4()),
+        ];
+        assert_eq!(pairing_round(&shape, now), vec![(1, 2)]);
+    }
+
+    #[test]
+    fn a_round_never_pairs_an_account_with_itself() {
+        let now = Instant::now();
+        let me = Uuid::new_v4();
+        let shape = vec![(sk(400), now, me), (sk(400), now, me)];
+        assert!(pairing_round(&shape, now).is_empty());
+    }
+
+    // ---- humans first, generalised: any other human's recent activity ----------------
+
+    #[test]
+    fn an_active_player_waits_longer_than_a_casual_one() {
+        let mut c = config(60, 300);
+        c.humans_first_active_cooldown_secs = 180;
+        c.humans_first_active_max_wait_secs = 600;
+        let since = Instant::now();
+        let now = since + StdDuration::from_secs(10);
+        let seen = now - StdDuration::from_secs(70);
+        assert_eq!(
+            humans_matching_until(&c, false, false, Some(seen), since, now),
+            None
+        );
+        assert_eq!(
+            humans_matching_until(&c, true, false, Some(seen), since, now),
+            Some(seen + StdDuration::from_secs(180))
+        );
+        let late = since + StdDuration::from_secs(400);
+        assert_eq!(
+            humans_matching_until(&c, false, true, None, since, late),
+            None
+        );
+        assert!(humans_matching_until(&c, true, true, None, since, late).is_some());
+    }
+
+    /// Another player's queue or fight counts; your own does not, and neither does a
+    /// match whose only human is you.
+    #[test]
+    fn others_activity_reads_queues_and_matches_of_other_players_only() {
+        let registry = MatchRegistry::new(4);
+        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        let now = Instant::now();
+        let t = |s: u64| now - StdDuration::from_secs(s);
+        let arrivals = vec![(me, t(1)), (other, t(50))];
+        let mut match_users: std::collections::HashMap<Uuid, Vec<Uuid>> = Default::default();
+        assert_eq!(
+            others_activity(&arrivals, &match_users, &registry, me),
+            (false, Some(t(50)))
+        );
+        // The other player is in a (bot) match right now.
+        let psid = Uuid::new_v4().to_string();
+        let gsid = Uuid::new_v4();
+        assert!(registry.allocate_with_bots(
+            std::slice::from_ref(&psid),
+            vec![Loadout::default(), Loadout::default()],
+            gsid,
+            1,
+        ));
+        let peer: SocketAddr = "10.9.2.1:5000".parse().unwrap();
+        assert!(registry.admit(peer, &psid, &[7u8; 32]).is_some());
+        match_users.insert(gsid, vec![other]);
+        assert!(others_activity(&arrivals, &match_users, &registry, me).0);
+        assert!(
+            !others_activity(&[], &match_users, &registry, other).0,
+            "my own bot match is not someone else matching"
+        );
+        // It ends: the end is their latest activity.
+        registry.remove(&peer);
+        let (live, last) = others_activity(&arrivals, &match_users, &registry, me);
+        assert!(!live);
+        assert!(
+            last.unwrap() > t(1),
+            "the match end is newer than their queue"
+        );
+    }
+
+    /// The 2026-11-15 08:16-08:21 case. LagorPing queues and is handed an AI (nobody
+    /// else around). RonnieRaider — an active player — queues while LagorPing fights it,
+    /// and LagorPing re-queues a little later: the two humans are paired, not two AIs.
+    #[tokio::test]
+    async fn two_regulars_searching_apart_are_paired_instead_of_two_ais() {
+        let mut c = config(1, 0);
+        c.humans_first_active_cooldown_secs = 6;
+        let tx = spawn(c, MatchRegistry::new(8));
+        let (l1, mut rx_l1) = ticket(Uuid::new_v4(), 1600);
+        let lagor = l1.user_id;
+        tx.send(MatchmakerCommand::Enqueue(l1)).unwrap();
+        assert!(
+            resolved(&mut rx_l1, StdDuration::from_millis(2500)).await,
+            "L alone: AI"
+        );
+        let (mut r, mut rx_r) = ticket(Uuid::new_v4(), 1700);
+        r.active = true;
+        tx.send(MatchmakerCommand::Enqueue(r)).unwrap();
+        assert!(
+            !resolved(&mut rx_r, StdDuration::from_millis(2500)).await,
+            "R (active) handed an AI seconds after another human searched"
+        );
+        let (l2, mut rx_l2) = ticket(lagor, 1600);
+        tx.send(MatchmakerCommand::Enqueue(l2)).unwrap();
+        assert!(resolved(&mut rx_r, StdDuration::from_millis(1500)).await);
+        assert!(
+            resolved(&mut rx_l2, StdDuration::from_millis(200)).await,
+            "paired"
+        );
+    }
+
+    /// The same, for a casual player: the short cooldown runs out and they get the AI
+    /// before the other comes back.
+    #[tokio::test]
+    async fn a_casual_player_keeps_the_short_wait() {
+        let mut c = config(1, 0);
+        c.humans_first_active_cooldown_secs = 6;
+        let tx = spawn(c, MatchRegistry::new(8));
+        let (l1, mut rx_l1) = ticket(Uuid::new_v4(), 1600);
+        tx.send(MatchmakerCommand::Enqueue(l1)).unwrap();
+        assert!(resolved(&mut rx_l1, StdDuration::from_millis(2500)).await);
+        let (r, mut rx_r) = ticket(Uuid::new_v4(), 1700);
+        tx.send(MatchmakerCommand::Enqueue(r)).unwrap();
+        assert!(resolved(&mut rx_r, StdDuration::from_millis(2500)).await);
+    }
+
+    #[test]
+    fn active_defaults() {
+        let c = ArenaConfig::from_env();
+        assert_eq!(
+            (
+                c.humans_first_active_cooldown_secs,
+                c.humans_first_active_max_wait_secs,
+                c.active_min_h2h,
+                c.active_window_days
+            ),
+            (180, 600, 10, 28)
+        );
     }
 
     /// A queued human who has waited past their deadline beats the bracket: that is
@@ -7988,5 +8454,42 @@ mod humans_first_tests {
             !resolved(&mut waiter_rx, StdDuration::from_millis(1500)).await,
             "the last waiter was handed an AI while others fought"
         );
+    }
+
+    /// The "active" lookup counts only this player's PAIRED tickets inside the window.
+    #[tokio::test]
+    async fn recent_h2h_tickets_counts_paired_tickets_in_the_window() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — active-player lookup NOT verified");
+            return;
+        };
+        let mut conn = AsyncPgConnection::establish(&url).await.expect("test db");
+        conn.begin_test_transaction()
+            .await
+            .expect("test transaction");
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};
+             CREATE TABLE arena_matches (
+                 ticket_id UUID PRIMARY KEY, user_id UUID NOT NULL,
+                 status TEXT NOT NULL, paired BOOLEAN NOT NULL DEFAULT FALSE,
+                 recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(), resolved_at TIMESTAMPTZ);"
+        ))
+        .await
+        .unwrap();
+        let (me, other) = (Uuid::new_v4(), Uuid::new_v4());
+        conn.batch_execute(&format!(
+            "INSERT INTO arena_matches (ticket_id, user_id, status, paired, recorded_at) VALUES
+               (gen_random_uuid(), '{me}', 'matched', true,  now() - interval '1 day'),
+               (gen_random_uuid(), '{me}', 'matched', true,  now() - interval '27 days'),
+               (gen_random_uuid(), '{me}', 'matched', true,  now() - interval '40 days'),
+               (gen_random_uuid(), '{me}', 'matched', false, now()),
+               (gen_random_uuid(), '{other}', 'matched', true, now());"
+        ))
+        .await
+        .unwrap();
+        assert_eq!(recent_h2h_tickets(&mut conn, me, 28).await, 2);
+        assert_eq!(recent_h2h_tickets(&mut conn, me, 60).await, 3);
     }
 }
