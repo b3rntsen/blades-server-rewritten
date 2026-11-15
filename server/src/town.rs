@@ -1157,7 +1157,8 @@ fn complete_response(
 /// We paid the 400 / 125 / 100 alone, so every town was short and its level
 /// gates came late. (Retail's Town Hall comes back from this completion at
 /// level 1, which is why the fixture test below sees its 525 against a
-/// level-1 row; ours stays at level 0 and is priced here.)
+/// level-1 row; ours is priced here at level 0, then the level-up this
+/// completion pays raises it to 1 — see [`sync_town_hall_level`].)
 fn prestige_on_complete(building_upgrades: &Value, town: &mut Value, building_id: Uuid) -> u64 {
     let Some((type_id, style_id, level)) = read_building_facts(town, building_id) else {
         return 0;
@@ -3026,6 +3027,8 @@ fn repair_town_on_load(
         backfill_store_town_xp_once(state, town, store_town_xp_of);
         changed = true;
     }
+    // Towns levelled here before #522 kept a level-0 hall; idempotent once healed.
+    changed |= sync_town_hall_level(town);
     changed
 }
 
@@ -3088,6 +3091,52 @@ pub(crate) fn is_town_offer_entry(offer: &Value) -> bool {
         .is_some_and(crate::global_shop::is_town_level_up_offer)
 }
 
+/// The Town Hall's building type (`BuildingCategory.CategoryType.TownHall`).
+const TOWN_HALL_TYPE_ID: &str = "a6a2de53-d65c-445a-8b55-d2a73c15b635";
+/// The Town Hall's `maxLevel` in `building_upgrades.json`; at 10 the APK says
+/// "The Town Hall is fully upgraded!".
+const TOWN_HALL_MAX_LEVEL: u64 = 10;
+
+/// Raise every standing Town Hall to the town's level, capped at
+/// [`TOWN_HALL_MAX_LEVEL`]. `true` when a hall changed.
+///
+/// Report #522. The client picks the hall's model from this `level` (its
+/// description reads "The Town Hall will automatically upgrade as the town
+/// itself grows in prestige") and never asks for the upgrade itself: retail's
+/// server wrote it. Measured: on every captured retail level-raising
+/// `/complete` that carried the hall, the hall's level equalled the town's new
+/// level, and all 113 retail towns imported at level 10 hold a level-10 hall.
+/// Only raises, and only a hall that has finished being placed (`NORMAL`): a
+/// hall still `BUILDING` gets its level when it completes, through the same
+/// level-up that completion pays.
+fn sync_town_hall_level(town: &mut Value) -> bool {
+    let target = town_level(town).min(TOWN_HALL_MAX_LEVEL);
+    let Some(districts) = town.get_mut("districts").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for segment in districts
+        .iter_mut()
+        .filter_map(|d| d.get_mut("segments").and_then(Value::as_object_mut))
+        .flat_map(|segments| segments.values_mut())
+    {
+        let Some(buildings) = segment.get_mut("buildings").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for building in buildings.values_mut() {
+            let is_standing_hall = building.get("typeId").and_then(Value::as_str)
+                == Some(TOWN_HALL_TYPE_ID)
+                && building.get("state").and_then(Value::as_str) == Some("NORMAL");
+            let level = building.get("level").and_then(Value::as_u64).unwrap_or(0);
+            if is_standing_hall && level < target {
+                building["level"] = json!(target);
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// Apply prestige and check for town level up
 fn apply_prestige_and_level_up(town: &mut Value, prestige_to_add: u64) -> u64 {
     // Get or initialize levelInfo
@@ -3128,6 +3177,9 @@ fn apply_prestige_and_level_up(town: &mut Value, prestige_to_add: u64) -> u64 {
     if new_level > current_level {
         level_info.insert("level".to_string(), json!(new_level));
     }
+
+    // The hall's stage follows the town (report #522).
+    sync_town_hall_level(town);
 
     new_level
 }
@@ -6367,5 +6419,104 @@ mod town_level_up_offer_tests {
         let body = &src[src.find("fn credit_town_xp_with(").unwrap()..];
         let body = &body[..body.find("\n}\n").unwrap()];
         assert!(body.contains("level_town_and_stamp_offer("));
+    }
+}
+
+/// Report #522: the Town Hall's look follows the town's level.
+///
+/// The client draws the Town Hall from its own building `level` — the APK's
+/// `UI.Building.TownHall.Level1` reads "The Town Hall will automatically upgrade
+/// as the town itself grows in prestige", and the three models per style
+/// (`town_townhall_townhall_<style>_00/_01/_02`) are picked from it. There is no
+/// upgrade request for it: retail's SERVER raised it. Measured on every captured
+/// retail town (local snapshot of 2026-06-07): on 14 of 14 level-raising
+/// `/complete`s that carried the hall, its `level` equalled the town's new
+/// `levelInfo.level` (1…9), and all 113 retail towns imported at town level 10
+/// hold a level-10 hall. Every town levelled on our server kept a level-0 hall.
+#[cfg(test)]
+mod report522_town_hall_follows_town_level {
+    use super::*;
+
+    const HALL: &str = "a6a2de53-d65c-445a-8b55-d2a73c15b635";
+    const FORGE: &str = "bfd7213e-b988-4237-8847-5e65e898f011";
+    const HALL_ID: &str = "f106c544-009a-4f6c-bc55-7fcf78f07c06";
+
+    fn town(level: u64, xp: u64, hall_level: u64, hall_state: &str) -> Value {
+        json!({
+            "levelInfo": {"level": level, "experiencePoints": xp},
+            "districts": [{
+                "id": "9a12c0d3-218c-4ef2-b78c-b6e3bca60719",
+                "segments": {
+                    "2a967439-6476-4974-940a-d6b1b7469eeb": {
+                        "id": "2a967439-6476-4974-940a-d6b1b7469eeb",
+                        "buildings": {
+                            "f106c544-009a-4f6c-bc55-7fcf78f07c06": {
+                                "id": "f106c544-009a-4f6c-bc55-7fcf78f07c06",
+                                "typeId": HALL,
+                                "level": hall_level,
+                                "state": hall_state
+                            },
+                            "abc03e45-e24f-4ec5-9a85-24d35d9b76ec": {
+                                "id": "abc03e45-e24f-4ec5-9a85-24d35d9b76ec",
+                                "typeId": FORGE,
+                                "level": 0,
+                                "state": "NORMAL"
+                            }
+                        }
+                    }
+                }
+            }]
+        })
+    }
+
+    fn level_of(town: &Value, id: &str) -> u64 {
+        find_building(town, Uuid::parse_str(id).unwrap()).unwrap()["level"]
+            .as_u64()
+            .unwrap()
+    }
+
+    /// Prkiland, 2026-06-05T19:55:58: a Forge completion took the town 1 → 2
+    /// (2918 XP) and the same response carried the hall at level 2.
+    #[test]
+    fn a_town_level_up_raises_the_hall_to_the_new_level() {
+        let mut t = town(1, 2500 - 10, 1, "NORMAL");
+        assert_eq!(apply_prestige_and_level_up(&mut t, 428), 2);
+        assert_eq!(level_of(&t, HALL_ID), 2);
+        assert_eq!(
+            level_of(&t, "abc03e45-e24f-4ec5-9a85-24d35d9b76ec"),
+            0,
+            "only the hall follows the town"
+        );
+    }
+
+    /// A town that already levelled here with the hall stuck at 0 is healed on
+    /// load, which is how every existing town gets its stages back.
+    #[test]
+    fn the_load_repair_heals_a_hall_left_behind() {
+        let mut t = town(10, 70000, 0, "NORMAL");
+        let mut state = blades_lib::server_state::ServerState {
+            town_sites_backfilled: true,
+            store_town_xp_backfilled: true,
+            ..Default::default()
+        };
+        assert!(repair_town_on_load(&mut state, &mut t, &json!({}), |_| 0));
+        assert_eq!(level_of(&t, HALL_ID), 10);
+    }
+
+    /// Never lowered, never above its max of 10, never while it is still
+    /// being placed.
+    #[test]
+    fn the_sync_only_raises_a_standing_hall_up_to_ten() {
+        let mut built_ahead = town(3, 5000, 5, "NORMAL");
+        assert!(!sync_town_hall_level(&mut built_ahead));
+        assert_eq!(level_of(&built_ahead, HALL_ID), 5);
+
+        let mut placing = town(4, 9000, 0, "BUILDING");
+        assert!(!sync_town_hall_level(&mut placing));
+        assert_eq!(level_of(&placing, HALL_ID), 0);
+
+        let mut past_ten = town(12, 200000, 9, "NORMAL");
+        assert!(sync_town_hall_level(&mut past_ten));
+        assert_eq!(level_of(&past_ten, HALL_ID), 10);
     }
 }
