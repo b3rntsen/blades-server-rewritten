@@ -1736,7 +1736,13 @@ pub async fn get_quests(
                 // Same shape as the loot repair below, and deliberately ahead of
                 // it: that one gives up when a row has no generated_data, and
                 // this must run for every story row regardless.
-                if !is_event && repair_story_quest_difficulty(&mut row.info.0) {
+                // #521: an older accept switched on every objective at once; take
+                // back the gated ones the player has not reached (bitwise `|` so
+                // both repairs always run).
+                let story_repaired = !is_event
+                    && (repair_story_quest_difficulty(&mut row.info.0)
+                        | blades_lib::util::quest::drop_premature_objectives(&mut row.info.0));
+                if story_repaired {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table

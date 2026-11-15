@@ -1,0 +1,482 @@
+{
+ "095b8109-0e57-400d-bcf4-70e10df8cdbf": {
+  "name": "GH01_TheJusticiarCometh",
+  "prerequisites": {
+   "2b4ba889-eb4c-4c82-bfb2-717127af52ed": [
+    "af3320f1-5331-4e56-91c4-95ead0190929"
+   ],
+   "c70cb947-b927-40c0-b987-200eedfb14ee": [
+    "2b4ba889-eb4c-4c82-bfb2-717127af52ed"
+   ]
+  }
+ },
+ "09fd53ff-1be5-4691-86e7-6582d0d25569": {
+  "name": "GH07_RescuingTheOldEnchanter",
+  "prerequisites": {
+   "76a7d80a-1c3a-4865-823f-c8bb8d914377": [
+    "bca78ad1-ebf8-4ea7-84c3-15c70b783d1e"
+   ]
+  }
+ },
+ "0dc4f277-abe1-4d7d-8ac2-b470214285cb": {
+  "name": "GH08_AFriendInNeed_VersionB",
+  "prerequisites": {
+   "a39d2deb-e7e9-4f3b-afb9-67289b9d1546": [
+    "39905744-faf3-4b95-800f-bf9ec8498ef9"
+   ],
+   "f36162fa-0874-4f4a-860a-874a8d671145": [
+    "a39d2deb-e7e9-4f3b-afb9-67289b9d1546"
+   ]
+  }
+ },
+ "0f17d97c-1b04-408f-a569-374d43bb4f9b": {
+  "name": "DS03_IntoTheFire",
+  "prerequisites": {
+   "62b8e954-950b-4bcc-9c73-bdb8e4a85e8c": [
+    "c8ffb9a5-deb1-4ca9-80b7-6bc1141da1c2"
+   ]
+  }
+ },
+ "109cc6ea-0b1b-4d69-9056-d4fbf4e8e0c4": {
+  "name": "BQ205_TheBigHit",
+  "prerequisites": {
+   "45daaa27-2797-4050-8a54-a1d42ba06bbb": [
+    "d13cf016-9500-45ba-93d3-9eedfdcc33b4"
+   ],
+   "5a7ef3d4-cc21-4f96-a6da-f0bb7585510c": [
+    "aa7eb662-fe65-46ef-a5a9-b8a7a8b29e21"
+   ],
+   "9faba60b-747d-4ff8-a219-1fc0ca7946c4": [
+    "28f50ac8-dd92-4ac9-907f-8014c4a2de9f"
+   ],
+   "aa7eb662-fe65-46ef-a5a9-b8a7a8b29e21": [
+    "45daaa27-2797-4050-8a54-a1d42ba06bbb"
+   ]
+  }
+ },
+ "159bc1e7-454c-4e2a-90cf-e200c74b961a": {
+  "name": "GS03_UnitedTheyStand",
+  "prerequisites": {
+   "30885cfc-c6e5-4e40-a937-07a4c12f5d3d": [
+    "64b2ac8f-9500-4101-b25b-87b41df1b6d7"
+   ],
+   "adb526cf-391e-423a-ac26-154f754d14ac": [
+    "64b2ac8f-9500-4101-b25b-87b41df1b6d7"
+   ],
+   "ce31fec4-3595-4612-84e0-918fc92bd2a6": [
+    "64b2ac8f-9500-4101-b25b-87b41df1b6d7"
+   ]
+  }
+ },
+ "1709a8bc-79dd-4a7f-b7f8-3a6022646dda": {
+  "name": "MQ06_RebuildTheSmithy",
+  "prerequisites": {
+   "9fd47464-b93f-4e1b-8f8d-8b5e7dcda0a9": [
+    "194b304a-fde4-4d48-8d85-a232d0b5ca4f"
+   ]
+  }
+ },
+ "19e25e7a-b6c0-4660-8f04-a2e51094c330": {
+  "name": "BQ02_AHotTip",
+  "prerequisites": {
+   "60f5d19b-1a09-4643-a06b-6911b131f794": [
+    "4a720ff1-e8eb-41a1-84a4-7d33976dfab9"
+   ]
+  }
+ },
+ "1c76244d-b85d-4d3e-8d7c-fd60023a175e": {
+  "name": "DS01_ACryForHelp",
+  "prerequisites": {
+   "194a8a7e-8c31-430f-b7ea-3911a387e1cb": [
+    "632ffc2a-8841-4699-b146-e2b7bea86131"
+   ]
+  }
+ },
+ "30a53534-e8d2-43ef-82f7-d706b6ef8a97": {
+  "name": "SQ202_QuestSettings",
+  "prerequisites": {
+   "0083fbef-fa4e-4c0b-8a85-3379e25f7d4e": [
+    "21d5213b-3916-4a70-974a-24fa5498ccc3",
+    "1eb63db5-a054-4cfa-97b8-ec2d6ca42351"
+   ],
+   "1eb63db5-a054-4cfa-97b8-ec2d6ca42351": [
+    "21d5213b-3916-4a70-974a-24fa5498ccc3"
+   ],
+   "69edd71a-6917-46ba-931a-79a39449c46c": [
+    "21d5213b-3916-4a70-974a-24fa5498ccc3",
+    "1eb63db5-a054-4cfa-97b8-ec2d6ca42351",
+    "0083fbef-fa4e-4c0b-8a85-3379e25f7d4e"
+   ]
+  }
+ },
+ "32d147d3-5037-4dc6-9b59-a281c7c0dd25": {
+  "name": "SQ204_Heretic",
+  "prerequisites": {
+   "0a221f39-8dab-415e-8332-1e353d801f82": [
+    "e1f2bb84-1d33-4b9a-8d97-98c398bf2b48"
+   ],
+   "e1f2bb84-1d33-4b9a-8d97-98c398bf2b48": [
+    "47e44563-d11e-45f5-b5d4-83b76baf9148"
+   ]
+  }
+ },
+ "361d145c-2247-4a97-8718-48bda0c93a17": {
+  "name": "SQ105_DeadlyNeighbor",
+  "prerequisites": {
+   "9f92a8d3-64d1-4ff5-a0f1-f620bbe04523": [
+    "baac8b97-0241-4d10-b1e7-edfd3cef5708"
+   ]
+  }
+ },
+ "39c8bf84-8c6b-4332-b010-32a82d2aebc4": {
+  "name": "GH08_AFriendInNeed_VersionA",
+  "prerequisites": {
+   "f823853a-50fa-4565-aa65-fae63b68b210": [
+    "69bbfcaf-69cd-4bab-8c97-154cf99b1c0f"
+   ]
+  }
+ },
+ "3c5ada24-8706-4e65-af90-675a00756c29": {
+  "name": "GH04_WhereTheresAWillTheresAWay",
+  "prerequisites": {
+   "8fdd8895-691f-4a5f-9ccf-0fc9d127bcec": [
+    "998f4588-e5d9-4d47-a1ca-fe20814fc677"
+   ],
+   "998f4588-e5d9-4d47-a1ca-fe20814fc677": [
+    "71ca1722-e89f-4e95-89ba-8617e2f7733f"
+   ],
+   "f8587ed9-fe7e-45d3-989c-b9033a73438b": [
+    "948189a5-187d-4235-93ea-ce36ce787046"
+   ]
+  }
+ },
+ "4439f370-5da7-4154-92fc-44ce2a4fe2b4": {
+  "name": "MQ09_MercenariesOnTheRun",
+  "prerequisites": {
+   "203f70d4-f4ab-4b2e-8ce4-c47fea79973a": [
+    "6c384103-1578-4755-9e92-d075f7f68a26"
+   ]
+  }
+ },
+ "45c042e1-538b-4079-8b92-06f1d7677b6f": {
+  "name": "GH02_TrollingTheThalmor",
+  "prerequisites": {
+   "8d6ffbe0-e2c7-4fdd-8beb-13cdff01679c": [
+    "bf64333d-9895-4aed-9f04-6b3467ce2a5c",
+    "3ae6ab5f-c1fd-445c-86bd-c825aa02f72e"
+   ]
+  }
+ },
+ "4fdd7a79-8d5b-4751-a87d-d913d5f62d1f": {
+  "name": "MQ08_ExploringTheAyleidRuins",
+  "prerequisites": {
+   "8b227a48-f802-473e-af8e-efe5b0ede774": [
+    "76212b84-4d81-4b00-b7bc-5c28f841f2df"
+   ]
+  }
+ },
+ "51e41844-7c98-44a6-802c-05b7e0bed137": {
+  "name": "MQ24_RestoringTheAyleidStatue",
+  "prerequisites": {
+   "29b9f2b7-404f-47db-844a-4adc89cd999b": [
+    "3b304761-a85c-4f36-8b2f-cb0951b9fe4a"
+   ],
+   "5e2f1a1c-93c6-4800-8840-96fb4c3eef4e": [
+    "29b9f2b7-404f-47db-844a-4adc89cd999b"
+   ],
+   "d4f161c0-0825-497a-b795-05333b72af6d": [
+    "f36f04e9-4071-436c-9077-10009377f72e"
+   ]
+  }
+ },
+ "60f1aaae-2ac1-4fa9-ad17-78a24452ffc6": {
+  "name": "BQ200_TheQueensJustice",
+  "prerequisites": {
+   "43545ba2-15d8-4a57-ac14-7ea9b89efb31": [
+    "59102951-bfe7-476a-bbdd-9a6b0e7d5026"
+   ]
+  }
+ },
+ "67c59fb2-7195-4bbb-a935-ef7beceecad3": {
+  "name": "DS02_ScorchedEarth",
+  "prerequisites": {
+   "0335fe16-9e10-4568-b8b9-facd068cae03": [
+    "6034fc2a-47d7-434d-b031-7245a9d3ece8"
+   ],
+   "51fb1489-5a39-42a8-bad4-9326460df141": [
+    "f26f9ad3-6a7b-4327-8ca8-b89cf37220f1"
+   ],
+   "aefb6159-aa17-4f43-bf8f-750799981c9d": [
+    "0335fe16-9e10-4568-b8b9-facd068cae03"
+   ]
+  }
+ },
+ "777d1990-6ca8-4514-8a9c-8aeb669c6187": {
+  "name": "SQ203_LikeFatherLikeSon",
+  "prerequisites": {
+   "74baf09e-23fb-42c5-b720-7854b658815a": [
+    "75b7a365-adbe-4a3c-9519-f741f8e017be"
+   ],
+   "85d632ac-86d4-4192-a718-584f2b841a46": [
+    "74baf09e-23fb-42c5-b720-7854b658815a"
+   ],
+   "f563ea61-f896-4bd7-91d2-8ce71574294b": [
+    "85d632ac-86d4-4192-a718-584f2b841a46"
+   ]
+  }
+ },
+ "7a860695-6b01-4ac9-b75e-be217d6af418": {
+  "name": "SQ103_QuestSettings",
+  "prerequisites": {
+   "6a9003d8-09ef-4dd7-ac29-23b4691e7144": [
+    "ce183f9d-728f-4c50-9052-5e81bb6d2049"
+   ],
+   "6bd119c6-5a84-4b2a-8a69-a10e10f41bad": [
+    "6a9003d8-09ef-4dd7-ac29-23b4691e7144"
+   ],
+   "71881723-4a9a-4c0f-a720-ed70c3ac4fda": [
+    "aa9c74b1-a4d9-409c-baa9-9675337658db"
+   ],
+   "ce183f9d-728f-4c50-9052-5e81bb6d2049": [
+    "71881723-4a9a-4c0f-a720-ed70c3ac4fda"
+   ]
+  }
+ },
+ "7e17f90d-157f-453f-97a8-882fb08e66d3": {
+  "name": "DS06_TheHunt_02",
+  "prerequisites": {
+   "cf31207a-ffee-4c41-93cf-6558952972ba": [
+    "7bd959d9-c0c0-4d0a-96f9-a3d073a8a6b4"
+   ]
+  }
+ },
+ "8057a28b-92c2-4a84-97d6-2d991d6fe84f": {
+  "name": "BQ206_GabriellesTreasure",
+  "prerequisites": {
+   "ada742d1-6fc5-4c4d-88ee-d976631ad945": [
+    "c4bc6586-a555-4b13-8c2e-0598e84f0ab4"
+   ],
+   "afd0b879-b6dc-4e46-be4e-a22b70ccc305": [
+    "c4bc6586-a555-4b13-8c2e-0598e84f0ab4"
+   ],
+   "b207417d-0443-4566-8012-5cd2cd1d034c": [
+    "ada742d1-6fc5-4c4d-88ee-d976631ad945"
+   ],
+   "c4bc6586-a555-4b13-8c2e-0598e84f0ab4": [
+    "3e134362-95f4-477a-a03c-59e47d9a5834"
+   ]
+  }
+ },
+ "8959ab54-f507-406c-b08f-c0f9487473e0": {
+  "name": "MQ22_UnmaskingTheTraitor",
+  "prerequisites": {
+   "3b6c6e44-df54-4c59-ac82-0820b1adab8a": [
+    "b20e348d-ae79-4015-88f4-1f33dec1593a"
+   ],
+   "b20e348d-ae79-4015-88f4-1f33dec1593a": [
+    "fb1c264f-3924-4041-925b-689e240af690"
+   ],
+   "fb1c264f-3924-4041-925b-689e240af690": [
+    "26c4dcb3-e775-487d-91ff-fce75b1b410d"
+   ]
+  }
+ },
+ "9181f784-9eb8-4872-953d-30ba8b6bc9d1": {
+  "name": "EQ33_Arena_Quest",
+  "prerequisites": {
+   "11c91017-a15e-4c82-a669-b90f643f6479": [
+    "def53c0f-993d-44a8-bac8-a070f997fc84"
+   ],
+   "16e649fb-46c1-4770-a27f-48de4ab6eb30": [
+    "929b2b5a-53a1-4b40-9518-305c64cf753a"
+   ],
+   "663e5425-fad2-44e3-8364-22f740fa7ecd": [
+    "11c91017-a15e-4c82-a669-b90f643f6479"
+   ],
+   "929b2b5a-53a1-4b40-9518-305c64cf753a": [
+    "663e5425-fad2-44e3-8364-22f740fa7ecd"
+   ],
+   "def53c0f-993d-44a8-bac8-a070f997fc84": [
+    "2b8c7c7b-f408-48f7-9811-a286b4cbcdd5"
+   ]
+  }
+ },
+ "9a63309e-ad49-469f-acb3-07816c606b0e": {
+  "name": "AQBR01_QuestSettings",
+  "prerequisites": {
+   "5a12bcac-99ff-4ba1-a17a-0fdf94b2046d": [
+    "8afd5619-aa77-4dbb-b23e-5a4846e79f72"
+   ]
+  }
+ },
+ "9ae181d9-b5ef-4abd-80f0-e3593ae2e309": {
+  "name": "BQ204_QuestSettings",
+  "prerequisites": {
+   "36af23e9-df17-417c-84ce-684184424462": [
+    "19225d9b-80b3-4bf6-9ee2-21d9b1f28cee"
+   ]
+  }
+ },
+ "9cbb61e3-a1f1-4897-aa6f-c05f4d1194f4": {
+  "name": "SQ102_QuestSettings",
+  "prerequisites": {
+   "2f995ea0-33cc-40af-8926-8c95479213b6": [
+    "ff2e9ed2-d863-45b3-a7f0-7b88d4d04bc5"
+   ],
+   "36840224-59de-442e-9654-41c898318d2d": [
+    "5a7e46e5-1974-4728-89bc-8ca03f8a372a"
+   ],
+   "5a7e46e5-1974-4728-89bc-8ca03f8a372a": [
+    "8c255cdf-04c5-4c65-b29b-5d416b921fb8"
+   ],
+   "8c255cdf-04c5-4c65-b29b-5d416b921fb8": [
+    "ff2e9ed2-d863-45b3-a7f0-7b88d4d04bc5"
+   ],
+   "ff2e9ed2-d863-45b3-a7f0-7b88d4d04bc5": [
+    "0e5320b8-04cf-41de-bbc9-717b2b8c9a5d"
+   ]
+  }
+ },
+ "9e52b8f2-7e66-4b4a-8a42-21b54a615939": {
+  "name": "MQ17_FacingTheDragon",
+  "prerequisites": {
+   "a964cc30-152c-458d-a1ec-1f54bbbe59da": [
+    "b3be00c8-c074-44f7-a1aa-fe3628f9387f"
+   ],
+   "beb29e22-4267-454e-881c-8321bf7a1dd5": [
+    "a964cc30-152c-458d-a1ec-1f54bbbe59da"
+   ]
+  }
+ },
+ "b2f3ffa8-8d5f-41d5-9b3e-ae97f3f519a1": {
+  "name": "BQ201_QuestSettings",
+  "prerequisites": {
+   "0c6e660c-4cda-4ab4-9ec2-450c74f2f9aa": [
+    "6a9c6b8e-3234-4f41-8dd5-5a5b9574675a"
+   ],
+   "3eaad396-fd21-43a0-a2a4-839364e733e1": [
+    "0c6e660c-4cda-4ab4-9ec2-450c74f2f9aa"
+   ],
+   "50657743-c7cb-4be1-8571-d34648d7d091": [
+    "574aeba4-8369-431b-861d-c841f5c534bc"
+   ],
+   "6a9c6b8e-3234-4f41-8dd5-5a5b9574675a": [
+    "a3cd129e-682a-42d3-bebb-55aafc13d384"
+   ],
+   "77b9fd1d-4844-47b3-b701-d19f094449c4": [
+    "3eaad396-fd21-43a0-a2a4-839364e733e1"
+   ],
+   "a3cd129e-682a-42d3-bebb-55aafc13d384": [
+    "500963af-dd50-4769-b901-a8123e3ea9c8"
+   ]
+  }
+ },
+ "b34a3b9c-6aea-458f-b4b3-c8951d506546": {
+  "name": "DS05_TheHunt_01",
+  "prerequisites": {
+   "1e474a8b-0bd5-4535-ad6d-eee33878e002": [
+    "ca70b80e-a684-44b7-9072-137ea2aa45b8"
+   ]
+  }
+ },
+ "b7f4d378-566b-45eb-9bda-206911901821": {
+  "name": "MQ15_TheLichsLair",
+  "prerequisites": {
+   "8bad0859-002e-4521-9007-949490dcef40": [
+    "6a939788-1f5c-4749-894d-5fc5f338d7b7"
+   ],
+   "b42723e3-8621-4c00-b734-c04955fb39f4": [
+    "8bad0859-002e-4521-9007-949490dcef40"
+   ]
+  }
+ },
+ "bd82425a-dfa4-47b2-a091-b4dea4c2ce15": {
+  "name": "MQ14_BackToTheBloodfallQueen",
+  "prerequisites": {
+   "1cb79ae9-1789-49a8-9c7c-14605fc223b2": [
+    "1c013c6e-b33b-4cc5-b547-27b6d766636d"
+   ]
+  }
+ },
+ "c178813f-ea7c-4732-aba0-a5c8d8767ec9": {
+  "name": "SQ201_PoolOfDespair",
+  "prerequisites": {
+   "80ad0046-d9c8-4659-ab6b-21ecfd0a02f1": [
+    "c3708679-26aa-4006-a6e9-c96740a2dbdf"
+   ],
+   "a9e8d260-e6b2-428d-9d36-f6e163063aa6": [
+    "80ad0046-d9c8-4659-ab6b-21ecfd0a02f1"
+   ],
+   "c3708679-26aa-4006-a6e9-c96740a2dbdf": [
+    "46680bd1-82bb-41b0-8249-083142c050bd"
+   ]
+  }
+ },
+ "c8cfc740-927c-45f3-8cc3-d00fc8cbfe9f": {
+  "name": "GH06_TheTombRaiders",
+  "prerequisites": {
+   "32095a0f-e337-4c77-a346-cf10c7398c43": [
+    "5362015a-3f1f-4d07-a141-e59bb5ce710b",
+    "fed2bafb-acda-4763-8aeb-3bab3add1eae"
+   ]
+  }
+ },
+ "cf4c4255-b5f9-49da-a61c-2396c1b0aed0": {
+  "name": "DS07_Resolution",
+  "prerequisites": {
+   "b600d100-fa80-4ae6-aa73-fb7e2467de86": [
+    "c61f11a5-1d89-4130-8547-cac05d99bd8e"
+   ],
+   "e2a54ac5-f746-41a5-aec6-065edf006465": [
+    "b600d100-fa80-4ae6-aa73-fb7e2467de86"
+   ]
+  }
+ },
+ "d4a88399-0518-4b72-872c-de8cbb191dae": {
+  "name": "MQ07_RescueTownFolksPt2",
+  "prerequisites": {
+   "a244ac50-2ba4-4186-88cc-fe50c055cdcb": [
+    "4c88cf72-0ef3-41bb-9b7b-fb4c2534634b"
+   ]
+  }
+ },
+ "ef5342bf-b94c-4c56-b1c2-30ba0a55c609": {
+  "name": "MQ18_LocatingTheAyleidCrown",
+  "prerequisites": {
+   "331465b7-3678-4afc-a133-71a0a7bf098b": [
+    "b3e57826-9424-487f-b3d1-cf550448bf8b"
+   ],
+   "422ee0e2-b5f9-4494-ba0a-17542490c30c": [
+    "331465b7-3678-4afc-a133-71a0a7bf098b"
+   ]
+  }
+ },
+ "f69774f4-94b0-49c4-aa9b-8881e687c582": {
+  "name": "BQ203_QuestSettings",
+  "prerequisites": {
+   "5c5fa212-2059-422f-9432-3f1fc54e7091": [
+    "b0ae9956-d862-4fb3-975b-3bcb09358985"
+   ],
+   "6f116c3c-ad3e-4655-a544-d651f4a8fe5a": [
+    "5c5fa212-2059-422f-9432-3f1fc54e7091"
+   ],
+   "b0ae9956-d862-4fb3-975b-3bcb09358985": [
+    "149d24cb-f7ca-4240-af84-753e82a9de8b"
+   ]
+  }
+ },
+ "f9c2a9a1-51a8-4628-81e3-9ca2c3f1c3d9": {
+  "name": "BQ03_TheQueensService",
+  "prerequisites": {
+   "46fd77fa-0c91-4f90-b3cb-98aff43b472b": [
+    "6646aa96-e538-41d5-8fce-b68a5d87c5be"
+   ],
+   "6646aa96-e538-41d5-8fce-b68a5d87c5be": [
+    "aa7f1f4d-c847-454c-a31d-5ebf85a76e91"
+   ],
+   "aa7f1f4d-c847-454c-a31d-5ebf85a76e91": [
+    "44c881c1-75b5-4b12-a243-abe1d86300f0"
+   ]
+  }
+ }
+}
