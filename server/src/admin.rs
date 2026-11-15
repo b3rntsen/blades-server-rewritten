@@ -5583,8 +5583,10 @@ mod tests {
         ];
 
         /// The unique-character-names migration (registry + commit-time check).
-        const NAMES_MIGRATION: &str = include_str!(
-            "../../migrations/2026-11-16-000000-0000_unique_character_names/up.sql"
+        const NAMES_MIGRATION: &str = concat!(
+            include_str!("../../migrations/2026-11-16-000000-0000_unique_character_names/up.sql"),
+            "\n",
+            include_str!("../../migrations/2026-11-16-000001-0000_unique_names_holder_check/up.sql"),
         );
 
         async fn fixture() -> Option<AsyncPgConnection> {
@@ -7188,6 +7190,104 @@ mod tests {
                 crate::character_names::settle_name(&mut c, u3, a3, "ÍSDÍS").await.unwrap(),
                 "ÍSDÍS 2"
             );
+        }
+
+        /// Prod 2026-11-15: apply failed with "character name Taheen is already
+        /// taken". Taheen's HOLDER also had an alt renamed in the same run, in a
+        /// group sorted earlier, so its sync ran at commit while the duplicate's
+        /// registry row still said "taheen" (grandfathered) — and the holder's own,
+        /// unchanged claim was refused against it.
+        #[tokio::test]
+        async fn the_backfill_survives_a_holder_with_another_renamed_alt() {
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let bind = |user: Uuid, days: i32| {
+                format!(
+                    "INSERT INTO device_bindings (device_id, user_id, bound_at) \
+                     VALUES ('{}', '{user}', now() - interval '{days} days')",
+                    Uuid::new_v4()
+                )
+            };
+            // u_holder holds "Taheen" (bound before u_dup) and has a parked "Bob";
+            // u_bob is older still, so u_holder's Bob is the one renamed — and
+            // "bob" sorts before "taheen".
+            let (_ch, u_holder) = seed_character(&mut c, "Taheen", 72, 0).await;
+            let (c_dup, u_dup) = seed_character(&mut c, "Taheen", 72, 0).await;
+            let (_cb, u_bob) = seed_character(&mut c, "Bob", 10, 0).await;
+            let parked = Uuid::new_v4();
+            diesel::sql_query(
+                "INSERT INTO character_versions \
+                   (id, character_id, user_id, source_alt_uuid, name, level, character, data, \
+                    inventory, wallet, server_state) \
+                 VALUES ($1, $2, $3, $4, 'Bob', 5, '{\"name\":\"Bob\"}', '{}', '{}', '{}', '{}')",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(u_holder)
+            .bind::<diesel::sql_types::Uuid, _>(parked)
+            .execute(&mut c)
+            .await
+            .unwrap();
+            let binds = [bind(u_bob, 30), bind(u_holder, 20), bind(u_dup, 10)].join(";");
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, &binds)
+                .await
+                .unwrap();
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+
+            let out = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            assert_eq!(out.changes.len(), 2, "{:?}", out.changes);
+            flush(&mut c)
+                .await
+                .expect("the holder's unchanged claim must not be refused mid-commit");
+            assert_eq!(live_name(&mut c, c_dup).await, "Taheen 2");
+            assert!(registry(&mut c).await.iter().all(|(_, gf)| !gf));
+            assert!(
+                crate::character_names::run_backfill(&mut c, false)
+                    .await
+                    .unwrap()
+                    .changes
+                    .is_empty()
+            );
+        }
+
+        /// Replays the backfill on a snapshot of prod's names (ids, names, levels,
+        /// alt ids, device bindings) when `NAMES_PROD_SNAPSHOT` points at one.
+        /// Skips otherwise — the snapshot is player data and is not committed.
+        #[tokio::test]
+        async fn the_backfill_applies_cleanly_to_a_prod_snapshot() {
+            let Ok(path) = std::env::var("NAMES_PROD_SNAPSHOT") else {
+                return eprintln!("SKIP: NAMES_PROD_SNAPSHOT unset");
+            };
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let dump = std::fs::read_to_string(path).unwrap();
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, &dump)
+                .await
+                .unwrap();
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            let dry = crate::character_names::run_backfill(&mut c, true).await.unwrap();
+            let out = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            assert_eq!(dry.changes, out.changes);
+            flush(&mut c).await.expect("commit-time check passes");
+            eprintln!("prod snapshot: {} renames applied", out.changes.len());
+            assert!(registry(&mut c).await.iter().all(|(_, gf)| !gf));
+            let again = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            assert!(again.changes.is_empty(), "{:?}", again.changes);
+            let undo = crate::character_names::run_undo(&mut c, out.run_id.unwrap())
+                .await
+                .unwrap();
+            assert_eq!(undo.restored, out.changes.len());
+            flush(&mut c).await.expect("undo passes the check");
         }
 
         #[tokio::test]
