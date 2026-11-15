@@ -403,8 +403,10 @@ pub fn compatible(a: Option<Skill>, b: Option<Skill>, waited: Duration) -> bool 
 /// becomes "this human vs. a bot". A lopsided human fight beats a bot, so at last call
 /// the bracket is dropped entirely.
 ///
-/// Among those present it still takes the CLOSEST in trophies, tie-broken by longest
-/// waiting — the same ordering as the in-bracket path.
+/// Among those present it takes the CLOSEST in trophies, tie-broken by longest
+/// waiting. (The in-bracket path is FIFO instead — see `in_bracket_partner`. Last call
+/// is already serving the queue's oldest ticket, so arrival order is honoured; the
+/// trophy preference only picks among the younger ones.)
 ///
 /// NEVER THE SAME ACCOUNT. Two tickets from one user — a second phone, or a
 /// re-queue whose old ticket has not been reaped — would otherwise be paired
@@ -443,6 +445,80 @@ fn last_call_partner(
         }
     }
     best.map(|(i, _, _)| i)
+}
+
+/// The in-bracket partner for a newly queued ticket: among the waiting tickets this
+/// one may meet ([`compatible`], not its own account, not cooldown-held), the one who
+/// has WAITED LONGEST. First come, first served (owner, 2026-11-15).
+///
+/// This used to take the closest in trophies. With a handful of players that let two
+/// people who had just fought — similar ratings, re-queuing seconds apart — pair with
+/// each other again ahead of someone already standing in the queue. The bracket still
+/// decides who is allowed; arrival order decides who goes first.
+///
+/// Returns `(index, trophy gap, how long they waited)`.
+fn in_bracket_partner(
+    candidates: &[(Option<Skill>, Instant, Uuid)],
+    req: Option<Skill>,
+    req_user: Uuid,
+    now: Instant,
+) -> Option<(usize, i64, Duration)> {
+    candidates
+        .iter()
+        .enumerate()
+        // Never pair an account with itself (see `last_call_partner`); a held ticket's
+        // `since` is its cooldown's end, in the future.
+        .filter(|(_, (_, since, user))| *user != req_user && *since <= now)
+        .filter(|(_, (skill, since, _))| {
+            compatible(*skill, req, now.saturating_duration_since(*since))
+        })
+        .min_by_key(|(_, (_, since, _))| *since)
+        .map(|(i, (skill, since, _))| {
+            let gap = match (skill, req) {
+                (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
+                _ => i64::MAX,
+            };
+            (i, gap, now.saturating_duration_since(*since))
+        })
+}
+
+/// **Humans first** (owner, 2026-11-15): while humans are matching, nobody gets an AI.
+///
+/// "Matching" is a human-vs-human match in progress, or one that ended less than
+/// [`ArenaConfig::humans_first_cooldown_secs`] ago — the fighters are on the results
+/// card and about to press Fight again. (A second human standing in the queue needs no
+/// gate: the deadline is last call, which pairs them.) A human playing an AI is not
+/// "matching"; the ordinary `busy` tier covers that.
+///
+/// Returns `Some(t)` while an AI is not allowed — re-check no earlier than `t` — and
+/// `None` when the ordinary tiered fallback may proceed. Never holds a ticket past
+/// `since + humans_first_max_wait_secs` (the safety valve; 0 = no valve).
+fn humans_matching_until(
+    config: &ArenaConfig,
+    live_pvp: usize,
+    last_pvp_end: Option<Instant>,
+    since: Instant,
+    now: Instant,
+) -> Option<Instant> {
+    if config.humans_first_cooldown_secs == 0 {
+        return None;
+    }
+    let valve = (config.humans_first_max_wait_secs > 0)
+        .then(|| since + Duration::from_secs(config.humans_first_max_wait_secs));
+    if valve.is_some_and(|v| now >= v) {
+        return None;
+    }
+    let until = if live_pvp > 0 {
+        // Nobody knows when a fight ends; look again shortly.
+        now + FALLBACK_REEVALUATE
+    } else {
+        let open = last_pvp_end? + Duration::from_secs(config.humans_first_cooldown_secs);
+        if now >= open {
+            return None;
+        }
+        open
+    };
+    Some(valve.map_or(until, |v| until.min(v)))
 }
 
 /// Status of a recorded matchmaking ticket, for the web /arena activity feed.
@@ -1632,6 +1708,8 @@ mod human_priority_tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         }
     }
 
@@ -2490,6 +2568,8 @@ mod bot_pick_tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         // No DB pool → the function's first early return. `block_on` because the
         // path never awaits anything real once `db` is None.
@@ -3998,6 +4078,12 @@ fn fallback_deadline(
     let delay = fallback_delay(config, live, recent, waiting_others);
     let tier = tier_rank(live, recent, waiting_others);
     let floor = match prev {
+        // Another human is standing in the queue: the deadline is last call, which
+        // pairs them, so it is `since + solo` whatever floor an earlier tier left
+        // behind. `next_floor` treats this tier as a RISE and would keep that floor —
+        // on 2026-11-15 a 230 s busy floor kept Flappety and HauDrauf queued side by
+        // side, out of bracket, until Flappety gave up.
+        Some(_) if waiting_others > 0 => since + delay,
         None => since + delay,
         Some((current, previous_tier)) => {
             next_floor(current, previous_tier, tier, since, delay, now)
@@ -4074,6 +4160,8 @@ async fn matchmaker_loop(
     // Per-ticket earliest moment a BOT may be handed out (#496, [`bot_floor`]): drawn
     // once, the first time the ticket's deadline is looked at, so it does not re-roll.
     let mut bot_floors: std::collections::HashMap<Uuid, Instant> = std::collections::HashMap::new();
+    // Tickets currently held by the humans-first gate, so its log line fires on change.
+    let mut gated: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     // The HTTP admission flag prevents normal arrivals during a deploy, while this
     // actor-owned flag closes the smaller race where a handler passed that check just
     // before the drain started and sends Enqueue just after the drain command.
@@ -4090,6 +4178,7 @@ async fn matchmaker_loop(
         arrivals.retain(|(_, at)| cutoff.saturating_duration_since(*at) <= window);
         floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
         bot_floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
+        gated.retain(|tid| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
 
         let oldest_ticket = waiting.iter().min_by_key(|(_, s)| *s);
         let oldest = oldest_ticket.map(|(_, s)| *s);
@@ -4140,8 +4229,35 @@ async fn matchmaker_loop(
             let bot_at = *bot_floors
                 .entry(tid)
                 .or_insert_with(|| bot_floor(&config, since, immediate, rand::random::<f64>()));
+            // Humans first: while people are fighting each other (or just did), no AI.
+            // Only gates the bot; a human in the queue is still paired at `floor`.
+            let gate = humans_matching_until(
+                &config,
+                registry.live_pvp_count(),
+                registry.last_pvp_end(),
+                since,
+                now,
+            );
+            if gate.is_some() != gated.contains(&tid) {
+                if gate.is_some() {
+                    gated.insert(tid);
+                    info!(
+                        "matchmaker: holding ticket {tid} for a human — humans are matching \
+                         (live pvp {}, cooldown {}s) — no AI",
+                        registry.live_pvp_count(),
+                        config.humans_first_cooldown_secs,
+                    );
+                } else {
+                    gated.remove(&tid);
+                    info!(
+                        "matchmaker: ticket {tid} — no human matching for {}s (or waited past \
+                         {}s); ordinary fallback applies",
+                        config.humans_first_cooldown_secs, config.humans_first_max_wait_secs,
+                    );
+                }
+            }
             let deadline = if waiting_others == 0 {
-                floor.max(bot_at)
+                floor.max(bot_at).max(gate.unwrap_or(floor))
             } else {
                 floor
             };
@@ -4227,6 +4343,22 @@ async fn matchmaker_loop(
                 // for a bot (#496): back in the queue until the bot floor. No spin — the
                 // stale ticket is dropped, so the next pass waits on `bot_at`.
                 if Instant::now() < bot_at {
+                    waiting.push((lone, since));
+                    continue;
+                }
+                // Humans first, re-checked at the moment of handing out the AI: the
+                // partner last call expected may have vanished while others still fight.
+                if humans_matching_until(
+                    &config,
+                    registry.live_pvp_count(),
+                    registry.last_pvp_end(),
+                    since,
+                    Instant::now(),
+                )
+                .is_some()
+                {
+                    // No spin: with the stale partner dropped, the next pass sees
+                    // nobody waiting and folds the gate into the deadline.
                     waiting.push((lone, since));
                     continue;
                 }
@@ -4394,38 +4526,14 @@ async fn matchmaker_loop(
         }
         waiting = live;
 
-        // Pick an opponent inside the bracket. Among those that qualify, take the
-        // CLOSEST in trophies — the bracket says who is allowed, this says who is
-        // best. Ties and unknown skills fall back to the longest-waiting, so nobody
-        // is starved by a stream of better-matched arrivals.
-        let now = Instant::now();
-        let mut best: Option<(usize, i64, Duration)> = None;
-        for (i, (cand, since)) in waiting.iter().enumerate() {
-            // Never pair an account with itself — see `last_call_partner`. Two
-            // devices on one account both queueing is the ordinary way this
-            // happens, and the result is a match that hangs at "Connecting"
-            // for both rather than an obvious failure.
-            if cand.user_id == req.user_id || *since > now {
-                continue;
-            }
-            let waited = now.saturating_duration_since(*since);
-            if !compatible(cand.skill, req.skill, waited) {
-                continue;
-            }
-            let gap = match (cand.skill, req.skill) {
-                (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
-                _ => i64::MAX,
-            };
-            let better = match best {
-                None => true,
-                Some((_, best_gap, best_waited)) => {
-                    gap < best_gap || (gap == best_gap && waited > best_waited)
-                }
-            };
-            if better {
-                best = Some((i, gap, waited));
-            }
-        }
+        // Pick an opponent inside the bracket: the longest-waiting one who qualifies
+        // (FIFO, see `in_bracket_partner`), so a player fresh from a fight cannot jump
+        // ahead of someone already standing in the queue.
+        let shape: Vec<(Option<Skill>, Instant, Uuid)> = waiting
+            .iter()
+            .map(|(t, s)| (t.skill, *s, t.user_id))
+            .collect();
+        let best = in_bracket_partner(&shape, req.skill, req.user_id, Instant::now());
 
         match best {
             Some((idx, gap, waited)) => {
@@ -5152,6 +5260,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         }
     }
 
@@ -5265,6 +5375,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5358,6 +5470,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5464,6 +5578,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5542,6 +5658,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5611,6 +5729,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5708,6 +5828,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5793,6 +5915,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5861,6 +5985,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -5921,6 +6047,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
@@ -6021,6 +6149,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let active_tickets = Arc::new(ActiveTickets::default());
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
@@ -6203,6 +6333,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -6279,6 +6411,8 @@ mod tests {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let ticket_id = Uuid::new_v4();
         let (rms, mut recv) = unbounded_channel();
@@ -6871,6 +7005,8 @@ mod no_show_375 {
             bot_delay_min_secs: 0,
             bot_delay_max_secs: 0,
             prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         };
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
@@ -7220,6 +7356,8 @@ mod pre_fight_quits_496 {
             bot_delay_min_secs: bot_min,
             bot_delay_max_secs: bot_max,
             prefight_cancel_cooldown_secs: cooldown,
+            humans_first_cooldown_secs: 0,
+            humans_first_max_wait_secs: 0,
         }
     }
 
@@ -7442,6 +7580,413 @@ mod pre_fight_quits_496 {
                 .await
                 .is_some(),
             "after the cooldown the search resolves as normal"
+        );
+    }
+}
+
+/// Humans first (owner, 2026-11-15): "If there are other humans matching, then there
+/// should be no AI matches, give it a cool down of 1 minute after the last matching …
+/// make sure there is a fair chance for the one that have not yet matched."
+///
+/// On prod that morning Flappety was handed three AIs in a row right after a human
+/// match. These pin the rule: no AI while a human-vs-human match runs or for
+/// `humans_first_cooldown_secs` after one ends; the longest waiter is the next partner.
+#[cfg(test)]
+mod humans_first_tests {
+    use super::*;
+    use crate::arena::combat::Loadout;
+    use std::net::SocketAddr;
+    use std::time::Duration as StdDuration;
+
+    fn config(cooldown: u64, max_wait: u64) -> ArenaConfig {
+        ArenaConfig {
+            public_advertise_host: None,
+            advertise_host: "127.0.0.1".into(),
+            udp_port: 7777,
+            max_concurrent_matches: 8,
+            max_queued_players: 64,
+            solo_fallback_secs: 1,
+            debug_ghost_user_id: None,
+            bot_user_ids: Vec::new(),
+            immediate_bot_users: Vec::new(),
+            // Every ordinary tier is short, so any hold seen here is the gate's.
+            busy_fallback_secs: 1,
+            recent_fallback_secs: 1,
+            recent_window_secs: 300,
+            bot_delay_min_secs: 0,
+            bot_delay_max_secs: 0,
+            prefight_cancel_cooldown_secs: 0,
+            humans_first_cooldown_secs: cooldown,
+            humans_first_max_wait_secs: max_wait,
+        }
+    }
+
+    fn ticket(
+        user_id: Uuid,
+        trophies: i64,
+    ) -> (
+        TicketRequest,
+        tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+    ) {
+        let (tx, rx) = unbounded_channel();
+        (
+            TicketRequest {
+                via_vpn: false,
+                expected_udp_ip: None,
+                ticket_id: Uuid::new_v4(),
+                user_id,
+                character_id: None,
+                rms: RmsHandle::Direct(tx),
+                skill: Some(Skill {
+                    level: 50,
+                    trophies,
+                }),
+            },
+            rx,
+        )
+    }
+
+    /// DB-less, a bot and a human pair both end in `Failed` from resolve's guards.
+    async fn resolved(
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+        within: StdDuration,
+    ) -> bool {
+        let deadline = tokio::time::Instant::now() + within;
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(
+                msg,
+                MatchmakingMessage::Failed { .. } | MatchmakingMessage::Succeeded { .. }
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn spawn(
+        config: ArenaConfig,
+        registry: Arc<MatchRegistry>,
+    ) -> UnboundedSender<MatchmakerCommand> {
+        let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
+        tokio::spawn(matchmaker_loop(
+            rx,
+            config,
+            registry,
+            Arc::new(ActiveTickets::default()),
+            None,
+        ));
+        tx
+    }
+
+    /// Two humans connected to one match: a human-vs-human fight in progress.
+    /// Returns the two peers, so the test can end the fight by disconnecting them.
+    fn start_pvp(registry: &MatchRegistry, port: u16) -> [SocketAddr; 2] {
+        let psids = [Uuid::new_v4().to_string(), Uuid::new_v4().to_string()];
+        assert!(registry.allocate(
+            &psids,
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4()
+        ));
+        let peers: [SocketAddr; 2] = [
+            format!("10.9.0.1:{port}").parse().unwrap(),
+            format!("10.9.0.2:{port}").parse().unwrap(),
+        ];
+        for (peer, psid) in peers.iter().zip(psids.iter()) {
+            assert!(registry.admit(*peer, psid, &[7u8; 32]).is_some());
+        }
+        peers
+    }
+
+    fn end_pvp(registry: &MatchRegistry, peers: [SocketAddr; 2]) {
+        for p in peers {
+            registry.remove(&p);
+        }
+    }
+
+    // ---- the registry signal ------------------------------------------------------
+
+    #[test]
+    fn a_human_match_is_live_until_it_ends_and_then_starts_the_cooldown() {
+        let registry = MatchRegistry::new(4);
+        assert_eq!(registry.live_pvp_count(), 0);
+        assert_eq!(registry.last_pvp_end(), None);
+        let peers = start_pvp(&registry, 5000);
+        assert_eq!(registry.live_pvp_count(), 1);
+        assert_eq!(registry.last_pvp_end(), None, "still fighting");
+        end_pvp(&registry, peers);
+        assert_eq!(registry.live_pvp_count(), 0);
+        assert!(
+            registry.last_pvp_end().is_some(),
+            "the end starts the cooldown"
+        );
+    }
+
+    #[test]
+    fn a_bot_match_or_a_never_joined_pair_is_not_humans_matching() {
+        let registry = MatchRegistry::new(4);
+        // Solo vs bot, connected.
+        let psid = Uuid::new_v4().to_string();
+        assert!(registry.allocate_with_bots(
+            std::slice::from_ref(&psid),
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4(),
+            1,
+        ));
+        let peer: SocketAddr = "10.9.1.1:5000".parse().unwrap();
+        assert!(registry.admit(peer, &psid, &[7u8; 32]).is_some());
+        // A pair where only one side ever connected.
+        let psids = [Uuid::new_v4().to_string(), Uuid::new_v4().to_string()];
+        assert!(registry.allocate(
+            &psids,
+            vec![Loadout::default(), Loadout::default()],
+            Uuid::new_v4()
+        ));
+        let half: SocketAddr = "10.9.1.2:5000".parse().unwrap();
+        assert!(registry.admit(half, &psids[0], &[7u8; 32]).is_some());
+        assert_eq!(registry.live_pvp_count(), 0);
+        registry.remove(&peer);
+        registry.remove(&half);
+        assert_eq!(
+            registry.last_pvp_end(),
+            None,
+            "neither was a human-vs-human fight"
+        );
+    }
+
+    // ---- the gate, as a pure rule -------------------------------------------------
+
+    #[test]
+    fn the_gate_closes_for_a_live_match_and_for_the_cooldown_after_it() {
+        let c = config(60, 300);
+        let since = Instant::now();
+        let now = since + StdDuration::from_secs(10);
+        assert!(
+            humans_matching_until(&c, 1, None, since, now).is_some(),
+            "live h2h"
+        );
+        let ended = now - StdDuration::from_secs(20);
+        assert_eq!(
+            humans_matching_until(&c, 0, Some(ended), since, now),
+            Some(ended + StdDuration::from_secs(60)),
+            "ended 20 s ago: closed until 60 s after the end"
+        );
+        let long_ago = now - StdDuration::from_secs(61);
+        assert_eq!(
+            humans_matching_until(&c, 0, Some(long_ago), since, now),
+            None
+        );
+        assert_eq!(
+            humans_matching_until(&c, 0, None, since, now),
+            None,
+            "never fought"
+        );
+    }
+
+    #[test]
+    fn the_safety_valve_opens_the_gate_after_the_max_wait() {
+        let c = config(60, 300);
+        let since = Instant::now();
+        let now = since + StdDuration::from_secs(301);
+        assert_eq!(humans_matching_until(&c, 1, None, since, now), None);
+        // And it never holds a waiter past the valve.
+        let early = since + StdDuration::from_secs(290);
+        let until = humans_matching_until(&c, 0, Some(early), since, early).unwrap();
+        assert_eq!(until, since + StdDuration::from_secs(300));
+    }
+
+    #[test]
+    fn a_zero_cooldown_turns_the_gate_off() {
+        let c = config(0, 300);
+        let now = Instant::now();
+        assert_eq!(humans_matching_until(&c, 3, Some(now), now, now), None);
+        assert_eq!(
+            ArenaConfig::from_env().humans_first_cooldown_secs,
+            60,
+            "default"
+        );
+        assert_eq!(
+            ArenaConfig::from_env().humans_first_max_wait_secs,
+            300,
+            "default"
+        );
+    }
+
+    // ---- FIFO -----------------------------------------------------------------------
+
+    /// Both waiting tickets are inside the newcomer's bracket; the one who has waited
+    /// longer is taken even though the other is closer in trophies.
+    #[test]
+    fn the_newcomer_takes_the_longest_waiter_not_the_closest() {
+        let now = Instant::now();
+        let (old, young) = (Uuid::new_v4(), Uuid::new_v4());
+        let shape = vec![
+            (
+                Some(Skill {
+                    level: 50,
+                    trophies: 400,
+                }),
+                now - StdDuration::from_secs(5),
+                young,
+            ),
+            (
+                Some(Skill {
+                    level: 50,
+                    trophies: 520,
+                }),
+                now - StdDuration::from_secs(40),
+                old,
+            ),
+        ];
+        let me = Some(Skill {
+            level: 50,
+            trophies: 400,
+        });
+        let (idx, _, _) = in_bracket_partner(&shape, me, Uuid::new_v4(), now).unwrap();
+        assert_eq!(shape[idx].2, old);
+    }
+
+    /// A queued human who has waited past their deadline beats the bracket: that is
+    /// last call, and the humans-first gate is what kept them there.
+    #[test]
+    fn a_waiter_held_for_a_human_is_paired_at_their_deadline() {
+        let c = config(60, 0);
+        let since = Instant::now();
+        let registry = MatchRegistry::new(4);
+        // Inherited a long busy floor before the second human arrived.
+        let prev = Some((since + StdDuration::from_secs(230), 2u8));
+        let (floor, _) = fallback_deadline(&c, &registry, since, 0, 1, false, prev, since);
+        assert_eq!(
+            floor,
+            since + StdDuration::from_secs(c.solo_fallback_secs),
+            "a human standing in the queue cuts an inherited busy wait to last call"
+        );
+    }
+
+    // ---- through the real loop ------------------------------------------------------
+
+    #[tokio::test]
+    async fn no_ai_while_a_human_match_is_running() {
+        let registry = MatchRegistry::new(8);
+        let _fight = start_pvp(&registry, 5100);
+        let tx = spawn(config(60, 0), registry.clone());
+        let (t, mut rx) = ticket(Uuid::new_v4(), 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(
+            !resolved(&mut rx, StdDuration::from_millis(3500)).await,
+            "handed an AI while two humans were fighting each other"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_ai_within_the_cooldown_then_ai_after_it() {
+        let registry = MatchRegistry::new(8);
+        registry.set_last_pvp_end_for_test(Some(Instant::now()));
+        let tx = spawn(config(3, 0), registry.clone());
+        let (t, mut rx) = ticket(Uuid::new_v4(), 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(
+            !resolved(&mut rx, StdDuration::from_millis(2000)).await,
+            "handed an AI inside the cooldown after a human match"
+        );
+        assert!(
+            resolved(&mut rx, StdDuration::from_millis(3500)).await,
+            "after the cooldown with nobody around, the ordinary fallback applies"
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_comes_promptly_once_nobody_has_fought_for_the_cooldown() {
+        let registry = MatchRegistry::new(8);
+        registry.set_last_pvp_end_for_test(Some(Instant::now() - StdDuration::from_secs(10)));
+        let tx = spawn(config(3, 0), registry.clone());
+        let (t, mut rx) = ticket(Uuid::new_v4(), 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(resolved(&mut rx, StdDuration::from_millis(2500)).await);
+    }
+
+    #[tokio::test]
+    async fn the_safety_valve_hands_out_the_ai_after_the_max_wait() {
+        let registry = MatchRegistry::new(8);
+        let _fight = start_pvp(&registry, 5200);
+        let tx = spawn(config(60, 2), registry.clone());
+        let (t, mut rx) = ticket(Uuid::new_v4(), 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(resolved(&mut rx, StdDuration::from_millis(4500)).await);
+    }
+
+    /// The owner's fairness case. C waits while A and B fight. When their match ends,
+    /// A re-queues first, then B: C — who was already waiting — is A's partner, and B
+    /// (who just finished) waits rather than jumping ahead. A and B are close in
+    /// trophies and C is not, which is exactly when "closest" used to re-pair A and B.
+    #[tokio::test]
+    async fn the_waiting_player_is_paired_before_a_just_finished_one() {
+        let registry = MatchRegistry::new(8);
+        let fight = start_pvp(&registry, 5300);
+        let tx = spawn(config(60, 0), registry.clone());
+        let (c, mut rx_c) = ticket(Uuid::new_v4(), 2000);
+        tx.send(MatchmakerCommand::Enqueue(c)).unwrap();
+        tokio::time::sleep(StdDuration::from_millis(1500)).await;
+        end_pvp(&registry, fight);
+        let (a, mut rx_a) = ticket(Uuid::new_v4(), 400);
+        let (b, mut rx_b) = ticket(Uuid::new_v4(), 410);
+        tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
+        tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
+        assert!(
+            resolved(&mut rx_c, StdDuration::from_millis(1500)).await,
+            "C left waiting"
+        );
+        assert!(
+            resolved(&mut rx_a, StdDuration::from_millis(200)).await,
+            "A is C's partner"
+        );
+        assert!(
+            !resolved(&mut rx_b, StdDuration::from_millis(1500)).await,
+            "B, fresh from a fight, jumped ahead of C (or was handed an AI in the cooldown)"
+        );
+    }
+
+    /// Three humans, two seats: over three rounds nobody sits out twice in a row.
+    /// The waiting player is always in the next fight; the AI never appears.
+    #[tokio::test]
+    async fn no_starvation_in_a_three_player_loop() {
+        let registry = MatchRegistry::new(8);
+        let tx = spawn(config(60, 0), registry.clone());
+        let users = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        // Round 0: users 0 and 1 are fighting; 2 waits.
+        let mut fight = start_pvp(&registry, 6000);
+        let mut fighters = [0usize, 1usize];
+        let mut waiter = 2usize;
+        let (t, mut waiter_rx) = ticket(users[waiter], 100 + 900 * waiter as i64);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        for round in 1..=3u16 {
+            tokio::time::sleep(StdDuration::from_millis(1300)).await;
+            end_pvp(&registry, fight);
+            // Both fighters re-queue, winner first.
+            let mut rxs = Vec::new();
+            for &f in &fighters {
+                let (t, rx) = ticket(users[f], 100 + 900 * f as i64);
+                tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+                rxs.push((f, rx));
+            }
+            assert!(
+                resolved(&mut waiter_rx, StdDuration::from_millis(1500)).await,
+                "round {round}: user {waiter} was still waiting"
+            );
+            let (first, mut first_rx) = rxs.remove(0);
+            let (second, second_rx) = rxs.remove(0);
+            assert!(
+                resolved(&mut first_rx, StdDuration::from_millis(300)).await,
+                "round {round}: the first to re-queue should take the waiter"
+            );
+            // The new fight: old waiter vs first re-queuer; the second waits.
+            fight = start_pvp(&registry, 6000 + round);
+            fighters = [waiter, first];
+            waiter = second;
+            waiter_rx = second_rx;
+        }
+        assert!(
+            !resolved(&mut waiter_rx, StdDuration::from_millis(1500)).await,
+            "the last waiter was handed an AI while others fought"
         );
     }
 }

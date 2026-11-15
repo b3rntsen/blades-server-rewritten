@@ -149,6 +149,23 @@ pub struct ArenaConfig {
     /// queued ticket) and simply does not resolve until the cooldown ends. Cancels
     /// before pairing, and cancels of bot matches, are free. No trophy penalty.
     pub prefight_cancel_cooldown_secs: u64,
+    /// **Humans first** (owner, 2026-11-15; env `ARENA_HUMANS_FIRST_COOLDOWN_SECS`,
+    /// default 60; `0` = off, the tiered fallback alone decides).
+    ///
+    /// While humans are matching — a human-vs-human match is in progress, or one
+    /// ended less than this many seconds ago — a waiting player is never handed an
+    /// AI; they wait for a human. (A second human standing in the queue needs no gate:
+    /// last call pairs them.) Once nobody has fought anybody for this long, the
+    /// ordinary tiers below apply unchanged. 60 s is the owner's number: long enough
+    /// for both fighters to clear the results card and press Fight again.
+    pub humans_first_cooldown_secs: u64,
+    /// Safety valve on the humans-first gate (env `ARENA_HUMANS_FIRST_MAX_WAIT_SECS`,
+    /// default 300; `0` = no valve). A player who has waited this long gets the
+    /// ordinary fallback even while others are fighting. With FIFO pairing a waiter
+    /// is the next partner of whoever frees up first, so this only fires when a
+    /// human match runs unusually long or its players walk away mid-cycle; 300 s
+    /// covers one full match plus the results card.
+    pub humans_first_max_wait_secs: u64,
 }
 
 impl ArenaConfig {
@@ -204,6 +221,8 @@ impl ArenaConfig {
             bot_delay_min_secs: parse("ARENA_BOT_DELAY_MIN_SECS", 4),
             bot_delay_max_secs: parse("ARENA_BOT_DELAY_MAX_SECS", 35),
             prefight_cancel_cooldown_secs: parse("ARENA_PREFIGHT_CANCEL_COOLDOWN_SECS", 120),
+            humans_first_cooldown_secs: parse("ARENA_HUMANS_FIRST_COOLDOWN_SECS", 60),
+            humans_first_max_wait_secs: parse("ARENA_HUMANS_FIRST_MAX_WAIT_SECS", 300),
         }
     }
 }
