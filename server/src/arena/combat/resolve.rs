@@ -2951,17 +2951,27 @@ fn apply_caster_begin_effects(
     // Indomitable Smash ships 250 at rank 1 and it was read by nobody, so the
     // maneuver cured conditions and then did nothing else defensively.
     //
-    // Lifetime: the ability ships no duration of its own, so it rides the same
-    // `ABILITY_USE_MIN_WINDOW_SECS` window the Combat Focus / Willpower perks use for
-    // a cast — the committed-animation window. That is a modelling choice, not an
-    // authored number, and is called out here rather than buried.
+    // Lifetime: the WHOLE maneuver. Retail registers the bonus in
+    // `AbilityDoIndomitableSmash$$BeginExecution@0x1E95AA4` and unregisters it only
+    // in `Cleanup@0x1E95C88`, i.e. at `OnManeuverEnded` — so it covers the smash's own
+    // hit and any Revenge that hit provokes. A flat 0.5 s window expired before the
+    // authored hit (0.75-0.78 s) and left the caster unresisted exactly then.
+    // Abilities with no authored maneuver timing keep the 0.5 s floor.
     if let Some(bonus) = r.get(super::gamedata::AbilityField::BonusResistance) {
         if bonus > 0.0 && caster < viewers {
             let eff = combat.fighters[caster].loadout.perks.ability_multiplier(
                 super::perks::fighter_health_is_critical(&combat.fighters[caster]),
             );
             let bonus = bonus * eff * eff;
-            let window = super::perks::ABILITY_USE_MIN_WINDOW_SECS;
+            let window = super::interrupts::maneuver_timing(
+                ability_uuid,
+                level,
+                super::interrupts::timing_weapon(&combat.fighters[caster]),
+            )
+            .map(|t| t.end)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(0.0)
+            .max(super::perks::ABILITY_USE_MIN_WINDOW_SECS);
             let expires = now + Duration::from_secs_f32(window);
             combat.fighters[caster]
                 .transient_all_resistance
@@ -12635,6 +12645,49 @@ mod shipped_effects_tests {
             total >= 250.0,
             "expected the authored 250 flat resistance, got {total}"
         );
+    }
+
+    /// Retail registers Indomitable Smash's resistance bonus in
+    /// `AbilityDoIndomitableSmash$$BeginExecution@0x1E95AA4` and unregisters it only
+    /// in `Cleanup@0x1E95C88`, so it covers the whole power attack — including the
+    /// moment its own hit lands and any Revenge that hit provokes. A flat 0.5 s
+    /// window expired before the authored hit (0.75 s two-handed, 0.78 s one-handed):
+    /// on prod (gsid cb06403e, 2026-11-15) Yaskrava's smash provoked a 137 Fire
+    /// Revenge 0.75 s after the cast, met it with no resistance at all, and was set
+    /// on fire again right after the cure.
+    #[test]
+    fn indomitable_smash_resistance_covers_its_own_hit() {
+        let now = Instant::now();
+        let uuid = uuid_of("IndomitableSmash");
+        for two_handed in [false, true] {
+            let mut c = combat2(now);
+            if two_handed {
+                c.fighters[0].loadout.weapon.weight = Some(Weight::Heavy);
+                c.fighters[0].loadout.weapon_template = None;
+            }
+            let timing = super::super::interrupts::maneuver_timing(
+                uuid,
+                1,
+                super::super::interrupts::timing_weapon(&c.fighters[0]),
+            )
+            .expect("Indomitable Smash has an authored timing");
+            apply_caster_begin_effects(&mut c, 0, uuid, 1, now);
+            let at_hit = now + Duration::from_secs_f32(timing.impacts[0] + 0.02);
+            let at_hit_resist =
+                c.fighters[0].transient_resistance_against(DamageType::Fire, at_hit);
+            assert!(
+                at_hit_resist >= 250.0,
+                "two_handed={two_handed}: resistance at the hit ({:.3}s) must still be the \
+                 authored 250, got {at_hit_resist}",
+                timing.impacts[0]
+            );
+            let after_end = now + Duration::from_secs_f32(timing.end + 0.1);
+            assert_eq!(
+                c.fighters[0].transient_resistance_against(DamageType::Fire, after_end),
+                0.0,
+                "two_handed={two_handed}: the bonus ends with the maneuver"
+            );
+        }
     }
 
     /// Frostbite ships `_resistanceBonus` 13.13 against `_resistTypes` [1,2,3] — the
