@@ -65,7 +65,9 @@ pub fn effective_event_reward_level(level: i64) -> i64 {
 
 fn paid_as_from(level: i64, from: i64) -> i64 {
     if level >= from {
-        TOP_LOOT_LEVEL.max(level)
+        // Exactly the top, also past it: a level 101-150 character (#425) is paid
+        // as level 100, the top of every retail loot table, never as 101.
+        TOP_LOOT_LEVEL
     } else {
         level
     }
@@ -188,6 +190,19 @@ mod tests {
         assert_eq!(effective_loot_level_u16(46), 100);
         assert_eq!(effective_loot_level_u16(60), 100);
         assert_eq!(effective_loot_level_u16(1), 1);
+    }
+
+    /// #425: past 100 (cap raised) the paid-as level stays 100, the top of every
+    /// retail loot table — not the character's own 101-150 — and the dungeon
+    /// loot shift a level-100 character gets is unchanged.
+    #[test]
+    fn levels_past_100_are_paid_as_100() {
+        for level in [100, 101, 120, 150] {
+            assert_eq!(effective_loot_level(level), 100, "level {level}");
+            assert_eq!(effective_event_reward_level(level), 100, "level {level}");
+        }
+        assert_eq!(effective_loot_level_u16(150), 100);
+        assert_eq!(effective_loot_level_u64(101), 100);
     }
 
     /// #432 keeps an event's fixed rewards (milestones, final reward) on #398's 49.

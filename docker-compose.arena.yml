@@ -169,6 +169,10 @@ services:
       # Dev override: pin EVERY anon login to this user (a Transfer'd character),
       # since there's no Bethesda/Google identity. Empty/unset = normal behaviour.
       ARENA_DEV_LOGIN_USER_ID: ${ARENA_DEV_LOGIN_USER_ID:-}
+      # Player level cap (#425). Unset/100 = retail. Raise (max 150) ONLY after the
+      # client data pack that extends the client's level table is in production:
+      # a client without it hangs on load once a character passes 100.
+      ARENA_MAX_PLAYER_LEVEL: ${ARENA_MAX_PLAYER_LEVEL:-100}
       # Per-match key submission to the capture platform so OUR-server arena
       # matches become decryptable (POSTs each admitted peer's ChaCha20 key+nonce
       # to /api/arena/submit-key, reaching newblades-web by service name over the

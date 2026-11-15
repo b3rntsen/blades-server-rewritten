@@ -69,12 +69,90 @@ impl LevelUpData {
     }
 }
 
+/// Retail's top level: the last row of `level_rewards.json` and the client's own
+/// `PlayerStats.MAXIMUM_PLAYER_LEVEL`. A stock client's level table
+/// (`PlayerStatsData._perLevelData` in `duplicates_sab`) ends here, and a
+/// character above it hangs that client on load.
+pub const RETAIL_MAX_LEVEL: u16 = 100;
+
+/// The highest level the past-100 extension is defined for (#425): the level the
+/// client data pack's table runs to. A server cap above it would hand a client a
+/// level its table does not hold, which is the hang above.
+pub const EXTENDED_MAX_LEVEL: u16 = 150;
+
+/// How many retail levels the extension's rewards cycle through: level `n` past
+/// 100 pays what level `n - 10` paid, so 101-110 repeat 91-100.
+const REWARD_CYCLE: u32 = 10;
+
+/// The server's level cap from `ARENA_MAX_PLAYER_LEVEL` (#425).
+///
+/// Unset, empty or unparseable means retail's 100, so the extension stays off
+/// until the operator flips it — which must wait until the client pack that
+/// extends the client's table is in production, or every player without it hangs
+/// on load the moment one of their characters passes 100. Values are clamped to
+/// `RETAIL_MAX_LEVEL..=EXTENDED_MAX_LEVEL`: lowering the cap below 100 would
+/// strand existing level-100 characters above it, and raising it past 150 would
+/// outrun the client table.
+pub fn max_level_from_env(value: Option<&str>) -> u16 {
+    match value.map(str::trim).filter(|v| !v.is_empty()) {
+        None => RETAIL_MAX_LEVEL,
+        Some(v) => match v.parse::<u16>() {
+            Ok(n) => n.clamp(RETAIL_MAX_LEVEL, EXTENDED_MAX_LEVEL),
+            Err(_) => RETAIL_MAX_LEVEL,
+        },
+    }
+}
+
+impl LevelUpData {
+    /// The table with its top at `max_level` (#425, owner decision d27).
+    ///
+    /// At or below the table's own top this only drops rows above `max_level`.
+    /// Above it, rows are added by continuing retail's ladder:
+    ///
+    /// - **Cost.** `xp_to_reach(n) = xp_to_reach(top) + step * (n - top)`, where
+    ///   `step = xp_to_reach(top) - xp_to_reach(top - 1)` — retail's last
+    ///   increment (44,316 at 99→100), held constant. Retail's own increments
+    ///   shrink by exactly 75 per level from 51 to 100 (a cubic that peaks at
+    ///   81); continuing THAT rule turns the increment negative near 120 and
+    ///   levels would get cheaper, so the last increment is the continuation that
+    ///   stays monotonic. 101 costs 2,638,269; 150 costs 4,809,753.
+    /// - **Rewards.** Level `n` copies level `n - 10`'s row (gold, gems, items,
+    ///   and the zero skill/attribute/health of every level past 50), so 101-110
+    ///   pay what 91-100 paid. The client pack carries the same rewards, so the
+    ///   level-up card shows what the server credits.
+    ///
+    /// An empty table stays empty: the extension continues retail's data and has
+    /// nothing to continue without it.
+    pub fn with_max_level(mut self, max_level: u16) -> Self {
+        let max = u32::from(max_level);
+        self.rewards.retain(|level, _| *level <= max);
+        let top = self.rewards.keys().copied().max().unwrap_or(0);
+        if top >= max || top <= REWARD_CYCLE {
+            return self;
+        }
+        let (Some(last), Some(prev)) = (self.get_reward(top), self.get_reward(top - 1)) else {
+            return self;
+        };
+        let base = last.xp_to_reach;
+        let step = last.xp_to_reach.saturating_sub(prev.xp_to_reach);
+        for n in (top + 1)..=max {
+            let Some(mut row) = self.get_reward(n - REWARD_CYCLE).cloned() else {
+                break;
+            };
+            row.xp_to_reach = base.saturating_add(step.saturating_mul(n - top));
+            self.rewards.insert(n, row);
+        }
+        self
+    }
+}
+
 /// Why a level-up was refused.
 ///
 /// Both arms are 400s at the wire: the client should not have offered the button.
 #[derive(Debug, PartialEq, Eq)]
 pub enum LevelUpRefusal {
-    /// The character is at the top of the table (retail's cap is 100).
+    /// The character is at the top of the table (retail's cap is 100; the
+    /// server's is `ARENA_MAX_PLAYER_LEVEL`, see [`max_level_from_env`]).
     AlreadyMaxLevel { level: u16 },
     /// Not enough banked experience for the next level's threshold.
     NotEnoughExperience { have: u64, need: u64 },
@@ -532,6 +610,174 @@ mod tests {
         }
         assert_eq!(ch.level, 58);
     }
+    // ── levels past 100 (#425) ──────────────────────────────────────────────
+
+    /// THE GATE: without `ARENA_MAX_PLAYER_LEVEL` the server is exactly retail —
+    /// 100 is the cap and the table is byte-for-byte the shipped one. A client
+    /// without the pack hangs at 101, so nothing may change until it is flipped.
+    #[test]
+    fn unset_the_cap_stays_retails_100_and_the_table_is_untouched() {
+        for unset in [None, Some(""), Some("  "), Some("banana"), Some("-5")] {
+            assert_eq!(max_level_from_env(unset), RETAIL_MAX_LEVEL, "{unset:?}");
+        }
+        assert_eq!(max_level_from_env(Some("100")), 100);
+        let stock = table();
+        let gated = table().with_max_level(max_level_from_env(None));
+        assert_eq!(gated.max_level(), 100);
+        assert_eq!(gated.rewards.len(), stock.rewards.len());
+        for (level, row) in &stock.rewards {
+            let g = &gated.rewards[level];
+            assert_eq!(
+                (g.xp_to_reach, g.gold_reward, g.gems_reward, g.items.len()),
+                (
+                    row.xp_to_reach,
+                    row.gold_reward,
+                    row.gems_reward,
+                    row.items.len()
+                ),
+                "level {level} changed with the extension off"
+            );
+        }
+        let mut ch = at(100, 76_163_908); // the most XP a prod level-100 holds
+        assert_eq!(
+            apply_level_up(&mut ch, Attribute::Stamina, &gated).unwrap_err(),
+            LevelUpRefusal::AlreadyMaxLevel { level: 100 }
+        );
+    }
+
+    /// The cap clamps to the range the client pack covers: below 100 would strand
+    /// level-100 characters, above 150 outruns the client's table.
+    #[test]
+    fn the_cap_is_clamped_to_the_packs_range() {
+        assert_eq!(max_level_from_env(Some("150")), 150);
+        assert_eq!(max_level_from_env(Some("120")), 120);
+        assert_eq!(max_level_from_env(Some("50")), RETAIL_MAX_LEVEL);
+        assert_eq!(max_level_from_env(Some("200")), EXTENDED_MAX_LEVEL);
+        assert_eq!(table().with_max_level(120).max_level(), 120);
+    }
+
+    /// The pinned numbers. The client pack's rows are generated by the same rule
+    /// (blades-capture `tools/bundle-reskin/patch_player_levels.py`), and these
+    /// values are what it writes — if either side changes, the level-up bar and
+    /// the server's charge disagree.
+    #[test]
+    fn the_extension_continues_retails_last_increment() {
+        let data = table().with_max_level(EXTENDED_MAX_LEVEL);
+        let xp = |l: u32| data.get_reward(l).unwrap().xp_to_reach;
+        assert_eq!(xp(99), 2_549_637, "retail");
+        assert_eq!(xp(100), 2_593_953, "retail");
+        assert_eq!(xp(101), 2_638_269);
+        assert_eq!(xp(110), 3_037_113);
+        assert_eq!(xp(150), 4_809_753);
+        assert_eq!(data.max_level(), 150);
+        assert!(data.get_reward(151).is_none());
+        // Inside the client's float and its MAXIMUM_EXPERIENCE (9,999,999) clamp.
+        assert!(xp(150) < 9_999_999);
+    }
+
+    #[test]
+    fn thresholds_are_monotonic_all_the_way_to_the_cap() {
+        let data = table().with_max_level(EXTENDED_MAX_LEVEL);
+        let mut prev = 0;
+        for l in 2..=u32::from(EXTENDED_MAX_LEVEL) {
+            let x = data
+                .get_reward(l)
+                .unwrap_or_else(|| panic!("no row {l}"))
+                .xp_to_reach;
+            assert!(x > prev, "level {l} costs {x}, not more than {prev}");
+            prev = x;
+        }
+    }
+
+    /// Rewards past 100 repeat 91-100, and no level past 50 grants skill,
+    /// attribute or health points — retail's own rule for 51-100.
+    #[test]
+    fn rewards_past_100_cycle_the_last_ten_retail_levels() {
+        let data = table().with_max_level(EXTENDED_MAX_LEVEL);
+        for n in 101..=u32::from(EXTENDED_MAX_LEVEL) {
+            let row = data.get_reward(n).unwrap();
+            let src = data.get_reward(91 + (n - 101) % 10).unwrap();
+            assert_eq!(
+                (row.gold_reward, row.gems_reward, row.reset_cost),
+                (src.gold_reward, src.gems_reward, src.reset_cost),
+                "level {n}"
+            );
+            let ids = |r: &LevelReward| {
+                r.items
+                    .iter()
+                    .map(|i| (i.template_id.clone(), i.quantity))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(ids(row), ids(src), "items at level {n}");
+            assert_eq!(
+                (row.skill_points, row.attribute_points, row.health_bonus),
+                (0, 0, 0),
+                "level {n}"
+            );
+        }
+    }
+
+    /// Level-up past 100 works with the gate open, charges the extended threshold
+    /// and pays the cycled reward; the new top refuses.
+    #[test]
+    fn levelling_past_100_works_once_the_cap_is_raised() {
+        let data = table().with_max_level(EXTENDED_MAX_LEVEL);
+        let need = data.cost_of_next_level(100).unwrap();
+        let mut ch = at(100, need + 7);
+        let points = ch.stamina_attribute_points;
+        let out = apply_level_up(&mut ch, Attribute::Stamina, &data).unwrap();
+        assert_eq!((ch.level, ch.experience), (101, 7));
+        assert_eq!(out.experience_spent, 2_638_269);
+        assert_eq!(
+            ch.stamina_attribute_points, points,
+            "no attribute point past 50"
+        );
+        // 101 pays what 91 paid (items, no currency).
+        assert!(out.credited_currencies.is_empty());
+        assert_eq!(
+            out.reward.stackable_items.len(),
+            data.get_reward(91).unwrap().items.len()
+        );
+
+        // One short of the threshold is refused; the walk stops exactly at 150.
+        let mut ch = at(120, data.cost_of_next_level(120).unwrap() - 1);
+        assert!(matches!(
+            apply_level_up(&mut ch, Attribute::Stamina, &data),
+            Err(LevelUpRefusal::NotEnoughExperience { .. })
+        ));
+        let total: u64 = (101..=150u32)
+            .map(|l| u64::from(data.get_reward(l).unwrap().xp_to_reach))
+            .sum();
+        let mut ch = at(100, total);
+        while apply_level_up(&mut ch, Attribute::Stamina, &data).is_ok() {}
+        assert_eq!((ch.level, ch.experience), (150, 0));
+        assert_eq!(
+            apply_level_up(&mut ch, Attribute::Stamina, &data).unwrap_err(),
+            LevelUpRefusal::AlreadyMaxLevel { level: 150 }
+        );
+    }
+
+    /// Operator test characters can be set past 100 only with the gate open —
+    /// how a level-101 character is made for the client test.
+    #[test]
+    fn set_level_follows_the_cap() {
+        let mut ch = at(100, 0);
+        assert!(set_level(&mut ch, 101, &table()).is_err());
+        let open = table().with_max_level(EXTENDED_MAX_LEVEL);
+        set_level(&mut ch, 101, &open).unwrap();
+        assert_eq!((ch.level, ch.stamina_attribute_points), (101, 49));
+    }
+
+    #[test]
+    fn an_empty_table_is_not_extended() {
+        assert!(
+            LevelUpData::default()
+                .with_max_level(150)
+                .rewards
+                .is_empty()
+        );
+    }
+
     // ── set_level (operator test characters) ────────────────────────────────
 
     /// THE CONTROL: levelling one step at a time through `apply_level_up` and

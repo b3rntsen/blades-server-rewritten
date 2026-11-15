@@ -34,8 +34,10 @@ use crate::features::beginner_economy::{
 };
 use crate::features::store_bundles::mix;
 
-/// The opener's character levels the rule applies to (#421, #429).
-pub const LEVELS: RangeInclusive<i64> = 45..=100;
+/// The opener's character levels the rule applies to (#421, #429), through the
+/// past-100 extension's top (#425): a level-101 opener keeps the rule rather than
+/// falling back to the raw retail grades.
+pub const LEVELS: RangeInclusive<i64> = 45..=crate::features::level_up::EXTENDED_MAX_LEVEL as i64;
 
 /// Silver chest tier.
 pub const SILVER: u64 = 2;
@@ -171,6 +173,20 @@ mod tests {
         pay_chest_soul_gems(&mut s, GOLD, 45, 1);
         assert_eq!(s.keys().filter(|id| SOUL_GEMS.contains(id)).count(), 1);
         assert_eq!(s[&crate::economy::GOLD], 500);
+    }
+
+    /// #425: a level 101-150 opener (cap raised) is paid exactly as a level-100
+    /// one — the rule must not fall back to the raw retail grades past 100.
+    #[test]
+    fn openers_past_100_keep_the_rule() {
+        for level in [100, 101, 150] {
+            let mut ours = HashMap::from([(SOUL_GEMS[2], 1u64), (SOUL_GEMS[7], 3)]);
+            let mut top = ours.clone();
+            pay_chest_soul_gems(&mut ours, GOLD, level, 9);
+            pay_chest_soul_gems(&mut top, GOLD, 100, 9);
+            assert_eq!(ours, top, "level {level}");
+            assert_eq!(ours.len(), 1, "re-graded into one stack at {level}");
+        }
     }
 
     /// Elder and Legendary: every gem is kept, each stack re-graded.

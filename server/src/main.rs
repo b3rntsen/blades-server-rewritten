@@ -413,7 +413,19 @@ async fn main() -> Result<()> {
                 data
             };
 
-            let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"));
+            // Levels past retail's 100 (#425) stay off until ARENA_MAX_PLAYER_LEVEL
+            // is raised, which waits on the client pack that extends the client's
+            // own level table: a stock client hangs on load at level 101.
+            let max_player_level = blades_lib::features::level_up::max_level_from_env(
+                std::env::var("ARENA_MAX_PLAYER_LEVEL").ok().as_deref(),
+            );
+            let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"))
+                .with_max_level(max_player_level);
+            log::info!(
+                "[level] player level cap {} (ARENA_MAX_PLAYER_LEVEL; retail {})",
+                level_up_data.max_level(),
+                blades_lib::features::level_up::RETAIL_MAX_LEVEL
+            );
             let events_json = load_static_json("event_quests.json");
             let events_data = EventQuestData::from_json(&events_json);
 
