@@ -11,7 +11,8 @@
 //!
 //! The season feed (`season-matches`, tracker #515 msg 3347) hands over the
 //! current arena season's matches with the facts HauDrauf's proposed cups rule
-//! needs — rounds, the stored trophy change, and how many h2h matches the pair
+//! needs — rounds, the CLASSIC trophy change (d54: the original value even after
+//! the season was recalculated under another rule), and how many h2h matches the pair
 //! had already played that UTC day (the +50 participation award's count). The
 //! website replays both today's rule and the proposed one (`web/lib/top100-cups.ts`).
 
@@ -215,7 +216,8 @@ pub async fn get_arena_monthly_matches(
 pub(crate) const SEASON_MATCHES_SQL: &str = "\
     WITH rows AS ( \
          SELECT r.id, r.recorded_at, r.character_id, r.opponent_character_id, r.game_session_id, \
-                r.is_h2h, r.win, r.rounds_won, r.rounds_lost, r.trophy_delta, \
+                r.is_h2h, r.win, r.rounds_won, r.rounds_lost, \
+                COALESCE(r.classic_trophy_delta, r.trophy_delta) AS trophy_delta, \
                 COALESCE(r.source_alt_uuid, c.source_alt_uuid, r.character_id) AS alt_key, \
                 COALESCE(c.source_alt_uuid, c.id) AS live_alt, \
                 c.character ->> 'name' AS live_name \
@@ -281,7 +283,7 @@ pub struct SeasonMatchesResponse {
     /// in-game season board).
     pub players: Vec<(Uuid, Uuid, String)>,
     /// `[at (unix s), player index, human opponent (0/1), win (0/1), rounds won,
-    /// rounds lost, stored trophy change, pair h2h games earlier that UTC day]`,
+    /// rounds lost, classic trophy change, pair h2h games earlier that UTC day]`,
     /// in match order.
     pub matches: Vec<[i64; 8]>,
 }
@@ -602,7 +604,8 @@ mod tests {
             for stmt in [
                 "ALTER TABLE arena_match_results ADD COLUMN opponent_character_id UUID, \
                  ADD COLUMN game_session_id UUID, ADD COLUMN rounds_won INT NOT NULL DEFAULT 0, \
-                 ADD COLUMN rounds_lost INT NOT NULL DEFAULT 0, ADD COLUMN trophy_delta BIGINT NOT NULL DEFAULT 0",
+                 ADD COLUMN rounds_lost INT NOT NULL DEFAULT 0, ADD COLUMN trophy_delta BIGINT NOT NULL DEFAULT 0, \
+                 ADD COLUMN classic_trophy_delta BIGINT",
                 "INSERT INTO characters VALUES ('00000000-0000-0000-0000-000000000001', '{\"name\":\"Ann\"}', NULL), \
                  ('00000000-0000-0000-0000-000000000002', '{\"name\":\"Bob\"}', NULL)",
             ] {
@@ -627,8 +630,10 @@ mod tests {
                 h2h(3, 3, "2026-11-02T14:00:00Z"),
                 h2h(4, 4, "2026-11-02T15:00:00Z"),
                 h2h(5, 5, "2026-11-03T00:00:01Z"),
-                "INSERT INTO arena_match_results (id, character_id, win, recorded_at, is_h2h, rounds_won, rounds_lost, trophy_delta) \
-                 VALUES ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000001', false, '2026-11-02T16:00:00Z', false, 0, 2, -20)"
+                // Recalculated under HauDrauf's rule (d54): the feed still serves
+                // the classic change the website replays.
+                "INSERT INTO arena_match_results (id, character_id, win, recorded_at, is_h2h, rounds_won, rounds_lost, trophy_delta, classic_trophy_delta) \
+                 VALUES ('00000000-0000-0000-0000-0000000000f1', '00000000-0000-0000-0000-000000000001', false, '2026-11-02T16:00:00Z', false, 0, 2, 20, -20)"
                     .into(),
             ] {
                 diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
