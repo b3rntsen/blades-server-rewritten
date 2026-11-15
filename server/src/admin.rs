@@ -6845,7 +6845,12 @@ mod tests {
             .load(c)
             .await
             .unwrap();
-            rows.into_iter().map(|r| (r.name, r.grandfathered)).collect()
+            // Sorted here, not by ORDER BY: collation order differs between
+            // databases (CI vs local), byte order does not.
+            let mut out: Vec<(String, bool)> =
+                rows.into_iter().map(|r| (r.name, r.grandfathered)).collect();
+            out.sort();
+            out
         }
 
         async fn live_name(c: &mut AsyncPgConnection, id: Uuid) -> String {
@@ -7043,7 +7048,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 registry(&mut c).await,
-                vec![("ísdís".to_string(), true), ("Ísdís".to_string(), false)],
+                vec![("Ísdís".to_string(), false), ("ísdís".to_string(), true)],
                 "the oldest (first-bound account) holds the name"
             );
             // The grandfathered one can still park and come back.
