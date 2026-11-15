@@ -77,7 +77,7 @@ fn clamp_limit(limit: Option<i64>) -> i64 {
     limit.unwrap_or(100).clamp(1, 100)
 }
 
-async fn active_season(
+pub(crate) async fn active_season(
     conn: &mut diesel_async::AsyncPgConnection,
 ) -> Result<Option<H2hSeasonSummary>, BladeApiError> {
     Ok(diesel::sql_query(
