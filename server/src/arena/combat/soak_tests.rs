@@ -255,7 +255,23 @@ struct Outcome {
     seen_round_ends: usize,
     seen_score: u8,
     states: Vec<u8>,
+    potions: usize,
+    /// `[viewer][avatar slot]`: the packed-stats sequence and health word each
+    /// client has ACCEPTED, applying the client's own `UpdateStats` rule.
+    client_seq: [[i32; 2]; 2],
+    client_hp: [[u16; 2]; 2],
+    /// Since when each player's view of their OWN health bar has disagreed with
+    /// the server.
+    own_bar_wrong_since: [Option<Instant>; 2],
 }
+
+/// How long a player's own health bar may disagree with the server before the soak
+/// calls it a defect. A stats frame is due within a regen/payout step (≤ 100 ms) of
+/// any pool change; the slack absorbs the 30–90 ms simulated tick jitter.
+const OWN_BAR_MAX_LAG: Duration = Duration::from_millis(1_000);
+
+/// Ultimate Healing (260 HP over 2.5 s), the potion the owner drinks.
+const SOAK_HEALTH_POTION: &str = "c2139cd9-1d9d-4d4e-80b2-133e07440158";
 
 const KEY: [u8; 32] = [0x5a; 32];
 const NONCE: [u8; 8] = [0xa5; 8];
@@ -447,7 +463,23 @@ fn human_input(m: &MatchInstance, slot: usize, rng: &mut Rng) -> Option<Vec<u8>>
             if !rng.chance(180) {
                 return None;
             }
-            Some(match rng.below(10) {
+            Some(match rng.below(11) {
+                10 => {
+                    // Drink a health potion: op56 declares it first (the client does
+                    // this at round start), then op63 asks to drink it.
+                    let mut w = NetDataWriter::new();
+                    w.int(0, f.net_object_id).byte(1, 56).byte(2, 3);
+                    if f.equipped_consumable.is_none() {
+                        w.byte(3, GameMessageId::EquipAbilitiesAndConsumables as u8)
+                            .string(4, SOAK_HEALTH_POTION)
+                            .int(5, 3);
+                    } else {
+                        w.byte(3, GameMessageId::RequestConsumeConsumable as u8);
+                    }
+                    let mut v = vec![0xBEu8, 0x36];
+                    v.extend_from_slice(&w.finish());
+                    v
+                }
                 0..=2 => vec![0x84, 0x36], // swing (the engine tests' swing frame)
                 // An attack PRESS: the next release (5) commits it after a random hold,
                 // so the soak also drives the charge clock (a tap below MinDamageTime
@@ -514,6 +546,7 @@ fn run_match(
     let quitter = rng.below(2) as usize;
 
     let mut o = Outcome::default();
+    o.client_hp = [[1023, 1023]; 2];
     let mut carriers = BTreeMap::new();
     let mut internal: Vec<u8> = vec![m.combat.match_state as u8];
     let mut wire: Vec<u8> = Vec::new();
@@ -554,6 +587,7 @@ fn run_match(
                     }
                 }
                 Some(50) => o.damage_frames += 1,
+                Some(64) if *viewer == 0 => o.potions += 1,
                 Some(29) if *viewer == 0 => o.deaths += 1,
                 Some(48) if *viewer == 0 => {
                     o.round_results_sent += 1;
@@ -586,6 +620,29 @@ fn run_match(
                     o.victory_cards += 1;
                 }
                 _ => {}
+            }
+            // What the client shows. Every carrier-0x36 avatar frame that carries
+            // packed stats (op50/53/58/65) is applied the way the client applies it:
+            // `PvpAvatar.UpdateStats(this, other)@0x17927AC` hands propId 4 to the named
+            // avatar and propId 5 to its opponent, and each avatar's
+            // `UpdateStats(newStats)@0x1793984` takes the word only when its sequence is
+            // GREATER (signed) than `_lastProcessedStatsSequenceID` (+0x84) — so a frame
+            // whose sequence is not fresh is dropped silently and the bar stays put.
+            if frame[1] == 0x36 {
+                let nd = arena_proto::parse_netdata(&frame[2..]);
+                let obj = nd.int(0).unwrap_or(-1) as i32;
+                if let Some(this) = (0..2).find(|&s| m.combat.fighters[s].net_object_id == obj) {
+                    for (pid, slot) in [(4u8, this), (5u8, 1 - this)] {
+                        if let Some(NetDataValue::ULong(v)) = nd.props.get(&pid) {
+                            let (h, _, _, seq) =
+                                crate::arena::combat::state::PackedStats::unpack(*v);
+                            if (seq as i32) > o.client_seq[*viewer][slot] {
+                                o.client_seq[*viewer][slot] = seq as i32;
+                                o.client_hp[*viewer][slot] = h;
+                            }
+                        }
+                    }
+                }
             }
             if *viewer == 0 && frame[1] == 0x35 {
                 if let Some(s) = arena_proto::parse_netdata(&frame[2..]).int(5) {
@@ -717,6 +774,34 @@ fn run_match(
             );
         }
 
+        // A human's OWN health bar must follow the server's pool during a live round
+        // (owner report 2026-11-15: "I drink a health potion and see no difference on
+        // my health bar"). Checked once the fighter's pools have changed at least once
+        // (`stats_seq >= 2`): before that the round-start op54 placeholder — retail's
+        // literal propId 5 = 1, seq 1 — is all the client has, and it is not ours to
+        // judge here. Three wire units of slack = rounding.
+        if m.combat.phase == FlowState::StateTimeout {
+            for &s in &humans {
+                let f = &m.combat.fighters[s];
+                let truth = crate::arena::combat::state::wire_fraction(f.health, f.max_health);
+                let shown = o.client_hp[s][s];
+                if f.stats_seq >= 2 && (truth as i32 - shown as i32).abs() > 3 {
+                    let since = *o.own_bar_wrong_since[s].get_or_insert(now);
+                    if now.duration_since(since) > OWN_BAR_MAX_LAG {
+                        return Err(format!(
+                            "slot {s}'s own health bar shows {shown}/1023 but the server has {truth}/1023 ({}/{} HP) for {:?}: client seq {} vs server seq {}",
+                            f.health,
+                            f.max_health,
+                            now.duration_since(since),
+                            o.client_seq[s][s],
+                            f.stats_seq
+                        ));
+                    }
+                } else {
+                    o.own_bar_wrong_since[s] = None;
+                }
+            }
+        }
         // Invariants, every tick.
         check_pools(&m)?;
         if ticks % 16 == 0 || m.is_finished() {
@@ -926,6 +1011,7 @@ fn soak_240_full_matches_terminate_cleanly() {
     let (mut rounds_hist, mut casts, mut dmg, mut frames) =
         ([0usize; 4], [0u64; 2], 0usize, 0usize);
     let mut timeouts = 0usize;
+    let mut potions = 0usize;
     let mut double_ko_matches: Vec<String> = Vec::new();
     // Every edge fixture fights at least twice in bot-vs-bot, whatever the RNG says.
     let edge_first: Vec<usize> = (30..fx.len()).flat_map(|i| [i, i]).collect();
@@ -965,6 +1051,7 @@ fn soak_240_full_matches_terminate_cleanly() {
                     dmg += o.damage_frames;
                     frames += o.frames;
                     timeouts += o.ended_by_timeout;
+                    potions += o.potions;
                     if o.double_kos > 0 {
                         double_ko_matches.push(format!(
                             "{label} ({} double KO, {} rounds)",
@@ -988,6 +1075,7 @@ fn soak_240_full_matches_terminate_cleanly() {
         casts[0],
         casts[1],
     );
+    eprintln!("CRE-SOAK   health potions drunk: {potions}");
     eprintln!(
         "CRE-SOAK   scoreless round regressions: {}",
         double_ko_matches.len()
@@ -1005,6 +1093,10 @@ fn soak_240_full_matches_terminate_cleanly() {
         failures.join("\n")
     );
     assert!(n >= 200 * scale);
+    assert!(
+        potions >= 50,
+        "the scripted humans must actually drink health potions: {potions}"
+    );
     assert!(
         casts[0] > 0 && casts[1] > 0,
         "both sides must cast abilities: {casts:?}"
