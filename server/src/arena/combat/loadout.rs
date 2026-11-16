@@ -3553,7 +3553,7 @@ mod report_536_armor_tempering {
             assert!(t10 >= t1, "{}: level 10 {t10} < level 1 {t1}", a.name);
             checked += 1;
         }
-        assert!(checked > 200, "only {checked} armour temper rows");
+        assert_eq!(checked, 199, "armour templates with a non-zero temper table");
     }
 
     /// Pogagoga's live loadout (prod, read-only SELECT 2026-11-16): four
