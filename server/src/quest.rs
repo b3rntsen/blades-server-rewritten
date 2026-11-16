@@ -11506,6 +11506,53 @@ pub(crate) mod report353_quest_town_xp_db {
         );
     }
 
+    /// Report #521: a job `/complete` lists the character's dialogue quests too.
+    ///
+    /// Its `quests` array is the client's quest log after the job. Retail kept
+    /// dialogue quests in it (10 of 255 captured entries); leaving GH01 out made the
+    /// client drop it mid-session. A dungeon quest whose data is missing stays
+    /// withheld (#62).
+    #[tokio::test]
+    async fn a_job_complete_lists_the_dialogue_quests_and_withholds_dataless_dungeon_ones() {
+        const GH01: Uuid = Uuid::from_u128(0x095b8109_0e57_400d_bcf4_70e10df8cdbf);
+        // MQ13 "Lost in Translation" has a dungeon.
+        const MQ13: Uuid = Uuid::from_u128(0xf4a9bc81_e652_45d0_ab1c_dc184c06ecd6);
+        let mut conn = db!();
+        let mut job = quest_row("JOB", jobs_gen::JOB_SENTINEL_GLD);
+        job["jobReward"] = json!({"characterXp": 10});
+        let ids = seed(&mut conn, job).await;
+        for gld in [GH01, MQ13] {
+            diesel::sql_query(
+                "INSERT INTO quests (id, character_id, info, generated_data) \
+                 VALUES ($1, $2, $3::jsonb, 'null'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(gld)
+            .bind::<diesel::sql_types::Uuid, _>(ids.1)
+            .bind::<diesel::sql_types::Text, _>(quest_row("NORMAL", gld).to_string())
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+
+        let out = complete(&mut conn, ids).await;
+        // An empty quest log is left out of the body entirely.
+        let listed: Vec<String> = out["quests"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|q| q["questId"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            listed.contains(&GH01.to_string()),
+            "GH01 listed: {listed:?}"
+        );
+        assert!(
+            !listed.contains(&MQ13.to_string()),
+            "dataless dungeon quest withheld"
+        );
+    }
+
     async fn objectives(
         conn: &mut AsyncPgConnection,
         gd: &blades_lib::game_data::GameData,
