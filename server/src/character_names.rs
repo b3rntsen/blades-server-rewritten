@@ -176,6 +176,137 @@ pub(crate) fn is_default_name(name: &str) -> bool {
     }
 }
 
+// --------------------------------------------------------------------------
+// The AI marker is reserved (owner decision 2026-11-16).
+//
+// Every server-run opponent is shown as "<name> (AI)". A player who names their
+// character "Ravena AI" (prod, 2026-11-15 23:41, website rename) passes for one.
+// So no player-set name may carry "AI" as a word of its own, in any spelling
+// that reads as one: brackets or not, any separator, any case, and the
+// look-alike letters other scripts offer (the game's own whitelist admits
+// Cyrillic "А", "İ"/"ı" and accented "Á"/"Í"; the import path admits more).
+// "AI" inside a word ("Kaiden", "Aiwa", "Laila") is a different word and stays.
+// --------------------------------------------------------------------------
+
+/// What one character reads as, for the AI-marker check: `Some('a')` /
+/// `Some('i')` for look-alikes of those letters, `Some(c)` lower-cased for any
+/// other letter or digit, `None` for a separator.
+fn ai_fold_char(c: char) -> Option<char> {
+    match c {
+        // A: Latin, Cyrillic, Greek, small capital, Latin alpha, Cherokee, Lisu, "@".
+        'A' | 'a' | 'А' | 'а' | 'Α' | 'α' | 'ᴀ' | 'ɑ' | 'Ꭺ' | 'ꓮ' | '@' => Some('a'),
+        // I: Latin (and l, 1, | that read as a capital I), dotless i, Cyrillic,
+        // Ukrainian/palochka, Greek, small capital, iota, Latin iota, click, Lisu.
+        'I' | 'i' | 'l' | '1' | '|' | 'ı' | 'І' | 'і' | 'Ӏ' | 'ӏ' | 'Ι' | 'ι' | 'ɪ' | 'Ɩ' | 'ɩ'
+        | 'ǀ' | 'ꓲ' | '¦' => Some('i'),
+        c if c.is_alphanumeric() => Some(c.to_lowercase().next().unwrap_or(c)),
+        _ => None,
+    }
+}
+
+/// The name's words as the AI-marker check reads them, each with its byte span
+/// in `name`. A word ends at any non-letter/digit (space, bracket, hyphen,
+/// dot, …) and where a lower-case letter is followed by a capital
+/// ("RavenaAI" reads as "Ravena AI"). Compatibility forms (full-width,
+/// circled, small forms) and accents are folded first, per character.
+fn ai_words(name: &str) -> Vec<(String, std::ops::Range<usize>)> {
+    let mut words: Vec<(String, std::ops::Range<usize>)> = Vec::new();
+    let mut current: Option<(String, std::ops::Range<usize>)> = None;
+    let mut prev_lower = false;
+    for (at, ch) in name.char_indices() {
+        let end = at + ch.len_utf8();
+        // NFKD then drop combining marks: "Ａ" -> "A", "Í" -> "I", "﹙" -> "(".
+        let folded: String = std::iter::once(ch)
+            .collect::<String>()
+            .nfkd()
+            .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+            .collect();
+        for f in folded.chars() {
+            let starts_word = prev_lower && f.is_uppercase();
+            match ai_fold_char(f) {
+                Some(letter) => {
+                    if starts_word {
+                        words.extend(current.take());
+                    }
+                    let word = current.get_or_insert_with(|| (String::new(), at..end));
+                    word.0.push(letter);
+                    word.1.end = end;
+                }
+                None => words.extend(current.take()),
+            }
+            prev_lower = f.is_lowercase();
+        }
+    }
+    words.extend(current);
+    // An apostrophe between two letters is part of the word: "Ai'ra" and
+    // "Ma'dami" are one word each, not "Ai" + "ra".
+    let mut merged: Vec<(String, std::ops::Range<usize>)> = Vec::with_capacity(words.len());
+    for (word, span) in words {
+        if let Some(last) = merged.last_mut() {
+            let between = &name[last.1.end..span.start];
+            if matches!(between, "'" | "\u{2019}") {
+                last.0.push_str(&word);
+                last.1.end = span.end;
+                continue;
+            }
+        }
+        merged.push((word, span));
+    }
+    merged
+}
+
+/// Byte spans of `name` that read as the AI marker: a word "AI", or "A" and
+/// "I" as two adjacent one-letter words ("A.I.", "A I").
+fn ai_marker_spans(name: &str) -> Vec<std::ops::Range<usize>> {
+    let words = ai_words(name);
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < words.len() {
+        if words[i].0 == "ai" {
+            spans.push(words[i].1.clone());
+        } else if words[i].0 == "a" && words.get(i + 1).is_some_and(|w| w.0 == "i") {
+            spans.push(words[i].1.start..words[i + 1].1.end);
+            i += 1;
+        }
+        i += 1;
+    }
+    spans
+}
+
+/// Whether `name` carries the AI marker reserved for server-run opponents.
+/// Every player-set name is checked against this; AI copies are recognised by
+/// their account (`arena_ai_copy_users`), never by their name.
+pub(crate) fn is_reserved_ai_name(name: &str) -> bool {
+    !ai_marker_spans(name).is_empty()
+}
+
+/// `name` with the AI marker taken out ("Ravena AI" -> "Ravena",
+/// "Ravena (AI)" -> "Ravena"): leftover brackets and separators are dropped
+/// and spaces collapsed. Empty when nothing else is left; the caller then
+/// generates a name.
+pub(crate) fn without_ai_marker(name: &str) -> String {
+    let spans = ai_marker_spans(name);
+    let mut kept = String::with_capacity(name.len());
+    let mut at = 0;
+    for span in &spans {
+        kept.push_str(&name[at..span.start]);
+        kept.push(' ');
+        at = span.end;
+    }
+    kept.push_str(&name[at..]);
+    let words: Vec<&str> = kept
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\''))
+        .filter(|w| w.chars().any(char::is_alphanumeric))
+        .collect();
+    let out = words.join(" ");
+    if is_reserved_ai_name(&out) {
+        String::new()
+    } else {
+        out
+    }
+}
+
 /// Names that never take part (SQL `character_name_exempt`, minus the default
 /// name, which the server replaces rather than exempts): blank, AI copies,
 /// operator test characters.
@@ -253,6 +384,54 @@ async fn registry_present(conn: &mut AsyncPgConnection) -> diesel::QueryResult<b
     Ok(row.flag)
 }
 
+/// Whether `user_id` is the arena account of a server-made AI copy (the
+/// website's "AI mimic": an isolated one-character account per copied alt).
+/// Identity, not name: copies are stored under the bare name and only shown
+/// with "(AI)", so a name test misses them — the 2026-11-15 backfill numbered
+/// 20 of them ("Ravena" -> "Ravena 2"). No table yet = no copies.
+pub(crate) async fn is_ai_copy_user(
+    conn: &mut AsyncPgConnection,
+    user_id: Uuid,
+) -> diesel::QueryResult<bool> {
+    // Two queries: a missing table fails at parse time, which would abort the
+    // caller's transaction.
+    let present: Flag =
+        diesel::sql_query("SELECT to_regclass('arena_ai_copy_users') IS NOT NULL AS flag")
+            .get_result(conn)
+            .await?;
+    if !present.flag {
+        return Ok(false);
+    }
+    let row: Flag = diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM arena_ai_copy_users WHERE user_id = $1) AS flag",
+    )
+    .bind::<SqlUuid, _>(user_id)
+    .get_result(conn)
+    .await?;
+    Ok(row.flag)
+}
+
+/// Record `user_id` as an AI copy's account and take its names out of the
+/// registry (the commit-time sync leaves them out from now on).
+pub(crate) async fn mark_ai_copy_user(
+    conn: &mut AsyncPgConnection,
+    user_id: Uuid,
+) -> diesel::QueryResult<()> {
+    diesel::sql_query(
+        "INSERT INTO arena_ai_copy_users (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+    )
+    .bind::<SqlUuid, _>(user_id)
+    .execute(conn)
+    .await?;
+    if registry_present(conn).await? {
+        diesel::sql_query("DELETE FROM character_names WHERE user_id = $1")
+            .bind::<SqlUuid, _>(user_id)
+            .execute(conn)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Whether another character holds `name`. Takes a transaction-scoped advisory
 /// lock on the normalised name first, so two transactions settling the same
 /// name queue instead of both seeing it free; the registry row written by
@@ -316,14 +495,18 @@ async fn generate_free(
 ) -> diesel::QueryResult<String> {
     for attempt in 0..64 {
         let candidate = combo_candidate(alt_key, attempt);
-        if !taken_by_other(conn, user_id, alt_key, &candidate).await? {
+        if !is_reserved_ai_name(&candidate)
+            && !taken_by_other(conn, user_id, alt_key, &candidate).await?
+        {
             return Ok(candidate);
         }
     }
     let base = combo_candidate(alt_key, 0);
     for n in 2.. {
         let candidate = numbered(&base, n);
-        if !taken_by_other(conn, user_id, alt_key, &candidate).await? {
+        if !is_reserved_ai_name(&candidate)
+            && !taken_by_other(conn, user_id, alt_key, &candidate).await?
+        {
             return Ok(candidate);
         }
     }
@@ -342,7 +525,20 @@ pub(crate) async fn settle_name(
     if !registry_present(conn).await? {
         return Ok(desired.to_string());
     }
-    let desired = desired.trim();
+    // An AI copy keeps the name it was copied with: the matchmaker shows it
+    // as "<name> (AI)", and it never holds a name a player could want.
+    if is_ai_copy_user(conn, user_id).await? {
+        return Ok(desired.to_string());
+    }
+    // A player's name never carries the AI marker: "Ravena AI" / "Ravena (AI)"
+    // settle as "Ravena" (numbered when taken).
+    let unmarked;
+    let desired = if is_reserved_ai_name(desired) {
+        unmarked = without_ai_marker(desired);
+        unmarked.as_str()
+    } else {
+        desired.trim()
+    };
     if desired.is_empty() || is_default_name(desired) {
         let name = generate_free(conn, user_id, alt_key).await?;
         claim(conn, user_id, alt_key, &name).await?;
@@ -353,7 +549,9 @@ pub(crate) async fn settle_name(
     }
     let mut candidate = desired.to_string();
     let mut n = 1;
-    while taken_by_other(conn, user_id, alt_key, &candidate).await? {
+    while is_reserved_ai_name(&candidate)
+        || taken_by_other(conn, user_id, alt_key, &candidate).await?
+    {
         n += 1;
         candidate = numbered(desired, n);
     }
@@ -430,7 +628,8 @@ SELECT a.user_id, a.alt_key, a.name, a.level,
          WHERE d.user_id = a.user_id) AS account_first_seen,
        (SELECT min(v.saved_at) FROM character_versions v
          WHERE v.user_id = a.user_id AND v.source_alt_uuid = a.alt_key) AS alt_first_saved,
-       EXISTS (SELECT 1 FROM test_characters t WHERE t.alt_uuid = a.alt_key) AS is_test
+       EXISTS (SELECT 1 FROM test_characters t WHERE t.alt_uuid = a.alt_key) AS is_test,
+       EXISTS (SELECT 1 FROM arena_ai_copy_users u WHERE u.user_id = a.user_id) AS is_ai_copy
   FROM alts a
 "#;
 
@@ -450,6 +649,8 @@ struct AltRow {
     alt_first_saved: Option<i64>,
     #[diesel(sql_type = Bool)]
     is_test: bool,
+    #[diesel(sql_type = Bool)]
+    is_ai_copy: bool,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -467,12 +668,27 @@ pub struct BackfillChange {
     pub kept_by: Option<Uuid>,
 }
 
+/// Oldest first: the account seen first, then the alt kept first (an alt never
+/// parked is the account's original), then the higher level.
+fn oldest_first(a: &AltRow, b: &AltRow) -> std::cmp::Ordering {
+    let first = |r: &AltRow| (r.account_first_seen.is_none(), r.account_first_seen);
+    first(a)
+        .cmp(&first(b))
+        .then(
+            (a.alt_first_saved.is_some(), a.alt_first_saved)
+                .cmp(&(b.alt_first_saved.is_some(), b.alt_first_saved)),
+        )
+        .then(b.level.cmp(&a.level))
+        .then(a.user_id.cmp(&b.user_id))
+        .then(a.alt_key.cmp(&b.alt_key))
+}
+
 /// The renames the backfill would make, oldest-wins, deterministic.
 async fn plan_backfill(conn: &mut AsyncPgConnection) -> diesel::QueryResult<Vec<BackfillChange>> {
     let rows: Vec<AltRow> = diesel::sql_query(ALL_ALTS_SQL).get_results(conn).await?;
     let rows: Vec<AltRow> = rows
         .into_iter()
-        .filter(|r| !r.is_test && !is_exempt(&r.name))
+        .filter(|r| !r.is_test && !r.is_ai_copy && !is_exempt(&r.name))
         .collect();
 
     // Every name in use stays taken while new names are chosen.
@@ -502,23 +718,12 @@ async fn plan_backfill(conn: &mut AsyncPgConnection) -> diesel::QueryResult<Vec<
         }
         // Oldest first: the account seen first, then the alt kept first (an alt
         // never parked is the account's original), then the higher level.
-        group.sort_by(|a, b| {
-            let first = |r: &AltRow| (r.account_first_seen.is_none(), r.account_first_seen);
-            first(a)
-                .cmp(&first(b))
-                .then(
-                    (a.alt_first_saved.is_some(), a.alt_first_saved)
-                        .cmp(&(b.alt_first_saved.is_some(), b.alt_first_saved)),
-                )
-                .then(b.level.cmp(&a.level))
-                .then(a.user_id.cmp(&b.user_id))
-                .then(a.alt_key.cmp(&b.alt_key))
-        });
+        group.sort_by(oldest_first);
         let holder = group[0].alt_key;
         for r in group.into_iter().skip(1) {
             let mut n = 2;
             let mut candidate = numbered(&r.name, n);
-            while taken.contains(&norm(&candidate)) {
+            while taken.contains(&norm(&candidate)) || is_reserved_ai_name(&candidate) {
                 n += 1;
                 candidate = numbered(&r.name, n);
             }
@@ -539,7 +744,7 @@ async fn plan_backfill(conn: &mut AsyncPgConnection) -> diesel::QueryResult<Vec<
     for r in defaults {
         let mut attempt = 0;
         let mut candidate = combo_candidate(r.alt_key, attempt);
-        while taken.contains(&norm(&candidate)) {
+        while taken.contains(&norm(&candidate)) || is_reserved_ai_name(&candidate) {
             attempt += 1;
             candidate = if attempt < 64 {
                 combo_candidate(r.alt_key, attempt)
@@ -729,6 +934,290 @@ pub(crate) async fn run_undo(
     })
 }
 
+// --------------------------------------------------------------------------
+// Repair after the AI marker was reserved (2026-11-16, owner-run by hand).
+// --------------------------------------------------------------------------
+
+/// Undo-table reasons written by [`run_ai_fix`].
+const REASON_AI_COPY_RESTORE: &str = "ai-copy-restore";
+const REASON_RESERVED_AI: &str = "reserved-ai";
+
+#[derive(diesel::QueryableByName)]
+struct CopyRenameRow {
+    #[diesel(sql_type = BigInt)]
+    id: i64,
+    #[diesel(sql_type = SqlUuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    alt_key: Uuid,
+    #[diesel(sql_type = Text)]
+    old_name: String,
+    #[diesel(sql_type = Text)]
+    new_name: String,
+    #[diesel(sql_type = Integer)]
+    level: i32,
+}
+
+/// Backfill renames of AI copies that are still in place (the copy still
+/// carries the backfill's name), oldest first.
+const COPY_RENAMES_SQL: &str = r#"
+SELECT u.id, u.user_id, u.alt_key, u.old_name, u.new_name,
+       COALESCE((SELECT (c."character"->>'level')::int FROM characters c
+                  WHERE c.user_id = u.user_id AND COALESCE(c.source_alt_uuid, c.id) = u.alt_key
+                  LIMIT 1),
+                (SELECT max(v.level) FROM character_versions v
+                  WHERE v.user_id = u.user_id AND v.source_alt_uuid = u.alt_key), 0) AS level
+  FROM character_name_backfill_undo u
+ WHERE u.undone_at IS NULL
+   AND u.reason IN ('duplicate', 'default-name')
+   AND (u.user_id = ANY($1)
+        OR EXISTS (SELECT 1 FROM arena_ai_copy_users a WHERE a.user_id = u.user_id))
+   AND EXISTS (SELECT 1 FROM characters c
+                WHERE c.user_id = u.user_id AND COALESCE(c.source_alt_uuid, c.id) = u.alt_key
+                  AND c."character"->>'name' = u.new_name
+               UNION ALL
+               SELECT 1 FROM character_versions v
+                WHERE v.user_id = u.user_id AND v.source_alt_uuid = u.alt_key
+                  AND v.name = u.new_name)
+ ORDER BY u.id
+"#;
+
+/// Whether a player character (not an AI copy, not this alt) holds `name`.
+async fn held_by_player(
+    conn: &mut AsyncPgConnection,
+    user_id: Uuid,
+    alt_key: Uuid,
+    name: &str,
+    copies: &[Uuid],
+) -> diesel::QueryResult<bool> {
+    let row: Flag = diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM character_names n \
+                         WHERE n.norm_name = character_name_norm($1) \
+                           AND NOT (n.user_id = $2 AND n.alt_key = $3) \
+                           AND NOT n.user_id = ANY($4) \
+                           AND NOT EXISTS (SELECT 1 FROM arena_ai_copy_users a \
+                                            WHERE a.user_id = n.user_id)) AS flag",
+    )
+    .bind::<Text, _>(name)
+    .bind::<SqlUuid, _>(user_id)
+    .bind::<SqlUuid, _>(alt_key)
+    .bind::<diesel::sql_types::Array<SqlUuid>, _>(copies)
+    .get_result(conn)
+    .await?;
+    Ok(row.flag)
+}
+
+/// What [`run_ai_fix`] does or would do.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiFixResponse {
+    pub dry_run: bool,
+    pub run_id: Option<Uuid>,
+    /// AI-copy accounts recorded by this run (given, existing, not yet recorded).
+    pub marked: Vec<Uuid>,
+    /// AI copies the backfill renamed, put back to their pre-backfill name.
+    pub restores: Vec<BackfillChange>,
+    /// Player characters whose name carries the AI marker, renamed.
+    pub renames: Vec<BackfillChange>,
+}
+
+/// (1) Record the given accounts as AI copies; (2) put back the name of every
+/// AI copy a backfill renamed; (3) rename every player character whose name
+/// carries the AI marker to "<name without it>", numbered from 2 when a player
+/// holds that (oldest keeps), or a generated name when nothing is left.
+/// One transaction; renames are recorded in `character_name_backfill_undo`
+/// under one run id, so `…/backfill/undo` reverses (2) and (3). Idempotent.
+pub(crate) async fn run_ai_fix(
+    conn: &mut AsyncPgConnection,
+    dry_run: bool,
+    ai_copy_user_ids: &[Uuid],
+) -> diesel::QueryResult<AiFixResponse> {
+    #[derive(diesel::QueryableByName)]
+    struct Id {
+        #[diesel(sql_type = SqlUuid)]
+        id: Uuid,
+    }
+    // Only accounts that exist; the ones not recorded yet are this run's marks.
+    let given: Vec<Uuid> = diesel::sql_query("SELECT id FROM users WHERE id = ANY($1) ORDER BY id")
+        .bind::<diesel::sql_types::Array<SqlUuid>, _>(ai_copy_user_ids)
+        .load::<Id>(conn)
+        .await?
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    let marked: Vec<Uuid> = diesel::sql_query(
+        "SELECT id FROM users WHERE id = ANY($1) \
+            AND NOT EXISTS (SELECT 1 FROM arena_ai_copy_users a WHERE a.user_id = users.id) \
+          ORDER BY id",
+    )
+    .bind::<diesel::sql_types::Array<SqlUuid>, _>(&given)
+    .load::<Id>(conn)
+    .await?
+    .into_iter()
+    .map(|r| r.id)
+    .collect();
+
+    let copy_rows: Vec<CopyRenameRow> = diesel::sql_query(COPY_RENAMES_SQL)
+        .bind::<diesel::sql_types::Array<SqlUuid>, _>(&given)
+        .load(conn)
+        .await?;
+    let restores: Vec<BackfillChange> = copy_rows
+        .iter()
+        .map(|r| BackfillChange {
+            user_id: r.user_id,
+            alt_key: r.alt_key,
+            level: r.level,
+            old_name: r.new_name.clone(),
+            new_name: r.old_name.clone(),
+            reason: REASON_AI_COPY_RESTORE.into(),
+            kept_by: None,
+        })
+        .collect();
+
+    let given_set: HashSet<Uuid> = given.iter().copied().collect();
+    let mut players: Vec<AltRow> = diesel::sql_query(ALL_ALTS_SQL)
+        .get_results::<AltRow>(conn)
+        .await?
+        .into_iter()
+        .filter(|r| {
+            !r.is_test
+                && !r.is_ai_copy
+                && !given_set.contains(&r.user_id)
+                && is_reserved_ai_name(&r.name)
+        })
+        .collect();
+    players.sort_by(oldest_first);
+    let mut planned: HashSet<String> = HashSet::new();
+    let mut renames = Vec::new();
+    for r in players {
+        let base = without_ai_marker(&r.name);
+        let generated = base.is_empty() || is_default_name(&base);
+        // Candidate k: the bare name, then "<name> 2", "<name> 3", …; or this
+        // character's generated-name stream when nothing is left.
+        let candidate = |k: u64| match (generated, k) {
+            (true, k) => combo_candidate(r.alt_key, k),
+            (false, 0) => base.clone(),
+            (false, k) => numbered(&base, k + 1),
+        };
+        let mut k = 0;
+        let new_name = loop {
+            let c = candidate(k);
+            k += 1;
+            if is_reserved_ai_name(&c) || is_default_name(&c) || planned.contains(&norm(&c)) {
+                continue;
+            }
+            if !held_by_player(conn, r.user_id, r.alt_key, &c, &given).await? {
+                break c;
+            }
+        };
+        planned.insert(norm(&new_name));
+        renames.push(BackfillChange {
+            user_id: r.user_id,
+            alt_key: r.alt_key,
+            level: r.level,
+            old_name: r.name.clone(),
+            new_name,
+            reason: REASON_RESERVED_AI.into(),
+            kept_by: None,
+        });
+    }
+
+    if dry_run || (marked.is_empty() && restores.is_empty() && renames.is_empty()) {
+        return Ok(AiFixResponse {
+            dry_run,
+            run_id: None,
+            marked,
+            restores,
+            renames,
+        });
+    }
+    for user in &given {
+        mark_ai_copy_user(conn, *user).await?;
+    }
+    let run_id = Uuid::new_v4();
+    let record = |c: &BackfillChange| {
+        diesel::sql_query(
+            "INSERT INTO character_name_backfill_undo \
+               (run_id, user_id, alt_key, old_name, new_name, reason) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind::<SqlUuid, _>(run_id)
+        .bind::<SqlUuid, _>(c.user_id)
+        .bind::<SqlUuid, _>(c.alt_key)
+        .bind::<Text, _>(c.old_name.clone())
+        .bind::<Text, _>(c.new_name.clone())
+        .bind::<Text, _>(c.reason.clone())
+    };
+    for (c, original) in restores.iter().zip(&copy_rows) {
+        rename_alt_everywhere(conn, c.user_id, c.alt_key, &c.new_name).await?;
+        record(c).execute(conn).await?;
+        diesel::sql_query(
+            "UPDATE character_name_backfill_undo \
+                SET undone_at = EXTRACT(EPOCH FROM now())::bigint WHERE id = $1",
+        )
+        .bind::<BigInt, _>(original.id)
+        .execute(conn)
+        .await?;
+    }
+    for c in &renames {
+        rename_alt_everywhere(conn, c.user_id, c.alt_key, &c.new_name).await?;
+        record(c).execute(conn).await?;
+    }
+    Ok(AiFixResponse {
+        dry_run,
+        run_id: Some(run_id),
+        marked,
+        restores,
+        renames,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiFixRequest {
+    /// Defaults to TRUE: applying is the explicit choice.
+    #[serde(default = "yes")]
+    pub dry_run: bool,
+    /// The AI-copy accounts the website minted (its `arenaMimicUserId`); the
+    /// arena cannot derive them itself.
+    #[serde(default)]
+    pub ai_copy_user_ids: Vec<Uuid>,
+}
+
+/// `POST /…/dev/v1/character-names/ai-fix {dryRun, aiCopyUserIds}` — see
+/// [`run_ai_fix`]. Dry run by default; undo with `…/backfill/undo {runId}`.
+#[post("/blades.bgs.services/api/dev/v1/character-names/ai-fix")]
+pub async fn fix_ai_names(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    body: web::Json<AiFixRequest>,
+) -> Result<web::Json<AiFixResponse>, BladeApiError> {
+    crate::admin::check_import_token(&app_state, &req)?;
+    let AiFixRequest {
+        dry_run,
+        ai_copy_user_ids,
+    } = body.into_inner();
+    let mut conn =
+        app_state.db_pool.get().await.map_err(|_| {
+            BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, IMPORT_SERVICE_ID, 5)
+        })?;
+    let out = conn
+        .transaction::<_, diesel::result::Error, _>(|c| {
+            async move { run_ai_fix(c, dry_run, &ai_copy_user_ids).await }.scope_boxed()
+        })
+        .await
+        .map_err(backfill_failed)?;
+    log::info!(
+        "character-name ai-fix: dry_run={} run={:?} marked={} restores={} renames={}",
+        out.dry_run,
+        out.run_id,
+        out.marked.len(),
+        out.restores.len(),
+        out.renames.len()
+    );
+    Ok(web::Json(out))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackfillRequest {
@@ -898,6 +1387,99 @@ mod tests {
         assert!(is_exempt("Ravena (AI)"));
         assert!(is_exempt("Ravena (Test)"));
         assert!(!is_exempt("Ravena"));
+    }
+
+    #[test]
+    fn the_ai_marker_is_reserved_in_every_spelling_that_reads_as_one() {
+        for bad in [
+            "Ravena AI", // prod, 2026-11-15
+            "Ravena (AI)",
+            "Ravena(AI)",
+            "Ravena [AI]",
+            "Ravena {ai}",
+            "Ravena <Ai>",
+            "Ravena ⟨AI⟩",
+            "Ravena ﹙AI﹚",   // small form brackets
+            "Ravena （ＡＩ）", // full-width
+            "Ravena-AI",
+            "Ravena_AI",
+            "Ravena.AI",
+            "Ravena A.I.",
+            "Ravena A I",
+            "RavenaAI", // glued, reads as two words
+            "AI Ravena",
+            "AI",
+            "(AI)",
+            "Ravena АІ", // Cyrillic А + Ukrainian І
+            "Ravena Αι", // Greek
+            "Ravena ᴀɪ", // small capitals
+            "Ravena Aİ", // dotted capital I (on the game whitelist)
+            "Ravena Aı", // dotless i (on the game whitelist)
+            "Ravena ÁÍ", // accents (on the game whitelist)
+            "Ravena Al", // lower-case L reads as a capital I
+            "Ravena A1",
+            "Ravena A|",
+            "Ravena @I",
+            "Ravena A\u{2160}", // Roman numeral one
+            "Ravena 'AI'",
+        ] {
+            assert!(is_reserved_ai_name(bad), "{bad:?} must be reserved");
+        }
+        for good in [
+            "Kaiden",
+            "Aiwa",
+            "Laila",
+            "Raistlin",
+            "Ravena",
+            "Mai Lin",
+            "Kai",
+            "Ali",
+            "Alan",
+            "Aino",
+            "Thai Boxer",
+            "Markus Valerius",
+            "Ísdís",
+            "Ma'dami",
+            "Zahar Surovый",
+            "Ravena 2",
+            "Azure Comfy Hare",
+            "MAIN",
+            "AIDEN",
+            "Aila",
+            "Saint Ai'ra",
+        ] {
+            assert!(!is_reserved_ai_name(good), "{good:?} must stay allowed");
+        }
+    }
+
+    #[test]
+    fn taking_the_ai_marker_out_leaves_the_rest_of_the_name() {
+        assert_eq!(without_ai_marker("Ravena AI"), "Ravena");
+        assert_eq!(without_ai_marker("Ravena (AI)"), "Ravena");
+        assert_eq!(without_ai_marker("Ravena(AI)"), "Ravena");
+        assert_eq!(without_ai_marker("Ravena-AI"), "Ravena");
+        assert_eq!(without_ai_marker("AI Ravena"), "Ravena");
+        assert_eq!(without_ai_marker("Ravena A.I."), "Ravena");
+        assert_eq!(without_ai_marker("Ma'dami (АІ)"), "Ma'dami");
+        assert_eq!(without_ai_marker("Big AI Ugly"), "Big Ugly");
+        assert_eq!(without_ai_marker("(AI)"), "");
+        assert_eq!(without_ai_marker("AI"), "");
+        assert_eq!(without_ai_marker("Ravena"), "Ravena");
+    }
+
+    #[test]
+    fn generated_and_numbered_names_never_carry_the_ai_marker() {
+        for w in COLOURS.iter().chain(ADJECTIVES).chain(CREATURES) {
+            assert!(!is_reserved_ai_name(w), "{w} reads as AI");
+        }
+        for i in (0..COLOURS.len() * ADJECTIVES.len() * CREATURES.len()).step_by(7) {
+            if let Some(name) = combo(i) {
+                assert!(!is_reserved_ai_name(&name), "{name:?}");
+            }
+        }
+        for n in 2..200 {
+            assert!(!is_reserved_ai_name(&numbered("Ravena", n)));
+        }
     }
 
     #[test]

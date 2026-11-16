@@ -784,6 +784,7 @@ async fn main() -> Result<()> {
                     .service(admin::set_current_character_name)
                     .service(character_names::backfill_character_names)
                     .service(character_names::undo_character_name_backfill)
+                    .service(character_names::fix_ai_names)
                     .service(admin::set_current_town_name)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)
