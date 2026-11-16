@@ -1387,6 +1387,61 @@ mod tests {
         );
     }
 
+    /// Tracker #516: a HUMAN's non-Quick maneuver cast while their own maneuver is
+    /// still running must be refused, exactly as for a bot. Quick Strikes and Piercing
+    /// Strikes carry no Quick tag, so `Actor$$CanCast@0x1c58f54` refuses them from the
+    /// `Maneuver` state. Retail (44 deduplicated sessions): 6 non-Quick maneuver op37s
+    /// sent mid-maneuver, 0 answered; the only mid-maneuver op38s were Quick ones.
+    /// We accepted them, so Quick Strikes -> Piercing Strikes -> a dodge chained at
+    /// ~1 s intervals, each cancelling the last (prod gsid a22f476a, 2026-11-14).
+    #[test]
+    fn a_human_mid_maneuver_cannot_cancel_it_with_a_non_quick_maneuver() {
+        let t0 = Instant::now();
+        let mut c = combat(t0, 0);
+        assert_eq!(
+            count(
+                &cast(&mut c, 0, "QuickStrikes", AbilityTag::Maneuver, t0),
+                38
+            ),
+            2
+        );
+        let mid = t0 + secs(1.0);
+        let out = cast(&mut c, 0, "PiercingStrikes", AbilityTag::Maneuver, mid);
+        assert!(
+            out.is_empty(),
+            "Piercing Strikes must not be accepted inside Quick Strikes"
+        );
+        assert!(
+            c.fighters[0].maneuver_active(mid),
+            "the running Quick Strikes was not cancelled"
+        );
+        assert!(
+            !c.fighters[0]
+                .cooldowns
+                .contains_key(uuid_of("PiercingStrikes")),
+            "a refused cast sets no cooldown"
+        );
+
+        // Control: a Quick-tagged maneuver still may (ChangeManeuverInProgress).
+        let mut c2 = combat(t0, 0);
+        cast(&mut c2, 0, "QuickStrikes", AbilityTag::Maneuver, t0);
+        let out = cast(&mut c2, 0, "DodgingStrike", AbilityTag::Maneuver, mid);
+        assert_eq!(count(&out, 38), 2, "control: a Quick dodge is accepted");
+        assert_op59(&out, uuid_of("QuickStrikes"), true);
+
+        // Control: once the maneuver has ended, Piercing Strikes is accepted.
+        let after = t0 + secs(1.40);
+        assert!(!c.fighters[0].maneuver_active(after));
+        assert_eq!(
+            count(
+                &cast(&mut c, 0, "PiercingStrikes", AbilityTag::Maneuver, after),
+                38
+            ),
+            2,
+            "control: accepted after OnManeuverEnded"
+        );
+    }
+
     /// Mid-maneuver a bot may cast only a Quick ability.
     #[test]
     fn a_bot_mid_maneuver_casts_only_quick_abilities() {
