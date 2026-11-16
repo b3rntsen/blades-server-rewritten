@@ -1808,10 +1808,11 @@ pub struct Fighter {
     /// is still holding. Retail raises such a guard the moment the stagger ends
     /// (report #357; see [`Self::reconcile_stagger`]).
     pub guard_held: bool,
-    /// A weapon maneuver (a shield bash, Power Attack, a dodge…) began while the
-    /// guard button may still be down, so the held guard goes back up at
-    /// `OnManeuverEnded` — see [`Self::reconcile_guard_after_maneuver`] (report #530).
-    pub guard_resume_after_maneuver: bool,
+    /// Something that locks the guard out began — a weapon maneuver (a shield bash,
+    /// Power Attack, a dodge…) or a paralysis — while the guard button may still be
+    /// down, so the held guard goes back up when the lock ends — see
+    /// [`Self::reconcile_held_guard_resume`] (report #530).
+    pub guard_resume_pending: bool,
 
     // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
     /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
@@ -2314,7 +2315,7 @@ impl Fighter {
             last_client_charge: None,
             last_input_block_zone: None,
             guard_held: false,
-            guard_resume_after_maneuver: false,
+            guard_resume_pending: false,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
@@ -2702,8 +2703,10 @@ impl Fighter {
         false
     }
 
-    /// Report #530: a guard held through a weapon maneuver goes back up when the
-    /// maneuver ends.
+    /// Report #530: a guard held through a weapon maneuver, or through a paralysis,
+    /// goes back up when the lock ends. (A stagger: [`Self::reconcile_stagger`]. A
+    /// spell cannot be cast from a raised guard at all — `Actor$$CanCast` — so it
+    /// never needs this.)
     ///
     /// The same shape as report #357's stagger. The maneuver lock (05-D5) drops a
     /// guard PRESS that arrives mid-maneuver, and casting a maneuver from a raised
@@ -2715,11 +2718,11 @@ impl Fighter {
     /// maneuver stays down.
     ///
     /// Returns true when the guard went up.
-    pub fn reconcile_guard_after_maneuver(&mut self, now: Instant) -> bool {
-        if !self.guard_resume_after_maneuver || self.maneuver_active(now) {
+    pub fn reconcile_held_guard_resume(&mut self, now: Instant) -> bool {
+        if !self.guard_resume_pending || self.maneuver_active(now) {
             return false;
         }
-        self.guard_resume_after_maneuver = false;
+        self.guard_resume_pending = false;
         if !self.guard_held
             || self.is_dead()
             || self.is_paralyzed()
@@ -4307,7 +4310,7 @@ impl MatchCombat {
             f.last_client_charge = None;
             f.last_input_block_zone = None;
             f.guard_held = false;
-            f.guard_resume_after_maneuver = false;
+            f.guard_resume_pending = false;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();

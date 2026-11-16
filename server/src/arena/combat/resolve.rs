@@ -1665,7 +1665,7 @@ pub(super) fn resolve_ability_cast(
         f.pending_manual_attack = None;
         f.bot_swing_at = None;
         // A guard still held when this maneuver ends goes back up then (#530).
-        f.guard_resume_after_maneuver = true;
+        f.guard_resume_pending = true;
         if f.actor_state() == ActorStateType::Blocking {
             f.blocking_until = None;
             f.reconcile_block(now);
@@ -4631,11 +4631,13 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
         && now.duration_since(f.state_entered) >= Duration::from_secs_f32(f.paralyze_secs.max(0.1))
     {
         f.set_actor_state(ActorStateType::Idle, now);
+        // A guard held through the paralysis goes back up now (#530, as #357).
+        f.guard_resume_pending = true;
     }
     // Phase 3.13: a lapsed stagger also returns the actor to Idle.
     f.reconcile_stagger(now);
     // Report #530: a guard held through a maneuver goes up at its end.
-    f.reconcile_guard_after_maneuver(now);
+    f.reconcile_held_guard_resume(now);
 }
 
 /// Deliver the due ticks of every in-flight channelled spell.
@@ -8113,6 +8115,126 @@ mod tests {
             );
             assert!(combat.fighters[0].block_phase(end).is_some());
         }
+    }
+
+    fn ability_uuid_530(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    /// Hold block, cast `editor`, keep holding with no further input, tick until the
+    /// lock is over; return the end instant.
+    fn hold_block_through_cast(
+        combat: &mut MatchCombat,
+        editor: &str,
+        press_at: Instant,
+        cast_at: Instant,
+    ) -> Instant {
+        use super::phase4_tests::make_act_frame;
+        on_c2s_input(combat, 0, &make_act_frame(true, 0.0, true), press_at);
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        let uuid = ability_uuid_530(editor);
+        let tag = super::super::loadout::ability_tag_for_template(uuid);
+        let _ = cast(combat, uuid, tag, cast_at);
+        let mut t = cast_at;
+        let deadline = cast_at + Duration::from_secs(6);
+        while t < deadline
+            && (combat.fighters[0].maneuver_active(t) || combat.fighters[0].in_channel_pose(t))
+        {
+            t += Duration::from_millis(20);
+            let _ = on_tick(combat, t, false);
+        }
+        let end = t + Duration::from_millis(40);
+        let _ = on_tick(combat, end, false);
+        let _ = on_tick(combat, end + Duration::from_millis(20), false);
+        end + Duration::from_millis(20)
+    }
+
+    /// Report #530 follow-up: "high block should also be placed after other
+    /// abilities". One case per family that locks the guard out: weapon maneuvers,
+    /// every shield bash, and a dodge. Each held guard comes back up as a fresh HIGH
+    /// block when the lock ends.
+    #[test]
+    fn report_530_a_held_guard_returns_high_after_every_maneuver_family() {
+        for editor in [
+            "PowerAttack",
+            "Guardbreaker",
+            "ShieldBash",
+            "HarryingBash",
+            "ReflectingBash",
+            "StaggeringBash",
+            "DodgingStrike",
+        ] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            let end =
+                hold_block_through_cast(&mut combat, editor, now, now + Duration::from_millis(100));
+            assert_eq!(
+                combat.fighters[0].actor_state(),
+                ActorStateType::Blocking,
+                "{editor}: the held guard goes back up"
+            );
+            assert_eq!(
+                combat.fighters[0].block_phase(end),
+                Some(BlockPhase::Optimal),
+                "{editor}: as a HIGH block"
+            );
+        }
+    }
+
+    /// Spells are NOT a family that needs the guard restored: a spell cannot be cast
+    /// from a raised guard at all (`Actor$$CanCast@0x1c58f54` admits Idle, Recovery
+    /// and Channeling only), so a player holding block never casts one. Pinned, so a
+    /// later change that lets spells through a guard has to deal with the guard.
+    #[test]
+    fn report_530_a_spell_cannot_be_cast_from_a_raised_guard() {
+        use super::phase4_tests::make_act_frame;
+        for editor in ["Fireball", "IceSpike", "Frostbite"] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            let uuid = ability_uuid_530(editor);
+            // Control: from Idle the cast goes through.
+            assert!(
+                !cast(&mut combat, uuid, AbilityTag::Damage, now).is_empty(),
+                "{editor}: control"
+            );
+            let mut combat = make_live_combat(now);
+            on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+            let out = cast(
+                &mut combat,
+                uuid,
+                AbilityTag::Damage,
+                now + Duration::from_millis(100),
+            );
+            assert!(out.is_empty(), "{editor}: refused while the guard is up");
+            assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        }
+    }
+
+    /// Paralysis drops the guard like a stagger does; a guard held through it goes
+    /// back up when it ends (the #357 shape).
+    #[test]
+    fn report_530_a_held_guard_returns_after_a_paralysis() {
+        use super::phase4_tests::make_act_frame;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        let f = &mut combat.fighters[0];
+        f.paralyze_secs = 2.0;
+        f.set_actor_state(ActorStateType::Paralyzed, now);
+        f.clear_scheduled_states();
+        f.blocking_until = None;
+        assert!(f.guard_held, "precondition");
+        let mut t = now;
+        while t < now + Duration::from_millis(2_200) {
+            t += Duration::from_millis(20);
+            let _ = on_tick(&mut combat, t, false);
+        }
+        let _ = on_tick(&mut combat, t + Duration::from_millis(20), false);
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
     }
 
     /// The control: a guard released during the bash stays down afterwards.
