@@ -1771,6 +1771,56 @@ mod tests {
         );
     }
 
+    /// Report #530/#533: Weapon Stamina / Magicka Damage ("of Exhaustion" / "of
+    /// Nullifying") is the ATTACKER's enchant. Any block — high or low — zeroes it
+    /// (`ResolveBlocking`, 0x1fd0790–0x1fd0824: non-health types → 0). Control: an
+    /// unblocked swing carries it.
+    #[test]
+    fn report_530_any_block_zeroes_weapon_exhaustion_and_nullifying() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        for ty in [DamageType::Stamina, DamageType::Magicka] {
+            let mut a = plain_blade(Weight::Light);
+            a.enchants = vec![(ty, 10)];
+            let open = m.resolve_attack(
+                &a,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            );
+            assert!(
+                comp(&open, ty) > 0.0,
+                "{ty:?}: control, unblocked swing drains"
+            );
+            for held in [0.1_f32, 2.5] {
+                let mut tgt = target();
+                tgt.loadout.has_shield = true;
+                tgt.loadout.block_rating = 360.0;
+                tgt.set_actor_state(ActorStateType::Blocking, now);
+                tgt.block_raised_at = Some(now - Duration::from_secs_f32(held));
+                tgt.blocking_until = Some(now + Duration::from_secs(5));
+                assert!(tgt.block_phase(now).is_some(), "precondition: guard up");
+                let hit = m.resolve_attack(
+                    &a,
+                    &tgt,
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    0,
+                    now,
+                );
+                assert_eq!(
+                    comp(&hit, ty),
+                    0.0,
+                    "{ty:?}: a block (held {held}s) zeroes it"
+                );
+            }
+        }
+    }
+
     /// A target fighter at `pct` of its (tripled, arena) health bar.
     fn fighter_at_health_pct(pct: f32) -> Fighter {
         let mut f = target();

@@ -3843,7 +3843,18 @@ fn emit_damage_with_outcome(
         .filter(|(t, _)| super::damage::is_health_type(*t))
         .map(|(_, v)| *v)
         .sum();
-    neg.negated = total <= 0.0;
+    // A hit that never carried health damage but does carry pool damage — Shield
+    // Stamina / Magicka Damage returned as Revenge on an optimal block (#530/#533) —
+    // is not a negation: retail calls a hit fully negated only when every stat is 0
+    // (01 E1). Without this it went out as op66 and the drain never happened.
+    let pool_only = before_pools <= 0.0
+        && components.iter().any(|(t, v)| {
+            matches!(
+                t,
+                super::state::DamageType::Stamina | super::state::DamageType::Magicka
+            ) && *v > 0.0
+        });
+    neg.negated = total <= 0.0 && !pool_only;
     let poison_damage: f32 = if neg.negated {
         0.0
     } else {
@@ -4213,9 +4224,21 @@ fn apply_shield_enchant_retaliation(
     if entries.is_empty() {
         return Vec::new();
     }
+    // Any positive entry counts, pool types included: Shield Stamina / Magicka
+    // Damage ("of Exhaustion" / "of Nullifying") return `Damage(8|9, X)` and retail
+    // sends every returned Damage with v > 0 back as Revenge
+    // (`ShieldElementalDamageBonusInstance$$BlockedDamage@0x1d525e0`,
+    // `<ResolveDamageEvents>b__2@0x1fd05b8`). Summing health types only made the
+    // two pool families do nothing on an optimal block (report #530/#533).
     let total: f32 = entries
         .iter()
-        .filter(|(ty, _)| super::damage::is_health_type(*ty))
+        .filter(|(ty, _)| {
+            super::damage::is_health_type(*ty)
+                || matches!(
+                    ty,
+                    super::state::DamageType::Stamina | super::state::DamageType::Magicka
+                )
+        })
         .map(|(_, v)| *v)
         .sum();
     if total <= 0.0 {
@@ -14200,6 +14223,65 @@ mod shipped_effects_tests {
         let _ = emit_damage(&mut opt, 0, 1, &high, now);
         assert_eq!(opt.fighters[0].ravaged_stamina, 42);
         assert_eq!(hp_before - opt.fighters[0].health, 20);
+    }
+
+    /// Report #530/#533 ("Exhaustion and Nullifying"): Shield Stamina/Magicka Damage
+    /// (tier-10 suffixes "of Exhaustion"/"of Nullifying") on an OPTIMAL block return
+    /// `Damage(_damageType 8/9, X)` to the ATTACKER through Revenge
+    /// (`ShieldElementalDamageBonusInstance$$BlockedDamage@0x1d525e0`, any v > 0). The
+    /// retaliation summed health types only, so a pool-only shield enchant did nothing.
+    #[test]
+    fn report_530_shield_exhaustion_drains_the_attacker_on_an_optimal_block() {
+        let now = Instant::now();
+        for (ty, low_control) in [(DamageType::Stamina, true), (DamageType::Magicka, false)] {
+            let hit = ResolvedDamage {
+                source: DamageSource::Attack,
+                active_side: ActiveSide::Right,
+                flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+                pre_mitigation_components: vec![(DamageType::Slashing, 10.0)],
+                components: vec![(DamageType::Slashing, 10.0)],
+                raw_components: vec![(DamageType::Slashing, 10.0)],
+                total: 10.0,
+                most_resisted: DamageType::None,
+                negated: false,
+                heal: 0.0,
+                block_physical: 1.0,
+                blocked: true,
+                resistance_scale: 1.0,
+            };
+            let pool = |c: &MatchCombat| match ty {
+                DamageType::Stamina => c.fighters[0].stamina,
+                _ => c.fighters[0].magicka,
+            };
+            if low_control {
+                let mut c = combat2(now);
+                c.fighters[1].loadout.shield_enchant_damage = vec![(ty, 100.0)];
+                let before = pool(&c);
+                let _ = emit_damage(&mut c, 0, 1, &hit, now);
+                assert_eq!(
+                    pool(&c),
+                    before,
+                    "a LOW block fires no shield enchant in PvP"
+                );
+            }
+            let mut c = combat2(now);
+            c.fighters[1].loadout.shield_enchant_damage = vec![(ty, 100.0)];
+            let before = pool(&c);
+            let mut high = hit.clone();
+            high.flags |= flags::WAS_OPTIMAL_BLOCKING;
+            let defender_before = (c.fighters[1].stamina, c.fighters[1].magicka);
+            let _ = emit_damage(&mut c, 0, 1, &high, now);
+            assert!(
+                pool(&c) < before,
+                "{ty:?}: the attacker loses {ty:?} to the blocker's shield ({before} -> {})",
+                pool(&c)
+            );
+            assert_eq!(
+                (c.fighters[1].stamina, c.fighters[1].magicka),
+                defender_before,
+                "the blocker's own pools are untouched"
+            );
+        }
     }
 
     #[test]
