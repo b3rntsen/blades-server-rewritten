@@ -927,6 +927,44 @@ pub struct WeaponProfile {
 /// source-compatible and the item stats live one level up.
 pub type WeaponTemplate = &'static crate::arena::combat::gamedata::WeaponStats;
 
+/// One equipped Absorb enchantment (`AbsorbBonusInstance`, combat-spec 09 §2.3).
+///
+/// `AbsorbBonusInstance$$GetAbsorbAmount@0x1e83960` reads the family's class table
+/// with the EQUIPPED WEAPON's `_weaponClass` (WeaponTemplate +0xD4) for a
+/// weapon-based source (Attack 1, WeaponManeuver 3) and with class 3 (Heavy) for
+/// every other source, then multiplies by `GetXValueMultiplier`. All three columns
+/// are kept so the source decides at hit time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AbsorbEnchant {
+    /// The pool restored: `DamageType::Health`, `Stamina` or `Magicka`
+    /// (`AbsorbStaticData._targetStat`, +0x48).
+    pub stat: DamageType,
+    /// X per weapon class: `[Light, Versatile (Balanced), Heavy]`.
+    pub by_weight: [f32; 3],
+}
+
+impl AbsorbEnchant {
+    /// X for one hit: the weapon's own class column on a weapon-based source, the
+    /// Heavy column otherwise.
+    pub fn amount(
+        &self,
+        source: DamageSource,
+        weapon: Option<crate::arena::combat::tables::Weight>,
+    ) -> f32 {
+        use crate::arena::combat::tables::Weight;
+        let w = if source.is_weapon_based() {
+            weapon.unwrap_or(Weight::Light)
+        } else {
+            Weight::Heavy
+        };
+        match w {
+            Weight::Light => self.by_weight[0],
+            Weight::Versatile => self.by_weight[1],
+            Weight::Heavy => self.by_weight[2],
+        }
+    }
+}
+
 /// A fighter's combat-relevant equipment, derived from the imported character.
 #[derive(Debug, Clone, Default)]
 pub struct Loadout {
@@ -1092,6 +1130,25 @@ pub struct Loadout {
     ///
     /// A shield has no weapon weight, so these ship a single curve — 52.66 at tier 10.
     pub shield_ravage: Vec<(DamageType, f32)>,
+    /// `Absorb {Health,Stamina,Magicka}` (and the Bloodthirst "Absorb Health Or Self
+    /// Repair" variant): the attacker gets back `min(health damage dealt, X)` of
+    /// [`AbsorbEnchant::stat`] on every landed hit. Applied in
+    /// `resolve::apply_absorb_enchants`; see [`AbsorbEnchant`].
+    pub absorb: Vec<AbsorbEnchant>,
+    /// `FortifyComboDamagePropertyLogic` — flat physical damage added to the weapon's
+    /// own damage type on a weapon-based hit while the attacker's combo count is >= 1.
+    /// `FortifyComboDamageBonusInstance$$GetBonusDamage@0x1d4e834`.
+    pub fortify_combo_damage: f32,
+    /// `ExtraDamageOnBlockingEnemyPropertyLogic` ("Fortify Blocked Damage") — flat
+    /// physical damage added to the weapon's own damage type on a weapon-based hit
+    /// against a target that is Blocking.
+    /// `DamageBlockingEnemyBonusInstance$$GetBonusDamage@0x1d4ca98`.
+    pub fortify_blocked_damage: f32,
+    /// `FortifyHealingPropertyLogic` — flat additive in the `RestoreStat` heal fold
+    /// for Health restored by a Potion (1), Restoration (3) or InstantConsumable (5)
+    /// source. Never regeneration (2) or Absorb (4).
+    /// `FortifyHealingBonusInstance$$GetHealingBonus@0x1d4f278`.
+    pub fortify_healing: f32,
     /// Shield elemental/stamina/magicka damage enchants. They ride the owner's shield
     /// bash and retaliate on an optimal blocked weapon/bash hit.
     pub shield_enchant_damage: Vec<(DamageType, f32)>,
@@ -1969,6 +2026,10 @@ pub struct Fighter {
     /// changes and already emits the stats update, so nothing new has to
     /// learn how to talk to the client.
     pub pending_restore: Option<PendingRestore>,
+    /// Fractional Absorb restoration not yet paid, per pool (Health, Stamina,
+    /// Magicka). Pools are integers here while retail's are floats; a periodic tick
+    /// absorbs `X × 0.075` (well under a point), so the tail is carried, not dropped.
+    pub absorb_carry: [f32; 3],
     /// A weapon poison armed by a non-restoration alchemy consumable. Delivered on
     /// later unblocked landed weapon hits; `None` when no poison is coated.
     pub active_poison: Option<ActiveAlchemyPoison>,
@@ -2306,6 +2367,7 @@ impl Fighter {
             stats_reduction_carry: 0.0,
             equipped_consumable: None,
             pending_restore: None,
+            absorb_carry: [0.0; 3],
             active_poison: None,
             paralyze_secs: paralyze_duration_secs(1),
             interrupt_pending: None,
@@ -4178,6 +4240,7 @@ impl MatchCombat {
             f.regen_carry_stamina = 0.0;
             f.regen_carry_magicka = 0.0;
             f.pending_restore = None;
+            f.absorb_carry = [0.0; 3];
             f.active_poison = None;
             f.magicka_surge_until = None;
             f.magicka_surge_bonus = 0.0;

@@ -3765,6 +3765,86 @@ struct EmittedDamage {
     poison_damage: f32,
 }
 
+/// Retail `Damage.IsPeriodic`: StatusEffect 4, AreaEffect 7, ContinuousSpell 8,
+/// ContinuousAttack 10 (combat-spec 01 D6).
+fn is_periodic_source(source: super::state::DamageSource) -> bool {
+    use super::state::DamageSource as DS;
+    matches!(
+        source,
+        DS::StatusEffect | DS::AreaEffect | DS::ContinuousSpell | DS::ContinuousAttack
+    )
+}
+
+/// **Absorb Health / Stamina / Magicka** on the attacker, for one landed hit that
+/// dealt `health_dealt` post-mitigation Health damage. Returns the whole points paid
+/// per pool `[health, stamina, magicka]`.
+///
+/// `AbsorbBonusInstance$$DamageGiven@0x1e836b0` (combat-spec 09 §2.3), run from
+/// `Actor$$ResolveDamageEvents@0x1c53624` after `ReceiveDamage` whenever the hit's
+/// total is > 0, so a blocked hit that lets the 5 % floor through still absorbs:
+///   1. return unless the wearer has an equipped weapon and `target != self`;
+///   2. `amt = Mathf.Min(damage.SumForActorStat(Health), GetAbsorbAmount(weapon, source))`
+///      — X is CAPPED by the Health damage the hit actually dealt;
+///   3. a periodic source scales `amt × globalTickInterval (0.1) ×
+///      continuousDamageAbsorbEffectiveness (0.75)`;
+///   4. `amt <= 0` returns; else `self.RestoreStat(_targetStat, amt, periodic,
+///      Absorption 4)`.
+///
+/// `RestoreStat@0x1c52ff4` (11 §3.1) restores nothing while the restorer's Health
+/// is at its minimum, adds no Fortify Healing for source 4 (its mask is 0x2a), and
+/// applies the racial Healing multiplier to Health restored by any non-Regeneration
+/// source — Absorption included. `PvpPlayerActor$$RestoreStat@0x1a32f84` is a `ret`
+/// on the client, so the server owns the pool change.
+fn apply_absorb_enchants(
+    combat: &mut MatchCombat,
+    attacker_slot: usize,
+    target_slot: usize,
+    source: super::state::DamageSource,
+    health_dealt: f32,
+) -> [u32; 3] {
+    use super::state::DamageType;
+    let mut paid = [0u32; 3];
+    if attacker_slot == target_slot || health_dealt <= 0.0 {
+        return paid;
+    }
+    let Some(f) = combat.fighters.get_mut(attacker_slot) else {
+        return paid;
+    };
+    if f.loadout.absorb.is_empty() || f.loadout.weapon.base_by_type.is_empty() || f.health == 0 {
+        return paid;
+    }
+    let periodic = is_periodic_source(source);
+    let weight = f.loadout.weapon.weight;
+    for a in f.loadout.absorb.clone() {
+        let mut amt = health_dealt.min(a.amount(source, weight));
+        if periodic {
+            amt *= super::gamedata::combat_params::GLOBAL_TICK_INTERVAL
+                * super::gamedata::combat_params::CONTINUOUS_DAMAGE_ABSORB_EFFECTIVENESS;
+        }
+        if amt <= 0.0 {
+            continue;
+        }
+        let idx = match a.stat {
+            DamageType::Health => {
+                amt *= f.loadout.healing_multiplier();
+                0
+            }
+            DamageType::Stamina => 1,
+            DamageType::Magicka => 2,
+            _ => continue,
+        };
+        let owed = f.absorb_carry[idx] + amt;
+        let whole = (owed + 0.0001).floor().max(0.0);
+        f.absorb_carry[idx] = (owed - whole).max(0.0);
+        let whole = whole as u32;
+        if whole > 0 {
+            f.restore_pool(a.stat, whole);
+            paid[idx] += whole;
+        }
+    }
+    paid
+}
+
 fn emit_damage(
     combat: &mut MatchCombat,
     attacker_slot: usize,
@@ -3935,6 +4015,11 @@ fn emit_damage_with_outcome(
     // frame reports. [Fighter::drain_mirrored_pools]
     let (drained_stam, drained_mag) =
         combat.fighters[target_slot].drain_mirrored_pools(&components);
+    // ABSORB — the attacker's `DamageGiven` hook. Paid before the op50 below is
+    // built: that frame carries the attacker's packed pools in propId 5, so both
+    // clients' bars show the restored Health/Stamina/Magicka with the hit itself.
+    let absorbed =
+        apply_absorb_enchants(combat, attacker_slot, target_slot, resolved.source, total);
     if resolved.source.is_weapon_based()
         && combat.fighters[attacker_slot].loadout.cooldown_penalty_secs > 0.0
     {
@@ -4013,12 +4098,15 @@ fn emit_damage_with_outcome(
     };
     let dealt = hp_before.saturating_sub(hp_after);
     info!(
-        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
+        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) absorbed=({},{},{}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
         combat.game_session_id,
         combat.fighters[attacker_slot].loadout.display_name,
         combat.fighters[target_slot].loadout.display_name,
         resolved.source,
         resolved.active_side,
+        absorbed[0],
+        absorbed[1],
+        absorbed[2],
         combat.fighters[target_slot].max_stamina,
         combat.fighters[target_slot].max_magicka,
         // Whether the server saw the target guarding when this hit landed — the one
@@ -9454,10 +9542,31 @@ fn on_consume_consumable(
     match super::gamedata::restoration(&uuid) {
         Some(r) => {
             let ticks = (r.duration / REGEN_TICK_INTERVAL.as_secs_f32()).max(1.0);
+            // FORTIFY HEALING (`FortifyHealingBonusInstance$$GetHealingBonus@0x1d4f278`):
+            // X for `stat == Health` and a Potion source (every shipped restoration is
+            // `_statIncreaseSource 1`). `RestoreStat@0x1c52ff4` adds it to EACH of the
+            // potion's periodic 0.1 s ticks scaled by `globalTickInterval (0.1) ×
+            // continuousHealingFortifyEffectiveness (0.4)`, and a 2.5 s potion is 25
+            // such ticks (`AbilityRestoreCasterStats$$Update@0x1e9eb90`), so the potion
+            // delivers `value + X × 0.04 × 25 = value + X` in total, all of it then
+            // multiplied by the racial Healing factor at payout (combat-spec 11 §3.2.5).
+            let fortify = if r.affected_stat == 0 {
+                let retail_ticks =
+                    (r.duration / super::gamedata::combat_params::GLOBAL_TICK_INTERVAL - 1e-3)
+                        .ceil()
+                        .max(1.0);
+                combat.fighters[sender].loadout.fortify_healing.max(0.0)
+                    * super::gamedata::combat_params::GLOBAL_TICK_INTERVAL
+                    * super::gamedata::combat_params::CONTINUOUS_HEALING_FORTIFY_EFFECTIVENESS
+                    * retail_ticks
+            } else {
+                0.0
+            };
+            let total = r.value + fortify;
             combat.fighters[sender].pending_restore = Some(super::state::PendingRestore {
                 affected_stat: r.affected_stat,
-                remaining: r.value,
-                per_tick: r.value / ticks,
+                remaining: total,
+                per_tick: total / ticks,
                 banked: 0.0,
             });
             info!(
@@ -11398,6 +11507,15 @@ mod phase4_tests {
         drink: bool,
         checkpoints_ms: &[u64],
     ) -> (Vec<u32>, usize, MatchCombat) {
+        run_potion_with(uuid, drink, checkpoints_ms, |_| {})
+    }
+
+    fn run_potion_with(
+        uuid: &str,
+        drink: bool,
+        checkpoints_ms: &[u64],
+        setup: impl Fn(&mut Fighter),
+    ) -> (Vec<u32>, usize, MatchCombat) {
         const ENGINE_STEP_MS: u64 = 2;
         let now = Instant::now();
         let mut combat = live_combat(now);
@@ -11416,6 +11534,7 @@ mod phase4_tests {
             f.regen_carry_health = 0.0;
             f.regen_carry_stamina = 0.0;
             f.regen_carry_magicka = 0.0;
+            setup(f);
         }
         combat.last_regen_tick = now;
         if drink {
@@ -11531,6 +11650,31 @@ mod phase4_tests {
                 "{uuid}: expected ~{expect} restored over the control, got {gained}"
             );
         }
+    }
+
+    /// FORTIFY HEALING (`FortifyHealingBonusInstance$$GetHealingBonus@0x1d4f278`):
+    /// X on Health from a Potion source, added per periodic tick x 0.1 x 0.4 by
+    /// `RestoreStat@0x1c52ff4` over a 2.5 s potion's 25 ticks = +X in total. Tier 10:
+    /// Ultimate Healing 260 + 16.6 = 276.6. A stamina potion gets nothing (stat gate).
+    #[test]
+    fn fortify_healing_adds_x_to_a_health_potion_and_nothing_to_stamina() {
+        const ULTIMATE_HEALING: &str = "c2139cd9-1d9d-4d4e-80b2-133e07440158";
+        const ULTIMATE_STAMINA: &str = "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6";
+        let with = |f: &mut Fighter| f.loadout.fortify_healing = 16.6;
+        let (potion, _, _) = run_potion_with(ULTIMATE_HEALING, true, &[3_000], with);
+        let (control, _, _) = run_potion_with(ULTIMATE_HEALING, false, &[3_000], with);
+        let gained = potion[0] - control[0];
+        assert!(
+            (276..=278).contains(&gained),
+            "260 + Fortify Healing 16.6 = ~277, got {gained}"
+        );
+        let (s_potion, _, _) = run_potion_with(ULTIMATE_STAMINA, true, &[3_000], with);
+        let (s_control, _, _) = run_potion_with(ULTIMATE_STAMINA, false, &[3_000], with);
+        let s_gained = s_potion[0] - s_control[0];
+        assert!(
+            (774..=776).contains(&s_gained),
+            "Fortify Healing is Health-only: stamina potion stays 775, got {s_gained}"
+        );
     }
 
     /// "Health potions do not seem to work in arena" (owner, 2026-10-03). They do:
@@ -15523,6 +15667,188 @@ mod report_31_high_block_stun {
             let nd = arena_proto::parse_netdata(&frame[2..]);
             nd.int(3) == Some(50) && nd.int(6) == Some(6)
         }));
+    }
+
+    fn absorb_hit(
+        source: super::super::state::DamageSource,
+        components: Vec<(super::super::state::DamageType, f32)>,
+    ) -> ResolvedDamage {
+        ResolvedDamage {
+            source,
+            active_side: ActiveSide::Middle,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            total: components.iter().map(|(_, v)| *v).sum(),
+            pre_mitigation_components: components.clone(),
+            raw_components: components.clone(),
+            components,
+            most_resisted: super::super::state::DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        }
+    }
+
+    /// An attacker at 1000/3000 HP, 100/1000 stamina and magicka, so a restore is
+    /// visible on every pool.
+    fn absorb_combat(now: Instant, absorb: Vec<super::super::state::AbsorbEnchant>) -> MatchCombat {
+        let mut c = combat(now, 2);
+        let f = &mut c.fighters[0];
+        f.loadout.absorb = absorb;
+        f.loadout.innate_healing_multiplier = 0.0;
+        f.max_health = 3_000;
+        f.health = 1_000;
+        f.max_stamina = 1_000;
+        f.stamina = 100;
+        f.max_magicka = 1_000;
+        f.magicka = 100;
+        c.fighters[1].max_health = 100_000;
+        c.fighters[1].health = 100_000;
+        c
+    }
+
+    /// ABSORB HEALTH (`AbsorbBonusInstance$$DamageGiven@0x1e836b0`): the attacker
+    /// regains `min(health damage dealt, X)`, X from the weapon's own class column on
+    /// a weapon hit and the HEAVY column on any other source
+    /// (`GetAbsorbAmount@0x1e83960`). Fractions carry; a self-hit absorbs nothing.
+    #[test]
+    fn absorb_health_heals_the_attacker_by_x_capped_by_damage_dealt() {
+        use super::super::state::{AbsorbEnchant, DamageSource, DamageType};
+        let now = Instant::now();
+        let health = AbsorbEnchant {
+            stat: DamageType::Health,
+            by_weight: [3.17, 4.15, 5.27],
+        };
+        // Control: no enchant, no heal.
+        let mut c = absorb_combat(now, vec![]);
+        super::emit_damage(
+            &mut c,
+            0,
+            1,
+            &absorb_hit(DamageSource::Attack, vec![(DamageType::Slashing, 200.0)]),
+            now,
+        );
+        assert_eq!(c.fighters[0].health, 1_000, "control: no Absorb, no heal");
+
+        // A Light weapon swing: 100 swings of 200 → 100 x 3.17 = 317 (carry keeps the tail).
+        let mut c = absorb_combat(now, vec![health]);
+        for _ in 0..100 {
+            super::emit_damage(
+                &mut c,
+                0,
+                1,
+                &absorb_hit(DamageSource::Attack, vec![(DamageType::Slashing, 200.0)]),
+                now,
+            );
+        }
+        assert_eq!(c.fighters[0].health, 1_317, "100 light hits x 3.17");
+
+        // Capped by the Health damage the hit dealt: a 1.0 hit returns 1, not 3.17.
+        let mut c = absorb_combat(now, vec![health]);
+        super::emit_damage(
+            &mut c,
+            0,
+            1,
+            &absorb_hit(DamageSource::Attack, vec![(DamageType::Slashing, 1.0)]),
+            now,
+        );
+        assert_eq!(c.fighters[0].health, 1_001, "min(dealt 1.0, X 3.17)");
+
+        // A Spell reads the HEAVY column whatever the weapon: 10 x 5.27 = 52.
+        let mut c = absorb_combat(now, vec![health]);
+        for _ in 0..10 {
+            super::emit_damage(
+                &mut c,
+                0,
+                1,
+                &absorb_hit(DamageSource::Spell, vec![(DamageType::Fire, 200.0)]),
+                now,
+            );
+        }
+        assert_eq!(c.fighters[0].health, 1_052, "spell hits use the heavy 5.27");
+
+        // A periodic source pays X x 0.1 x 0.75: 100 channel ticks x 0.395 = 39.
+        let mut c = absorb_combat(now, vec![health]);
+        for _ in 0..100 {
+            super::emit_damage(
+                &mut c,
+                0,
+                1,
+                &absorb_hit(
+                    DamageSource::ContinuousSpell,
+                    vec![(DamageType::Fire, 20.0)],
+                ),
+                now,
+            );
+        }
+        assert_eq!(c.fighters[0].health, 1_039, "periodic ticks absorb x0.075");
+
+        // Stamina/Magicka-only damage deals no Health damage → nothing to absorb.
+        let mut c = absorb_combat(now, vec![health]);
+        super::emit_damage(
+            &mut c,
+            0,
+            1,
+            &absorb_hit(DamageSource::Attack, vec![(DamageType::Stamina, 200.0)]),
+            now,
+        );
+        assert_eq!(c.fighters[0].health, 1_000, "SumForActorStat(Health) is 0");
+    }
+
+    /// ABSORB STAMINA / MAGICKA restore their own pool, still capped by the HEALTH
+    /// damage dealt, and the op50 for that hit already carries the attacker's raised
+    /// pools (propId 5), so the bars move with the hit.
+    #[test]
+    fn absorb_stamina_and_magicka_restore_their_pools_and_reach_the_wire() {
+        use super::super::state::{AbsorbEnchant, DamageSource, DamageType, PackedStats};
+        let now = Instant::now();
+        let mut c = absorb_combat(
+            now,
+            vec![
+                AbsorbEnchant {
+                    stat: DamageType::Stamina,
+                    by_weight: [9.5, 12.45, 15.8],
+                },
+                AbsorbEnchant {
+                    stat: DamageType::Magicka,
+                    by_weight: [9.5, 12.45, 15.8],
+                },
+            ],
+        );
+        c.fighters[0].loadout.weapon.weight = Some(super::super::tables::Weight::Heavy);
+        let out = super::emit_damage(
+            &mut c,
+            0,
+            1,
+            &absorb_hit(
+                DamageSource::WeaponManeuver,
+                vec![(DamageType::Slashing, 300.0)],
+            ),
+            now,
+        );
+        // 15.8 each: 15 paid, 0.8 carried.
+        assert_eq!((c.fighters[0].stamina, c.fighters[0].magicka), (115, 115));
+        assert_eq!(
+            c.fighters[0].health, 1_000,
+            "a stamina/magicka absorb does not heal"
+        );
+        let op50 = out
+            .iter()
+            .find(|(dest, f)| *dest == 0 && messages::user_message_gmid(f) == Some(50))
+            .expect("the hit's op50 to the attacker");
+        let nd = arena_proto::parse_netdata(&op50.1[2..]);
+        let other = match nd.get(5) {
+            Some(arena_proto::NetDataValue::ULong(v)) => *v,
+            got => panic!("propId 5 must be a ULong, got {got:?}"),
+        };
+        assert_eq!(
+            other,
+            c.fighters[0].packed_stats(),
+            "op50 carries the post-absorb attacker"
+        );
+        let (_, s, m, _) = PackedStats::unpack(other);
+        assert!(s > 100 && m > 100, "wire fractions of 115/1000 ({s}, {m})");
     }
 
     /// Report #231: Weapon Ravage rides weapon-based hits only

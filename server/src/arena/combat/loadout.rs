@@ -617,7 +617,7 @@ fn profile_base(p: &WeaponProfile) -> f32 {
 ///
 /// Unknown families are ignored (they are cosmetic / out-of-combat / economy
 /// logics such as `SelfRepairOnFrostDamagePropertyLogic`).
-fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
+pub(super) fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
     apply_enchant_with_rating(lo, id, tier, None);
 }
 
@@ -740,6 +740,34 @@ fn apply_enchant_with_rating_and_multiplier(
             push_shield_ravage(lo, DamageType::Magicka, magnitude)
         }
         "ShieldRavageHealthPropertyLogic" => push_shield_ravage(lo, DamageType::Health, magnitude),
+
+        // ---- Absorb (combat-spec 09 §2.3) ------------------------------------
+        // `AbsorbBonusInstance$$DamageGiven@0x1e836b0`: on every landed hit by the
+        // wearer (any source, target != self, an equipped weapon) restore
+        // `min(health damage dealt, X)` of `_targetStat`. X is read per weapon class
+        // (`GetAbsorbAmount@0x1e83960`), so all three columns are stored. The
+        // Bloodthirst variant ("Absorb Health Or Self Repair") is the same class with
+        // `_durabilityGainedIfAbsorbOnFull` set; durability does not exist in the
+        // arena, so only its absorb half applies.
+        "AbsorbHealthPropertyLogic" | "AbsorbHealthGainDurabilityPropertyLogic" => {
+            push_absorb(lo, DamageType::Health, &uuid, tier, xvalue_multiplier)
+        }
+        "AbsorbStaminaPropertyLogic" => {
+            push_absorb(lo, DamageType::Stamina, &uuid, tier, xvalue_multiplier)
+        }
+        "AbsorbMagickaPropertyLogic" => {
+            push_absorb(lo, DamageType::Magicka, &uuid, tier, xvalue_multiplier)
+        }
+
+        // ---- situational physical adders (combat-spec 09 §2.1) ----------------
+        // Both register in `_situationalAdditiveDamage` and add X to the component
+        // of the weapon's own `_damageType` on a weapon-based source; see
+        // `damage::RetailDamageModel::physical_base_components`.
+        "FortifyComboDamagePropertyLogic" => lo.fortify_combo_damage += magnitude,
+        "ExtraDamageOnBlockingEnemyPropertyLogic" => lo.fortify_blocked_damage += magnitude,
+
+        // ---- heal fold (combat-spec 11 §3.1) ----------------------------------
+        "FortifyHealingPropertyLogic" => lo.fortify_healing += magnitude,
         "ShieldFireDamagePropertyLogic" => {
             lo.shield_enchant_damage.push((DamageType::Fire, magnitude))
         }
@@ -1134,6 +1162,22 @@ fn push_ravage(lo: &mut Loadout, ty: DamageType, uuid: &str, tier: u8) {
     };
     if magnitude > 0.0 {
         lo.ravage.push((ty, magnitude));
+    }
+}
+
+/// Store one Absorb enchantment with all three weapon-class columns of its shipped
+/// table, each scaled by the item's X-value multiplier (Fortify Primary Effect).
+fn push_absorb(lo: &mut Loadout, stat: DamageType, uuid: &str, tier: u8, xmult: f32) {
+    let col =
+        |w| gamedata::enchant_magnitude_for_weight(uuid, tier, w).unwrap_or(0.0) * xmult.max(0.0);
+    let by_weight = [
+        col(tables::Weight::Light),
+        col(tables::Weight::Versatile),
+        col(tables::Weight::Heavy),
+    ];
+    if by_weight.iter().any(|v| *v > 0.0) {
+        lo.absorb
+            .push(super::state::AbsorbEnchant { stat, by_weight });
     }
 }
 
@@ -1847,6 +1891,105 @@ mod tests {
     }
     use super::*;
     use serde_json::json;
+
+    /// Six families every prod character carrying them got NOTHING from: each fell
+    /// through `apply_enchant`'s `_ => {}`. Each now loads its SHIPPED tier-10 value
+    /// (`enchant_magnitudes.json`), per weapon class where the family has a table per
+    /// class (`AbsorbBonusInstance$$GetAbsorbAmount@0x1e83960`).
+    #[test]
+    fn missing_enchantments_load_their_shipped_tier_ten_values() {
+        use crate::arena::combat::state::AbsorbEnchant;
+        let id = |s: &str| Uuid::parse_str(s).unwrap();
+        let bare = Loadout::default();
+        assert!(
+            bare.absorb.is_empty(),
+            "control: bare loadout absorbs nothing"
+        );
+
+        let absorb = |uuid: &str| {
+            let mut lo = Loadout::default();
+            apply_enchant(&mut lo, &id(uuid), 10);
+            lo.absorb
+        };
+        let close3 = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
+        let one = |v: Vec<AbsorbEnchant>, stat: DamageType, want: [f32; 3]| {
+            assert_eq!(v.len(), 1, "{stat:?}: one absorb entry");
+            assert_eq!(v[0].stat, stat);
+            assert!(
+                close3(v[0].by_weight, want),
+                "{stat:?}: {:?} != {want:?}",
+                v[0].by_weight
+            );
+        };
+        one(
+            absorb("cc432e27-813c-4afa-a3df-d587cfd550d2"),
+            DamageType::Health,
+            [3.17, 4.15, 5.27],
+        );
+        one(
+            absorb("652d5ac9-3076-405b-a163-dde1a950fb26"),
+            DamageType::Stamina,
+            [9.5, 12.45, 15.8],
+        );
+        one(
+            absorb("94aa3774-cd7e-400c-9d17-a4652fb88a93"),
+            DamageType::Magicka,
+            [9.5, 12.45, 15.8],
+        );
+        // Bloodthirst variant: same class, its own (flat across classes) table.
+        one(
+            absorb("13a46a9b-3d02-48c7-b57c-f9424f10ab1d"),
+            DamageType::Health,
+            [4.15, 4.15, 4.15],
+        );
+
+        let flat = |uuid: &str, tier: u8, field: fn(&Loadout) -> f32, want: f32| {
+            let mut lo = Loadout::default();
+            assert_eq!(field(&lo), 0.0, "{uuid}: control");
+            apply_enchant(&mut lo, &id(uuid), tier);
+            assert!(
+                (field(&lo) - want).abs() < 1e-3,
+                "{uuid} t{tier}: {} != {want}",
+                field(&lo)
+            );
+        };
+        flat(
+            "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+            10,
+            |l| l.fortify_combo_damage,
+            51.53,
+        );
+        flat(
+            "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+            1,
+            |l| l.fortify_combo_damage,
+            18.41,
+        );
+        flat(
+            "af1e56bf-1974-452c-aa70-36b2140cbb07",
+            10,
+            |l| l.fortify_blocked_damage,
+            156.98,
+        );
+        flat(
+            "af1e56bf-1974-452c-aa70-36b2140cbb07",
+            1,
+            |l| l.fortify_blocked_damage,
+            56.06,
+        );
+        flat(
+            "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+            10,
+            |l| l.fortify_healing,
+            16.6,
+        );
+        flat(
+            "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+            1,
+            |l| l.fortify_healing,
+            6.8,
+        );
+    }
 
     const WEAPON_POISON_DAMAGE: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
     const FORTIFY_HEALTH: &str = "b4de8d1b-d8a1-4575-8517-c1e5800a7525";

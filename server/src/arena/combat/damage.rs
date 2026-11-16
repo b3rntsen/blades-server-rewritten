@@ -524,6 +524,7 @@ impl RetailDamageModel {
         attacker: &Loadout,
         target: &Fighter,
         source: DamageSource,
+        combo_count: u32,
         now: Instant,
     ) -> Vec<(DamageType, f32)> {
         // Scout / Armsman / Barbarian add flat damage for LIGHT / VERSATILE / HEAVY
@@ -564,6 +565,32 @@ impl RetailDamageModel {
         // physical total (05 §2.6: `(weapon + bonus*g) * (1 + [combo>=1]*comboDF)`).
         let mut maneuver_bonus = attacker.maneuver_bonus_damage.max(0.0);
 
+        // FORTIFY COMBO DAMAGE and FORTIFY BLOCKED DAMAGE — two situational
+        // additives (`_situationalAdditiveDamage`, combat-spec 01 D3) with one gate
+        // shape. Each `GetBonusDamage` returns X only when the component is PHYSICAL
+        // (`get_IsPhysicalDamage`), the source is weapon-based (`IsWeaponBased`:
+        // Attack 1 / WeaponManeuver 3, never a bash 11) and the component's type
+        // equals the equipped weapon's own `_damageType` (WeaponTemplate +0xD8). Then:
+        //   - Combo: the ATTACKER's `_comboCount` (Actor +0x2CC) is > 0
+        //     (`FortifyComboDamageBonusInstance$$GetBonusDamage@0x1d4e834`);
+        //   - Blocked: the TARGET `HasStatus(Blocking 1)`
+        //     (`DamageBlockingEnemyBonusInstance$$GetBonusDamage@0x1d4ca98`) — any
+        //     guard, optimal or not; the block then cuts the sum like any damage.
+        // Added to the base so the attack-type factor multiplies it, like PDOC.
+        let weapon_hit = source.is_weapon_based();
+        let combo_bonus = if weapon_hit && combo_count >= 1 {
+            attacker.fortify_combo_damage.max(0.0)
+        } else {
+            0.0
+        };
+        let blocked_bonus =
+            if weapon_hit && target.actor_state() == super::state::ActorStateType::Blocking {
+                attacker.fortify_blocked_damage.max(0.0)
+            } else {
+                0.0
+            };
+        let own_type = attacker.weapon.primary_type;
+
         // A shield bash hits with the SHIELD, not the weapon: `ResolveManeuverDamage
         // @0x1bd2d88` takes `owner.ShieldDamage` for source 11, and
         // `ManeuverParameters$$DistributeBonusDamage@0x1a21844` folds every physical
@@ -590,6 +617,10 @@ impl RetailDamageModel {
                 if is_physical(*ty) && maneuver_bonus > 0.0 {
                     base += maneuver_bonus;
                     maneuver_bonus = 0.0;
+                }
+                // `if v > 0` (01 D3): the situational list never creates a component.
+                if is_physical(*ty) && Some(*ty) == own_type && base > 0.0 {
+                    base += combo_bonus + blocked_bonus;
                 }
                 (*ty, base.max(0.0))
             })
@@ -618,7 +649,8 @@ impl RetailDamageModel {
         );
 
         let mut components: Vec<(DamageType, f32)> = Vec::new();
-        for (ty, base) in Self::physical_base_components(attacker, target, source, now) {
+        for (ty, base) in Self::physical_base_components(attacker, target, source, combo_count, now)
+        {
             components.push((ty, base * scale));
         }
         if source == DamageSource::ShieldManeuver {
@@ -1625,6 +1657,138 @@ mod tests {
             now,
         );
         assert!((comp(&ordered, DamageType::Fire) - 115.0).abs() < 0.01);
+    }
+
+    fn slashing_pre(rd: &ResolvedDamage) -> f32 {
+        rd.pre_mitigation_components
+            .iter()
+            .filter(|(t, _)| *t == DamageType::Slashing)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+
+    /// FORTIFY COMBO DAMAGE (`FortifyComboDamageBonusInstance$$GetBonusDamage@0x1d4e834`):
+    /// +X (51.53 at t10) to the weapon's own physical type on a weapon-based source
+    /// while the attacker's `_comboCount` >= 1, added BEFORE the attack-type factor.
+    /// Controls: nothing at combo 0, nothing on a shield bash.
+    #[test]
+    fn fortify_combo_damage_adds_x_before_the_combo_factor_only_while_chained() {
+        const X: f32 = 51.53;
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut with = plain_blade(Weight::Light);
+        with.fortify_combo_damage = X;
+        let without = plain_blade(Weight::Light);
+        let hit = |lo: &Loadout, source: DamageSource, combo: u32| {
+            slashing_pre(&m.resolve_attack(
+                lo,
+                &target(),
+                source,
+                ActiveSide::Left,
+                1.0,
+                combo,
+                now,
+            ))
+        };
+        // combo 0: no bonus.
+        let g0 = hit(&with, DamageSource::Attack, 0) - hit(&without, DamageSource::Attack, 0);
+        assert!(
+            g0.abs() < 1e-3,
+            "combo 0 must not pay Fortify Combo, got +{g0}"
+        );
+        // combo 1: +X times the attack-type factor (1 + comboDamageFactor).
+        let f = attack_type_multiplier(
+            DamageSource::Attack,
+            without.charge_params().combo_damage_factor,
+            1,
+            1.0,
+        );
+        assert!(f > 1.0, "fixture: a chained swing has a combo factor");
+        let g1 = hit(&with, DamageSource::Attack, 1) - hit(&without, DamageSource::Attack, 1);
+        assert!(
+            (g1 - X * f).abs() < 0.05,
+            "chained swing: expected +{X} x {f} = {}, got +{g1}",
+            X * f
+        );
+        // A weapon maneuver is weapon-based too.
+        let gm = hit(&with, DamageSource::WeaponManeuver, 1)
+            - hit(&without, DamageSource::WeaponManeuver, 1);
+        assert!(gm > X - 0.05, "maneuver at combo 1 pays it, got +{gm}");
+        // A shield bash is not weapon-based (`IsWeaponBased` = sources 1 and 3).
+        let mut bash_with = with.clone();
+        bash_with.shield_damage = 80.0;
+        let mut bash_without = without.clone();
+        bash_without.shield_damage = 80.0;
+        let total = |lo: &Loadout| {
+            m.resolve_attack(
+                lo,
+                &target(),
+                DamageSource::ShieldManeuver,
+                ActiveSide::Middle,
+                1.0,
+                3,
+                now,
+            )
+            .total
+        };
+        assert!(
+            (total(&bash_with) - total(&bash_without)).abs() < 1e-3,
+            "a shield bash never carries Fortify Combo"
+        );
+    }
+
+    /// FORTIFY BLOCKED DAMAGE (`DamageBlockingEnemyBonusInstance$$GetBonusDamage@0x1d4ca98`):
+    /// +X (156.98 at t10) to the weapon's own physical type when the TARGET
+    /// `HasStatus(Blocking)`. It is added before the block, so the block then cuts
+    /// the larger sum. Control: an open target gets nothing.
+    #[test]
+    fn fortify_blocked_damage_pays_only_against_a_guard_and_before_the_block() {
+        const X: f32 = 156.98;
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut with = plain_blade(Weight::Light);
+        with.fortify_blocked_damage = X;
+        let without = plain_blade(Weight::Light);
+        let open = |lo: &Loadout| {
+            m.resolve_attack(
+                lo,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            )
+        };
+        assert!(
+            (open(&with).total - open(&without).total).abs() < 1e-3,
+            "an open target must not pay Fortify Blocked Damage"
+        );
+        let guard = guarding(now, Some((DAEDRIC_SHIELD_300, 10)), None, true);
+        let blocked = |lo: &Loadout| {
+            m.resolve_attack(
+                lo,
+                &guard,
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            )
+        };
+        let (bw, bo) = (blocked(&with), blocked(&without));
+        assert!(bw.blocked && bo.blocked, "fixture: the guard takes the hit");
+        let pre_gain = slashing_pre(&bw) - slashing_pre(&bo);
+        assert!(
+            (pre_gain - X).abs() < 0.05,
+            "the add lands before the block: expected +{X} pre-mitigation, got +{pre_gain}"
+        );
+        assert!(
+            bw.total > bo.total,
+            "the block cuts the larger sum, so more gets through: {} vs {}",
+            bw.total,
+            bo.total
+        );
     }
 
     /// An un-armored, un-blocking L100 target.
