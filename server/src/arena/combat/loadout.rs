@@ -157,6 +157,19 @@ pub fn blocking_item_rating(uuid: &str, block_base: f32, tempering_level: u64) -
         .ceil()
 }
 
+/// One armour piece's rating `P`: the temper-level `protection` value when the piece
+/// is tempered, otherwise the template's `armorRating`.
+///
+/// `Actor$$GetDisplayedProtectionRatingForItem@0x1c56260` reads
+/// `GetTemperPropertiesForLevel(level) +0x18` for a tempered item and the template
+/// `armorRating` (+0x110) for an untempered one, then `CeilToInt`s it, and
+/// `GetEquippedProtectionRating@0x1c55da4` sums those per-piece integers. A material
+/// property's `GetRawXValue@0x24d0ae4` multiplies by the same `P`, un-ceiled, so
+/// this returns the raw value and the Armor Rating sum ceils it.
+pub fn armor_piece_rating(a: &gamedata::ArmorStats, tempering_level: u64) -> f32 {
+    super::armor_temper::tempered_armor_value(a.uuid, tempering_level).unwrap_or(a.armor_rating)
+}
+
 /// The UESP fallback surface, for characters whose weapon does not resolve to a
 /// shipped template (imported without inventory, bots).
 fn fallback_weapon_profile(level: u16) -> WeaponProfile {
@@ -255,8 +268,11 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
                 weapon = Some((w, eq.item.tempering_level));
             }
         } else if let Some(a) = gamedata::armor(&template) {
-            lo.armor_rating += a.armor_rating;
-            item_rating_for_material = Some(a.armor_rating);
+            // The piece's TEMPERED rating (tracker #536). The Armor Rating sums it
+            // ceiled per piece; material properties scale by it un-ceiled.
+            let rating = armor_piece_rating(a, eq.item.tempering_level);
+            lo.armor_rating += rating.ceil();
+            item_rating_for_material = Some(rating);
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
             item_rating_for_material = Some(blocking_item_rating(
@@ -3420,5 +3436,172 @@ mod report_231_artifact_regen_tests {
         let mut lo = Loadout::default();
         apply_template_properties(&mut lo, FORK_OF_HORRIPILATION);
         assert!(lo.blocks_magicka_regen);
+    }
+}
+
+/// Tracker #536: armour TEMPERING feeds the Armor Rating and every material
+/// property of the piece.
+///
+/// `Actor$$GetDisplayedProtectionRatingForItem@0x1c56260` reads a tempered piece's
+/// `GetTemperPropertiesForLevel(level) +0x18` (the `protection` column), falls back
+/// to the template's `armorRating` only when untempered, and `CeilToInt`s the
+/// result; `GetEquippedProtectionRating@0x1c55da4` sums those integers. A material
+/// property (`_propertyType == 2`) multiplies its xValue by the same temper-level
+/// value (`GetRawXValue@0x24d0ae4`). We read the untempered template value for
+/// both, so a tempering-10 set lost roughly a third of its armour and of its
+/// material resistances.
+///
+/// Expected values are literals from `tempering.json` (`levels[9].protection`) and
+/// the shipped material xValue `0.0667`, not values computed by the code under test.
+#[cfg(test)]
+mod report_536_armor_tempering {
+    use super::*;
+    use blades_lib::user_data::{
+        Backpack, CompleteInventory, Item, ItemPropertiesAll, SingleEquippedItem, Treasury,
+    };
+
+    /// Leather Armor (armorSet 20, `armorRating` 207.9, tempering-10 protection
+    /// 302.4) carrying Material Resist Bashing + Material Resist Shock.
+    const LEATHER_ARMOR: &str = "7f495ddd-f2ca-44d8-aeba-df09e25deda5";
+    const MATERIAL_XVALUE: f32 = 0.0667;
+
+    fn one_piece(template: &str, tempering_level: u64) -> Loadout {
+        let mut inv = blades_lib::user_data::Loadout::default();
+        let slot = Uuid::from_u128(1);
+        inv.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id: Uuid::from_u128(2),
+                slot,
+                item: Item {
+                    item_template_id: Uuid::parse_str(template).unwrap(),
+                    tempering_level,
+                    durability: 100.0,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: ItemPropertiesAll::default(),
+                },
+            },
+        );
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: inv,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        from_character(&CompleteCharacter::default(), &inventory)
+    }
+
+    fn resist(lo: &Loadout, ty: DamageType) -> f32 {
+        lo.resistances
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
+    }
+
+    #[test]
+    fn a_tempered_piece_counts_its_temper_level_armor_rating() {
+        let lo = one_piece(LEATHER_ARMOR, 10);
+        assert_eq!(
+            lo.armor_rating, 303.0,
+            "ceil(302.4), not the template's 207.9"
+        );
+    }
+
+    #[test]
+    fn an_untempered_piece_counts_its_template_rating_ceiled() {
+        let lo = one_piece(LEATHER_ARMOR, 0);
+        assert_eq!(lo.armor_rating, 208.0, "ceil(207.9)");
+    }
+
+    #[test]
+    fn material_resistances_scale_with_the_tempered_rating() {
+        let tempered = one_piece(LEATHER_ARMOR, 10);
+        let raw = one_piece(LEATHER_ARMOR, 0);
+        for ty in [DamageType::Bashing, DamageType::Shock] {
+            assert!(
+                close(resist(&tempered, ty), MATERIAL_XVALUE * 302.4),
+                "{ty:?}: tempered {} want {}",
+                resist(&tempered, ty),
+                MATERIAL_XVALUE * 302.4
+            );
+            assert!(
+                close(resist(&raw, ty), MATERIAL_XVALUE * 207.9),
+                "{ty:?}: untempered {}",
+                resist(&raw, ty)
+            );
+        }
+    }
+
+    #[test]
+    fn every_armor_temper_row_rises_from_the_template_value() {
+        let mut checked = 0;
+        for a in gamedata::ARMORS.iter() {
+            let Some(t1) = super::super::armor_temper::tempered_armor_value(a.uuid, 1) else {
+                continue;
+            };
+            let t10 = super::super::armor_temper::tempered_armor_value(a.uuid, 10).unwrap();
+            assert!(t1 >= a.armor_rating, "{}: level 1 {t1} < base", a.name);
+            assert!(t10 >= t1, "{}: level 10 {t10} < level 1 {t1}", a.name);
+            checked += 1;
+        }
+        assert!(checked > 200, "only {checked} armour temper rows");
+    }
+
+    /// Pogagoga's live loadout (prod, read-only SELECT 2026-11-16): four
+    /// tempering-10 armour pieces. Per piece, ceiled temper-10 protection:
+    /// Dragonscale Helmet 172.8 → 173, Hide Gauntlets 122.4 → 123, Leather Armor
+    /// 302.4 → 303, Stalhrim Boots 122.4 → 123 = 722. We used to count the template
+    /// values 118.8 + 84.15 + 207.9 + 84.15 = 495.
+    #[test]
+    fn pogagogas_tempered_set_counts_in_full() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("testdata/report536_pogagoga_character.json"))
+                .expect("fixture JSON");
+        let character: CompleteCharacter =
+            serde_json::from_value(fixture["character"].clone()).expect("character");
+        let loadout: blades_lib::user_data::Loadout =
+            serde_json::from_value(fixture["loadout"].clone()).expect("loadout");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let lo = from_character(&character, &inventory);
+        assert_eq!(lo.display_name, "Pogagoga");
+        assert_eq!(lo.armor_rating - lo.perks.matching_set_armor, 722.0);
+        // Material resistances off the tempered ratings:
+        // Cleaving/Poison from the helmet, Shock from the cuirass, Frost from the
+        // boots, Bashing from cuirass + boots.
+        assert!(close(
+            resist(&lo, DamageType::Cleaving),
+            MATERIAL_XVALUE * 172.8
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Poison),
+            MATERIAL_XVALUE * 172.8
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Shock),
+            MATERIAL_XVALUE * 302.4
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Frost),
+            MATERIAL_XVALUE * 122.4
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Bashing),
+            MATERIAL_XVALUE * (302.4 + 122.4)
+        ));
     }
 }
