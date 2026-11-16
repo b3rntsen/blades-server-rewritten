@@ -4374,6 +4374,18 @@ const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 /// engine step. 100 ms gives the bar ten visible steps a second.
 const RESTORE_PAYOUT_STEP: Duration = Duration::from_millis(100);
 
+/// Shortest gap between two regen-driven op65 `PlayerStatsUpdate` frames for one
+/// fighter (report #531).
+///
+/// Regen runs on every ~2 ms engine step, and a 4%/s pool gains a whole point about
+/// every 25 ms, so sending each point streamed 40-53 reliable op65 a second to every
+/// player — about half of all in-round frames and the bulk of what a poor link has to
+/// acknowledge. Retail sent 18-42 op65 in a whole ~100 s match (session 486, three
+/// matches, gap p50 3 s). 500 ms keeps the bar moving in visible steps (and inside
+/// the soak's one-second own-bar check) at ~1/20 of the old frame rate. The pools
+/// still regenerate every step; a change held back here is sent once the gap passes.
+pub(super) const REGEN_STATS_MIN_INTERVAL: Duration = Duration::from_millis(500);
+
 /// In-combat stamina/magicka regen rate as a fraction of the pool per second.
 ///
 /// Capture test T3 settled the server-side arena rule: 4%/s of the full maximum,
@@ -6077,8 +6089,18 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             }
         }
 
-        let changed = f.stamina != before_s || f.magicka != before_m || f.health != before_h;
-        if changed {
+        if f.stamina != before_s || f.magicka != before_m || f.health != before_h {
+            f.regen_stats_pending = true;
+        }
+        // Report #531: bound the frame cadence, not the regeneration. A change held
+        // back here stays pending and goes out on the first step past the interval,
+        // carrying the newest pools.
+        let due = f
+            .regen_stats_sent_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= REGEN_STATS_MIN_INTERVAL);
+        if f.regen_stats_pending && due {
+            f.regen_stats_pending = false;
+            f.regen_stats_sent_at = Some(now);
             // Retail stat-carrying frames stamp both actors' packed words with one
             // fresh sequence. If propId 4 and propId 5 drift independently, the
             // client can reject a later potion correction as stale after seeing the
@@ -6097,9 +6119,9 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             let obj_id = combat.fighters[slot].net_object_id;
             // propId 5 is `_pvpOtherActorStats` — the OPPONENT of the avatar at
             // propId 0. It used to be a hardcoded `1`, which decodes to
-            // all-pools-zero, and this tick fires ~1/s per fighter for the whole
-            // fight. `packed_stats()` is a pure read: it does not bump the
-            // opponent's own `stats_seq`.
+            // all-pools-zero, and this tick fires for the whole fight (at most once
+            // per `REGEN_STATS_MIN_INTERVAL` per fighter). `packed_stats()` is a pure
+            // read: it does not bump the opponent's own `stats_seq`.
             let opp_slot = combat.fighters[slot].arena_target;
             let other_packed = combat
                 .fighters
@@ -7335,6 +7357,85 @@ mod tests {
         assert!(
             has_op65,
             "regen tick must emit at least one PlayerStatsUpdate (op65)"
+        );
+    }
+
+    /// **Report #531 — passive regen must not stream op65 at the engine's step rate.**
+    ///
+    /// Regen is continuous over elapsed time and the production engine steps every
+    /// ~2 ms, so a 4%/s stamina pool gains a whole point every ~25 ms. Emitting an op65
+    /// for each point put 40-53 reliable `PlayerStatsUpdate` frames a second on every
+    /// player's link (soak driver at a 2 ms tick), about half of all in-round frames.
+    /// Retail sent 18-42 op65 in a whole ~100 s match (session 486, three matches,
+    /// gap p50 3 s). The pools still regenerate at the full rate; only the frame
+    /// cadence is bounded, and the newest pool is always sent once the interval has
+    /// passed, so the bar settles on the server's value.
+    #[test]
+    fn regen_op65_cadence_is_bounded_at_production_step_rate() {
+        use super::super::state::PackedStats;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let max_stam = combat.fighters[0].max_stamina;
+        combat.fighters[0].stamina = max_stam / 4;
+        combat.fighters[1].magicka = combat.fighters[1].max_magicka / 4;
+        combat.last_regen_tick = now;
+        let stam_before = combat.fighters[0].stamina;
+        let slot0_obj = combat.fighters[0].net_object_id as i64;
+
+        let mut op65 = 0usize;
+        let mut shown = None;
+        let mut last_sent_at = now;
+        let step = Duration::from_millis(2);
+        let span = Duration::from_secs(4);
+        let mut t = now;
+        while t < now + span {
+            t += step;
+            for (viewer, frame) in apply_regen_tick(&mut combat, t) {
+                if messages::user_message_gmid(&frame) != Some(65) {
+                    continue;
+                }
+                op65 += 1;
+                let nd = arena_proto::parse_netdata(&frame[2..]);
+                if viewer == 0 && nd.int(0) == Some(slot0_obj) {
+                    if let Some(arena_proto::NetDataValue::ULong(v)) = nd.props.get(&4) {
+                        shown = Some(PackedStats::unpack(*v).1);
+                        last_sent_at = t;
+                    }
+                }
+            }
+        }
+
+        // Full-rate regeneration is untouched.
+        let expected = (STAMINA_REGEN_RATE_PER_S * max_stam as f32 * span.as_secs_f32()) as u32;
+        let gained = combat.fighters[0].stamina - stam_before;
+        assert!(
+            gained + 1 >= expected,
+            "stamina must still regenerate at 4%/s: gained {gained}, expected ~{expected}"
+        );
+        // Two regenerating fighters, two viewers, at most one frame per interval each.
+        let per_viewer_per_sec = op65 as f32 / 2.0 / span.as_secs_f32();
+        let bound = 2.0 / REGEN_STATS_MIN_INTERVAL.as_secs_f32() + 0.5;
+        assert!(
+            per_viewer_per_sec <= bound,
+            "regen sent {op65} op65 frames in {span:?} ({per_viewer_per_sec:.1}/s per viewer, \
+             bound {bound:.1}/s)"
+        );
+        // The bar is never left behind by more than one interval of regen.
+        assert!(
+            t.duration_since(last_sent_at) <= REGEN_STATS_MIN_INTERVAL,
+            "slot 0's newest op65 is {:?} old",
+            t.duration_since(last_sent_at)
+        );
+        let f = &combat.fighters[0];
+        let truth = super::super::state::wire_fraction(f.stamina, f.max_stamina);
+        let shown = shown.expect("slot 0 op65 was sent");
+        let per_interval =
+            (STAMINA_REGEN_RATE_PER_S * 1023.0 * REGEN_STATS_MIN_INTERVAL.as_secs_f32()).ceil()
+                as i32
+                + 2;
+        assert!(
+            (truth as i32 - shown as i32).abs() <= per_interval,
+            "the newest op65 must track the pool: shown {shown}, server {truth}"
         );
     }
 
@@ -11501,9 +11602,16 @@ mod phase4_tests {
             "the potion may add at most ~one op65 per 100 ms payout: {potion_op65} vs \
              {control_op65} in the control"
         );
+        // Report #531 bounds regen-driven op65 to one per `REGEN_STATS_MIN_INTERVAL`, and
+        // the control's own regen already fills that cadence, so the potion rides the
+        // same frames rather than adding more. It must still be carried by them: one
+        // frame per interval across the whole 3 s window. (That the bar follows the pool
+        // within a second is the soak's own-bar invariant, which drinks potions.)
+        let cadence = (checkpoints[1] as u128 / REGEN_STATS_MIN_INTERVAL.as_millis()) as usize;
         assert!(
-            potion_op65 > control_op65,
-            "the restored stamina must reach the client in op65 stats frames"
+            potion_op65 >= control_op65 && potion_op65 >= cadence,
+            "the restored stamina must reach the client in op65 stats frames: \
+             {potion_op65} frames (control {control_op65}, cadence {cadence})"
         );
     }
 

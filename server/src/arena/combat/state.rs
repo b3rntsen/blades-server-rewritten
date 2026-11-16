@@ -1620,6 +1620,11 @@ pub struct Fighter {
     pub regen_carry_health: f32,
     pub regen_carry_stamina: f32,
     pub regen_carry_magicka: f32,
+    /// Report #531: a regen/restoration pool change not yet sent in an op65, and when
+    /// the last regen-driven op65 for this fighter went out. See
+    /// `resolve::REGEN_STATS_MIN_INTERVAL`.
+    pub regen_stats_pending: bool,
+    pub regen_stats_sent_at: Option<Instant>,
     pub effects: Vec<ActiveEffect>,
     /// The fighter's current animation/logic state.
     ///
@@ -2256,6 +2261,8 @@ impl Fighter {
             regen_carry_health: 0.0,
             regen_carry_stamina: 0.0,
             regen_carry_magicka: 0.0,
+            regen_stats_pending: false,
+            regen_stats_sent_at: None,
             effects: Vec::new(),
             // Construction, not a transition — nothing to tell a client that has no
             // avatar yet, so the field is set directly rather than via the mutator.
