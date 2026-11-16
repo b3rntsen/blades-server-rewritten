@@ -162,6 +162,15 @@ fn repair_story_quest_difficulty(info: &mut blades_lib::user_data::Quest) -> boo
     true
 }
 
+/// The repairs `/quests` applies to a stored story row; true when it changed.
+///
+/// It never removes an objective: a stored row can be behind what the client
+/// already did (see `report_521_read_keeps_objectives`), and an objective taken
+/// away hides the NPC that serves it.
+fn repair_stored_story_row(info: &mut blades_lib::user_data::Quest) -> bool {
+    repair_story_quest_difficulty(info)
+}
+
 /// "Ordinary" excludes the two row kinds that have their own lifecycle: town jobs
 /// (rotated on the daily reset) and event quests (retired when their window
 /// closes). What is left is the quest log proper, and a completed entry there is
@@ -1736,13 +1745,7 @@ pub async fn get_quests(
                 // Same shape as the loot repair below, and deliberately ahead of
                 // it: that one gives up when a row has no generated_data, and
                 // this must run for every story row regardless.
-                // #521: an older accept switched on every objective at once; take
-                // back the gated ones the player has not reached (bitwise `|` so
-                // both repairs always run).
-                let story_repaired = !is_event
-                    && (repair_story_quest_difficulty(&mut row.info.0)
-                        | blades_lib::util::quest::drop_premature_objectives(&mut row.info.0));
-                if story_repaired {
+                if !is_event && repair_stored_story_row(&mut row.info.0) {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
@@ -11956,5 +11959,55 @@ mod report465_completed_jobs_stay_off_the_board_db {
     struct Count {
         #[diesel(sql_type = diesel::sql_types::BigInt)]
         n: i64,
+    }
+}
+
+/// Report #521 follow-up: the `/quests` read must not take objectives away.
+///
+/// #619 also dropped untouched gated objectives from stored rows. On prod that
+/// hid NPCs: the client's own MQ15 progress (Saashi's per-quest dialogue flag,
+/// one increment per location debriefed) runs ahead of the server's for 7 of 13
+/// holders — the client never reported it — so "ask the Traveling Merchant" was
+/// legitimately reached, and removing it made Arven Dalas vanish for Rim Rusefm.
+/// The accept-side fix stays; stored rows keep what they hold.
+#[cfg(test)]
+mod report_521_read_keeps_objectives {
+    use super::*;
+    use blades_lib::user_data::{ObjectiveStatus, Quest, QuestStatus, QuestType};
+
+    const MQ15: Uuid = Uuid::from_u128(0xb7f4d378_566b_45eb_9bda_206911901821);
+    const EXPLORE: Uuid = Uuid::from_u128(0x6a939788_1f5c_4749_894d_5fc5f338d7b7);
+    const MERCHANT: Uuid = Uuid::from_u128(0x8bad0859_002e_4521_9007_949490dcef40);
+    const SAASHI: Uuid = Uuid::from_u128(0xb42723e3_8621_4c00_b734_c04955fb39f4);
+
+    fn st(progress: f64) -> ObjectiveStatus {
+        ObjectiveStatus {
+            status: QuestStatus::Active,
+            progress,
+            completed: false,
+        }
+    }
+
+    #[test]
+    fn a_stored_story_row_keeps_its_gated_objectives() {
+        let mut info = Quest {
+            version: 1,
+            r#type: QuestType::Normal,
+            objective_statuses: [(EXPLORE, st(2.0)), (MERCHANT, st(0.0)), (SAASHI, st(0.0))]
+                .into_iter()
+                .collect(),
+            difficulty_level: blades_lib::user_data::STORY_QUEST_DIFFICULTY_LEVEL,
+            seed: 1234.into(),
+            gld_quest_id: MQ15,
+            completed: false,
+            game_event_quest_data: None,
+            rewards: None,
+            final_reward: None,
+            job_reward: None,
+            job_dungeon_template_id: None,
+        };
+        assert!(!repair_stored_story_row(&mut info));
+        assert!(info.objective_statuses.contains_key(&MERCHANT));
+        assert!(info.objective_statuses.contains_key(&SAASHI));
     }
 }
