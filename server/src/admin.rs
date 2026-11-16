@@ -1958,6 +1958,10 @@ pub struct CurrentCharacterSummary {
     /// The captured character this live row was imported from (`characters.source_alt_uuid`),
     /// so the web can keep that archived alt's name in step with a rename.
     source_alt_uuid: Option<Uuid>,
+    /// When the player may next rename this character from the website (unix
+    /// seconds; tracker #527). `None` when no rename of theirs is on record or the
+    /// limit is off. A value in the past means a rename is allowed now.
+    next_rename_at_secs: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -1971,6 +1975,51 @@ pub struct CurrentCharacterResponse {
 pub struct SetCurrentCharacterNameRequest {
     pub user_id: Uuid,
     pub name: String,
+    /// The rename limit does not apply (tracker #527): the website sets this for
+    /// an admin, and when it re-applies a name the player already chose on the
+    /// alt list as that alt goes live. Defaults to a limited, player rename.
+    #[serde(default)]
+    pub exempt: bool,
+}
+
+/// `IMPORT_SERVICE_ID` error: the character was renamed by its player less
+/// than [`rename_cooldown_secs`] ago (tracker #527). The website reads the
+/// date it may be renamed again from `current-character`'s `nextRenameAtSecs`.
+pub(crate) const RENAME_TOO_SOON: u64 = 122;
+
+/// Tracker #527 (HauDrauf): a player may rename a character from the website
+/// once per this many days; renames from before the rule count. Override with
+/// `CHARACTER_RENAME_COOLDOWN_DAYS` in the arena env (`0` turns the limit off).
+/// Admin and system renames are exempt and do not start the cooldown.
+pub(crate) const DEFAULT_RENAME_COOLDOWN_DAYS: i64 = 30;
+
+fn rename_cooldown_secs() -> i64 {
+    static SECS: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *SECS.get_or_init(|| {
+        let days = std::env::var("CHARACTER_RENAME_COOLDOWN_DAYS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|d| *d >= 0)
+            .unwrap_or(DEFAULT_RENAME_COOLDOWN_DAYS);
+        days * 86_400
+    })
+}
+
+/// When the player may next rename, from the character's rename audit: the
+/// latest non-exempt rename plus `cooldown_secs`. `None` when none is on record
+/// or the limit is off.
+fn next_rename_at_secs(server_state: &Value, cooldown_secs: i64) -> Option<i64> {
+    if cooldown_secs <= 0 {
+        return None;
+    }
+    server_state
+        .get("currentCharacterRenames")?
+        .as_array()?
+        .iter()
+        .filter(|e| e.get("exempt").and_then(Value::as_bool) != Some(true))
+        .filter_map(|e| e.get("renamedAtSecs").and_then(Value::as_i64))
+        .max()
+        .map(|last| last + cooldown_secs)
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -2046,6 +2095,7 @@ const AI_NAME_SUFFIX: &str = "(AI)";
 fn current_character_summary(
     row: CharacterDbEntryCharacterAlone,
     source_alt_uuid: Option<Uuid>,
+    next_rename_at_secs: Option<i64>,
 ) -> CurrentCharacterSummary {
     CurrentCharacterSummary {
         user_id: row.user_id,
@@ -2054,6 +2104,7 @@ fn current_character_summary(
         level: row.character.0.level,
         pvp_trophies: row.character.0.pvp_trophies,
         source_alt_uuid,
+        next_rename_at_secs,
     }
 }
 
@@ -2080,14 +2131,13 @@ pub async fn get_current_character(
 
     let character = match row {
         Some(row) => {
-            let source_alt_uuid: Option<Uuid> = characters::table
+            let (source_alt_uuid, server_state): (Option<Uuid>, Value) = characters::table
                 .filter(characters::id.eq(row.id))
-                .select(characters::source_alt_uuid)
-                .first::<Option<Uuid>>(&mut conn)
-                .await
-                .optional()?
-                .flatten();
-            Some(current_character_summary(row, source_alt_uuid))
+                .select((characters::source_alt_uuid, characters::server_state))
+                .first::<(Option<Uuid>, Value)>(&mut conn)
+                .await?;
+            let next = next_rename_at_secs(&server_state, rename_cooldown_secs());
+            Some(current_character_summary(row, source_alt_uuid, next))
         }
         None => None,
     };
@@ -2115,8 +2165,18 @@ pub async fn set_current_character_name(
         })?;
 
     conn.transaction(move |mut conn| {
-        async move { rename_current_character(&mut conn, character_id, body.user_id, name).await }
-            .scope_boxed()
+        async move {
+            rename_current_character_as(
+                &mut conn,
+                character_id,
+                body.user_id,
+                name,
+                body.exempt,
+                rename_cooldown_secs(),
+            )
+            .await
+        }
+        .scope_boxed()
     })
     .await
     .map(Json)
@@ -2286,11 +2346,32 @@ fn has_ai_label(name: &str) -> bool {
     name.trim().ends_with(AI_NAME_SUFFIX)
 }
 
+/// A player's rename, under the default limit.
+#[cfg(test)]
 async fn rename_current_character(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
     name: String,
+) -> Result<SetCurrentCharacterNameResponse, BladeApiError> {
+    rename_current_character_as(
+        conn,
+        character_id,
+        user_id,
+        name,
+        false,
+        DEFAULT_RENAME_COOLDOWN_DAYS * 86_400,
+    )
+    .await
+}
+
+async fn rename_current_character_as(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    name: String,
+    exempt: bool,
+    cooldown_secs: i64,
 ) -> Result<SetCurrentCharacterNameResponse, BladeApiError> {
     let (mut character, mut server_state): (Value, Value) = characters::table
         .filter(characters::id.eq(character_id))
@@ -2305,6 +2386,16 @@ async fn rename_current_character(
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
         })?
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 28))?;
+
+    // Tracker #527: one player rename per cooldown, counted from the audit.
+    let now = arena_season::now_unix();
+    if !exempt && next_rename_at_secs(&server_state, cooldown_secs).is_some_and(|next| next > now) {
+        return Err(BladeApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            IMPORT_SERVICE_ID,
+            RENAME_TOO_SOON,
+        ));
+    }
 
     // One name, one character: refused with NAME_TAKEN when another character
     // holds it; the character's own name (in any case) is fine.
@@ -2355,7 +2446,8 @@ async fn rename_current_character(
         CharacterRenameAuditEntry {
             previous_name: previous_name.clone(),
             new_name: name.clone(),
-            renamed_at_secs: arena_season::now_unix(),
+            renamed_at_secs: now,
+            exempt,
         },
     )?;
 
@@ -4500,6 +4592,7 @@ mod tests {
                     }),
                 },
                 Some(Uuid::from_u128(3)),
+                Some(1_800_000_000),
             );
             let value = serde_json::to_value(summary).unwrap();
             let mut keys: Vec<&str> = value
@@ -4515,6 +4608,7 @@ mod tests {
                     "characterId",
                     "level",
                     "name",
+                    "nextRenameAtSecs",
                     "pvpTrophies",
                     "sourceAltUuid",
                     "userId"
@@ -4833,6 +4927,119 @@ mod tests {
                     .unwrap()
                     > 0
             );
+        }
+        // ---- Tracker #527: one player rename per cooldown ----
+
+        const COOLDOWN: i64 = DEFAULT_RENAME_COOLDOWN_DAYS * 86_400;
+
+        /// Put one rename on the audit, `days_ago` days back, in the shape rows
+        /// written before the limit have (no `exempt` field).
+        async fn renamed_days_ago(conn: &mut AsyncPgConnection, id: Uuid, days_ago: i64) {
+            let at = arena_season::now_unix() - days_ago * 86_400;
+            sql_query(
+                "UPDATE characters SET server_state = jsonb_build_object( \
+                   'currentCharacterRenames', jsonb_build_array(jsonb_build_object( \
+                     'previousName', 'Before', 'newName', character->>'name', \
+                     'renamedAtSecs', $2::bigint))) \
+                 WHERE id = $1",
+            )
+            .bind::<SqlUuid, _>(id)
+            .bind::<diesel::sql_types::BigInt, _>(at)
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        #[test]
+        fn the_next_rename_is_the_latest_counted_rename_plus_the_cooldown() {
+            let state = serde_json::json!({"currentCharacterRenames": [
+                {"previousName": "a", "newName": "b", "renamedAtSecs": 100},
+                {"previousName": "b", "newName": "c", "renamedAtSecs": 300},
+                {"previousName": "c", "newName": "d", "renamedAtSecs": 900, "exempt": true},
+            ]});
+            assert_eq!(next_rename_at_secs(&state, 1000), Some(1300));
+            assert_eq!(
+                next_rename_at_secs(&state, 0),
+                None,
+                "0 turns the limit off"
+            );
+            assert_eq!(next_rename_at_secs(&serde_json::json!({}), 1000), None);
+            assert_eq!(DEFAULT_RENAME_COOLDOWN_DAYS, 30);
+        }
+
+        #[actix_web::test]
+        async fn a_second_rename_within_the_cooldown_is_refused() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"First"})).await;
+            rename_current_character(&mut conn, id, user, "Second".into())
+                .await
+                .expect("the first rename is free");
+            let err = rename_current_character(&mut conn, id, user, "Yaskrava".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(err.error_code(), RENAME_TOO_SOON);
+            let row = stored(&mut conn, id).await;
+            assert_eq!(row.character["name"], "Second");
+            assert_eq!(
+                row.server_state["currentCharacterRenames"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1,
+                "a refused rename is not audited"
+            );
+        }
+
+        #[actix_web::test]
+        async fn a_rename_from_before_the_rule_counts_and_expires_after_the_cooldown() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"Old"})).await;
+            renamed_days_ago(&mut conn, id, 29).await;
+            let err = rename_current_character(&mut conn, id, user, "New".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.error_code(), RENAME_TOO_SOON);
+
+            renamed_days_ago(&mut conn, id, 30).await;
+            rename_current_character(&mut conn, id, user, "New".into())
+                .await
+                .expect("30 days on, the player may rename again");
+            assert_eq!(stored(&mut conn, id).await.character["name"], "New");
+        }
+
+        #[actix_web::test]
+        async fn an_exempt_rename_ignores_the_cooldown_and_does_not_start_one() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"Old"})).await;
+            renamed_days_ago(&mut conn, id, 1).await;
+            rename_current_character_as(&mut conn, id, user, "Admin Pick".into(), true, COOLDOWN)
+                .await
+                .expect("an admin is exempt");
+            let row = stored(&mut conn, id).await;
+            assert_eq!(
+                row.server_state["currentCharacterRenames"][1]["exempt"],
+                true
+            );
+
+            // A fresh character an admin renamed: the player's own rename is free.
+            let (id2, user2) = seed_character(&mut conn, serde_json::json!({"name":"Fresh"})).await;
+            rename_current_character_as(&mut conn, id2, user2, "Synced".into(), true, COOLDOWN)
+                .await
+                .unwrap();
+            rename_current_character(&mut conn, id2, user2, "Players Own".into())
+                .await
+                .expect("an exempt rename does not start the cooldown");
+        }
+
+        #[actix_web::test]
+        async fn a_zero_cooldown_turns_the_limit_off() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"Old"})).await;
+            renamed_days_ago(&mut conn, id, 0).await;
+            rename_current_character_as(&mut conn, id, user, "New".into(), false, 0)
+                .await
+                .expect("limit off");
         }
     }
 
@@ -7284,6 +7491,63 @@ mod tests {
                 .expect("the old name only blocks the \"(AI)\" label, not the reserved form");
             flush(&mut c).await.unwrap();
             assert_eq!(live_name(&mut c, cid).await, "Ravena Dawn");
+        }
+
+        /// Tracker #527: the rename limit is the PLAYER's. The uniqueness
+        /// backfill renames a duplicate even inside its cooldown, and does not
+        /// count against the player.
+        #[tokio::test]
+        async fn the_backfill_renames_through_a_players_rename_cooldown() {
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let (c1, _u1) = seed_character(&mut c, "Twinned", 60, 0).await;
+            let (c2, _u2) = seed_character(&mut c, "Twinned", 61, 0).await;
+            let now = crate::arena::arena_season::now_unix();
+            for cid in [c1, c2] {
+                diesel::sql_query(
+                    "UPDATE characters SET server_state = jsonb_build_object( \
+                       'currentCharacterRenames', jsonb_build_array(jsonb_build_object( \
+                         'previousName', 'Before', 'newName', 'Twinned', \
+                         'renamedAtSecs', $2::bigint))) WHERE id = $1",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .bind::<diesel::sql_types::BigInt, _>(now)
+                .execute(&mut c)
+                .await
+                .map(|_: usize| ())
+                .unwrap();
+            }
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            let mut names = vec![live_name(&mut c, c1).await, live_name(&mut c, c2).await];
+            names.sort();
+            assert_eq!(names, vec!["Twinned".to_string(), "Twinned 2".to_string()]);
+            for cid in [c1, c2] {
+                let audit: i32 = diesel::sql_query(
+                    "SELECT jsonb_array_length(server_state->'currentCharacterRenames') AS n \
+                     FROM characters WHERE id = $1",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .get_result::<AuditLen>(&mut c)
+                .await
+                .unwrap()
+                .n;
+                assert_eq!(audit, 1, "the backfill adds no player rename");
+            }
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct AuditLen {
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            n: i32,
         }
 
         #[tokio::test]
