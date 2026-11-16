@@ -629,6 +629,7 @@ impl RetailDamageModel {
         // weapon-based (`Damage$$IsWeaponBased@0x1bd3e6c` excludes source 11), and
         // the weapon's alchemy poison does not ride a bash either (05 §3.11).
         if source == DamageSource::ShieldManeuver {
+            apply_adrenaline(attacker, &mut components, scale, false);
             return components;
         }
         // Enchant tracks: independent of the physical combo roll (capture-validated,
@@ -687,7 +688,52 @@ impl RetailDamageModel {
             }
             components.push((ench_ty, v));
         }
+        apply_adrenaline(attacker, &mut components, scale, false);
         components
+    }
+}
+
+/// **Adrenaline** (report #530): "Increases physical/elemental damage by {0} while
+/// Health is critical."
+///
+/// `AdrenalineBonusInstance$$GetBonusDamage@0x1D49D20` returns X for every component
+/// whose type is in its `_targetDamageTypes` (Physical [1,2,3], Elemental [4,5,6,7])
+/// while the WEARER is at critical health, and it registers in the
+/// situational-additive list (combat-spec 01 D3/D4): each component with v > 0 gets
+/// `+X`, scaled by 0.075 on a periodic source, BEFORE the physical pass multiplies by
+/// `1 + attack-type factor`. The non-physical pass multiplies by `1 + 0`.
+///
+/// The components handed in are already multiplied by `physical_factor`, so the
+/// physical bonus is added as `X × physical_factor` — the same as `(v + X) × f`.
+/// The family has no source filter: swings, maneuvers, bashes and spells all get it.
+///
+/// It used to do nothing at all — both families fell through `apply_enchant`'s
+/// `_ => {}` — though the reporter owns 22 Adrenaline pieces.
+pub(super) fn apply_adrenaline(
+    attacker: &Loadout,
+    components: &mut [(DamageType, f32)],
+    physical_factor: f32,
+    periodic: bool,
+) {
+    if !attacker.attacker_at_critical_health
+        || (attacker.adrenaline_physical <= 0.0 && attacker.adrenaline_elemental <= 0.0)
+    {
+        return;
+    }
+    let scale = if periodic {
+        combat_params::CONTINUOUS_DAMAGE_FORTIFY_EFFECTIVENESS * combat_params::GLOBAL_TICK_INTERVAL
+    } else {
+        1.0
+    };
+    for (ty, v) in components.iter_mut() {
+        if *v <= 0.0 {
+            continue;
+        }
+        if is_physical(*ty) {
+            *v += attacker.adrenaline_physical * scale * physical_factor;
+        } else if is_elemental(*ty) {
+            *v += attacker.adrenaline_elemental * scale;
+        }
     }
 }
 
@@ -908,9 +954,20 @@ impl DamageModel for RetailDamageModel {
             caster_loadout.elem_resist_piercing_rating += erp;
         }
 
+        // Adrenaline rides spells too: the family has no source filter (#530).
+        caster_loadout.adrenaline_physical = caster.adrenaline_physical;
+        caster_loadout.adrenaline_elemental = caster.adrenaline_elemental;
+        caster_loadout.attacker_at_critical_health = caster.health_critical;
+
         // The mirrored stat drain is appended by `finish_resolved` from the
         // post-block value — see [`append_mirrored_drains`].
         let mut components = vec![(ty, base)];
+        apply_adrenaline(
+            &caster_loadout,
+            &mut components,
+            1.0,
+            source == DamageSource::ContinuousSpell,
+        );
         finish_resolved(
             &caster_loadout,
             target,
@@ -1711,6 +1768,147 @@ mod tests {
             deep > shallow * 1.5,
             "PDOC must be MULTIPLIED by the combo: depth-0 gain {shallow:.1} vs \
              depth-3 gain {deep:.1}. Equal gains mean it landed after the multiplier."
+        );
+    }
+
+    /// A target fighter at `pct` of its (tripled, arena) health bar.
+    fn fighter_at_health_pct(pct: f32) -> Fighter {
+        let mut f = target();
+        f.max_health = 3000;
+        f.health = (3000.0 * pct) as u32;
+        f
+    }
+
+    /// Report #530: Adrenaline adds its X to the physical component before the
+    /// attack-type factor, and to every elemental track flat — but only while the
+    /// WEARER is at critical health, which in the arena is 35 % of the un-tripled
+    /// bar (`get_IsAtCriticalHealth@0x1C5C2BC`), set on the per-hit clone.
+    #[test]
+    fn report_530_adrenaline_pays_only_at_critical_health_and_rides_the_combo() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let hit = |critical: bool, adrenaline: bool, combo: u32| {
+            let mut a = poison_dagger();
+            a.attacker_at_critical_health = critical;
+            if adrenaline {
+                a.adrenaline_physical = 25.2;
+                a.adrenaline_elemental = 10.08;
+            }
+            m.resolve_attack(
+                &a,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                combo,
+                now,
+            )
+        };
+        // Control: not critical, the gear does nothing.
+        let calm = hit(false, true, 0);
+        let bare = hit(false, false, 0);
+        assert_eq!(
+            comp(&calm, DamageType::Slashing),
+            comp(&bare, DamageType::Slashing)
+        );
+        assert_eq!(
+            comp(&calm, DamageType::Poison),
+            comp(&bare, DamageType::Poison)
+        );
+
+        // Critical: the elemental track gains exactly the flat 10.08.
+        let crit = hit(true, true, 0);
+        let crit_bare = hit(true, false, 0);
+        let poison_gain = comp(&crit, DamageType::Poison) - comp(&crit_bare, DamageType::Poison);
+        assert!(
+            (poison_gain - 10.08).abs() < 0.05,
+            "elemental +10.08, got {poison_gain}"
+        );
+        // Physical gains, and a deeper combo multiplies the gain (01 D3).
+        let shallow = comp(&crit, DamageType::Slashing) - comp(&crit_bare, DamageType::Slashing);
+        let deep = comp(&hit(true, true, 3), DamageType::Slashing)
+            - comp(&hit(true, false, 3), DamageType::Slashing);
+        assert!(shallow > 0.0, "physical Adrenaline must pay, got {shallow}");
+        assert!(
+            deep > shallow * 1.2,
+            "the combo factor multiplies it: {shallow} vs {deep}"
+        );
+    }
+
+    /// Report #530: Adrenaline has no source filter, so a spell gets it too.
+    #[test]
+    fn report_530_adrenaline_rides_spells_at_critical_health() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let perks = crate::arena::combat::perks::PerkBonuses::default();
+        let caster = |critical: bool| crate::arena::combat::perks::CasterPerks {
+            perks: &perks,
+            magicka_full: false,
+            health_critical: critical,
+            elem_resist_piercing: 0.0,
+            elem_resist_piercing_rating: 0.0,
+            element_fortify: &[],
+            adrenaline_physical: 25.2,
+            adrenaline_elemental: 10.08,
+        };
+        let fireball = gamedata::ids::FIREBALL;
+        let calm = m.resolve_ability(
+            fireball,
+            1,
+            &caster(false),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
+        let crit = m.resolve_ability(
+            fireball,
+            1,
+            &caster(true),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
+        let gain = comp(&crit, DamageType::Fire) - comp(&calm, DamageType::Fire);
+        assert!(
+            (gain - 10.08).abs() < 0.05,
+            "Fireball +10.08 at critical, got {gain}"
+        );
+    }
+
+    /// Report #530: Mercy is flat resistance on the WEARER while it is at critical
+    /// health — 35 % of the un-tripled bar, i.e. ≈ 11.7 % of the arena bar. At 30 %
+    /// of the arena bar the wearer is NOT critical in the arena (control).
+    #[test]
+    fn report_530_mercy_resists_only_at_critical_health() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let slashing = |pct: f32, mercy: bool| {
+            let mut t = fighter_at_health_pct(pct);
+            if mercy {
+                t.loadout.mercy_physical = 25.2;
+            }
+            comp(
+                &m.resolve_attack(
+                    &plain_blade(Weight::Light),
+                    &t,
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    0,
+                    now,
+                ),
+                DamageType::Slashing,
+            )
+        };
+        assert_eq!(
+            slashing(0.30, true),
+            slashing(0.30, false),
+            "30 % of a tripled bar is not critical"
+        );
+        let cut = slashing(0.10, false) - slashing(0.10, true);
+        assert!(
+            (cut - 25.2).abs() < 0.05,
+            "Mercy t10 resists 25.2 at critical, got {cut}"
         );
     }
 
@@ -2827,6 +3025,8 @@ mod tests {
             elem_resist_piercing: 0.0,
             elem_resist_piercing_rating: 0.0,
             element_fortify: &fortify,
+            adrenaline_physical: 0.0,
+            adrenaline_elemental: 0.0,
         };
         let fortified = m.resolve_ability(
             spell,

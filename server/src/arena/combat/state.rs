@@ -1185,6 +1185,25 @@ pub struct Loadout {
     /// the elemental four. Staggered, Blind and Paralyzed do NOT count.
     pub opportunist_physical: f32,
     pub opportunist_elemental: f32,
+    /// **Adrenaline** — `Adrenaline{Physical,Elemental}PropertyLogic`, "Increases
+    /// physical/elemental damage by {0} while Health is critical" (report #530).
+    /// `AdrenalineBonusInstance$$GetBonusDamage@0x1D49D20` adds X to every component
+    /// whose type is in `_targetDamageTypes` (Physical [1,2,3], Elemental [4,5,6,7])
+    /// while the WEARER `IsAtCriticalHealth`, in the situational-additive list (01 D3:
+    /// before the attack-type factor). No source filter.
+    pub adrenaline_physical: f32,
+    pub adrenaline_elemental: f32,
+    /// **Mercy** — `Mercy{Physical,Elemental}PropertyLogic`, "+{0} Resistance to
+    /// physical/elemental damage while Health is critical" (report #530).
+    /// `MercyBonusInstance$$GetResistanceBonus@0x1D50858` registers in
+    /// `_resistanceAdditiveSources`, the same list as Resist <Element> (01 E6c).
+    pub mercy_physical: f32,
+    pub mercy_elemental: f32,
+    /// Transient, per hit: the ATTACKER is at critical health
+    /// (`Actor$$get_IsAtCriticalHealth`). Set on the per-hit loadout clone by the
+    /// caller, because the damage model sees only the attacker's `Loadout`. Gates
+    /// Adrenaline. Never set on a fighter's stored loadout.
+    pub attacker_at_critical_health: bool,
     /// Flat BLOCK-piercing ratings, subtracted from the defender's Block Rating before
     /// the block reduction is computed — the block-stage mirror of
     /// `armor_piercing_rating`. `block_piercing_rating` applies to physical,
@@ -1789,6 +1808,10 @@ pub struct Fighter {
     /// is still holding. Retail raises such a guard the moment the stagger ends
     /// (report #357; see [`Self::reconcile_stagger`]).
     pub guard_held: bool,
+    /// A weapon maneuver (a shield bash, Power Attack, a dodge…) began while the
+    /// guard button may still be down, so the held guard goes back up at
+    /// `OnManeuverEnded` — see [`Self::reconcile_guard_after_maneuver`] (report #530).
+    pub guard_resume_after_maneuver: bool,
 
     // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
     /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
@@ -2291,6 +2314,7 @@ impl Fighter {
             last_client_charge: None,
             last_input_block_zone: None,
             guard_held: false,
+            guard_resume_after_maneuver: false,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
@@ -2676,6 +2700,40 @@ impl Fighter {
             }
         }
         false
+    }
+
+    /// Report #530: a guard held through a weapon maneuver goes back up when the
+    /// maneuver ends.
+    ///
+    /// The same shape as report #357's stagger. The maneuver lock (05-D5) drops a
+    /// guard PRESS that arrives mid-maneuver, and casting a maneuver from a raised
+    /// guard ends that guard; in both cases the player is still holding the button
+    /// and the client will not send the press again. Without this the server fought
+    /// on with the guard down after every shield bash while the player held block —
+    /// "after using shield bash skills the high block isn't activated afterwards".
+    /// A release at any point clears `guard_held`, so a guard let go during the
+    /// maneuver stays down.
+    ///
+    /// Returns true when the guard went up.
+    pub fn reconcile_guard_after_maneuver(&mut self, now: Instant) -> bool {
+        if !self.guard_resume_after_maneuver || self.maneuver_active(now) {
+            return false;
+        }
+        self.guard_resume_after_maneuver = false;
+        if !self.guard_held
+            || self.is_dead()
+            || self.is_paralyzed()
+            || self.is_staggered(now)
+            || self.has_reckless_fury(now)
+            || matches!(
+                self.actor_state,
+                ActorStateType::Blocking | ActorStateType::Charging
+            )
+        {
+            return false;
+        }
+        self.raise_guard(now);
+        true
     }
 
     /// The statuses this fighter is currently under, restricted to the ones whose
@@ -3239,11 +3297,30 @@ impl Fighter {
             .filter(|(t, _)| *t == ty)
             .map(|(_, v)| *v)
             .sum();
+        rating += self.mercy_against(ty);
         if super::damage::is_elemental(ty) {
             rating = (rating - pierce_rating).max(0.0);
             rating *= (1.0 - pierce_frac).clamp(0.0, 1.0);
         }
         rating.max(0.0)
+    }
+
+    /// Mercy's flat resistance against `ty`, live only while this fighter is at
+    /// critical health (report #530). It sits in the same additive list as the
+    /// Resist enchants, so elemental piercing applies to it as well.
+    pub fn mercy_against(&self, ty: DamageType) -> f32 {
+        let amount = if super::damage::is_physical(ty) {
+            self.loadout.mercy_physical
+        } else if super::damage::is_elemental(ty) {
+            self.loadout.mercy_elemental
+        } else {
+            0.0
+        };
+        if amount > 0.0 && super::perks::fighter_health_is_critical(self) {
+            amount
+        } else {
+            0.0
+        }
     }
 
     pub fn resistance_rating_against_source(
@@ -4230,6 +4307,7 @@ impl MatchCombat {
             f.last_client_charge = None;
             f.last_input_block_zone = None;
             f.guard_held = false;
+            f.guard_resume_after_maneuver = false;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();

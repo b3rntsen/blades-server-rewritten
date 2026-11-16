@@ -1293,6 +1293,9 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
             continue;
         }
         let mut attacker_loadout = combat.fighters[h.sender].loadout.clone();
+        // Adrenaline reads the swinger's health as the hit lands (#530).
+        attacker_loadout.attacker_at_critical_health =
+            super::perks::fighter_health_is_critical(&combat.fighters[h.sender]);
         // Reckless Fury adds its weapon-class bonus to every swing for its window
         // (`_bonusDamages`: Light 11.24 / Versatile 14.17 / Heavy 17.86 at rank 1).
         // Ride the maneuver channel — same "flat additive on the physical base"
@@ -1661,6 +1664,8 @@ pub(super) fn resolve_ability_cast(
         f.charge_press_at = None;
         f.pending_manual_attack = None;
         f.bot_swing_at = None;
+        // A guard still held when this maneuver ends goes back up then (#530).
+        f.guard_resume_after_maneuver = true;
         if f.actor_state() == ActorStateType::Blocking {
             f.blocking_until = None;
             f.reconcile_block(now);
@@ -2265,6 +2270,9 @@ fn apply_ability_impact(
         }
         AbilityTag::Maneuver => {
             let mut attacker_loadout = combat.fighters[sender].loadout.clone();
+            // Adrenaline reads the caster's health as the maneuver lands (#530).
+            attacker_loadout.attacker_at_critical_health =
+                super::perks::fighter_health_is_critical(&combat.fighters[sender]);
             // METTLE applies to MANEUVERS — and only to the maneuver's own flat bonus.
             // The client folds `1 + Σ EnhanceAbility` into
             // `ManeuverParameters._effectivenessMultiplier` at `ExecuteAbility`, and
@@ -4603,6 +4611,8 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     }
     // Phase 3.13: a lapsed stagger also returns the actor to Idle.
     f.reconcile_stagger(now);
+    // Report #530: a guard held through a maneuver goes up at its end.
+    f.reconcile_guard_after_maneuver(now);
 }
 
 /// Deliver the due ticks of every in-flight channelled spell.
@@ -8027,6 +8037,81 @@ mod tests {
             combat.fighters[1].is_staggered(impact),
             "an unblocking target is staggered only at the strike phase",
         );
+    }
+
+    /// Report #530: "After using shield bash skills (all skills), the high block isn't
+    /// activated afterwards." The player holds block, bashes, and keeps holding. The
+    /// bash ends the guard and the maneuver lock drops any press made during it, so
+    /// the client never re-sends the press it is still holding. The held guard must go
+    /// back up when the maneuver ends, as #357 does for a stagger.
+    #[test]
+    fn report_530_a_guard_held_through_a_shield_bash_goes_up_when_it_ends() {
+        use super::phase4_tests::make_act_frame;
+        for held_from_before in [true, false] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            if held_from_before {
+                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+                assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+            }
+            let cast_at = now + Duration::from_millis(100);
+            let _ = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, cast_at);
+            assert!(combat.fighters[0].maneuver_active(cast_at), "precondition");
+            if !held_from_before {
+                // Pressed mid-maneuver: the lock drops it, but the button stays down.
+                let press = cast_at + Duration::from_millis(600);
+                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), press);
+            }
+            assert!(combat.fighters[0].guard_held, "precondition: block held");
+
+            // Tick through the maneuver with no further input from the client.
+            let mut t = cast_at;
+            let mut up_while_maneuvering_after_bash_guard = false;
+            while combat.fighters[0].maneuver_active(t) {
+                t += Duration::from_millis(20);
+                let _ = on_tick(&mut combat, t, false);
+                if combat.fighters[0].maneuver_active(t)
+                    && t > cast_at + Duration::from_millis(700)
+                    && combat.fighters[0].actor_state() == ActorStateType::Blocking
+                {
+                    up_while_maneuvering_after_bash_guard = true;
+                }
+            }
+            assert!(
+                !up_while_maneuvering_after_bash_guard,
+                "the guard must not come up while the maneuver still runs"
+            );
+            let end = t + Duration::from_millis(20);
+            let _ = on_tick(&mut combat, end, false);
+            assert_eq!(
+                combat.fighters[0].actor_state(),
+                ActorStateType::Blocking,
+                "held_from_before={held_from_before}: the held guard goes up at OnManeuverEnded"
+            );
+            assert!(combat.fighters[0].block_phase(end).is_some());
+        }
+    }
+
+    /// The control: a guard released during the bash stays down afterwards.
+    #[test]
+    fn report_530_a_guard_released_during_the_bash_stays_down() {
+        use super::phase4_tests::make_act_frame;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        let cast_at = now + Duration::from_millis(100);
+        let _ = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, cast_at);
+        let release = cast_at + Duration::from_millis(600);
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, true), release);
+        let mut t = cast_at;
+        while combat.fighters[0].maneuver_active(t) || t < release {
+            t += Duration::from_millis(20);
+            let _ = on_tick(&mut combat, t, false);
+        }
+        let end = t + Duration::from_millis(100);
+        let _ = on_tick(&mut combat, end, false);
+        assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert!(combat.fighters[0].block_phase(end).is_none());
     }
 
     /// Report from live play: "Ice Spike now stuns, but it does it instantaneously,

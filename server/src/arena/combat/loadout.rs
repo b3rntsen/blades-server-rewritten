@@ -886,6 +886,15 @@ fn apply_enchant_with_rating_and_multiplier(
         // No percent sign, so a FLAT add — the same shape as Fortify.
         "OpportunistPhysicalPropertyLogic" => lo.opportunist_physical += magnitude,
         "OpportunistElementalPropertyLogic" => lo.opportunist_elemental += magnitude,
+
+        // ---- critical-health families (report #530) ---------------------------
+        // Both were missing: every Adrenaline and Mercy piece fell through `_ => {}`
+        // and did nothing. Gated on the wearer's `IsAtCriticalHealth` where they are
+        // read (`damage::apply_adrenaline`, `Fighter::mercy_against`).
+        "AdrenalinePhysicalPropertyLogic" => lo.adrenaline_physical += magnitude,
+        "AdrenalineElementalPropertyLogic" => lo.adrenaline_elemental += magnitude,
+        "MercyPhysicalPropertyLogic" => lo.mercy_physical += magnitude,
+        "MercyElementalPropertyLogic" => lo.mercy_elemental += magnitude,
         "ArmorPiercingPhysicalPropertyLogic" => lo.armor_piercing_rating += magnitude,
 
         // ---- status-threshold fortifies (Phase 3.8) ------------------------
@@ -1785,6 +1794,46 @@ mod tests {
     ///
     /// 7591 * ENCHANT_DAMAGE_PER_VALUE = 137.32, and 137.21 is an observed value on
     /// the wire in s615.
+    /// Report #530: "The enchantment that activates at critical health doesn't work."
+    /// Adrenaline and Mercy (Physical and Elemental) fell through `_ => {}`. Each now
+    /// loads its SHIPPED tier-10 value (`_xValueByTier[10]`: 25.2 physical, 10.08
+    /// elemental, `property_logic_static.json`).
+    #[test]
+    fn report_530_adrenaline_and_mercy_load_their_shipped_values() {
+        let cases: [(&str, fn(&Loadout) -> f32, f32); 4] = [
+            (
+                "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+                |l| l.adrenaline_physical,
+                25.2,
+            ),
+            (
+                "262ece9b-bd65-4876-b698-5926ca4422be",
+                |l| l.adrenaline_elemental,
+                10.08,
+            ),
+            (
+                "10f57d40-98e9-4181-972b-d654f81afc27",
+                |l| l.mercy_physical,
+                25.2,
+            ),
+            (
+                "d8638848-d706-4ddd-b096-2a56e7696436",
+                |l| l.mercy_elemental,
+                10.08,
+            ),
+        ];
+        for (id, field, want) in cases {
+            let mut lo = Loadout::default();
+            assert_eq!(field(&lo), 0.0, "control: bare loadout");
+            super::apply_enchant(&mut lo, &Uuid::parse_str(id).unwrap(), 10);
+            assert!(
+                (field(&lo) - want).abs() < 1e-3,
+                "{id}: expected {want}, got {}",
+                field(&lo)
+            );
+        }
+    }
+
     #[test]
     fn frost_revenge_t10_is_scaled_to_the_captured_magnitude() {
         use super::super::state::DamageType;
