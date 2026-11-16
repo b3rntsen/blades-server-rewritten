@@ -7320,6 +7320,64 @@ mod tests {
             assert!(plan.changes.is_empty(), "{:?}", plan.changes);
         }
 
+        /// The second prod case (2026-11-16): the REAL Yaskrava renamed his main
+        /// "Yaskrava AI"; the only other "Yaskrava" is his AI copy (numbered
+        /// "Yaskrava 2" by the backfill). Copies do not hold names, so the
+        /// player gets the BARE name back — on the repair and on the import path.
+        #[tokio::test]
+        async fn a_stripped_name_is_bare_when_only_an_ai_copy_holds_it() {
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let (copy_cid, copy_user) = seed_character(&mut c, "Yaskrava", 100, 0).await;
+            add_user_row(&mut c, copy_user).await;
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            let (pcid, _) = seed_character(&mut c, "Yaskrava AI", 100, 0).await;
+            flush(&mut c).await.unwrap();
+
+            let dry = crate::character_names::run_ai_fix(&mut c, true, &[copy_user])
+                .await
+                .unwrap();
+            assert_eq!(dry.renames.len(), 1, "{:?}", dry.renames);
+            assert_eq!(
+                dry.renames[0].new_name, "Yaskrava",
+                "bare: only the copy has it"
+            );
+            let out = crate::character_names::run_ai_fix(&mut c, false, &[copy_user])
+                .await
+                .unwrap();
+            flush(&mut c).await.expect("commit-time check passes");
+            assert_eq!(out.renames, dry.renames);
+            assert_eq!(live_name(&mut c, pcid).await, "Yaskrava");
+            assert_eq!(
+                live_name(&mut c, copy_cid).await,
+                "Yaskrava",
+                "the copy keeps its name"
+            );
+
+            // Import/starter path: the bare name is free of players -> bare;
+            // once a player holds it -> numbered.
+            let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(
+                crate::character_names::settle_name(&mut c, u, a, "Thorn (AI)")
+                    .await
+                    .unwrap(),
+                "Thorn"
+            );
+            let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(
+                crate::character_names::settle_name(&mut c, u, a, "Yaskrava AI")
+                    .await
+                    .unwrap(),
+                "Yaskrava 2",
+                "the player who now holds it keeps it"
+            );
+        }
+
         /// The 2026-11-16 repair, on the prod shape: a holder "Ravena", an AI
         /// copy the backfill numbered "Ravena 2", and a player who then took
         /// "Ravena AI".
