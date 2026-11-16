@@ -1174,17 +1174,23 @@ fn finish_resolved(
     // already does for the perks.
     // Venom Strikes boosts weapon-alchemy poison status effectiveness/duration, not
     // Poison damage components (`VenomStrikesAbility` feeds `PoisonAlchemy`, 05 §3.5).
-    for (ty, v) in components.iter_mut() {
-        if *v > 0.0 {
-            *v *= attacker.innate_damage_multiplier(*ty, source);
-        }
-    }
     if single_impact {
         for (ty, v) in components.iter_mut() {
             if is_elemental(*ty) && *v > 0.0 {
                 *v += (attacker.perks.element_bonus(*ty) + fortify_for(attacker, *ty))
                     * fortify_scale;
             }
+        }
+    }
+    // Racial % bonuses (`FortifyElement` / `FortifyWeaponType` / `EnhanceAbility`
+    // InnateLogic, list `_permanentDamageFactors +0x38`) come AFTER the flat fortify:
+    // `<ResolvePermanentDamageBonuses>b__0@0x1FD0D40` adds PermanentFortify, then
+    // `if v > 0: v *= 1 + Σ factor`. So a Khajiit's +10% poison scales Augmented
+    // Poison and Fortify Poison gear too. Applying it first (as we did) dropped the
+    // racial share of every flat add (tracker #532).
+    for (ty, v) in components.iter_mut() {
+        if *v > 0.0 {
+            *v *= attacker.innate_damage_multiplier(*ty, source);
         }
     }
 
@@ -1624,7 +1630,51 @@ mod tests {
             0,
             now,
         );
-        assert!((comp(&ordered, DamageType::Fire) - 115.0).abs() < 0.01);
+        // Retail `<ResolvePermanentDamageBonuses>b__0@0x1FD0D40`: the flat fortify is
+        // added FIRST, then `v *= 1 + Σ PermanentDamageFactor` (the racial %), so the
+        // racial bonus scales the perk too: (100 + 10) × 1.05 = 115.5, not
+        // 100 × 1.05 + 10 = 115 (tracker #532).
+        assert!(
+            (comp(&ordered, DamageType::Fire) - 115.5).abs() < 0.01,
+            "racial % must multiply the flat fortify too, got {}",
+            comp(&ordered, DamageType::Fire)
+        );
+    }
+
+    /// Tracker #532: a real Khajiit (resolved from the live `CharacterUID`, not a
+    /// hand-built factor) with Augmented Poison and Fortify Poison gear. Retail folds
+    /// `(base + perk + gear) × (1 + 0.10)`; the racial 10% used to skip both flat adds.
+    #[test]
+    fn khajiit_poison_bonus_scales_augmented_poison_and_fortify_gear() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut khajiit = plain_blade(Weight::Light);
+        khajiit.weapon.base_by_type = vec![(DamageType::Poison, 100.0)];
+        khajiit
+            .perks
+            .element_damage
+            .push((DamageType::Poison, 10.0));
+        khajiit.element_fortify.push((DamageType::Poison, 20.0));
+        super::super::loadout::apply_racial_innates_from_customization(
+            &mut khajiit,
+            &serde_json::json!({
+                "CharacterUID": {"id": {"_t": "String", "_v": "81c01573-8c66-48d2-856a-25459fbb97b8"}}
+            }),
+        );
+        let hit = m.resolve_attack(
+            &khajiit,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!(
+            (comp(&hit, DamageType::Poison) - 143.0).abs() < 0.01,
+            "(100 + 10 + 20) x 1.10 = 143, got {}",
+            comp(&hit, DamageType::Poison)
+        );
     }
 
     /// An un-armored, un-blocking L100 target.
