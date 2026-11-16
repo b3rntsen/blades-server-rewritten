@@ -2967,8 +2967,9 @@ mod learned_perk_tests {
             "no equipped Resist Fire enchant"
         );
         assert!(
-            close(rating(DamageType::Frost), 21.79089),
-            "equipped gear/template data contributes permanent Frost resistance"
+            close(rating(DamageType::Frost), 30.97548),
+            "Material Resist Frost x the TEMPERED piece ratings (#536): \
+             0.0667 x (Stalhrim Helmet t9 162.0 + Dwarven Mail Armor t10 302.4)"
         );
         assert!(
             close(rating(DamageType::Shock), 0.0),

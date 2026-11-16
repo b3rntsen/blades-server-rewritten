@@ -74,7 +74,7 @@ def main():
     )
     write_table(
         src, items, sha, ("ARMORS",), ARMOR_OUT, ARMOR_DOC,
-        "ARMOR_TEMPER", "Armor Rating", "tempered_armor_value",
+        "ARMOR_TEMPER", "Armor Rating", "tempered_armor_value", skip_zero=True,
     )
 
 
@@ -102,7 +102,7 @@ ARMOR_DOC = [
 ]
 
 
-def write_table(src, items, sha, tables, out, doc, const, what, fn):
+def write_table(src, items, sha, tables, out, doc, const, what, fn, skip_zero=False):
     rows = []
     for table in tables:
         for u in template_uuids(src, table):
@@ -111,6 +111,10 @@ def write_table(src, items, sha, tables, out, doc, const, what, fn):
                 continue
             levels = t["levels"]
             assert len(levels) == 10, (u, len(levels))
+            if skip_zero and not any(lv["protection"] for lv in levels):
+                # Untemperable (Thalmor clothes ship ten zero rows): keep the
+                # template's own value rather than a zero.
+                continue
             rows.append((u, t["editor_name"], [lv["protection"] for lv in levels]))
     rows.sort(key=lambda r: r[0])
     assert len({r[0] for r in rows}) == len(rows)
