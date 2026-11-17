@@ -777,6 +777,7 @@ async fn main() -> Result<()> {
                     .service(arena::top100_boards::get_arena_h2h_guilds)
                     .service(arena::top100_boards::get_arena_guild_members)
                     .service(arena::top100_boards::get_arena_h2h_matches)
+                    .service(arena::top100_renames::get_arena_recent_renames)
                     .service(arena::monthly_matches::get_arena_monthly_matches)
                     .service(arena::monthly_matches::get_arena_season_matches)
                     .service(admin::rebuild_arena_h2h_ratings)

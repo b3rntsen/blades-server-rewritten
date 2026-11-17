@@ -157,6 +157,19 @@ pub fn blocking_item_rating(uuid: &str, block_base: f32, tempering_level: u64) -
         .ceil()
 }
 
+/// One armour piece's rating `P`: the temper-level `protection` value when the piece
+/// is tempered, otherwise the template's `armorRating`.
+///
+/// `Actor$$GetDisplayedProtectionRatingForItem@0x1c56260` reads
+/// `GetTemperPropertiesForLevel(level) +0x18` for a tempered item and the template
+/// `armorRating` (+0x110) for an untempered one, then `CeilToInt`s it, and
+/// `GetEquippedProtectionRating@0x1c55da4` sums those per-piece integers. A material
+/// property's `GetRawXValue@0x24d0ae4` multiplies by the same `P`, un-ceiled, so
+/// this returns the raw value and the Armor Rating sum ceils it.
+pub fn armor_piece_rating(a: &gamedata::ArmorStats, tempering_level: u64) -> f32 {
+    super::armor_temper::tempered_armor_value(a.uuid, tempering_level).unwrap_or(a.armor_rating)
+}
+
 /// The UESP fallback surface, for characters whose weapon does not resolve to a
 /// shipped template (imported without inventory, bots).
 fn fallback_weapon_profile(level: u16) -> WeaponProfile {
@@ -255,8 +268,11 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
                 weapon = Some((w, eq.item.tempering_level));
             }
         } else if let Some(a) = gamedata::armor(&template) {
-            lo.armor_rating += a.armor_rating;
-            item_rating_for_material = Some(a.armor_rating);
+            // The piece's TEMPERED rating (tracker #536). The Armor Rating sums it
+            // ceiled per piece; material properties scale by it un-ceiled.
+            let rating = armor_piece_rating(a, eq.item.tempering_level);
+            lo.armor_rating += rating.ceil();
+            item_rating_for_material = Some(rating);
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
             item_rating_for_material = Some(blocking_item_rating(
@@ -617,7 +633,7 @@ fn profile_base(p: &WeaponProfile) -> f32 {
 ///
 /// Unknown families are ignored (they are cosmetic / out-of-combat / economy
 /// logics such as `SelfRepairOnFrostDamagePropertyLogic`).
-fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
+pub(super) fn apply_enchant(lo: &mut Loadout, id: &Uuid, tier: u8) {
     apply_enchant_with_rating(lo, id, tier, None);
 }
 
@@ -740,6 +756,34 @@ fn apply_enchant_with_rating_and_multiplier(
             push_shield_ravage(lo, DamageType::Magicka, magnitude)
         }
         "ShieldRavageHealthPropertyLogic" => push_shield_ravage(lo, DamageType::Health, magnitude),
+
+        // ---- Absorb (combat-spec 09 §2.3) ------------------------------------
+        // `AbsorbBonusInstance$$DamageGiven@0x1e836b0`: on every landed hit by the
+        // wearer (any source, target != self, an equipped weapon) restore
+        // `min(health damage dealt, X)` of `_targetStat`. X is read per weapon class
+        // (`GetAbsorbAmount@0x1e83960`), so all three columns are stored. The
+        // Bloodthirst variant ("Absorb Health Or Self Repair") is the same class with
+        // `_durabilityGainedIfAbsorbOnFull` set; durability does not exist in the
+        // arena, so only its absorb half applies.
+        "AbsorbHealthPropertyLogic" | "AbsorbHealthGainDurabilityPropertyLogic" => {
+            push_absorb(lo, DamageType::Health, &uuid, tier, xvalue_multiplier)
+        }
+        "AbsorbStaminaPropertyLogic" => {
+            push_absorb(lo, DamageType::Stamina, &uuid, tier, xvalue_multiplier)
+        }
+        "AbsorbMagickaPropertyLogic" => {
+            push_absorb(lo, DamageType::Magicka, &uuid, tier, xvalue_multiplier)
+        }
+
+        // ---- situational physical adders (combat-spec 09 §2.1) ----------------
+        // Both register in `_situationalAdditiveDamage` and add X to the component
+        // of the weapon's own `_damageType` on a weapon-based source; see
+        // `damage::RetailDamageModel::physical_base_components`.
+        "FortifyComboDamagePropertyLogic" => lo.fortify_combo_damage += magnitude,
+        "ExtraDamageOnBlockingEnemyPropertyLogic" => lo.fortify_blocked_damage += magnitude,
+
+        // ---- heal fold (combat-spec 11 §3.1) ----------------------------------
+        "FortifyHealingPropertyLogic" => lo.fortify_healing += magnitude,
         "ShieldFireDamagePropertyLogic" => {
             lo.shield_enchant_damage.push((DamageType::Fire, magnitude))
         }
@@ -886,6 +930,15 @@ fn apply_enchant_with_rating_and_multiplier(
         // No percent sign, so a FLAT add — the same shape as Fortify.
         "OpportunistPhysicalPropertyLogic" => lo.opportunist_physical += magnitude,
         "OpportunistElementalPropertyLogic" => lo.opportunist_elemental += magnitude,
+
+        // ---- critical-health families (report #530) ---------------------------
+        // Both were missing: every Adrenaline and Mercy piece fell through `_ => {}`
+        // and did nothing. Gated on the wearer's `IsAtCriticalHealth` where they are
+        // read (`damage::apply_adrenaline`, `Fighter::mercy_against`).
+        "AdrenalinePhysicalPropertyLogic" => lo.adrenaline_physical += magnitude,
+        "AdrenalineElementalPropertyLogic" => lo.adrenaline_elemental += magnitude,
+        "MercyPhysicalPropertyLogic" => lo.mercy_physical += magnitude,
+        "MercyElementalPropertyLogic" => lo.mercy_elemental += magnitude,
         "ArmorPiercingPhysicalPropertyLogic" => lo.armor_piercing_rating += magnitude,
 
         // ---- status-threshold fortifies (Phase 3.8) ------------------------
@@ -1134,6 +1187,22 @@ fn push_ravage(lo: &mut Loadout, ty: DamageType, uuid: &str, tier: u8) {
     };
     if magnitude > 0.0 {
         lo.ravage.push((ty, magnitude));
+    }
+}
+
+/// Store one Absorb enchantment with all three weapon-class columns of its shipped
+/// table, each scaled by the item's X-value multiplier (Fortify Primary Effect).
+fn push_absorb(lo: &mut Loadout, stat: DamageType, uuid: &str, tier: u8, xmult: f32) {
+    let col =
+        |w| gamedata::enchant_magnitude_for_weight(uuid, tier, w).unwrap_or(0.0) * xmult.max(0.0);
+    let by_weight = [
+        col(tables::Weight::Light),
+        col(tables::Weight::Versatile),
+        col(tables::Weight::Heavy),
+    ];
+    if by_weight.iter().any(|v| *v > 0.0) {
+        lo.absorb
+            .push(super::state::AbsorbEnchant { stat, by_weight });
     }
 }
 
@@ -1785,6 +1854,46 @@ mod tests {
     ///
     /// 7591 * ENCHANT_DAMAGE_PER_VALUE = 137.32, and 137.21 is an observed value on
     /// the wire in s615.
+    /// Report #530: "The enchantment that activates at critical health doesn't work."
+    /// Adrenaline and Mercy (Physical and Elemental) fell through `_ => {}`. Each now
+    /// loads its SHIPPED tier-10 value (`_xValueByTier[10]`: 25.2 physical, 10.08
+    /// elemental, `property_logic_static.json`).
+    #[test]
+    fn report_530_adrenaline_and_mercy_load_their_shipped_values() {
+        let cases: [(&str, fn(&Loadout) -> f32, f32); 4] = [
+            (
+                "8fd72d41-3e82-4865-b49e-b576b8384aa9",
+                |l| l.adrenaline_physical,
+                25.2,
+            ),
+            (
+                "262ece9b-bd65-4876-b698-5926ca4422be",
+                |l| l.adrenaline_elemental,
+                10.08,
+            ),
+            (
+                "10f57d40-98e9-4181-972b-d654f81afc27",
+                |l| l.mercy_physical,
+                25.2,
+            ),
+            (
+                "d8638848-d706-4ddd-b096-2a56e7696436",
+                |l| l.mercy_elemental,
+                10.08,
+            ),
+        ];
+        for (id, field, want) in cases {
+            let mut lo = Loadout::default();
+            assert_eq!(field(&lo), 0.0, "control: bare loadout");
+            super::apply_enchant(&mut lo, &Uuid::parse_str(id).unwrap(), 10);
+            assert!(
+                (field(&lo) - want).abs() < 1e-3,
+                "{id}: expected {want}, got {}",
+                field(&lo)
+            );
+        }
+    }
+
     #[test]
     fn frost_revenge_t10_is_scaled_to_the_captured_magnitude() {
         use super::super::state::DamageType;
@@ -1847,6 +1956,105 @@ mod tests {
     }
     use super::*;
     use serde_json::json;
+
+    /// Six families every prod character carrying them got NOTHING from: each fell
+    /// through `apply_enchant`'s `_ => {}`. Each now loads its SHIPPED tier-10 value
+    /// (`enchant_magnitudes.json`), per weapon class where the family has a table per
+    /// class (`AbsorbBonusInstance$$GetAbsorbAmount@0x1e83960`).
+    #[test]
+    fn missing_enchantments_load_their_shipped_tier_ten_values() {
+        use crate::arena::combat::state::AbsorbEnchant;
+        let id = |s: &str| Uuid::parse_str(s).unwrap();
+        let bare = Loadout::default();
+        assert!(
+            bare.absorb.is_empty(),
+            "control: bare loadout absorbs nothing"
+        );
+
+        let absorb = |uuid: &str| {
+            let mut lo = Loadout::default();
+            apply_enchant(&mut lo, &id(uuid), 10);
+            lo.absorb
+        };
+        let close3 = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3);
+        let one = |v: Vec<AbsorbEnchant>, stat: DamageType, want: [f32; 3]| {
+            assert_eq!(v.len(), 1, "{stat:?}: one absorb entry");
+            assert_eq!(v[0].stat, stat);
+            assert!(
+                close3(v[0].by_weight, want),
+                "{stat:?}: {:?} != {want:?}",
+                v[0].by_weight
+            );
+        };
+        one(
+            absorb("cc432e27-813c-4afa-a3df-d587cfd550d2"),
+            DamageType::Health,
+            [3.17, 4.15, 5.27],
+        );
+        one(
+            absorb("652d5ac9-3076-405b-a163-dde1a950fb26"),
+            DamageType::Stamina,
+            [9.5, 12.45, 15.8],
+        );
+        one(
+            absorb("94aa3774-cd7e-400c-9d17-a4652fb88a93"),
+            DamageType::Magicka,
+            [9.5, 12.45, 15.8],
+        );
+        // Bloodthirst variant: same class, its own (flat across classes) table.
+        one(
+            absorb("13a46a9b-3d02-48c7-b57c-f9424f10ab1d"),
+            DamageType::Health,
+            [4.15, 4.15, 4.15],
+        );
+
+        let flat = |uuid: &str, tier: u8, field: fn(&Loadout) -> f32, want: f32| {
+            let mut lo = Loadout::default();
+            assert_eq!(field(&lo), 0.0, "{uuid}: control");
+            apply_enchant(&mut lo, &id(uuid), tier);
+            assert!(
+                (field(&lo) - want).abs() < 1e-3,
+                "{uuid} t{tier}: {} != {want}",
+                field(&lo)
+            );
+        };
+        flat(
+            "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+            10,
+            |l| l.fortify_combo_damage,
+            51.53,
+        );
+        flat(
+            "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+            1,
+            |l| l.fortify_combo_damage,
+            18.41,
+        );
+        flat(
+            "af1e56bf-1974-452c-aa70-36b2140cbb07",
+            10,
+            |l| l.fortify_blocked_damage,
+            156.98,
+        );
+        flat(
+            "af1e56bf-1974-452c-aa70-36b2140cbb07",
+            1,
+            |l| l.fortify_blocked_damage,
+            56.06,
+        );
+        flat(
+            "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+            10,
+            |l| l.fortify_healing,
+            16.6,
+        );
+        flat(
+            "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f",
+            1,
+            |l| l.fortify_healing,
+            6.8,
+        );
+    }
 
     const WEAPON_POISON_DAMAGE: &str = "08ea75d0-5cf1-44a9-9816-d3c6740c4191";
     const FORTIFY_HEALTH: &str = "b4de8d1b-d8a1-4575-8517-c1e5800a7525";
@@ -2951,8 +3159,9 @@ mod learned_perk_tests {
             "no equipped Resist Fire enchant"
         );
         assert!(
-            close(rating(DamageType::Frost), 21.79089),
-            "equipped gear/template data contributes permanent Frost resistance"
+            close(rating(DamageType::Frost), 30.97548),
+            "Material Resist Frost x the TEMPERED piece ratings (#536): \
+             0.0667 x (Stalhrim Helmet t9 162.0 + Dwarven Mail Armor t10 302.4)"
         );
         assert!(
             close(rating(DamageType::Shock), 0.0),
@@ -3420,5 +3629,172 @@ mod report_231_artifact_regen_tests {
         let mut lo = Loadout::default();
         apply_template_properties(&mut lo, FORK_OF_HORRIPILATION);
         assert!(lo.blocks_magicka_regen);
+    }
+}
+
+/// Tracker #536: armour TEMPERING feeds the Armor Rating and every material
+/// property of the piece.
+///
+/// `Actor$$GetDisplayedProtectionRatingForItem@0x1c56260` reads a tempered piece's
+/// `GetTemperPropertiesForLevel(level) +0x18` (the `protection` column), falls back
+/// to the template's `armorRating` only when untempered, and `CeilToInt`s the
+/// result; `GetEquippedProtectionRating@0x1c55da4` sums those integers. A material
+/// property (`_propertyType == 2`) multiplies its xValue by the same temper-level
+/// value (`GetRawXValue@0x24d0ae4`). We read the untempered template value for
+/// both, so a tempering-10 set lost roughly a third of its armour and of its
+/// material resistances.
+///
+/// Expected values are literals from `tempering.json` (`levels[9].protection`) and
+/// the shipped material xValue `0.0667`, not values computed by the code under test.
+#[cfg(test)]
+mod report_536_armor_tempering {
+    use super::*;
+    use blades_lib::user_data::{
+        Backpack, CompleteInventory, Item, ItemPropertiesAll, SingleEquippedItem, Treasury,
+    };
+
+    /// Leather Armor (armorSet 20, `armorRating` 207.9, tempering-10 protection
+    /// 302.4) carrying Material Resist Bashing + Material Resist Shock.
+    const LEATHER_ARMOR: &str = "7f495ddd-f2ca-44d8-aeba-df09e25deda5";
+    const MATERIAL_XVALUE: f32 = 0.0667;
+
+    fn one_piece(template: &str, tempering_level: u64) -> Loadout {
+        let mut inv = blades_lib::user_data::Loadout::default();
+        let slot = Uuid::from_u128(1);
+        inv.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id: Uuid::from_u128(2),
+                slot,
+                item: Item {
+                    item_template_id: Uuid::parse_str(template).unwrap(),
+                    tempering_level,
+                    durability: 100.0,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: ItemPropertiesAll::default(),
+                },
+            },
+        );
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: inv,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        from_character(&CompleteCharacter::default(), &inventory)
+    }
+
+    fn resist(lo: &Loadout, ty: DamageType) -> f32 {
+        lo.resistances
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 0.01
+    }
+
+    #[test]
+    fn a_tempered_piece_counts_its_temper_level_armor_rating() {
+        let lo = one_piece(LEATHER_ARMOR, 10);
+        assert_eq!(
+            lo.armor_rating, 303.0,
+            "ceil(302.4), not the template's 207.9"
+        );
+    }
+
+    #[test]
+    fn an_untempered_piece_counts_its_template_rating_ceiled() {
+        let lo = one_piece(LEATHER_ARMOR, 0);
+        assert_eq!(lo.armor_rating, 208.0, "ceil(207.9)");
+    }
+
+    #[test]
+    fn material_resistances_scale_with_the_tempered_rating() {
+        let tempered = one_piece(LEATHER_ARMOR, 10);
+        let raw = one_piece(LEATHER_ARMOR, 0);
+        for ty in [DamageType::Bashing, DamageType::Shock] {
+            assert!(
+                close(resist(&tempered, ty), MATERIAL_XVALUE * 302.4),
+                "{ty:?}: tempered {} want {}",
+                resist(&tempered, ty),
+                MATERIAL_XVALUE * 302.4
+            );
+            assert!(
+                close(resist(&raw, ty), MATERIAL_XVALUE * 207.9),
+                "{ty:?}: untempered {}",
+                resist(&raw, ty)
+            );
+        }
+    }
+
+    #[test]
+    fn every_armor_temper_row_rises_from_the_template_value() {
+        let mut checked = 0;
+        for a in gamedata::ARMORS.iter() {
+            let Some(t1) = super::super::armor_temper::tempered_armor_value(a.uuid, 1) else {
+                continue;
+            };
+            let t10 = super::super::armor_temper::tempered_armor_value(a.uuid, 10).unwrap();
+            assert!(t1 >= a.armor_rating, "{}: level 1 {t1} < base", a.name);
+            assert!(t10 >= t1, "{}: level 10 {t10} < level 1 {t1}", a.name);
+            checked += 1;
+        }
+        assert_eq!(checked, 199, "armour templates with a non-zero temper table");
+    }
+
+    /// Pogagoga's live loadout (prod, read-only SELECT 2026-11-16): four
+    /// tempering-10 armour pieces. Per piece, ceiled temper-10 protection:
+    /// Dragonscale Helmet 172.8 → 173, Hide Gauntlets 122.4 → 123, Leather Armor
+    /// 302.4 → 303, Stalhrim Boots 122.4 → 123 = 722. We used to count the template
+    /// values 118.8 + 84.15 + 207.9 + 84.15 = 495.
+    #[test]
+    fn pogagogas_tempered_set_counts_in_full() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("testdata/report536_pogagoga_character.json"))
+                .expect("fixture JSON");
+        let character: CompleteCharacter =
+            serde_json::from_value(fixture["character"].clone()).expect("character");
+        let loadout: blades_lib::user_data::Loadout =
+            serde_json::from_value(fixture["loadout"].clone()).expect("loadout");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let lo = from_character(&character, &inventory);
+        assert_eq!(lo.display_name, "Pogagoga");
+        assert_eq!(lo.armor_rating - lo.perks.matching_set_armor, 722.0);
+        // Material resistances off the tempered ratings:
+        // Cleaving/Poison from the helmet, Shock from the cuirass, Frost from the
+        // boots, Bashing from cuirass + boots.
+        assert!(close(
+            resist(&lo, DamageType::Cleaving),
+            MATERIAL_XVALUE * 172.8
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Poison),
+            MATERIAL_XVALUE * 172.8
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Shock),
+            MATERIAL_XVALUE * 302.4
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Frost),
+            MATERIAL_XVALUE * 122.4
+        ));
+        assert!(close(
+            resist(&lo, DamageType::Bashing),
+            MATERIAL_XVALUE * (302.4 + 122.4)
+        ));
     }
 }

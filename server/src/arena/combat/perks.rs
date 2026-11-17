@@ -298,6 +298,9 @@ pub struct CasterPerks<'a> {
     /// The caster's `Fortify <Element> Damage` gear. A slice, not a Vec, because
     /// `CasterPerks` is `Copy`.
     pub element_fortify: &'a [(super::state::DamageType, f32)],
+    /// The caster's Adrenaline gear, live while `health_critical` (report #530).
+    pub adrenaline_physical: f32,
+    pub adrenaline_elemental: f32,
 }
 
 impl CasterPerks<'static> {
@@ -310,6 +313,8 @@ impl CasterPerks<'static> {
             elem_resist_piercing: 0.0,
             elem_resist_piercing_rating: 0.0,
             element_fortify: &[],
+            adrenaline_physical: 0.0,
+            adrenaline_elemental: 0.0,
         }
     }
 }
@@ -336,6 +341,8 @@ impl<'a> CasterPerks<'a> {
             elem_resist_piercing: f.loadout.elem_resist_piercing,
             elem_resist_piercing_rating: f.loadout.elem_resist_piercing_rating,
             element_fortify: &f.loadout.element_fortify,
+            adrenaline_physical: f.loadout.adrenaline_physical,
+            adrenaline_elemental: f.loadout.adrenaline_elemental,
         }
     }
 }
