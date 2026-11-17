@@ -1,9 +1,9 @@
 {
  "_meta": {
-  "description": "DecorationCrafting recipe id -> the town prestige (townXp) retail paid when that craft was collected.",
-  "source": "APK ItemBundleGenerationDataList (reference/game-defs/shop_bundles.json in the capture repo): the Workshop bundle whose single item is the recipe's output template carries `town_xp`; the recipe -> output mapping is recipe_outputs.json. Every Workshop decoration template has exactly one such bundle, each of quantity 1.",
-  "evidence": "Retail capture 17253 (2026-05-15): collecting DecorationCrafting recipe 6d164b3d (Ancient Tree) moved town.levelInfo.experiencePoints 87565 -> 87656, +91 = this bundle's town_xp; the response carried `town`.",
-  "not_here": "The other 102 DecorationCrafting recipes have no Workshop bundle and no prestige value anywhere in the APK data we hold, so they pay nothing rather than an invented number."
+  "description": "DecorationCrafting recipe id -> the town prestige (townXp) collecting that craft pays.",
+  "source": "APK ItemBundleGenerationDataList (reference/game-defs/shop_bundles.json in the capture repo): the single-item, quantity-1 bundle selling the recipe's output -- a Workshop bundle, else the gem store's IAP_Deco_ bundle -- carries `town_xp`; recipe -> output is recipe_outputs.json. Regenerate with script/extract_decoration_craft_prestige.py.",
+  "evidence": "Retail capture 17253 (2026-05-15): collecting DecorationCrafting recipe 6d164b3d (Ancient Tree) moved town.levelInfo.experiencePoints 87565 -> 87656, +91 = its Workshop bundle's town_xp; the response carried `town`. The IAP_Deco_ values are what the retail store paid for buying the same decoration (report #538); no retail capture crafts one.",
+  "not_here": "The other 67 DecorationCrafting recipes' outputs have no single-decoration bundle and no prestige value anywhere in the APK data we hold, so they pay nothing rather than an invented number."
  },
  "recipes": {
   "0ba4a489-d9d9-4768-9c46-a319c852a02e": {
@@ -12,6 +12,34 @@
    "townXp": 57,
    "bundleId": "c3380941-d2e6-4031-a2a5-ce4aa06e28a7",
    "bundle": "Workshop - L Decoration - Gallows"
+  },
+  "0d780617-1d4c-4577-bfcb-93bc248fec98": {
+   "outputItemTemplateId": "add0fef4-b7cb-436e-a537-d4f41174d1af",
+   "name": "Black & Gold Stele",
+   "townXp": 44,
+   "bundleId": "488af51f-b63b-47ab-ae7c-c89568f3f5f3",
+   "bundle": "IAP_Deco_S_Stele3"
+  },
+  "12a3769d-6f0c-4f88-b95f-b4bdc51d52c9": {
+   "outputItemTemplateId": "e9f2c268-f3b7-4c0a-8038-3073e34e3d13",
+   "name": "New Life Banner",
+   "townXp": 12,
+   "bundleId": "9c6a97e6-4d4d-4b68-b3d7-d9574a2b76f7",
+   "bundle": "IAP_Deco_S_NewLifeBanner"
+  },
+  "14d42128-1436-46fc-b93b-ce6eec6164d7": {
+   "outputItemTemplateId": "c2ea9e2a-5662-4184-a104-4a510821d7b6",
+   "name": "A Fool's Respite",
+   "townXp": 50,
+   "bundleId": "4be8fe21-f548-4eab-9308-9135fad8b6d7",
+   "bundle": "IAP_Deco_S_AFoolsRespite"
+  },
+  "15012dca-d43d-4b53-93ee-bc693d2b68b3": {
+   "outputItemTemplateId": "e75f1379-27c2-4bff-be71-79b38b45270d",
+   "name": "Scarecrow",
+   "townXp": 10,
+   "bundleId": "eb4d84f5-ab0e-4fbc-bab4-b0b9b09608fa",
+   "bundle": "IAP_Deco_S_Scarecrow"
   },
   "174e762c-3154-4541-8e0d-e49b82ecb26c": {
    "outputItemTemplateId": "703fe90f-e8be-4f11-8029-fc87295b8895",
@@ -26,6 +54,13 @@
    "townXp": 59,
    "bundleId": "3d8e3f51-ce5b-4d68-aa3d-f3d36d46cdd7",
    "bundle": "Workshop - L Decoration - Large Tree #2"
+  },
+  "19575686-1ac0-4686-a942-0b76ecee5e06": {
+   "outputItemTemplateId": "eded85b4-554f-4746-a27a-d624bc1da7cf",
+   "name": "Grand Saturalia Tree",
+   "townXp": 80,
+   "bundleId": "3f4ad011-6c3c-48eb-b31b-b6eed3f1c6f7",
+   "bundle": "IAP_Deco_L_SnowTree_01"
   },
   "197e7478-2e59-4007-a461-c0fc619e957d": {
    "outputItemTemplateId": "ea5b4d2c-61cc-49e6-acaa-e41d6dd4adc9",
@@ -48,12 +83,26 @@
    "bundleId": "81be0d03-38dc-4398-ba1a-77a906ba2432",
    "bundle": "Workshop - M Decoration - Tree #3"
   },
+  "2ac9016d-79fc-4bea-88e2-10b2799a954c": {
+   "outputItemTemplateId": "5b6ec37e-e969-4832-a1c4-9bb84a4227a7",
+   "name": "Peridot Beacon",
+   "townXp": 61,
+   "bundleId": "6a2b9bb5-051d-4c3a-83cc-5ef5853005e8",
+   "bundle": "IAP_Deco_S_PeridotBeacon"
+  },
   "2c87ca37-71ea-4b61-9b5f-52577a45cd60": {
    "outputItemTemplateId": "57b2a90b-c963-4c80-88e3-fd94d774c27c",
    "name": "Mulberry Tree",
    "townXp": 9,
    "bundleId": "0f840160-10fd-439f-b831-e96633c32eef",
    "bundle": "Workshop - S Decoration - Small Tree #1"
+  },
+  "34a4c2a2-1347-4823-9da7-a6a5a280948a": {
+   "outputItemTemplateId": "b53d6051-48a4-410a-a4f6-e9edc3e624f6",
+   "name": "Ice Unicorn",
+   "townXp": 27,
+   "bundleId": "e656d4de-b991-4c9e-8b07-73556cfc7ab1",
+   "bundle": "IAP_Deco_S_IceUnicorn"
   },
   "3a2be530-5cc0-4295-8567-dabc8cd9c83c": {
    "outputItemTemplateId": "023ee5a7-ea62-4214-8749-84da4de5793b",
@@ -68,6 +117,27 @@
    "townXp": 56,
    "bundleId": "7bbc2711-7ecc-4120-ba42-72811b513fac",
    "bundle": "Workshop - S Decoration - Beacon"
+  },
+  "3f2eecee-d295-4060-a0ea-867b27761408": {
+   "outputItemTemplateId": "9fa4b89e-f738-425e-9fae-4af65ccb0604",
+   "name": "Hircine's Prize",
+   "townXp": 142,
+   "bundleId": "ed877797-34c9-49b2-b80c-3ca5452183bf",
+   "bundle": "IAP_Deco_L_UnicornFountain"
+  },
+  "4d8a031f-a97b-4df9-a632-5ffca0f58a16": {
+   "outputItemTemplateId": "49ab6268-3eb0-4546-a417-f4107ac327fb",
+   "name": "Ice Dragon Bust",
+   "townXp": 27,
+   "bundleId": "a031c8e0-d642-401f-a236-d1a1660a3e38",
+   "bundle": "IAP_Deco_S_IceDragonBust"
+  },
+  "4fc8c681-382d-4507-a384-92e95eaeccc2": {
+   "outputItemTemplateId": "04d05817-08f3-4368-8f95-64d617699b19",
+   "name": "Garnet Beacon",
+   "townXp": 61,
+   "bundleId": "7e559e23-3843-4990-93c6-47c729dbd92f",
+   "bundle": "IAP_Deco_S_GarnetBeacon"
   },
   "507eeb8c-0a7c-4293-927c-60b45d7f47fc": {
    "outputItemTemplateId": "bebb7325-98f3-452d-b830-d406a6105580",
@@ -97,6 +167,13 @@
    "bundleId": "87bc3704-fa15-499a-8fbb-439be8186ac8",
    "bundle": "Workshop - M Decoration - Keg of Ale"
   },
+  "6317398f-f283-4c54-8ae0-0ca909f84fa8": {
+   "outputItemTemplateId": "b74639cf-8df4-45ec-9055-a37f88b7e321",
+   "name": "Abyssal Hourglass",
+   "townXp": 91,
+   "bundleId": "f22cebbc-9fbc-49c6-aed4-42b95dbe2b9a",
+   "bundle": "IAP_Deco_M_Abyss1"
+  },
   "664548cc-ab6e-4b8e-8e99-9d4df5b94f14": {
    "outputItemTemplateId": "0594db3b-8fe3-4ae2-9a3e-8856acc06ccf",
    "name": "Tall Shrub",
@@ -104,12 +181,26 @@
    "bundleId": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
    "bundle": "Workshop - S Decoration - Flowers #3"
   },
+  "67bac256-4539-487e-bce7-b6cf51643ae8": {
+   "outputItemTemplateId": "1a692f65-abc2-403c-ae30-baef4ce75592",
+   "name": "The Painful Lesson",
+   "townXp": 40,
+   "bundleId": "cf7d54b3-207e-4a70-81a7-6bd39515c447",
+   "bundle": "IAP_Deco_S_ThePainfulLesson"
+  },
   "6b650e68-b544-45c2-b40f-8a3ee59008d4": {
    "outputItemTemplateId": "0bb2b12e-49f6-4f7d-bcd1-c8b4fd548786",
    "name": "Tall Aspen Tree",
    "townXp": 54,
    "bundleId": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
    "bundle": "Workshop - M Decoration - Tree #4"
+  },
+  "6ca3e482-a967-4306-bbf5-f695caeac070": {
+   "outputItemTemplateId": "f075e3ea-df65-4a65-afb4-9776ba0e35cf",
+   "name": "Emerald Beacon",
+   "townXp": 61,
+   "bundleId": "569b7458-ac11-493d-b1a3-b3c40c485316",
+   "bundle": "IAP_Deco_S_EmeraldBeacon"
   },
   "6d164b3d-6532-4c4b-adcc-b4b8bc75f2dd": {
    "outputItemTemplateId": "d25c8faa-5943-4ab1-99d2-aab025ecb581",
@@ -124,6 +215,20 @@
    "townXp": 168,
    "bundleId": "9f980fdc-d48a-40ed-b26c-9961fe8c4d67",
    "bundle": "Workshop - M Decoration - Torture Cage"
+  },
+  "7247c4ed-41b2-4710-8dad-57e7028c3a76": {
+   "outputItemTemplateId": "b3c128e2-d811-4f85-a9b9-62aefdde092d",
+   "name": "Ice Elk",
+   "townXp": 27,
+   "bundleId": "72717644-7aaa-42c0-b729-9af3d45d6c5e",
+   "bundle": "IAP_Deco_S_IceElk"
+  },
+  "729bedc8-aafb-4fc3-93c2-65259b069349": {
+   "outputItemTemplateId": "48fad7a1-3f32-4dad-811a-c33312717176",
+   "name": "Golden Stallion",
+   "townXp": 133,
+   "bundleId": "75ae96d6-badf-40f3-b752-1a5e239862f0",
+   "bundle": "IAP_Deco_M_GoldenHorse"
   },
   "732c0750-c969-43af-bcf9-2391432b1b97": {
    "outputItemTemplateId": "2cf13c38-bfb1-4668-93a2-1199478854b6",
@@ -146,6 +251,13 @@
    "bundleId": "839d1afb-5adc-4439-9a9d-61cc99c8b91e",
    "bundle": "Workshop - M Decoration - Outhouse"
   },
+  "87601390-fed9-455d-a39d-3aad32c99ac4": {
+   "outputItemTemplateId": "56a1ce35-e3c7-47e7-993f-b63ff14e05b1",
+   "name": "Dragon Snow Globe",
+   "townXp": 187,
+   "bundleId": "e4e080ea-5af9-40b6-a998-20474d5c6269",
+   "bundle": "IAP_Deco_L_DragonSnowGlobe"
+  },
   "87802e7f-4eef-4c71-b1e0-549bb3673d66": {
    "outputItemTemplateId": "939df0a7-d349-4601-943c-29c834bc2280",
    "name": "Blue Banner",
@@ -159,6 +271,34 @@
    "townXp": 72,
    "bundleId": "767604e5-fb72-4d71-8323-6451ae22194f",
    "bundle": "Workshop - M Decoration - Stone cairn"
+  },
+  "8d7b1bea-2ad9-4f14-a074-1d2929b6c40f": {
+   "outputItemTemplateId": "85164324-f536-40b6-ad86-559932529ae8",
+   "name": "Saturalia Tree",
+   "townXp": 40,
+   "bundleId": "1e8355ac-594d-45a4-ba1e-3ebac4e12bf2",
+   "bundle": "IAP_Deco_M_LifeTree_01"
+  },
+  "92461bd2-179e-434d-a472-a42f88d5e793": {
+   "outputItemTemplateId": "7cdd7354-e9f7-4ef8-a5bb-f4af711a62bb",
+   "name": "Trophy Hunter",
+   "townXp": 110,
+   "bundleId": "5fe32e5f-050a-42c1-8d3e-3381fbfede4d",
+   "bundle": "IAP_Deco_S_TrophyHunter"
+  },
+  "93dfc668-57f8-4db2-8612-6a999cf20dd7": {
+   "outputItemTemplateId": "2e4dff56-d3f8-4e9f-a0c9-ae2dc712f419",
+   "name": "Crystal Shrine",
+   "townXp": 11,
+   "bundleId": "c5cbdaee-125c-468f-9adf-61713f441130",
+   "bundle": "IAP_Deco_S_Crystal_Shrine"
+  },
+  "95d06953-7c86-4f37-94ba-6c5dd29e3d24": {
+   "outputItemTemplateId": "c8e8e85c-2f1c-46f8-a047-9c328de69d20",
+   "name": "Ice Mammoth",
+   "townXp": 27,
+   "bundleId": "2e23c77d-a988-46db-98ac-3187cf9e403f",
+   "bundle": "IAP_Deco_S_IceMammoth"
   },
   "a27a5124-3d25-423c-8be8-ab088c6d9212": {
    "outputItemTemplateId": "d092b411-aaa6-46f8-b935-dd5e41d90de1",
@@ -188,6 +328,20 @@
    "bundleId": "deb1eee9-840b-433e-b76c-b7fc1c0c4e8f",
    "bundle": "Workshop - S Decoration - Red Banner"
   },
+  "a9db0fbb-e2f8-478e-ad18-02b85a1558aa": {
+   "outputItemTemplateId": "fa792ef4-4ef2-4f7b-80a9-8e6b6e205374",
+   "name": "Fighters' Trophy",
+   "townXp": 80,
+   "bundleId": "27c2fee5-75e5-43c1-b0f1-54ea722c0ced",
+   "bundle": "IAP_Deco_M_FighterTrophy"
+  },
+  "aa6292c6-1197-4b81-bd3d-360bf1392e20": {
+   "outputItemTemplateId": "46d4de4d-2a4b-43c4-8623-14b305376d56",
+   "name": "Ice Khajiit",
+   "townXp": 22,
+   "bundleId": "315780c6-732d-480e-9290-82356e5ffd0a",
+   "bundle": "IAP_Deco_S_IceKhajiit"
+  },
   "ac30e373-6125-4eee-9117-abdadd8d7d8e": {
    "outputItemTemplateId": "d13183d0-56e4-4ea6-9514-6270b4097dea",
    "name": "Fire Pit",
@@ -208,6 +362,13 @@
    "townXp": 32,
    "bundleId": "cb3c5974-a02e-48a6-9de2-028e0bfbd446",
    "bundle": "Workshop - M Decoration - Tree #2"
+  },
+  "b0a56a6a-9ead-4211-8685-857746123d98": {
+   "outputItemTemplateId": "c8a95980-4afb-474b-a323-37eef8aa0011",
+   "name": "Fount of the Victor",
+   "townXp": 230,
+   "bundleId": "4c0fa05c-c7cb-463e-a3ac-0ef6fcaed6d9",
+   "bundle": "IAP_Deco_M_FountOfTheVictor"
   },
   "bcd151c7-7341-4c88-8793-f32258dc553b": {
    "outputItemTemplateId": "aade0180-4604-45ce-b80e-10887c76ea8e",
@@ -244,6 +405,62 @@
    "bundleId": "3cfdb71e-4df1-4648-bdec-076ab0968d2b",
    "bundle": "Workshop - S Decoration - Black Banner"
   },
+  "c93ba65c-1389-4702-bc2d-4c54fe557e72": {
+   "outputItemTemplateId": "294c2d84-207e-4df1-9286-f38cc299bb13",
+   "name": "Macabre Decoration",
+   "townXp": 20,
+   "bundleId": "e13aa35f-53c9-411f-9712-ef49ccca742f",
+   "bundle": "IAP_Deco_M_Bones"
+  },
+  "cbfb5ca3-1b00-4405-87d8-347f4880b02a": {
+   "outputItemTemplateId": "86ba8b31-4d72-49a6-a104-35f775bfe4df",
+   "name": "Full Spire",
+   "townXp": 31,
+   "bundleId": "13e4849e-2736-4508-b6e5-da8e111becf8",
+   "bundle": "IAP_Deco_M_FullSpire"
+  },
+  "d031b57f-1b48-4b51-bc47-b25345c90390": {
+   "outputItemTemplateId": "9a239d75-a7be-4c34-8ab0-874101aff147",
+   "name": "Abyssal Altar",
+   "townXp": 64,
+   "bundleId": "90d7e7c5-7a1c-4efc-89f8-38cc57a6ae0b",
+   "bundle": "IAP_Deco_M_Abyss3"
+  },
+  "d185351a-1af2-4c28-97fb-7581cafd34a8": {
+   "outputItemTemplateId": "9dc28430-d12a-4288-b808-e7f6292cc80f",
+   "name": "Costly Throne",
+   "townXp": 50,
+   "bundleId": "e7ce0eec-9dc6-4162-8e37-96f9c04389c0",
+   "bundle": "IAP_Deco_S_CostlyThrone"
+  },
+  "d5ec9df6-ef75-4b47-9e69-c810154869ff": {
+   "outputItemTemplateId": "44fe0579-c6bb-48f9-b01c-ceef3bd9007f",
+   "name": "Spider Tree",
+   "townXp": 85,
+   "bundleId": "b0f76e4f-355a-4d79-b38f-ac1759a8286b",
+   "bundle": "IAP_Deco_L_ScaryTree"
+  },
+  "d6f24685-f5a6-4f3a-ad20-428e5cc5c437": {
+   "outputItemTemplateId": "8841cbbd-c404-4713-9f98-73b6c9730f13",
+   "name": "Amethyst Beacon",
+   "townXp": 61,
+   "bundleId": "36024808-316e-4d59-a8f3-cab9df90ab44",
+   "bundle": "IAP_Deco_S_AmethystBeacon"
+  },
+  "d7217564-0c50-48c2-84b6-2e99b16928fc": {
+   "outputItemTemplateId": "aee0edba-39e2-417d-bbb2-9cb7b9fc1ea5",
+   "name": "Stonetooth Bash Chicken",
+   "townXp": 16,
+   "bundleId": "33bc6dab-37db-49e2-89f6-400d08c13b0b",
+   "bundle": "IAP_Deco_S_StonetoothBashChicken"
+  },
+  "df7b5f09-e240-421c-a5a7-ea6e03be3b42": {
+   "outputItemTemplateId": "708e0da9-d609-4b86-8ecb-4569961946ee",
+   "name": "Saturalia Grove",
+   "townXp": 68,
+   "bundleId": "2fe4c441-94fc-4a66-9479-ff399d30bfe3",
+   "bundle": "IAP_Deco_L_SaturaliaGrove"
+  },
   "e073f924-565b-438a-880e-053e701b6fcd": {
    "outputItemTemplateId": "c75d1c08-2857-4ebc-9b60-97acc67d8c19",
    "name": "Training Dummy",
@@ -258,6 +475,27 @@
    "bundleId": "4303443d-50d7-40b2-8514-338f6683ac24",
    "bundle": "Workshop - S Decoration - Potted Plant #2"
   },
+  "e493dd3a-b6c6-4a10-9124-94adf3aa128b": {
+   "outputItemTemplateId": "ccf16487-e58c-44d5-91e4-d4b33029e1fa",
+   "name": "Ice Goat",
+   "townXp": 22,
+   "bundleId": "bf11b6c4-1387-4c71-ad85-a1e99d51ae6c",
+   "bundle": "IAP_Deco_S_IceGoat"
+  },
+  "ed78da46-1428-4d7f-95e9-c90f8b550d97": {
+   "outputItemTemplateId": "7c5bad75-0a94-4193-b4f1-f21e0b7a4b96",
+   "name": "Witches' Cauldron",
+   "townXp": 30,
+   "bundleId": "996fc36f-4f98-471c-8312-b77e18f77e90",
+   "bundle": "IAP_Deco_S_WitchesCauldron"
+  },
+  "ee4eedd0-d551-41a3-b7f8-41e96faf88a5": {
+   "outputItemTemplateId": "65a04415-2a40-49cc-9dd3-a42cf864a2ba",
+   "name": "Necromancer's Pool",
+   "townXp": 30,
+   "bundleId": "a2a46b65-3ebe-4bb3-aa86-266d7af7c200",
+   "bundle": "IAP_Deco_S_NecromancersPool"
+  },
   "f0b33228-453a-4a99-bfbb-3c00c50ceaa6": {
    "outputItemTemplateId": "3fc190cd-c244-43b9-9a78-fcecb0d6860c",
    "name": "Fancy Water Fountain",
@@ -271,6 +509,13 @@
    "townXp": 69,
    "bundleId": "070cba2c-39ab-4306-be51-4274551b335d",
    "bundle": "Workshop - S Decoration - Nirnroot"
+  },
+  "fa6407a0-599b-4d31-a1d8-39bd46b096c2": {
+   "outputItemTemplateId": "53bc8b17-4024-49bd-b9b5-2fab7aeaae1e",
+   "name": "Imperial Bath",
+   "townXp": 89,
+   "bundleId": "c4e42aca-4534-41fa-8eb2-d0b94a74901a",
+   "bundle": "IAP_Deco_S_Old_Well"
   },
   "fc776f95-d6ad-4537-a1cd-325406366743": {
    "outputItemTemplateId": "158e2a7f-7687-4f82-86e2-0dc78a09d7c8",

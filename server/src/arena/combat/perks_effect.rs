@@ -169,6 +169,8 @@ fn augmented_flames_raises_a_fire_spell() {
         elem_resist_piercing: 0.0,
         elem_resist_piercing_rating: 0.0,
         element_fortify: &[],
+        adrenaline_physical: 0.0,
+        adrenaline_elemental: 0.0,
     };
 
     let with = m.resolve_ability(
@@ -213,6 +215,8 @@ fn maximum_power_pays_only_at_full_magicka() {
         elem_resist_piercing: 0.0,
         elem_resist_piercing_rating: 0.0,
         element_fortify: &[],
+        adrenaline_physical: 0.0,
+        adrenaline_elemental: 0.0,
     };
     let ravaged = CasterPerks {
         perks: &bonuses,
@@ -221,6 +225,8 @@ fn maximum_power_pays_only_at_full_magicka() {
         elem_resist_piercing: 0.0,
         elem_resist_piercing_rating: 0.0,
         element_fortify: &[],
+        adrenaline_physical: 0.0,
+        adrenaline_elemental: 0.0,
     };
 
     let a = comp(

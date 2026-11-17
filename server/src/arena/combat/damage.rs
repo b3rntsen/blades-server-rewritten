@@ -524,6 +524,7 @@ impl RetailDamageModel {
         attacker: &Loadout,
         target: &Fighter,
         source: DamageSource,
+        combo_count: u32,
         now: Instant,
     ) -> Vec<(DamageType, f32)> {
         // Scout / Armsman / Barbarian add flat damage for LIGHT / VERSATILE / HEAVY
@@ -564,6 +565,32 @@ impl RetailDamageModel {
         // physical total (05 §2.6: `(weapon + bonus*g) * (1 + [combo>=1]*comboDF)`).
         let mut maneuver_bonus = attacker.maneuver_bonus_damage.max(0.0);
 
+        // FORTIFY COMBO DAMAGE and FORTIFY BLOCKED DAMAGE — two situational
+        // additives (`_situationalAdditiveDamage`, combat-spec 01 D3) with one gate
+        // shape. Each `GetBonusDamage` returns X only when the component is PHYSICAL
+        // (`get_IsPhysicalDamage`), the source is weapon-based (`IsWeaponBased`:
+        // Attack 1 / WeaponManeuver 3, never a bash 11) and the component's type
+        // equals the equipped weapon's own `_damageType` (WeaponTemplate +0xD8). Then:
+        //   - Combo: the ATTACKER's `_comboCount` (Actor +0x2CC) is > 0
+        //     (`FortifyComboDamageBonusInstance$$GetBonusDamage@0x1d4e834`);
+        //   - Blocked: the TARGET `HasStatus(Blocking 1)`
+        //     (`DamageBlockingEnemyBonusInstance$$GetBonusDamage@0x1d4ca98`) — any
+        //     guard, optimal or not; the block then cuts the sum like any damage.
+        // Added to the base so the attack-type factor multiplies it, like PDOC.
+        let weapon_hit = source.is_weapon_based();
+        let combo_bonus = if weapon_hit && combo_count >= 1 {
+            attacker.fortify_combo_damage.max(0.0)
+        } else {
+            0.0
+        };
+        let blocked_bonus =
+            if weapon_hit && target.actor_state() == super::state::ActorStateType::Blocking {
+                attacker.fortify_blocked_damage.max(0.0)
+            } else {
+                0.0
+            };
+        let own_type = attacker.weapon.primary_type;
+
         // A shield bash hits with the SHIELD, not the weapon: `ResolveManeuverDamage
         // @0x1bd2d88` takes `owner.ShieldDamage` for source 11, and
         // `ManeuverParameters$$DistributeBonusDamage@0x1a21844` folds every physical
@@ -590,6 +617,10 @@ impl RetailDamageModel {
                 if is_physical(*ty) && maneuver_bonus > 0.0 {
                     base += maneuver_bonus;
                     maneuver_bonus = 0.0;
+                }
+                // `if v > 0` (01 D3): the situational list never creates a component.
+                if is_physical(*ty) && Some(*ty) == own_type && base > 0.0 {
+                    base += combo_bonus + blocked_bonus;
                 }
                 (*ty, base.max(0.0))
             })
@@ -618,7 +649,8 @@ impl RetailDamageModel {
         );
 
         let mut components: Vec<(DamageType, f32)> = Vec::new();
-        for (ty, base) in Self::physical_base_components(attacker, target, source, now) {
+        for (ty, base) in Self::physical_base_components(attacker, target, source, combo_count, now)
+        {
             components.push((ty, base * scale));
         }
         if source == DamageSource::ShieldManeuver {
@@ -629,6 +661,7 @@ impl RetailDamageModel {
         // weapon-based (`Damage$$IsWeaponBased@0x1bd3e6c` excludes source 11), and
         // the weapon's alchemy poison does not ride a bash either (05 §3.11).
         if source == DamageSource::ShieldManeuver {
+            apply_adrenaline(attacker, &mut components, scale, false);
             return components;
         }
         // Enchant tracks: independent of the physical combo roll (capture-validated,
@@ -687,7 +720,52 @@ impl RetailDamageModel {
             }
             components.push((ench_ty, v));
         }
+        apply_adrenaline(attacker, &mut components, scale, false);
         components
+    }
+}
+
+/// **Adrenaline** (report #530): "Increases physical/elemental damage by {0} while
+/// Health is critical."
+///
+/// `AdrenalineBonusInstance$$GetBonusDamage@0x1D49D20` returns X for every component
+/// whose type is in its `_targetDamageTypes` (Physical [1,2,3], Elemental [4,5,6,7])
+/// while the WEARER is at critical health, and it registers in the
+/// situational-additive list (combat-spec 01 D3/D4): each component with v > 0 gets
+/// `+X`, scaled by 0.075 on a periodic source, BEFORE the physical pass multiplies by
+/// `1 + attack-type factor`. The non-physical pass multiplies by `1 + 0`.
+///
+/// The components handed in are already multiplied by `physical_factor`, so the
+/// physical bonus is added as `X × physical_factor` — the same as `(v + X) × f`.
+/// The family has no source filter: swings, maneuvers, bashes and spells all get it.
+///
+/// It used to do nothing at all — both families fell through `apply_enchant`'s
+/// `_ => {}` — though the reporter owns 22 Adrenaline pieces.
+pub(super) fn apply_adrenaline(
+    attacker: &Loadout,
+    components: &mut [(DamageType, f32)],
+    physical_factor: f32,
+    periodic: bool,
+) {
+    if !attacker.attacker_at_critical_health
+        || (attacker.adrenaline_physical <= 0.0 && attacker.adrenaline_elemental <= 0.0)
+    {
+        return;
+    }
+    let scale = if periodic {
+        combat_params::CONTINUOUS_DAMAGE_FORTIFY_EFFECTIVENESS * combat_params::GLOBAL_TICK_INTERVAL
+    } else {
+        1.0
+    };
+    for (ty, v) in components.iter_mut() {
+        if *v <= 0.0 {
+            continue;
+        }
+        if is_physical(*ty) {
+            *v += attacker.adrenaline_physical * scale * physical_factor;
+        } else if is_elemental(*ty) {
+            *v += attacker.adrenaline_elemental * scale;
+        }
     }
 }
 
@@ -908,9 +986,20 @@ impl DamageModel for RetailDamageModel {
             caster_loadout.elem_resist_piercing_rating += erp;
         }
 
+        // Adrenaline rides spells too: the family has no source filter (#530).
+        caster_loadout.adrenaline_physical = caster.adrenaline_physical;
+        caster_loadout.adrenaline_elemental = caster.adrenaline_elemental;
+        caster_loadout.attacker_at_critical_health = caster.health_critical;
+
         // The mirrored stat drain is appended by `finish_resolved` from the
         // post-block value — see [`append_mirrored_drains`].
         let mut components = vec![(ty, base)];
+        apply_adrenaline(
+            &caster_loadout,
+            &mut components,
+            1.0,
+            source == DamageSource::ContinuousSpell,
+        );
         finish_resolved(
             &caster_loadout,
             target,
@@ -1174,17 +1263,23 @@ fn finish_resolved(
     // already does for the perks.
     // Venom Strikes boosts weapon-alchemy poison status effectiveness/duration, not
     // Poison damage components (`VenomStrikesAbility` feeds `PoisonAlchemy`, 05 §3.5).
-    for (ty, v) in components.iter_mut() {
-        if *v > 0.0 {
-            *v *= attacker.innate_damage_multiplier(*ty, source);
-        }
-    }
     if single_impact {
         for (ty, v) in components.iter_mut() {
             if is_elemental(*ty) && *v > 0.0 {
                 *v += (attacker.perks.element_bonus(*ty) + fortify_for(attacker, *ty))
                     * fortify_scale;
             }
+        }
+    }
+    // Racial % bonuses (`FortifyElement` / `FortifyWeaponType` / `EnhanceAbility`
+    // InnateLogic, list `_permanentDamageFactors +0x38`) come AFTER the flat fortify:
+    // `<ResolvePermanentDamageBonuses>b__0@0x1FD0D40` adds PermanentFortify, then
+    // `if v > 0: v *= 1 + Σ factor`. So a Khajiit's +10% poison scales Augmented
+    // Poison and Fortify Poison gear too. Applying it first (as we did) dropped the
+    // racial share of every flat add (tracker #532).
+    for (ty, v) in components.iter_mut() {
+        if *v > 0.0 {
+            *v *= attacker.innate_damage_multiplier(*ty, source);
         }
     }
 
@@ -1624,7 +1719,183 @@ mod tests {
             0,
             now,
         );
-        assert!((comp(&ordered, DamageType::Fire) - 115.0).abs() < 0.01);
+        // Retail `<ResolvePermanentDamageBonuses>b__0@0x1FD0D40`: the flat fortify is
+        // added FIRST, then `v *= 1 + Σ PermanentDamageFactor` (the racial %), so the
+        // racial bonus scales the perk too: (100 + 10) × 1.05 = 115.5, not
+        // 100 × 1.05 + 10 = 115 (tracker #532).
+        assert!(
+            (comp(&ordered, DamageType::Fire) - 115.5).abs() < 0.01,
+            "racial % must multiply the flat fortify too, got {}",
+            comp(&ordered, DamageType::Fire)
+        );
+    }
+
+    /// Tracker #532: a real Khajiit (resolved from the live `CharacterUID`, not a
+    /// hand-built factor) with Augmented Poison and Fortify Poison gear. Retail folds
+    /// `(base + perk + gear) × (1 + 0.10)`; the racial 10% used to skip both flat adds.
+    #[test]
+    fn khajiit_poison_bonus_scales_augmented_poison_and_fortify_gear() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut khajiit = plain_blade(Weight::Light);
+        khajiit.weapon.base_by_type = vec![(DamageType::Poison, 100.0)];
+        khajiit
+            .perks
+            .element_damage
+            .push((DamageType::Poison, 10.0));
+        khajiit.element_fortify.push((DamageType::Poison, 20.0));
+        super::super::loadout::apply_racial_innates_from_customization(
+            &mut khajiit,
+            &serde_json::json!({
+                "CharacterUID": {"id": {"_t": "String", "_v": "81c01573-8c66-48d2-856a-25459fbb97b8"}}
+            }),
+        );
+        let hit = m.resolve_attack(
+            &khajiit,
+            &target(),
+            DamageSource::Attack,
+            ActiveSide::Right,
+            1.0,
+            0,
+            now,
+        );
+        assert!(
+            (comp(&hit, DamageType::Poison) - 143.0).abs() < 0.01,
+            "(100 + 10 + 20) x 1.10 = 143, got {}",
+            comp(&hit, DamageType::Poison)
+        );
+    }
+
+    fn slashing_pre(rd: &ResolvedDamage) -> f32 {
+        rd.pre_mitigation_components
+            .iter()
+            .filter(|(t, _)| *t == DamageType::Slashing)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+
+    /// FORTIFY COMBO DAMAGE (`FortifyComboDamageBonusInstance$$GetBonusDamage@0x1d4e834`):
+    /// +X (51.53 at t10) to the weapon's own physical type on a weapon-based source
+    /// while the attacker's `_comboCount` >= 1, added BEFORE the attack-type factor.
+    /// Controls: nothing at combo 0, nothing on a shield bash.
+    #[test]
+    fn fortify_combo_damage_adds_x_before_the_combo_factor_only_while_chained() {
+        const X: f32 = 51.53;
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut with = plain_blade(Weight::Light);
+        with.fortify_combo_damage = X;
+        let without = plain_blade(Weight::Light);
+        let hit = |lo: &Loadout, source: DamageSource, combo: u32| {
+            slashing_pre(&m.resolve_attack(
+                lo,
+                &target(),
+                source,
+                ActiveSide::Left,
+                1.0,
+                combo,
+                now,
+            ))
+        };
+        // combo 0: no bonus.
+        let g0 = hit(&with, DamageSource::Attack, 0) - hit(&without, DamageSource::Attack, 0);
+        assert!(
+            g0.abs() < 1e-3,
+            "combo 0 must not pay Fortify Combo, got +{g0}"
+        );
+        // combo 1: +X times the attack-type factor (1 + comboDamageFactor).
+        let f = attack_type_multiplier(
+            DamageSource::Attack,
+            without.charge_params().combo_damage_factor,
+            1,
+            1.0,
+        );
+        assert!(f > 1.0, "fixture: a chained swing has a combo factor");
+        let g1 = hit(&with, DamageSource::Attack, 1) - hit(&without, DamageSource::Attack, 1);
+        assert!(
+            (g1 - X * f).abs() < 0.05,
+            "chained swing: expected +{X} x {f} = {}, got +{g1}",
+            X * f
+        );
+        // A weapon maneuver is weapon-based too.
+        let gm = hit(&with, DamageSource::WeaponManeuver, 1)
+            - hit(&without, DamageSource::WeaponManeuver, 1);
+        assert!(gm > X - 0.05, "maneuver at combo 1 pays it, got +{gm}");
+        // A shield bash is not weapon-based (`IsWeaponBased` = sources 1 and 3).
+        let mut bash_with = with.clone();
+        bash_with.shield_damage = 80.0;
+        let mut bash_without = without.clone();
+        bash_without.shield_damage = 80.0;
+        let total = |lo: &Loadout| {
+            m.resolve_attack(
+                lo,
+                &target(),
+                DamageSource::ShieldManeuver,
+                ActiveSide::Middle,
+                1.0,
+                3,
+                now,
+            )
+            .total
+        };
+        assert!(
+            (total(&bash_with) - total(&bash_without)).abs() < 1e-3,
+            "a shield bash never carries Fortify Combo"
+        );
+    }
+
+    /// FORTIFY BLOCKED DAMAGE (`DamageBlockingEnemyBonusInstance$$GetBonusDamage@0x1d4ca98`):
+    /// +X (156.98 at t10) to the weapon's own physical type when the TARGET
+    /// `HasStatus(Blocking)`. It is added before the block, so the block then cuts
+    /// the larger sum. Control: an open target gets nothing.
+    #[test]
+    fn fortify_blocked_damage_pays_only_against_a_guard_and_before_the_block() {
+        const X: f32 = 156.98;
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut with = plain_blade(Weight::Light);
+        with.fortify_blocked_damage = X;
+        let without = plain_blade(Weight::Light);
+        let open = |lo: &Loadout| {
+            m.resolve_attack(
+                lo,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            )
+        };
+        assert!(
+            (open(&with).total - open(&without).total).abs() < 1e-3,
+            "an open target must not pay Fortify Blocked Damage"
+        );
+        let guard = guarding(now, Some((DAEDRIC_SHIELD_300, 10)), None, true);
+        let blocked = |lo: &Loadout| {
+            m.resolve_attack(
+                lo,
+                &guard,
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            )
+        };
+        let (bw, bo) = (blocked(&with), blocked(&without));
+        assert!(bw.blocked && bo.blocked, "fixture: the guard takes the hit");
+        let pre_gain = slashing_pre(&bw) - slashing_pre(&bo);
+        assert!(
+            (pre_gain - X).abs() < 0.05,
+            "the add lands before the block: expected +{X} pre-mitigation, got +{pre_gain}"
+        );
+        assert!(
+            bw.total > bo.total,
+            "the block cuts the larger sum, so more gets through: {} vs {}",
+            bw.total,
+            bo.total
+        );
     }
 
     /// An un-armored, un-blocking L100 target.
@@ -1711,6 +1982,197 @@ mod tests {
             deep > shallow * 1.5,
             "PDOC must be MULTIPLIED by the combo: depth-0 gain {shallow:.1} vs \
              depth-3 gain {deep:.1}. Equal gains mean it landed after the multiplier."
+        );
+    }
+
+    /// Report #530/#533: Weapon Stamina / Magicka Damage ("of Exhaustion" / "of
+    /// Nullifying") is the ATTACKER's enchant. Any block — high or low — zeroes it
+    /// (`ResolveBlocking`, 0x1fd0790–0x1fd0824: non-health types → 0). Control: an
+    /// unblocked swing carries it.
+    #[test]
+    fn report_530_any_block_zeroes_weapon_exhaustion_and_nullifying() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        for ty in [DamageType::Stamina, DamageType::Magicka] {
+            let mut a = plain_blade(Weight::Light);
+            a.enchants = vec![(ty, 10)];
+            let open = m.resolve_attack(
+                &a,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                0,
+                now,
+            );
+            assert!(
+                comp(&open, ty) > 0.0,
+                "{ty:?}: control, unblocked swing drains"
+            );
+            for held in [0.1_f32, 2.5] {
+                let mut tgt = target();
+                tgt.loadout.has_shield = true;
+                tgt.loadout.block_rating = 360.0;
+                tgt.set_actor_state(ActorStateType::Blocking, now);
+                tgt.block_raised_at = Some(now - Duration::from_secs_f32(held));
+                tgt.blocking_until = Some(now + Duration::from_secs(5));
+                assert!(tgt.block_phase(now).is_some(), "precondition: guard up");
+                let hit = m.resolve_attack(
+                    &a,
+                    &tgt,
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    0,
+                    now,
+                );
+                assert_eq!(
+                    comp(&hit, ty),
+                    0.0,
+                    "{ty:?}: a block (held {held}s) zeroes it"
+                );
+            }
+        }
+    }
+
+    /// A target fighter at `pct` of its (tripled, arena) health bar.
+    fn fighter_at_health_pct(pct: f32) -> Fighter {
+        let mut f = target();
+        f.max_health = 3000;
+        f.health = (3000.0 * pct) as u32;
+        f
+    }
+
+    /// Report #530: Adrenaline adds its X to the physical component before the
+    /// attack-type factor, and to every elemental track flat — but only while the
+    /// WEARER is at critical health, which in the arena is 35 % of the un-tripled
+    /// bar (`get_IsAtCriticalHealth@0x1C5C2BC`), set on the per-hit clone.
+    #[test]
+    fn report_530_adrenaline_pays_only_at_critical_health_and_rides_the_combo() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let hit = |critical: bool, adrenaline: bool, combo: u32| {
+            let mut a = poison_dagger();
+            a.attacker_at_critical_health = critical;
+            if adrenaline {
+                a.adrenaline_physical = 25.2;
+                a.adrenaline_elemental = 10.08;
+            }
+            m.resolve_attack(
+                &a,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Left,
+                1.0,
+                combo,
+                now,
+            )
+        };
+        // Control: not critical, the gear does nothing.
+        let calm = hit(false, true, 0);
+        let bare = hit(false, false, 0);
+        assert_eq!(
+            comp(&calm, DamageType::Slashing),
+            comp(&bare, DamageType::Slashing)
+        );
+        assert_eq!(
+            comp(&calm, DamageType::Poison),
+            comp(&bare, DamageType::Poison)
+        );
+
+        // Critical: the elemental track gains exactly the flat 10.08.
+        let crit = hit(true, true, 0);
+        let crit_bare = hit(true, false, 0);
+        let poison_gain = comp(&crit, DamageType::Poison) - comp(&crit_bare, DamageType::Poison);
+        assert!(
+            (poison_gain - 10.08).abs() < 0.05,
+            "elemental +10.08, got {poison_gain}"
+        );
+        // Physical gains, and a deeper combo multiplies the gain (01 D3).
+        let shallow = comp(&crit, DamageType::Slashing) - comp(&crit_bare, DamageType::Slashing);
+        let deep = comp(&hit(true, true, 3), DamageType::Slashing)
+            - comp(&hit(true, false, 3), DamageType::Slashing);
+        assert!(shallow > 0.0, "physical Adrenaline must pay, got {shallow}");
+        assert!(
+            deep > shallow * 1.2,
+            "the combo factor multiplies it: {shallow} vs {deep}"
+        );
+    }
+
+    /// Report #530: Adrenaline has no source filter, so a spell gets it too.
+    #[test]
+    fn report_530_adrenaline_rides_spells_at_critical_health() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let perks = crate::arena::combat::perks::PerkBonuses::default();
+        let caster = |critical: bool| crate::arena::combat::perks::CasterPerks {
+            perks: &perks,
+            magicka_full: false,
+            health_critical: critical,
+            elem_resist_piercing: 0.0,
+            elem_resist_piercing_rating: 0.0,
+            element_fortify: &[],
+            adrenaline_physical: 25.2,
+            adrenaline_elemental: 10.08,
+        };
+        let fireball = gamedata::ids::FIREBALL;
+        let calm = m.resolve_ability(
+            fireball,
+            1,
+            &caster(false),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
+        let crit = m.resolve_ability(
+            fireball,
+            1,
+            &caster(true),
+            &target(),
+            ActiveSide::Middle,
+            now,
+        );
+        let gain = comp(&crit, DamageType::Fire) - comp(&calm, DamageType::Fire);
+        assert!(
+            (gain - 10.08).abs() < 0.05,
+            "Fireball +10.08 at critical, got {gain}"
+        );
+    }
+
+    /// Report #530: Mercy is flat resistance on the WEARER while it is at critical
+    /// health — 35 % of the un-tripled bar, i.e. ≈ 11.7 % of the arena bar. At 30 %
+    /// of the arena bar the wearer is NOT critical in the arena (control).
+    #[test]
+    fn report_530_mercy_resists_only_at_critical_health() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let slashing = |pct: f32, mercy: bool| {
+            let mut t = fighter_at_health_pct(pct);
+            if mercy {
+                t.loadout.mercy_physical = 25.2;
+            }
+            comp(
+                &m.resolve_attack(
+                    &plain_blade(Weight::Light),
+                    &t,
+                    DamageSource::Attack,
+                    ActiveSide::Left,
+                    1.0,
+                    0,
+                    now,
+                ),
+                DamageType::Slashing,
+            )
+        };
+        assert_eq!(
+            slashing(0.30, true),
+            slashing(0.30, false),
+            "30 % of a tripled bar is not critical"
+        );
+        let cut = slashing(0.10, false) - slashing(0.10, true);
+        assert!(
+            (cut - 25.2).abs() < 0.05,
+            "Mercy t10 resists 25.2 at critical, got {cut}"
         );
     }
 
@@ -2827,6 +3289,8 @@ mod tests {
             elem_resist_piercing: 0.0,
             elem_resist_piercing_rating: 0.0,
             element_fortify: &fortify,
+            adrenaline_physical: 0.0,
+            adrenaline_elemental: 0.0,
         };
         let fortified = m.resolve_ability(
             spell,

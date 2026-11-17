@@ -134,7 +134,8 @@ pub fn input_gate_refusal(
 }
 
 /// The gates of `resolve::resolve_ability_cast`, in the resolver's order: cooldown,
-/// `CanCast` (human maneuvers excepted, as there), then shield, stamina and magicka.
+/// `CanCast` (human maneuvers excepted, except mid-maneuver: #516), then shield,
+/// stamina and magicka.
 /// `level` and `tag` are what the resolver looked up for the cast.
 pub fn cast_gate_refusal(
     combat: &MatchCombat,
@@ -152,7 +153,15 @@ pub fn cast_gate_refusal(
             });
         }
     }
-    if sender >= combat.expected_peers || tag != AbilityTag::Maneuver {
+    // A human's maneuver skips the full state gate (its Recovery/guard timing is the
+    // client's), but NOT the Maneuver state: a non-Quick maneuver cast while the
+    // caster's own maneuver still runs is refused, as `Actor$$CanCast@0x1c58f54` does
+    // (tracker #516: Quick Strikes / Piercing Strikes cancelling each other; retail
+    // answered 0 of 6 such requests).
+    let human_mid_maneuver = tag == AbilityTag::Maneuver
+        && caster.maneuver_active(now)
+        && !interrupts::is_quick(ability_uuid);
+    if sender >= combat.expected_peers || tag != AbilityTag::Maneuver || human_mid_maneuver {
         if let Some(refusal) = interrupts::cast_refusal(caster, ability_uuid, now) {
             return Some(CastRefusalReason::CanCast {
                 refusal,
