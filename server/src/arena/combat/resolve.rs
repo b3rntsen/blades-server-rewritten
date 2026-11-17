@@ -1293,6 +1293,9 @@ fn land_due_hits(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)
             continue;
         }
         let mut attacker_loadout = combat.fighters[h.sender].loadout.clone();
+        // Adrenaline reads the swinger's health as the hit lands (#530).
+        attacker_loadout.attacker_at_critical_health =
+            super::perks::fighter_health_is_critical(&combat.fighters[h.sender]);
         // Reckless Fury adds its weapon-class bonus to every swing for its window
         // (`_bonusDamages`: Light 11.24 / Versatile 14.17 / Heavy 17.86 at rank 1).
         // Ride the maneuver channel — same "flat additive on the physical base"
@@ -1661,6 +1664,8 @@ pub(super) fn resolve_ability_cast(
         f.charge_press_at = None;
         f.pending_manual_attack = None;
         f.bot_swing_at = None;
+        // A guard still held when this maneuver ends goes back up then (#530).
+        f.guard_resume_pending = true;
         if f.actor_state() == ActorStateType::Blocking {
             f.blocking_until = None;
             f.reconcile_block(now);
@@ -2265,6 +2270,9 @@ fn apply_ability_impact(
         }
         AbilityTag::Maneuver => {
             let mut attacker_loadout = combat.fighters[sender].loadout.clone();
+            // Adrenaline reads the caster's health as the maneuver lands (#530).
+            attacker_loadout.attacker_at_critical_health =
+                super::perks::fighter_health_is_critical(&combat.fighters[sender]);
             // METTLE applies to MANEUVERS — and only to the maneuver's own flat bonus.
             // The client folds `1 + Σ EnhanceAbility` into
             // `ManeuverParameters._effectivenessMultiplier` at `ExecuteAbility`, and
@@ -3835,7 +3843,18 @@ fn emit_damage_with_outcome(
         .filter(|(t, _)| super::damage::is_health_type(*t))
         .map(|(_, v)| *v)
         .sum();
-    neg.negated = total <= 0.0;
+    // A hit that never carried health damage but does carry pool damage — Shield
+    // Stamina / Magicka Damage returned as Revenge on an optimal block (#530/#533) —
+    // is not a negation: retail calls a hit fully negated only when every stat is 0
+    // (01 E1). Without this it went out as op66 and the drain never happened.
+    let pool_only = before_pools <= 0.0
+        && components.iter().any(|(t, v)| {
+            matches!(
+                t,
+                super::state::DamageType::Stamina | super::state::DamageType::Magicka
+            ) && *v > 0.0
+        });
+    neg.negated = total <= 0.0 && !pool_only;
     let poison_damage: f32 = if neg.negated {
         0.0
     } else {
@@ -4205,9 +4224,21 @@ fn apply_shield_enchant_retaliation(
     if entries.is_empty() {
         return Vec::new();
     }
+    // Any positive entry counts, pool types included: Shield Stamina / Magicka
+    // Damage ("of Exhaustion" / "of Nullifying") return `Damage(8|9, X)` and retail
+    // sends every returned Damage with v > 0 back as Revenge
+    // (`ShieldElementalDamageBonusInstance$$BlockedDamage@0x1d525e0`,
+    // `<ResolveDamageEvents>b__2@0x1fd05b8`). Summing health types only made the
+    // two pool families do nothing on an optimal block (report #530/#533).
     let total: f32 = entries
         .iter()
-        .filter(|(ty, _)| super::damage::is_health_type(*ty))
+        .filter(|(ty, _)| {
+            super::damage::is_health_type(*ty)
+                || matches!(
+                    ty,
+                    super::state::DamageType::Stamina | super::state::DamageType::Magicka
+                )
+        })
         .map(|(_, v)| *v)
         .sum();
     if total <= 0.0 {
@@ -4373,6 +4404,18 @@ const REGEN_TICK_INTERVAL: Duration = Duration::from_secs(1);
 /// change the pool — and so emit an op65 to both players — on nearly every 2 ms
 /// engine step. 100 ms gives the bar ten visible steps a second.
 const RESTORE_PAYOUT_STEP: Duration = Duration::from_millis(100);
+
+/// Shortest gap between two regen-driven op65 `PlayerStatsUpdate` frames for one
+/// fighter (report #531).
+///
+/// Regen runs on every ~2 ms engine step, and a 4%/s pool gains a whole point about
+/// every 25 ms, so sending each point streamed 40-53 reliable op65 a second to every
+/// player — about half of all in-round frames and the bulk of what a poor link has to
+/// acknowledge. Retail sent 18-42 op65 in a whole ~100 s match (session 486, three
+/// matches, gap p50 3 s). 500 ms keeps the bar moving in visible steps (and inside
+/// the soak's one-second own-bar check) at ~1/20 of the old frame rate. The pools
+/// still regenerate every step; a change held back here is sent once the gap passes.
+pub(super) const REGEN_STATS_MIN_INTERVAL: Duration = Duration::from_millis(500);
 
 /// In-combat stamina/magicka regen rate as a fraction of the pool per second.
 ///
@@ -4600,9 +4643,13 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
         && now.duration_since(f.state_entered) >= Duration::from_secs_f32(f.paralyze_secs.max(0.1))
     {
         f.set_actor_state(ActorStateType::Idle, now);
+        // A guard held through the paralysis goes back up now (#530, as #357).
+        f.guard_resume_pending = true;
     }
     // Phase 3.13: a lapsed stagger also returns the actor to Idle.
     f.reconcile_stagger(now);
+    // Report #530: a guard held through a maneuver goes up at its end.
+    f.reconcile_held_guard_resume(now);
 }
 
 /// Deliver the due ticks of every in-flight channelled spell.
@@ -6077,8 +6124,18 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             }
         }
 
-        let changed = f.stamina != before_s || f.magicka != before_m || f.health != before_h;
-        if changed {
+        if f.stamina != before_s || f.magicka != before_m || f.health != before_h {
+            f.regen_stats_pending = true;
+        }
+        // Report #531: bound the frame cadence, not the regeneration. A change held
+        // back here stays pending and goes out on the first step past the interval,
+        // carrying the newest pools.
+        let due = f
+            .regen_stats_sent_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= REGEN_STATS_MIN_INTERVAL);
+        if f.regen_stats_pending && due {
+            f.regen_stats_pending = false;
+            f.regen_stats_sent_at = Some(now);
             // Retail stat-carrying frames stamp both actors' packed words with one
             // fresh sequence. If propId 4 and propId 5 drift independently, the
             // client can reject a later potion correction as stale after seeing the
@@ -6097,9 +6154,9 @@ pub(super) fn apply_regen_tick(combat: &mut MatchCombat, now: Instant) -> Vec<(u
             let obj_id = combat.fighters[slot].net_object_id;
             // propId 5 is `_pvpOtherActorStats` — the OPPONENT of the avatar at
             // propId 0. It used to be a hardcoded `1`, which decodes to
-            // all-pools-zero, and this tick fires ~1/s per fighter for the whole
-            // fight. `packed_stats()` is a pure read: it does not bump the
-            // opponent's own `stats_seq`.
+            // all-pools-zero, and this tick fires for the whole fight (at most once
+            // per `REGEN_STATS_MIN_INTERVAL` per fighter). `packed_stats()` is a pure
+            // read: it does not bump the opponent's own `stats_seq`.
             let opp_slot = combat.fighters[slot].arena_target;
             let other_packed = combat
                 .fighters
@@ -7338,6 +7395,85 @@ mod tests {
         );
     }
 
+    /// **Report #531 — passive regen must not stream op65 at the engine's step rate.**
+    ///
+    /// Regen is continuous over elapsed time and the production engine steps every
+    /// ~2 ms, so a 4%/s stamina pool gains a whole point every ~25 ms. Emitting an op65
+    /// for each point put 40-53 reliable `PlayerStatsUpdate` frames a second on every
+    /// player's link (soak driver at a 2 ms tick), about half of all in-round frames.
+    /// Retail sent 18-42 op65 in a whole ~100 s match (session 486, three matches,
+    /// gap p50 3 s). The pools still regenerate at the full rate; only the frame
+    /// cadence is bounded, and the newest pool is always sent once the interval has
+    /// passed, so the bar settles on the server's value.
+    #[test]
+    fn regen_op65_cadence_is_bounded_at_production_step_rate() {
+        use super::super::state::PackedStats;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let max_stam = combat.fighters[0].max_stamina;
+        combat.fighters[0].stamina = max_stam / 4;
+        combat.fighters[1].magicka = combat.fighters[1].max_magicka / 4;
+        combat.last_regen_tick = now;
+        let stam_before = combat.fighters[0].stamina;
+        let slot0_obj = combat.fighters[0].net_object_id as i64;
+
+        let mut op65 = 0usize;
+        let mut shown = None;
+        let mut last_sent_at = now;
+        let step = Duration::from_millis(2);
+        let span = Duration::from_secs(4);
+        let mut t = now;
+        while t < now + span {
+            t += step;
+            for (viewer, frame) in apply_regen_tick(&mut combat, t) {
+                if messages::user_message_gmid(&frame) != Some(65) {
+                    continue;
+                }
+                op65 += 1;
+                let nd = arena_proto::parse_netdata(&frame[2..]);
+                if viewer == 0 && nd.int(0) == Some(slot0_obj) {
+                    if let Some(arena_proto::NetDataValue::ULong(v)) = nd.props.get(&4) {
+                        shown = Some(PackedStats::unpack(*v).1);
+                        last_sent_at = t;
+                    }
+                }
+            }
+        }
+
+        // Full-rate regeneration is untouched.
+        let expected = (STAMINA_REGEN_RATE_PER_S * max_stam as f32 * span.as_secs_f32()) as u32;
+        let gained = combat.fighters[0].stamina - stam_before;
+        assert!(
+            gained + 1 >= expected,
+            "stamina must still regenerate at 4%/s: gained {gained}, expected ~{expected}"
+        );
+        // Two regenerating fighters, two viewers, at most one frame per interval each.
+        let per_viewer_per_sec = op65 as f32 / 2.0 / span.as_secs_f32();
+        let bound = 2.0 / REGEN_STATS_MIN_INTERVAL.as_secs_f32() + 0.5;
+        assert!(
+            per_viewer_per_sec <= bound,
+            "regen sent {op65} op65 frames in {span:?} ({per_viewer_per_sec:.1}/s per viewer, \
+             bound {bound:.1}/s)"
+        );
+        // The bar is never left behind by more than one interval of regen.
+        assert!(
+            t.duration_since(last_sent_at) <= REGEN_STATS_MIN_INTERVAL,
+            "slot 0's newest op65 is {:?} old",
+            t.duration_since(last_sent_at)
+        );
+        let f = &combat.fighters[0];
+        let truth = super::super::state::wire_fraction(f.stamina, f.max_stamina);
+        let shown = shown.expect("slot 0 op65 was sent");
+        let per_interval =
+            (STAMINA_REGEN_RATE_PER_S * 1023.0 * REGEN_STATS_MIN_INTERVAL.as_secs_f32()).ceil()
+                as i32
+                + 2;
+        assert!(
+            (truth as i32 - shown as i32).abs() <= per_interval,
+            "the newest op65 must track the pool: shown {shown}, server {truth}"
+        );
+    }
+
     /// Capture T3: magicka recovers continuously at 4%/s, symmetric with stamina.
     #[test]
     fn regen_tick_raises_magicka_at_4pct_per_second() {
@@ -8027,6 +8163,201 @@ mod tests {
             combat.fighters[1].is_staggered(impact),
             "an unblocking target is staggered only at the strike phase",
         );
+    }
+
+    /// Report #530: "After using shield bash skills (all skills), the high block isn't
+    /// activated afterwards." The player holds block, bashes, and keeps holding. The
+    /// bash ends the guard and the maneuver lock drops any press made during it, so
+    /// the client never re-sends the press it is still holding. The held guard must go
+    /// back up when the maneuver ends, as #357 does for a stagger.
+    #[test]
+    fn report_530_a_guard_held_through_a_shield_bash_goes_up_when_it_ends() {
+        use super::phase4_tests::make_act_frame;
+        for held_from_before in [true, false] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            if held_from_before {
+                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+                assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+            }
+            let cast_at = now + Duration::from_millis(100);
+            let _ = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, cast_at);
+            assert!(combat.fighters[0].maneuver_active(cast_at), "precondition");
+            if !held_from_before {
+                // Pressed mid-maneuver: the lock drops it, but the button stays down.
+                let press = cast_at + Duration::from_millis(600);
+                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), press);
+            }
+            assert!(combat.fighters[0].guard_held, "precondition: block held");
+
+            // Tick through the maneuver with no further input from the client.
+            let mut t = cast_at;
+            let mut up_while_maneuvering_after_bash_guard = false;
+            while combat.fighters[0].maneuver_active(t) {
+                t += Duration::from_millis(20);
+                let _ = on_tick(&mut combat, t, false);
+                if combat.fighters[0].maneuver_active(t)
+                    && t > cast_at + Duration::from_millis(700)
+                    && combat.fighters[0].actor_state() == ActorStateType::Blocking
+                {
+                    up_while_maneuvering_after_bash_guard = true;
+                }
+            }
+            assert!(
+                !up_while_maneuvering_after_bash_guard,
+                "the guard must not come up while the maneuver still runs"
+            );
+            let end = t + Duration::from_millis(20);
+            let _ = on_tick(&mut combat, end, false);
+            assert_eq!(
+                combat.fighters[0].actor_state(),
+                ActorStateType::Blocking,
+                "held_from_before={held_from_before}: the held guard goes up at OnManeuverEnded"
+            );
+            assert!(combat.fighters[0].block_phase(end).is_some());
+        }
+    }
+
+    fn ability_uuid_530(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    /// Hold block, cast `editor`, keep holding with no further input, tick until the
+    /// lock is over; return the end instant.
+    fn hold_block_through_cast(
+        combat: &mut MatchCombat,
+        editor: &str,
+        press_at: Instant,
+        cast_at: Instant,
+    ) -> Instant {
+        use super::phase4_tests::make_act_frame;
+        on_c2s_input(combat, 0, &make_act_frame(true, 0.0, true), press_at);
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        let uuid = ability_uuid_530(editor);
+        let tag = super::super::loadout::ability_tag_for_template(uuid);
+        let _ = cast(combat, uuid, tag, cast_at);
+        let mut t = cast_at;
+        let deadline = cast_at + Duration::from_secs(6);
+        while t < deadline
+            && (combat.fighters[0].maneuver_active(t) || combat.fighters[0].in_channel_pose(t))
+        {
+            t += Duration::from_millis(20);
+            let _ = on_tick(combat, t, false);
+        }
+        let end = t + Duration::from_millis(40);
+        let _ = on_tick(combat, end, false);
+        let _ = on_tick(combat, end + Duration::from_millis(20), false);
+        end + Duration::from_millis(20)
+    }
+
+    /// Report #530 follow-up: "high block should also be placed after other
+    /// abilities". One case per family that locks the guard out: weapon maneuvers,
+    /// every shield bash, and a dodge. Each held guard comes back up as a fresh HIGH
+    /// block when the lock ends.
+    #[test]
+    fn report_530_a_held_guard_returns_high_after_every_maneuver_family() {
+        for editor in [
+            "PowerAttack",
+            "Guardbreaker",
+            "ShieldBash",
+            "HarryingBash",
+            "ReflectingBash",
+            "StaggeringBash",
+            "DodgingStrike",
+        ] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            let end =
+                hold_block_through_cast(&mut combat, editor, now, now + Duration::from_millis(100));
+            assert_eq!(
+                combat.fighters[0].actor_state(),
+                ActorStateType::Blocking,
+                "{editor}: the held guard goes back up"
+            );
+            assert_eq!(
+                combat.fighters[0].block_phase(end),
+                Some(BlockPhase::Optimal),
+                "{editor}: as a HIGH block"
+            );
+        }
+    }
+
+    /// Spells are NOT a family that needs the guard restored: a spell cannot be cast
+    /// from a raised guard at all (`Actor$$CanCast@0x1c58f54` admits Idle, Recovery
+    /// and Channeling only), so a player holding block never casts one. Pinned, so a
+    /// later change that lets spells through a guard has to deal with the guard.
+    #[test]
+    fn report_530_a_spell_cannot_be_cast_from_a_raised_guard() {
+        use super::phase4_tests::make_act_frame;
+        for editor in ["Fireball", "IceSpike", "Frostbite"] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            let uuid = ability_uuid_530(editor);
+            // Control: from Idle the cast goes through.
+            assert!(
+                !cast(&mut combat, uuid, AbilityTag::Damage, now).is_empty(),
+                "{editor}: control"
+            );
+            let mut combat = make_live_combat(now);
+            on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+            let out = cast(
+                &mut combat,
+                uuid,
+                AbilityTag::Damage,
+                now + Duration::from_millis(100),
+            );
+            assert!(out.is_empty(), "{editor}: refused while the guard is up");
+            assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        }
+    }
+
+    /// Paralysis drops the guard like a stagger does; a guard held through it goes
+    /// back up when it ends (the #357 shape).
+    #[test]
+    fn report_530_a_held_guard_returns_after_a_paralysis() {
+        use super::phase4_tests::make_act_frame;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        let f = &mut combat.fighters[0];
+        f.paralyze_secs = 2.0;
+        f.set_actor_state(ActorStateType::Paralyzed, now);
+        f.clear_scheduled_states();
+        f.blocking_until = None;
+        assert!(f.guard_held, "precondition");
+        let mut t = now;
+        while t < now + Duration::from_millis(2_200) {
+            t += Duration::from_millis(20);
+            let _ = on_tick(&mut combat, t, false);
+        }
+        let _ = on_tick(&mut combat, t + Duration::from_millis(20), false);
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+    }
+
+    /// The control: a guard released during the bash stays down afterwards.
+    #[test]
+    fn report_530_a_guard_released_during_the_bash_stays_down() {
+        use super::phase4_tests::make_act_frame;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+        let cast_at = now + Duration::from_millis(100);
+        let _ = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, cast_at);
+        let release = cast_at + Duration::from_millis(600);
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, true), release);
+        let mut t = cast_at;
+        while combat.fighters[0].maneuver_active(t) || t < release {
+            t += Duration::from_millis(20);
+            let _ = on_tick(&mut combat, t, false);
+        }
+        let end = t + Duration::from_millis(100);
+        let _ = on_tick(&mut combat, end, false);
+        assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        assert!(combat.fighters[0].block_phase(end).is_none());
     }
 
     /// Report from live play: "Ice Spike now stuns, but it does it instantaneously,
@@ -11501,9 +11832,16 @@ mod phase4_tests {
             "the potion may add at most ~one op65 per 100 ms payout: {potion_op65} vs \
              {control_op65} in the control"
         );
+        // Report #531 bounds regen-driven op65 to one per `REGEN_STATS_MIN_INTERVAL`, and
+        // the control's own regen already fills that cadence, so the potion rides the
+        // same frames rather than adding more. It must still be carried by them: one
+        // frame per interval across the whole 3 s window. (That the bar follows the pool
+        // within a second is the soak's own-bar invariant, which drinks potions.)
+        let cadence = (checkpoints[1] as u128 / REGEN_STATS_MIN_INTERVAL.as_millis()) as usize;
         assert!(
-            potion_op65 > control_op65,
-            "the restored stamina must reach the client in op65 stats frames"
+            potion_op65 >= control_op65 && potion_op65 >= cadence,
+            "the restored stamina must reach the client in op65 stats frames: \
+             {potion_op65} frames (control {control_op65}, cadence {cadence})"
         );
     }
 
@@ -14115,6 +14453,65 @@ mod shipped_effects_tests {
         let _ = emit_damage(&mut opt, 0, 1, &high, now);
         assert_eq!(opt.fighters[0].ravaged_stamina, 42);
         assert_eq!(hp_before - opt.fighters[0].health, 20);
+    }
+
+    /// Report #530/#533 ("Exhaustion and Nullifying"): Shield Stamina/Magicka Damage
+    /// (tier-10 suffixes "of Exhaustion"/"of Nullifying") on an OPTIMAL block return
+    /// `Damage(_damageType 8/9, X)` to the ATTACKER through Revenge
+    /// (`ShieldElementalDamageBonusInstance$$BlockedDamage@0x1d525e0`, any v > 0). The
+    /// retaliation summed health types only, so a pool-only shield enchant did nothing.
+    #[test]
+    fn report_530_shield_exhaustion_drains_the_attacker_on_an_optimal_block() {
+        let now = Instant::now();
+        for (ty, low_control) in [(DamageType::Stamina, true), (DamageType::Magicka, false)] {
+            let hit = ResolvedDamage {
+                source: DamageSource::Attack,
+                active_side: ActiveSide::Right,
+                flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+                pre_mitigation_components: vec![(DamageType::Slashing, 10.0)],
+                components: vec![(DamageType::Slashing, 10.0)],
+                raw_components: vec![(DamageType::Slashing, 10.0)],
+                total: 10.0,
+                most_resisted: DamageType::None,
+                negated: false,
+                heal: 0.0,
+                block_physical: 1.0,
+                blocked: true,
+                resistance_scale: 1.0,
+            };
+            let pool = |c: &MatchCombat| match ty {
+                DamageType::Stamina => c.fighters[0].stamina,
+                _ => c.fighters[0].magicka,
+            };
+            if low_control {
+                let mut c = combat2(now);
+                c.fighters[1].loadout.shield_enchant_damage = vec![(ty, 100.0)];
+                let before = pool(&c);
+                let _ = emit_damage(&mut c, 0, 1, &hit, now);
+                assert_eq!(
+                    pool(&c),
+                    before,
+                    "a LOW block fires no shield enchant in PvP"
+                );
+            }
+            let mut c = combat2(now);
+            c.fighters[1].loadout.shield_enchant_damage = vec![(ty, 100.0)];
+            let before = pool(&c);
+            let mut high = hit.clone();
+            high.flags |= flags::WAS_OPTIMAL_BLOCKING;
+            let defender_before = (c.fighters[1].stamina, c.fighters[1].magicka);
+            let _ = emit_damage(&mut c, 0, 1, &high, now);
+            assert!(
+                pool(&c) < before,
+                "{ty:?}: the attacker loses {ty:?} to the blocker's shield ({before} -> {})",
+                pool(&c)
+            );
+            assert_eq!(
+                (c.fighters[1].stamina, c.fighters[1].magicka),
+                defender_before,
+                "the blocker's own pools are untouched"
+            );
+        }
     }
 
     #[test]
