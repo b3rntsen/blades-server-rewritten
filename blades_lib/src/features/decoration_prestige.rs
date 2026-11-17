@@ -8,10 +8,12 @@
 //!
 //! A bought decoration's prestige rides on its offer's `townXp`. A CRAFTED one
 //! has no reward of its own to carry it: the APK's `Recipe` has no prestige
-//! field. The number is on the Workshop's `ItemBundleGenerationData` for the
-//! same decoration, which is what this table maps each recipe to. Retail capture
-//! 17253 is the proof: collecting an Ancient Tree craft paid +91, and the
-//! Workshop bundle for the Ancient Tree carries `town_xp` 91.
+//! field. The number is on the `ItemBundleGenerationData` that sells that one
+//! decoration — the Workshop's, or for a decoration the gem store sold, its
+//! `IAP_Deco_` bundle (report #538) — which is what this table maps each recipe
+//! to (`script/extract_decoration_craft_prestige.py`). Retail capture 17253 is
+//! the proof: collecting an Ancient Tree craft paid +91, and the Workshop bundle
+//! for the Ancient Tree carries `town_xp` 91.
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -62,9 +64,34 @@ mod tests {
         );
     }
 
+    /// Report #538: a Workshop recipe for a decoration the gem store sold paid
+    /// nothing, although the APK prices that decoration's prestige on its own
+    /// single-item store bundle (`IAP_Deco_M_FighterTrophy`, `town_xp` 80).
+    #[test]
+    fn a_store_decoration_crafted_at_the_workshop_pays_its_store_prestige() {
+        const FIGHTERS_TROPHY_RECIPE: &str = "a9db0fbb-e2f8-478e-ad18-02b85a1558aa";
+        const FIGHTERS_TROPHY: &str = "fa792ef4-4ef2-4f7b-80a9-8e6b6e205374";
+        assert_eq!(
+            craft_prestige(&Uuid::parse_str(FIGHTERS_TROPHY_RECIPE).unwrap()),
+            Some((Uuid::parse_str(FIGHTERS_TROPHY).unwrap(), 80))
+        );
+    }
+
+    /// No APK bundle carries The King's Sentry, so it still pays nothing rather
+    /// than an invented number.
+    #[test]
+    fn a_decoration_with_no_apk_prestige_still_pays_nothing() {
+        let kings_sentry = Uuid::parse_str("a05ce92d-e6e4-4535-94c4-c32602bc0eb2").unwrap();
+        assert_eq!(craft_prestige(&kings_sentry), None);
+    }
+
     #[test]
     fn every_entry_pays_something_and_agrees_with_the_recipe_output() {
-        assert_eq!(corpus().recipes.len(), 39, "the 39 Workshop decorations");
+        assert_eq!(
+            corpus().recipes.len(),
+            39 + 35,
+            "the 39 Workshop decorations and the 35 sold on their own store bundle"
+        );
         for (recipe, e) in &corpus().recipes {
             assert!(e.town_xp > 0, "{recipe} pays nothing");
             let out = crate::features::recipe_outputs::output_for(recipe)
