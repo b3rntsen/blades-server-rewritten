@@ -238,6 +238,27 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         super::perks::matched_armor_set(&armor_pieces),
     );
 
+    // WEAPON RAVAGE NEEDS THE WEAPON'S CLASS while the properties are applied
+    // (report #542). `push_ravage` reads its curve (light/versatile/heavy) off
+    // `lo.weapon.weight`, but the weapon is only installed after the item loop below,
+    // so every weapon ravage — template (Baridan's Axe) or rolled enchant — saw `None`
+    // and was dropped. Resolve the class first, picking the same weapon the loop will
+    // (highest base damage, first wins); `install_weapon` then replaces the profile.
+    lo.weapon.weight = inventory
+        .loadout
+        .equipped_items
+        .0
+        .values()
+        .filter_map(|eq| gamedata::weapon(&eq.item.item_template_id.as_hyphenated().to_string()))
+        .fold(
+            None::<&'static gamedata::WeaponStats>,
+            |best, w| match best {
+                Some(b) if w.base_damage <= b.base_damage => Some(b),
+                _ => Some(w),
+            },
+        )
+        .map(|w| tables::Weight::from_class(w.weapon_class));
+
     let mut weapon: Option<(&'static gamedata::WeaponStats, u64)> = None;
 
     for eq in inventory.loadout.equipped_items.0.values() {
@@ -3420,5 +3441,122 @@ mod report_231_artifact_regen_tests {
         let mut lo = Loadout::default();
         apply_template_properties(&mut lo, FORK_OF_HORRIPILATION);
         assert!(lo.blocks_magicka_regen);
+    }
+}
+
+/// Report #542 follow-up (Pogagoga): "check the Baridan Axe, maybe the ravage mana cut
+/// doesn't work there". It did not — and neither did any other WEAPON ravage.
+/// `push_ravage` reads the curve off the weapon's class, but `from_character` applied
+/// every item's properties before it installed the weapon, so the class was still
+/// `None` and the ravage was dropped. Prod, 2026-11-10..17: 1,349 ravaging hits, every
+/// one a shield bash (shield ravage has no class curve); zero from a weapon.
+#[cfg(test)]
+mod report542_weapon_ravage_tests {
+    use super::*;
+    use blades_lib::user_data::{
+        Backpack, Item, ItemPropertiesAll, ItemSingleProperty, SingleEquippedItem, Treasury,
+    };
+
+    const BARIDANS_AXE: &str = "1f174bab-d765-4f9c-917a-69d4c1abcd82";
+    const RAVAGE_MAGICKA: &str = "7cdb7179-4cd4-466e-8b77-4caf2fddb268";
+    const RAVAGE_STAMINA: &str = "9be2e7e9-5ef5-4ee8-aeec-b864bca07f07";
+
+    fn item(template: &str, enchanting: Vec<(&str, u64)>) -> Item {
+        Item {
+            item_template_id: Uuid::parse_str(template).unwrap(),
+            tempering_level: 0,
+            durability: 100.0,
+            grade: None,
+            arcane_tier: None,
+            properties: ItemPropertiesAll {
+                enchanting: enchanting
+                    .into_iter()
+                    .map(|(id, tier)| ItemSingleProperty {
+                        id: Uuid::parse_str(id).unwrap(),
+                        tier,
+                    })
+                    .collect(),
+                grading: vec![],
+            },
+        }
+    }
+
+    fn loadout_of(items: Vec<Item>) -> Loadout {
+        let mut lo = blades_lib::user_data::Loadout::default();
+        for (i, item) in items.into_iter().enumerate() {
+            let slot = Uuid::from_u128(0x5420 + i as u128);
+            lo.equipped_items.0.insert(
+                slot,
+                SingleEquippedItem {
+                    id: Uuid::from_u128(0x5430 + i as u128),
+                    slot,
+                    item,
+                },
+            );
+        }
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: lo,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let character = CompleteCharacter {
+            level: 50,
+            ..Default::default()
+        };
+        from_character(&character, &inventory)
+    }
+
+    fn ravage(lo: &Loadout, ty: DamageType) -> f32 {
+        lo.ravage
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+
+    /// Baridan's Axe carries Weapon Ravage Magicka t10 on its TEMPLATE. It is a
+    /// versatile war axe, so the cut is the balanced curve's 42.0 per hit.
+    #[test]
+    fn baridans_axe_ravages_magicka_on_the_versatile_curve() {
+        let lo = loadout_of(vec![item(BARIDANS_AXE, vec![])]);
+        assert!(
+            lo.weapon.weight == Some(tables::Weight::Versatile),
+            "precondition: the axe resolved as a versatile weapon"
+        );
+        let want =
+            gamedata::enchant_magnitude_for_weight(RAVAGE_MAGICKA, 10, tables::Weight::Versatile)
+                .unwrap();
+        assert!(
+            (ravage(&lo, DamageType::Magicka) - want).abs() < 1e-3,
+            "Baridan's Axe must ravage {want} magicka, got {:?}",
+            lo.ravage
+        );
+    }
+
+    /// The same defect on an ordinary instance enchant: any weapon with a rolled
+    /// Ravage Stamina lost it.
+    #[test]
+    fn an_instance_ravage_enchant_on_a_weapon_survives_the_load() {
+        let lo = loadout_of(vec![item(
+            gamedata::ids::DRAGONBONE_DAGGER,
+            vec![(RAVAGE_STAMINA, 10)],
+        )]);
+        let weight = lo.weapon.weight.expect("the dagger resolved");
+        let want = gamedata::enchant_magnitude_for_weight(RAVAGE_STAMINA, 10, weight).unwrap();
+        assert!(
+            (ravage(&lo, DamageType::Stamina) - want).abs() < 1e-3,
+            "a t10 Ravage Stamina dagger must ravage {want}, got {:?}",
+            lo.ravage
+        );
+    }
+
+    /// Control: no weapon ravage on the gear, no ravage in the loadout.
+    #[test]
+    fn a_plain_weapon_ravages_nothing() {
+        let lo = loadout_of(vec![item(gamedata::ids::DRAGONBONE_DAGGER, vec![])]);
+        assert!(lo.ravage.is_empty(), "got {:?}", lo.ravage);
     }
 }
