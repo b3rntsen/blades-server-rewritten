@@ -3852,6 +3852,13 @@ fn emit_damage_with_outcome(
     // it swallowed the hit whole. The heal used to live inside the `negated` branch
     // below, so an Absorb that ate most of a big hit healed nothing, and the dodge
     // restorations (Adrenaline / Renewing / Focusing) would have had the same hole.
+    // The restoration's visual rides ahead of the hit it came from, as in retail.
+    out.extend(restoration_vfx_frames(
+        combat,
+        target_slot,
+        neg.heal,
+        neg.restore_magicka,
+    ));
     if neg.heal > 0.0 {
         let f = &mut combat.fighters[target_slot];
         let heal = (neg.heal * f.loadout.healing_multiplier()).round() as u32;
@@ -9517,16 +9524,56 @@ fn on_consume_consumable(
 /// nothing. Better to send no visual than a fabricated one.
 fn potion_vfx_for_stat(item_uuid: &str) -> Option<(&'static str, &'static str)> {
     match super::gamedata::restoration(item_uuid)?.affected_stat {
-        0 => Some((
-            "71396acd-1caa-414b-a249-57e35e1e69b6", // VFX_AlchemyVFX_PotionVFX_Health
-            "0fef0efe-57b5-46c1-814a-47211103a673", // ..._Health_3rd
-        )),
-        2 => Some((
-            "ca784a31-a574-4a8d-8840-6b5d432cbbb4", // VFX_AlchemyVFX_PotionVFX_Magicka
-            "2f5405f6-054d-451b-8671-3b21f9a7ef9e", // ..._Magicka_3rd
-        )),
+        0 => Some(HEALTH_RESTORE_VFX),
+        2 => Some(MAGICKA_RESTORE_VFX),
         _ => None, // stamina: not in the corpus, so not invented
     }
+}
+
+/// The captured op78 (first-person, third-person) pair for a HEALTH restoration.
+const HEALTH_RESTORE_VFX: (&str, &str) = (
+    "71396acd-1caa-414b-a249-57e35e1e69b6", // VFX_AlchemyVFX_PotionVFX_Health
+    "0fef0efe-57b5-46c1-814a-47211103a673", // ..._Health_3rd
+);
+/// The captured op78 (first-person, third-person) pair for a MAGICKA restoration.
+const MAGICKA_RESTORE_VFX: (&str, &str) = (
+    "ca784a31-a574-4a8d-8840-6b5d432cbbb4", // VFX_AlchemyVFX_PotionVFX_Magicka
+    "2f5405f6-054d-451b-8671-3b21f9a7ef9e", // ..._Magicka_3rd
+);
+
+/// op78 `PlayerPlayVFX` for a negation pool that just restored the fighter (#535).
+///
+/// Retail plays a restoration's visual through the server: `AbilityDoAbsorb`
+/// (Absorb) and `AbilityDoRestoringDodge` (Adrenaline Dodge → Health, Renewing Dodge
+/// → Magicka) each carry `_restorationPointers` (dump.cs 603149 / 604137), and the
+/// PvP client only plays VFX it is told to — `PvpAvatar$$OnMiscMessage@0x1794948` →
+/// `Actor$$PlayVFX@0x1C5A878`. Captured: s293 Absorb (op38 `4e760726…`) and s277
+/// Adrenaline Dodge (op38 `be56c560…`) are each followed by the HEALTH pair on the
+/// caster, sent before the op50 the pool swallowed. We restored the pool and sent no
+/// visual, so an Absorb or a restoring dodge healed in silence.
+///
+/// Focusing Dodge refunds cooldowns, not a stat, and has no restoration pointers, so
+/// it stays silent; so does Ward, whose restoration factor is 0.
+fn restoration_vfx_frames(
+    combat: &MatchCombat,
+    slot: usize,
+    heal: f32,
+    restore_magicka: f32,
+) -> Vec<(usize, Vec<u8>)> {
+    let obj = combat.fighters[slot].net_object_id;
+    let mut out = Vec::new();
+    for (amount, vfx) in [
+        (heal, HEALTH_RESTORE_VFX),
+        (restore_magicka, MAGICKA_RESTORE_VFX),
+    ] {
+        if amount > 0.0 {
+            let f = messages::player_play_vfx(obj, vfx.0, vfx.1);
+            for viewer in 0..combat.fighters.len() {
+                out.push((viewer, f.clone()));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -20605,5 +20652,220 @@ mod report_332_storm_armor_tests {
         assert_eq!(nd.int(2), Some(1));
         assert_eq!(nd.int(3), Some(60));
         assert_eq!(nd.string(4), Some(BLIZZARD));
+    }
+}
+
+#[cfg(test)]
+mod restoration_vfx_tests {
+    use super::super::damage::flags;
+    use super::super::loadout;
+    use super::super::state::{DamageNegationSource, DamageType, Fighter, NegationPool};
+    use super::*;
+
+    fn combat2(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters
+                .push(Fighter::new(slot, obj, loadout::starter(), now));
+        }
+        c.phase = FlowState::StateTimeout;
+        c
+    }
+
+    fn pool(
+        source: DamageNegationSource,
+        remaining: f32,
+        restoration_factor: f32,
+        on_absorb_restore: (f32, f32, f32),
+        now: Instant,
+    ) -> NegationPool {
+        let dodge = source == DamageNegationSource::Dodge;
+        NegationPool {
+            source,
+            remaining,
+            expires_at: now + Duration::from_secs(2),
+            restoration_factor,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore,
+            dodge_started_at: dodge.then_some(now),
+            dodge_status_expires_at: dodge.then(|| now + Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+        }
+    }
+
+    fn sword_hit(amount: f32) -> ResolvedDamage {
+        ResolvedDamage {
+            source: DamageSource::Attack,
+            active_side: ActiveSide::Middle,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Slashing, amount)],
+            components: vec![(DamageType::Slashing, amount)],
+            raw_components: vec![(DamageType::Slashing, amount)],
+            total: amount,
+            most_resisted: DamageType::Slashing,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        }
+    }
+
+    fn gmid(frame: &[u8]) -> Option<i64> {
+        (frame.len() > 2 && frame[1] == 0x36)
+            .then(|| arena_proto::parse_netdata(&frame[2..]).int(3))
+            .flatten()
+    }
+
+    /// (viewer, avatar obj, firstPerson, thirdPerson) of every op78, in send order.
+    fn op78s(out: &[(usize, Vec<u8>)]) -> Vec<(usize, i64, String, String)> {
+        out.iter()
+            .filter(|(_, f)| gmid(f) == Some(78))
+            .map(|(v, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                (
+                    *v,
+                    nd.int(0).unwrap(),
+                    nd.string(4).unwrap().to_string(),
+                    nd.string(5).unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn first_index_of(out: &[(usize, Vec<u8>)], id: i64) -> Option<usize> {
+        out.iter().position(|(_, f)| gmid(f) == Some(id))
+    }
+
+    /// s293: Absorb (op38 `4e760726…`) eats most of a hit → op78 HEALTH pair on the
+    /// caster, to both viewers, ahead of the op50 for that hit.
+    #[test]
+    fn an_absorb_that_heals_plays_the_health_restore_vfx_before_the_hit() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].health = c.fighters[1].max_health / 2;
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Absorb,
+            30.0,
+            1.0,
+            (0.0, 0.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(50.0), now);
+
+        let obj = c.fighters[1].net_object_id as i64;
+        let vfx = op78s(&out);
+        assert_eq!(vfx.len(), 2, "one op78 per viewer: {vfx:?}");
+        for (viewer, target, first, third) in &vfx {
+            assert!(*viewer < 2);
+            assert_eq!(*target, obj, "played on the fighter the pool healed");
+            assert_eq!(first, HEALTH_RESTORE_VFX.0);
+            assert_eq!(third, HEALTH_RESTORE_VFX.1);
+        }
+        assert!(
+            first_index_of(&out, 78) < first_index_of(&out, 50),
+            "the visual rides ahead of the op50, as captured"
+        );
+    }
+
+    /// The whole hit swallowed → op66, still with the restore visual first.
+    #[test]
+    fn a_fully_absorbed_hit_still_plays_the_restore_vfx() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].health = c.fighters[1].max_health / 2;
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Absorb,
+            100.0,
+            1.0,
+            (0.0, 0.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+        assert_eq!(op78s(&out).len(), 2);
+        assert!(first_index_of(&out, 78) < first_index_of(&out, 66));
+    }
+
+    /// Renewing Dodge restores MAGICKA → the magicka pair, not the health one.
+    #[test]
+    fn a_magicka_restoring_dodge_plays_the_magicka_pair() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Dodge,
+            100.0,
+            0.0,
+            (0.0, 40.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+        let vfx = op78s(&out);
+        assert_eq!(vfx.len(), 2, "{vfx:?}");
+        assert!(
+            vfx.iter()
+                .all(|(_, _, f, t)| f == MAGICKA_RESTORE_VFX.0 && t == MAGICKA_RESTORE_VFX.1)
+        );
+    }
+
+    /// s277: Adrenaline Dodge restores HEALTH → the health pair.
+    #[test]
+    fn a_health_restoring_dodge_plays_the_health_pair() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].health = c.fighters[1].max_health / 2;
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Dodge,
+            100.0,
+            0.0,
+            (40.0, 0.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+        let vfx = op78s(&out);
+        assert_eq!(vfx.len(), 2, "{vfx:?}");
+        assert!(
+            vfx.iter()
+                .all(|(_, _, f, t)| f == HEALTH_RESTORE_VFX.0 && t == HEALTH_RESTORE_VFX.1)
+        );
+    }
+
+    /// Controls: no pool, a Ward (restoration 0) and a Focusing Dodge (cooldowns
+    /// only) restore no stat, so no restoration visual may appear.
+    #[test]
+    fn nothing_restored_means_no_restore_vfx() {
+        let now = Instant::now();
+        let cases: [(&str, Option<NegationPool>); 3] = [
+            ("plain hit", None),
+            (
+                "ward",
+                Some(pool(
+                    DamageNegationSource::Ward,
+                    100.0,
+                    0.0,
+                    (0.0, 0.0, 0.0),
+                    now,
+                )),
+            ),
+            (
+                "focusing dodge",
+                Some(pool(
+                    DamageNegationSource::Dodge,
+                    100.0,
+                    0.0,
+                    (0.0, 0.0, 2.0),
+                    now,
+                )),
+            ),
+        ];
+        for (name, p) in cases {
+            let mut c = combat2(now);
+            c.fighters[1].negation_pools.extend(p);
+            let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+            assert!(op78s(&out).is_empty(), "{name}: no stat restored, no op78");
+        }
     }
 }
