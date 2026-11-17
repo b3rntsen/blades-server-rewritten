@@ -871,7 +871,8 @@ mod tests {
         let mut out = cast(&mut c, 0, "Thunderstorm", AbilityTag::Damage, t0);
         c.fighters[0].apply_stagger_for(t0 + secs(1.0), 1.5);
         out.extend(drain_state_changes(&mut c, t0 + secs(1.0)));
-        for ms in (20..=7000).step_by(20) {
+        // Bolts fall at 3, 6 and 9 s (report #542), so run past the last one.
+        for ms in (20..=9500).step_by(20) {
             out.extend(on_tick(&mut c, t0 + Duration::from_millis(ms), false));
         }
         assert!(op59s(&out).is_empty());

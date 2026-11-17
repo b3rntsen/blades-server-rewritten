@@ -2048,6 +2048,15 @@ pub(super) fn resolve_ability_cast(
     out
 }
 
+/// Thunderstorm's bolt schedule: `(numberOfBolts, duration / numberOfBolts)`, or
+/// `None` for any ability that does not ship a multi-bolt `_numberOfBolts`.
+fn thunderstorm_bolts(ability_uuid: &str, level: u8) -> Option<(u32, f32)> {
+    let r = super::gamedata::ability_rank_clamped(ability_uuid, level as u16)?;
+    let n = r.get(super::gamedata::AbilityField::NumberOfBolts)?;
+    let span = r.duration()?;
+    (n >= 2.0 && span > 0.0).then(|| (n as u32, span / n))
+}
+
 /// The EFFECT half of a cast: damage, control, and every shipped side effect.
 ///
 /// Split out of [`resolve_ability_cast`] so it can run either immediately or from
@@ -2420,6 +2429,38 @@ fn apply_ability_impact(
                  damage number — no op50 emitted (buff or mis-tagged cast)",
             );
         }
+        AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic
+            if thunderstorm_bolts(ability_uuid, level).is_some() =>
+        {
+            // THUNDERSTORM'S FIRST BOLT IS NOT AT THE CAST (report #542). It is a
+            // single `AbilityDoThunderstorm` step: an `AbilityContinuousDamage` built
+            // with `damageInterval = duration / numberOfBolts` (3 s), whose `_nextTick`
+            // starts AT that interval (`AbilityContinuousDamage$$.ctor@0x1e8fd70`,
+            // `AbilityDoThunderstorm$$.ctor@0x1e9a82c`; combat-spec 06 §1.5, §2.6). So
+            // the bolts land at 3, 6 and 9 s. We struck the first one the instant the
+            // button was pressed, before the storm had even formed.
+            //
+            // The per-bolt magnitude is left as it was (`_damage`): the runtime path
+            // reads as 3 x that, but the client's own SimulateDamage and loc text say
+            // `_damage`, and only a capture can settle which the server used (06 Q1).
+            let (n_bolts, interval) =
+                thunderstorm_bolts(ability_uuid, level).expect("guarded by the arm");
+            combat.channels.push(super::state::ActiveChannel {
+                caster_slot: sender,
+                target_slot,
+                ability_uuid: ability_uuid.to_string(),
+                ability_level: level,
+                remaining_ticks: n_bolts,
+                magicka_full_at_cast,
+                next_tick_at: now + Duration::from_secs_f32(interval),
+                interval_secs: interval,
+                cast_at: now,
+            });
+            info!(
+                "combat: slot {sender} THUNDERSTORM {n_bolts} bolts, the first in \
+                 {interval:.2}s and then one every {interval:.2}s ({ability_uuid})"
+            );
+        }
         AbilityTag::Paralyze | AbilityTag::Damage | AbilityTag::Generic => {
             let caster = super::perks::CasterPerks {
                 magicka_full: magicka_full_at_cast,
@@ -2438,33 +2479,6 @@ fn apply_ability_impact(
             last_hit_total = emitted.health_damage;
             last_hit_poison = emitted.poison_damage;
             out.extend(emitted.frames);
-            // THUNDERSTORM is not a DoT — it ships `_numberOfBolts` (3) over a
-            // `_duration` (9 s) and a per-BOLT `_damage`, so `channel_ticks` (which
-            // keys off `_damagePerSecond`) never saw it and it landed as one
-            // immediate hit. Schedule the remaining bolts at duration/bolts.
-            let bolts =
-                super::gamedata::ability_rank_clamped(ability_uuid, level as u16).and_then(|r| {
-                    let n = r.get(super::gamedata::AbilityField::NumberOfBolts)?;
-                    let span = r.duration()?;
-                    (n >= 2.0 && span > 0.0).then(|| (n as u32, span / n))
-                });
-            if let Some((n_bolts, interval)) = bolts {
-                combat.channels.push(super::state::ActiveChannel {
-                    caster_slot: sender,
-                    target_slot,
-                    ability_uuid: ability_uuid.to_string(),
-                    ability_level: level,
-                    remaining_ticks: n_bolts - 1,
-                    magicka_full_at_cast,
-                    next_tick_at: now + Duration::from_secs_f32(interval),
-                    interval_secs: interval,
-                    cast_at: now,
-                });
-                info!(
-                    "combat: slot {sender} THUNDERSTORM {n_bolts} bolts, one every \
-                     {interval:.2}s ({ability_uuid})"
-                );
-            }
             // A CHANNELLED spell just emitted tick 1 of many. Schedule the rest;
             // `apply_channel_ticks` delivers them on the shipped PvP tick.
             if let Some(total_ticks) = super::damage::channel_ticks(ability_uuid, level) {
@@ -3926,6 +3940,10 @@ fn emit_damage_with_outcome(
     let blocked = resolved.blocked;
 
     let hp_before = combat.fighters[target_slot].health;
+    // Health as the client holds it: the integer pool less any fractional damage
+    // already owed. Conditioning compares against this (report #542).
+    let hp_before_exact =
+        (hp_before as f32 - combat.fighters[target_slot].health_damage_carry).max(0.0);
     let max_hp = combat.fighters[target_slot].max_health;
     // `take_damage_at`, not `take_damage`: Reckless Fury floors the victim at 1 HP
     // for its window ("cannot be killed").
@@ -4080,10 +4098,15 @@ fn emit_damage_with_outcome(
     // POST-NEGATION elemental component into the target's sliding window and check
     // thresholds → op51 ChangeCombatStatusEffect (a condition DoT lands) — including the
     // Paralyze poison→paralyse layering. [status-resistance-spec §5]
-    out.extend(apply_status_conditioning(
+    //
+    // Only the components that were NOT lethal count (report #542): see
+    // [`apply_status_conditioning_at_health`]. `hp_before_exact` is the victim's
+    // health before this hit, which is what retail compares against.
+    out.extend(apply_status_conditioning_at_health(
         combat,
         target_slot,
         &components,
+        hp_before_exact,
         now,
     ));
 
@@ -4452,19 +4475,54 @@ fn apply_status_conditioning(
     components: &[(super::state::DamageType, f32)],
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    use super::damage::is_elemental;
+    let health = combat.fighters[target_slot].health as f32;
+    apply_status_conditioning_at_health(combat, target_slot, components, health, now)
+}
+
+/// [`apply_status_conditioning`] against the victim's health BEFORE the hit.
+///
+/// A LETHAL COMPONENT CONDITIONS NOTHING (report #542). Retail records an elemental
+/// component into the damage history only while the running health-damage total of
+/// the hit, including that component, is still **below the victim's current
+/// health** (`Actor.ReceiveDamage` closure `DisplayClass302_0$$b__0@0x1fcff7c`,
+/// combat-spec 08 §2.1). The check runs before Reckless Fury's clamp (01 G), so a
+/// fighter held at 1 HP by Fury cannot be set Burning/Frozen/Shocked/Poisoned by a
+/// hit that would have killed them: the hit is clamped to nothing and records
+/// nothing. We recorded every component regardless, so a Fury-protected fighter on
+/// 1 HP was still conditioned and then ticked by the condition's DoT.
+fn apply_status_conditioning_at_health(
+    combat: &mut MatchCombat,
+    target_slot: usize,
+    components: &[(super::state::DamageType, f32)],
+    health_before: f32,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::damage::{is_elemental, is_health_type};
     use super::state::{DamageType, condition_for_element};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
-    let _ = combat.fighters[target_slot].max_health;
 
-    // Collect this hit's elemental components (post-mitigation) before borrowing mut.
-    let elementals: Vec<(DamageType, f32)> = components
-        .iter()
-        .filter(|(t, v)| is_elemental(*t) && *v > 0.0)
-        .map(|(t, v)| (*t, *v))
-        .collect();
+    // Collect this hit's elemental components (post-mitigation) before borrowing mut,
+    // keeping only those whose running health total stays below the victim's health.
+    let mut running = 0.0_f32;
+    let mut elementals: Vec<(DamageType, f32)> = Vec::new();
+    for (t, v) in components {
+        if is_health_type(*t) && *v > 0.0 {
+            running += *v;
+        }
+        if !is_elemental(*t) || *v <= 0.0 {
+            continue;
+        }
+        if running < health_before {
+            elementals.push((*t, *v));
+        } else {
+            debug!(
+                "combat status: slot {target_slot} {t:?} {v:.1} is lethal against \
+                 {health_before:.1} HP — not recorded for conditioning"
+            );
+        }
+    }
     if elementals.is_empty() {
         return out;
     }
@@ -12841,13 +12899,14 @@ mod shipped_effects_tests {
             now,
             true,
         );
-        assert!(!out.is_empty(), "the first bolt lands immediately");
+        // Report #542: the first bolt is one interval after the cast, not at it.
+        let _ = out;
         let ch = c
             .channels
             .iter()
             .find(|ch| ch.ability_uuid == u)
             .expect("bolts scheduled");
-        assert_eq!(ch.remaining_ticks, 2, "3 bolts total = 1 now + 2 scheduled");
+        assert_eq!(ch.remaining_ticks, 3, "3 bolts total, all scheduled");
         assert!(
             (ch.interval_secs - 3.0).abs() < 0.01,
             "9s / 3 bolts = 3s apart, got {}",
@@ -17082,10 +17141,13 @@ mod report_31_high_block_stun {
             .plateau_start_time(1.0)
             + 0.01;
         assert!(super::charge_swing_factor(&c.fighters[1], plateau, now).unwrap() > 1.0);
+        // Over the threshold but not lethal: a lethal component conditions nothing
+        // (report #542).
+        let frost = c.fighters[1].condition_threshold(StatusEffectType::Frozen) + 1.0;
         let out = super::apply_status_conditioning(
             &mut c,
             1,
-            &[(super::super::state::DamageType::Frost, 1.0e5)],
+            &[(super::super::state::DamageType::Frost, frost)],
             now,
         );
         let froze = out.iter().any(|(_, f)| {
@@ -20605,5 +20667,192 @@ mod report_332_storm_armor_tests {
         assert_eq!(nd.int(2), Some(1));
         assert_eq!(nd.int(3), Some(60));
         assert_eq!(nd.string(4), Some(BLIZZARD));
+    }
+}
+
+/// Report #542 (Pogagoga): "is freezing, burning etc. applied if the character has 1 HP
+/// left and receives elemental damage (for example during Reckless Fury)?", and "some
+/// skills take effect immediately without waiting for their animation".
+#[cfg(test)]
+mod report542_tests {
+    use super::super::damage::{ResolvedDamage, flags};
+    use super::super::state::{
+        ActiveSide, DamageSource, DamageType, Fighter, FlowState, MatchCombat, StatusEffectType,
+    };
+    use super::*;
+
+    fn combat2(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters.push(Fighter::new(
+                slot,
+                obj,
+                super::super::loadout::starter(),
+                now,
+            ));
+        }
+        c.phase = FlowState::StateTimeout;
+        c
+    }
+
+    fn fire_hit(amount: f32) -> ResolvedDamage {
+        ResolvedDamage {
+            source: DamageSource::Spell,
+            active_side: ActiveSide::Middle,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Fire, amount)],
+            components: vec![(DamageType::Fire, amount)],
+            raw_components: vec![(DamageType::Fire, amount)],
+            total: amount,
+            most_resisted: DamageType::None,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        }
+    }
+
+    fn burning(c: &MatchCombat, slot: usize, now: Instant) -> bool {
+        c.fighters[slot]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Burning && now < e.expires_at)
+    }
+
+    fn uuid_of(editor: &str) -> &'static str {
+        super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == editor)
+            .map(|a| a.uuid)
+            .unwrap_or_else(|| panic!("{editor} missing from the shipped table"))
+    }
+
+    /// THE REPORTED CASE. A fighter on 1 HP held up by Reckless Fury takes a Fire hit
+    /// well over the Burning threshold. Retail records an elemental component only
+    /// while the hit's running health total is still below the victim's current
+    /// health (`DisplayClass302_0$$b__0@0x1fcff7c`), so the clamped hit conditions
+    /// nothing. We set them Burning.
+    #[test]
+    fn a_fury_protected_fighter_on_1_hp_is_not_conditioned_by_a_lethal_hit() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        apply_reckless_fury(&mut c, 0, 1, now);
+        c.fighters[0].health = 1;
+        let big = c.fighters[0].condition_threshold(StatusEffectType::Burning) + 50.0;
+
+        let _ = emit_damage(&mut c, 1, 0, &fire_hit(big), now);
+
+        assert!(
+            !c.fighters[0].is_dead(),
+            "precondition: Fury held the fighter up"
+        );
+        assert_eq!(c.fighters[0].health, 1);
+        assert!(
+            !burning(&c, 0, now),
+            "a hit clamped by Fury at 1 HP must not set the fighter Burning"
+        );
+        assert_eq!(
+            c.fighters[0].recent_element_damage(DamageType::Fire),
+            0.0,
+            "and records nothing toward a later condition"
+        );
+    }
+
+    /// The control: the SAME hit against a full health bar conditions, so the test
+    /// above fails for the lethal rule and not because the hit is too small.
+    #[test]
+    fn the_same_hit_at_full_health_does_set_burning() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        apply_reckless_fury(&mut c, 0, 1, now);
+        let big = c.fighters[0].condition_threshold(StatusEffectType::Burning) + 50.0;
+        assert!(
+            (c.fighters[0].health as f32) > big,
+            "precondition: the hit is not lethal at full health"
+        );
+
+        let _ = emit_damage(&mut c, 1, 0, &fire_hit(big), now);
+
+        assert!(burning(&c, 0, now), "control: a non-lethal hit conditions");
+    }
+
+    /// The rule is a running total in component order: a physical component that
+    /// already exhausts the victim's health makes the elemental one behind it lethal.
+    #[test]
+    fn the_running_total_includes_the_physical_part_of_the_hit() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let t = c.fighters[1].condition_threshold(StatusEffectType::Burning) + 1.0;
+        let hp = 2.0 * t;
+        let lethal = apply_status_conditioning_at_health(
+            &mut c,
+            1,
+            &[(DamageType::Slashing, hp), (DamageType::Fire, t)],
+            hp,
+            now,
+        );
+        assert!(
+            lethal.is_empty() && !burning(&c, 1, now),
+            "slash + fire >= health"
+        );
+
+        let survivable = apply_status_conditioning_at_health(
+            &mut c,
+            1,
+            &[(DamageType::Slashing, hp - t - 1.0), (DamageType::Fire, t)],
+            hp,
+            now,
+        );
+        assert!(
+            !survivable.is_empty() && burning(&c, 1, now),
+            "control: below health"
+        );
+    }
+
+    /// Thunderstorm is one `AbilityContinuousDamage` step with interval
+    /// `duration / numberOfBolts`, and `_nextTick` starts AT the interval: bolts land at
+    /// 3, 6 and 9 s. We struck the first bolt the moment the button was pressed.
+    #[test]
+    fn thunderstorm_strikes_its_first_bolt_one_interval_after_the_cast() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let u = uuid_of("Thunderstorm");
+        let hp0 = c.fighters[1].health;
+        let _ = apply_ability_impact(
+            &mut c,
+            0,
+            1,
+            u,
+            1,
+            super::super::state::AbilityTag::Damage,
+            false,
+            now,
+            true,
+        );
+        assert_eq!(c.fighters[1].health, hp0, "nothing lands at the cast");
+        let ch = c
+            .channels
+            .iter()
+            .find(|ch| ch.ability_uuid == u)
+            .expect("bolts scheduled");
+        assert_eq!(ch.remaining_ticks, 3, "all three bolts are still to come");
+        assert!((ch.interval_secs - 3.0).abs() < 0.01, "9 s / 3 bolts");
+
+        let _ = apply_channel_ticks(&mut c, now + Duration::from_secs_f32(2.9));
+        assert_eq!(c.fighters[1].health, hp0, "still nothing at 2.9 s");
+
+        let mut landed = Vec::new();
+        for t in [3.0_f32, 6.0, 9.0] {
+            let before = c.fighters[1].health;
+            let _ = apply_channel_ticks(&mut c, now + Duration::from_secs_f32(t));
+            landed.push(before > c.fighters[1].health);
+        }
+        assert_eq!(landed, vec![true, true, true], "bolts at 3, 6 and 9 s");
+        assert!(
+            !c.channels.iter().any(|ch| ch.ability_uuid == u),
+            "and the storm is spent after the third"
+        );
     }
 }
