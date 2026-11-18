@@ -3474,6 +3474,7 @@ mod tests {
             dodge_status_expires_at: None,
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let mut components = vec![
             (DamageType::Slashing, 200.0),

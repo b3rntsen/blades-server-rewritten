@@ -1855,6 +1855,7 @@ pub(super) fn resolve_ability_cast(
         // play nothing — the very bug being fixed — so skip the frame instead and
         // leave the omission visible.
         super::loadout::actor_animation_for_maneuver(&ea.ability_uuid).map(|anim| {
+            combat.fighters[sender].replace_swing_recovery_with_cast(now);
             // Every one of 2,941 retail op58 frames carries propId 7, and its newest
             // history entry is Maneuver. The old sparse frame omitted it; on device,
             // Piercing Strikes then fell back to a spell-like generic cast.
@@ -1918,6 +1919,7 @@ pub(super) fn resolve_ability_cast(
                     r.get(super::gamedata::AbilityField::ChannelMaxLength)
                         .unwrap_or(0.0)
                 };
+                combat.fighters[sender].replace_swing_recovery_with_cast(now);
                 let state_blob = combat.fighters[sender]
                     .begin_channel_pose(now + Duration::from_secs_f32(pose_secs.max(0.0)));
                 messages::player_channeling_state_change(
@@ -3101,6 +3103,7 @@ fn apply_caster_begin_effects(
                 dodge_status_expires_at: status_expires,
                 dodge_effectiveness: eff,
                 bypass_types: &[],
+                breaks_into_stagger: false,
                 restoration_factor: 0.0,
                 absorb_fraction: 1.0,
                 elemental_only: false,
@@ -3380,6 +3383,7 @@ fn apply_shipped_effects_phased(
                 // TYPE and no magnitude, so "does not absorb it" is the faithful
                 // reading; a "takes extra fire" multiplier would be invented.
                 bypass_types: r.vulnerable_damage_types,
+                breaks_into_stagger: false,
             });
             let obj = combat.fighters[caster].net_object_id;
             info!("combat: slot {caster} storm-armor shield +{shield:.1} ({ability_uuid})");
@@ -4016,6 +4020,13 @@ fn emit_damage_with_outcome(
     // it swallowed the hit whole. The heal used to live inside the `negated` branch
     // below, so an Absorb that ate most of a big hit healed nothing, and the dodge
     // restorations (Adrenaline / Renewing / Focusing) would have had the same hole.
+    // The restoration's visual rides ahead of the hit it came from, as in retail.
+    out.extend(restoration_vfx_frames(
+        combat,
+        target_slot,
+        neg.heal,
+        neg.restore_magicka,
+    ));
     if neg.heal > 0.0 {
         let f = &mut combat.fighters[target_slot];
         let heal = (neg.heal * f.loadout.healing_multiplier()).round() as u32;
@@ -5409,6 +5420,7 @@ fn apply_ward(
         elemental_only: true,
         consumes_overflow: true,
         bypass_types: &[],
+        breaks_into_stagger: false,
     });
     // Add transient flat physical armor (subtracted from incoming physical as a
     // transient resistance on the caster — `DamageType::Health` is NOT physical;
@@ -5476,6 +5488,7 @@ fn apply_absorb(
         elemental_only: false,
         consumes_overflow: false,
         bypass_types: &[],
+        breaks_into_stagger: false,
     });
     let obj = f.net_object_id;
     info!(
@@ -6443,6 +6456,23 @@ pub fn drain_state_changes_for(
     only: Option<usize>,
 ) -> Vec<(usize, Vec<u8>)> {
     let viewers = combat.fighters.len();
+    // A Spellbreaker ward that a hit just broke staggers its owner. Applied before
+    // the interrupt pass and the state drain so the stagger's op59/op39 go out in
+    // retail's order below; the op51s follow the state frames.
+    let mut spellbreaker_stuns: Vec<usize> = Vec::new();
+    for slot in 0..viewers {
+        if matches!(only, Some(s) if s != slot) {
+            continue;
+        }
+        if std::mem::take(&mut combat.fighters[slot].spellbreaker_broke) {
+            spellbreaker_stuns.push(slot);
+            if !combat.fighters[slot]
+                .apply_stagger_for(now, super::state::BASE_STAGGER_DURATION_SECS)
+            {
+                debug!("combat: slot {slot} Spellbreaker ward broke but it cannot be staggered");
+            }
+        }
+    }
     // op59 for any cast a stagger or paralysis just interrupted, BEFORE the state
     // frame: retail's order is damage → op59 → op39 → op51 in all 83 captured
     // selfInterrupt=false frames (06-D1).
@@ -6486,10 +6516,15 @@ pub fn drain_state_changes_for(
                     messages_state::player_charging_state_change(&ctx, side, t)
                 }
                 ActorStateType::Blocking => {
-                    // prop 10 `OptimalBlockAllowed`: retail sent `true` in 231 of 248
-                    // frames and no decoded correlation explains the other 17, so the
-                    // majority value is sent rather than a guessed derivation.
-                    messages_state::player_blocking_state_change(&ctx, t, true)
+                    // prop 10 `OptimalBlockAllowed`: the same latch that decides
+                    // whether this guard can stun. It used to be a constant `true`, so
+                    // a guard re-raised inside the 0.8 s cooldown showed the viewer a
+                    // high block that our server then resolved as low (#549 point 3).
+                    // Retail sends `false` in 62 of 779 de-duplicated frames
+                    // (s503/s615/s616), 55 of them within a second of the previous
+                    // guard's release; 1.3 % of later re-raises.
+                    let allowed = combat.fighters[slot].optimal_block_allowed();
+                    messages_state::player_blocking_state_change(&ctx, t, allowed)
                 }
                 ActorStateType::PlayerAutoAttack => {
                     // prop 10 `Direction`: (0,0) in 21 of 25 retail frames. We have
@@ -6538,6 +6573,9 @@ pub fn drain_state_changes_for(
             combat.fighters[slot].active_manual_attack = None;
         }
     }
+    for slot in spellbreaker_stuns {
+        out.extend(spellbreaker_ward_broken(combat, slot, now));
+    }
     // The Blocking (1) status, after the actor-state frames so the op41 that raises
     // the shield (or the op39 that lowers it) goes out first, the order retail uses
     // for a state and its status. Synced here, at the seam every c2s and every tick
@@ -6562,9 +6600,115 @@ pub fn drain_state_changes_for(
             for viewer in 0..viewers {
                 out.push((viewer, frame.clone()));
             }
+            out.extend(sync_spellbreaker_ward(combat, slot, up, now));
         }
     }
     out
+}
+
+/// **Spellbreaker** (tracker #550): "Creates a Rank 5 Ward while blocking, but the
+/// wielder is stunned when the Ward breaks."
+///
+/// `ShieldSpellCastBonusInstance` registers on the Blocking status: `CastSpell
+/// @0x1d52e88` runs `Actor.ExecuteAbility(SpellbreakerRank1)` when status 1 is
+/// added, `EndSpell@0x1d52eb4` runs `Actor.TryForceEndAbility` when it is removed.
+/// The ability's `AbilityDoSpellbreaker` step is a Ward (176.59 elemental pool +
+/// 111.43 Armor Rating) with `_wardDuration` 0 — it keeps running while its health
+/// lasts, so it ends with the guard or when a hit exhausts it.
+///
+/// Called on every Blocking edge. Raising the guard arms the ward and announces
+/// Ward (15); dropping it removes an unbroken ward. The break path is
+/// [`spellbreaker_ward_broken`].
+fn sync_spellbreaker_ward(
+    combat: &mut MatchCombat,
+    slot: usize,
+    up: bool,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
+    let Some((health, _armor)) = combat.fighters[slot].loadout.spellbreaker_ward else {
+        return Vec::new();
+    };
+    let f = &mut combat.fighters[slot];
+    let had_ward = f.spellbreaker_ward_up();
+    f.negation_pools.retain(|p| !p.breaks_into_stagger);
+    if up {
+        f.negation_pools.push(NegationPool {
+            source: DamageNegationSource::Ward,
+            remaining: health,
+            // No duration of its own: it ends with the guard (`EndSpell`) or breaks.
+            expires_at: now + Duration::from_secs(24 * 3600),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
+            elemental_only: true,
+            consumes_overflow: true,
+            bypass_types: &[],
+            breaks_into_stagger: true,
+        });
+        info!("combat: slot {slot} SPELLBREAKER ward up (pool {health:.2})");
+        let frame = messages::change_combat_status_effect(
+            f.net_object_id,
+            true,
+            StatusEffectType::Ward,
+            0.0,
+        );
+        return (0..combat.fighters.len())
+            .map(|v| (v, frame.clone()))
+            .collect();
+    }
+    if had_ward {
+        return ward_status_removed(combat, slot);
+    }
+    Vec::new()
+}
+
+/// A hit exhausted the Spellbreaker ward: `AbilityDoSpellbreaker$$Update@0x1e99f08`
+/// staggers the owner for its `BaseStaggerDuration` (the caller has applied it) and
+/// the step completes, removing Ward (15).
+fn spellbreaker_ward_broken(
+    combat: &mut MatchCombat,
+    slot: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{BASE_STAGGER_DURATION_SECS, StatusEffectType};
+    let mut out = Vec::new();
+    let f = &combat.fighters[slot];
+    if f.is_staggered(now) {
+        let secs = f.shortened_stagger_secs(BASE_STAGGER_DURATION_SECS);
+        info!("combat: slot {slot} STUNNED {secs:.2}s — its Spellbreaker ward broke");
+        let frame = messages::change_combat_status_effect(
+            f.net_object_id,
+            true,
+            StatusEffectType::Staggered,
+            secs,
+        );
+        out.extend((0..combat.fighters.len()).map(|v| (v, frame.clone())));
+    }
+    out.extend(ward_status_removed(combat, slot));
+    out
+}
+
+/// op51 remove Ward (15) for `slot`, unless a cast Ward still stands.
+fn ward_status_removed(combat: &mut MatchCombat, slot: usize) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, StatusEffectType};
+    let f = &mut combat.fighters[slot];
+    let other_ward = f
+        .negation_pools
+        .iter()
+        .any(|p| p.source == DamageNegationSource::Ward && p.elemental_only && p.remaining > 0.0);
+    if other_ward {
+        return Vec::new();
+    }
+    f.acknowledge_status_removed(StatusEffectType::Ward);
+    let frame =
+        messages::change_combat_status_effect(f.net_object_id, false, StatusEffectType::Ward, 0.0);
+    (0..combat.fighters.len())
+        .map(|v| (v, frame.clone()))
+        .collect()
 }
 
 /// Walk the attacker through the three beats of a swing.
@@ -10070,16 +10214,56 @@ fn on_consume_consumable(
 /// nothing. Better to send no visual than a fabricated one.
 fn potion_vfx_for_stat(item_uuid: &str) -> Option<(&'static str, &'static str)> {
     match super::gamedata::restoration(item_uuid)?.affected_stat {
-        0 => Some((
-            "71396acd-1caa-414b-a249-57e35e1e69b6", // VFX_AlchemyVFX_PotionVFX_Health
-            "0fef0efe-57b5-46c1-814a-47211103a673", // ..._Health_3rd
-        )),
-        2 => Some((
-            "ca784a31-a574-4a8d-8840-6b5d432cbbb4", // VFX_AlchemyVFX_PotionVFX_Magicka
-            "2f5405f6-054d-451b-8671-3b21f9a7ef9e", // ..._Magicka_3rd
-        )),
+        0 => Some(HEALTH_RESTORE_VFX),
+        2 => Some(MAGICKA_RESTORE_VFX),
         _ => None, // stamina: not in the corpus, so not invented
     }
+}
+
+/// The captured op78 (first-person, third-person) pair for a HEALTH restoration.
+const HEALTH_RESTORE_VFX: (&str, &str) = (
+    "71396acd-1caa-414b-a249-57e35e1e69b6", // VFX_AlchemyVFX_PotionVFX_Health
+    "0fef0efe-57b5-46c1-814a-47211103a673", // ..._Health_3rd
+);
+/// The captured op78 (first-person, third-person) pair for a MAGICKA restoration.
+const MAGICKA_RESTORE_VFX: (&str, &str) = (
+    "ca784a31-a574-4a8d-8840-6b5d432cbbb4", // VFX_AlchemyVFX_PotionVFX_Magicka
+    "2f5405f6-054d-451b-8671-3b21f9a7ef9e", // ..._Magicka_3rd
+);
+
+/// op78 `PlayerPlayVFX` for a negation pool that just restored the fighter (#535).
+///
+/// Retail plays a restoration's visual through the server: `AbilityDoAbsorb`
+/// (Absorb) and `AbilityDoRestoringDodge` (Adrenaline Dodge → Health, Renewing Dodge
+/// → Magicka) each carry `_restorationPointers` (dump.cs 603149 / 604137), and the
+/// PvP client only plays VFX it is told to — `PvpAvatar$$OnMiscMessage@0x1794948` →
+/// `Actor$$PlayVFX@0x1C5A878`. Captured: s293 Absorb (op38 `4e760726…`) and s277
+/// Adrenaline Dodge (op38 `be56c560…`) are each followed by the HEALTH pair on the
+/// caster, sent before the op50 the pool swallowed. We restored the pool and sent no
+/// visual, so an Absorb or a restoring dodge healed in silence.
+///
+/// Focusing Dodge refunds cooldowns, not a stat, and has no restoration pointers, so
+/// it stays silent; so does Ward, whose restoration factor is 0.
+fn restoration_vfx_frames(
+    combat: &MatchCombat,
+    slot: usize,
+    heal: f32,
+    restore_magicka: f32,
+) -> Vec<(usize, Vec<u8>)> {
+    let obj = combat.fighters[slot].net_object_id;
+    let mut out = Vec::new();
+    for (amount, vfx) in [
+        (heal, HEALTH_RESTORE_VFX),
+        (restore_magicka, MAGICKA_RESTORE_VFX),
+    ] {
+        if amount > 0.0 {
+            let f = messages::player_play_vfx(obj, vfx.0, vfx.1);
+            for viewer in 0..combat.fighters.len() {
+                out.push((viewer, f.clone()));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -12702,6 +12886,7 @@ mod shipped_effects_tests {
             dodge_status_expires_at: None,
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let hp_before = c.fighters[1].health;
         let hit = ResolvedDamage {
@@ -13667,6 +13852,7 @@ mod shipped_effects_tests {
             dodge_status_expires_at: Some(now + Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let resolved = RetailDamageModel.resolve_flat(
             &c.fighters[1].loadout,
@@ -15262,6 +15448,7 @@ mod shipped_effects_tests {
                     dodge_status_expires_at: Some(now + Duration::from_secs(1)),
                     dodge_effectiveness: 1.0,
                     bypass_types: &[],
+                    breaks_into_stagger: false,
                 });
             }
 
@@ -17451,6 +17638,7 @@ mod report_31_high_block_stun {
                 dodge_status_expires_at: Some(now + Duration::from_secs(1)),
                 dodge_effectiveness: 1.0,
                 bypass_types: &[],
+                breaks_into_stagger: false,
             });
         assert!(
             super::bot_next_ready_ability(
@@ -19351,6 +19539,113 @@ mod status_removals_tests {
         assert_eq!(op51(&out, StatusEffectType::Blocking, false), 2);
     }
 
+    /// Tracker #550: Spellbreaker — "Creates a Rank 5 Ward while blocking, but the
+    /// wielder is stunned when the Ward breaks." Raising the guard arms a 176.59
+    /// elemental ward with +111.43 armor and announces Ward (15); dropping it
+    /// removes the ward; a hit that exhausts it staggers the wielder.
+    #[test]
+    fn report_550_spellbreaker_wards_while_blocking_and_stuns_when_it_breaks() {
+        const SPELLBREAKER: &str = "9a22b59a-cdbc-4987-bf4a-0cc812428aeb";
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let character = blades_lib::user_data::CompleteCharacter {
+            level: 50,
+            ..Default::default()
+        };
+        let mut lo = blades_lib::user_data::Loadout::default();
+        let slot = uuid::Uuid::from_u128(0x550);
+        lo.equipped_items.0.insert(
+            slot,
+            blades_lib::user_data::SingleEquippedItem {
+                id: uuid::Uuid::from_u128(0x5501),
+                slot,
+                item: blades_lib::user_data::Item {
+                    item_template_id: uuid::Uuid::parse_str(SPELLBREAKER).unwrap(),
+                    tempering_level: 0,
+                    durability: 100.0,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: Default::default(),
+                },
+            },
+        );
+        let inv = blades_lib::user_data::CompleteInventory {
+            backpack: Default::default(),
+            loadout: lo,
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        c.fighters[0].loadout = loadout::from_character(&character, &inv);
+        let raise = |c: &mut MatchCombat, t: Instant| {
+            c.fighters[0].set_actor_state(ActorStateType::Blocking, t);
+            c.fighters[0].blocking_until = Some(t + Duration::from_secs(5));
+            c.fighters[0].block_raised_at = Some(t);
+            drain_state_changes(c, t)
+        };
+
+        // Guard up: the ward stands.
+        let up = raise(&mut c, now);
+        assert_eq!(op51(&up, StatusEffectType::Ward, true), 2, "Ward announced");
+        assert!(c.fighters[0].spellbreaker_ward_up());
+        let armor = c.fighters[0].transient_resistance_against(DamageType::Slashing, now);
+        assert!((armor - 111.43).abs() < 1e-2, "ward armor {armor}");
+        assert_eq!(
+            c.fighters[0].transient_resistance_against(DamageType::Fire, now),
+            0.0
+        );
+
+        // Guard down: the ward ends with it, no stun.
+        c.fighters[0].blocking_until = None;
+        c.fighters[0].reconcile_block(at(now, 0.5));
+        let down = drain_state_changes(&mut c, at(now, 0.5));
+        assert_eq!(
+            op51(&down, StatusEffectType::Ward, false),
+            2,
+            "Ward removed"
+        );
+        assert!(!c.fighters[0].spellbreaker_ward_up());
+        assert!(!c.fighters[0].is_staggered(at(now, 0.5)));
+
+        // Raise again; 100 fire is absorbed whole and does not break it.
+        let t1 = at(now, 1.0);
+        raise(&mut c, t1);
+        let mut hit = [(DamageType::Fire, 100.0)];
+        c.fighters[0].apply_non_dodge_negation_pools(DamageSource::Spell, &mut hit, t1);
+        assert_eq!(hit[0].1, 0.0);
+        drain_state_changes(&mut c, t1);
+        assert!(
+            !c.fighters[0].is_staggered(t1),
+            "an intact ward does not stun"
+        );
+        assert!(c.fighters[0].spellbreaker_ward_up());
+
+        // The next 100 exhausts it (76.59 left): the breaking hit's excess is
+        // negated too, and the wielder is staggered for the PvP base duration.
+        let mut hit = [(DamageType::Fire, 100.0)];
+        c.fighters[0].apply_non_dodge_negation_pools(DamageSource::Spell, &mut hit, t1);
+        assert_eq!(hit[0].1, 0.0, "excess of the breaking hit is negated");
+        let broke = drain_state_changes(&mut c, t1);
+        assert!(
+            c.fighters[0].is_staggered(t1),
+            "wielder stunned when the ward breaks"
+        );
+        assert_eq!(op51_staggered_secs(&broke).len(), 2, "Staggered announced");
+        assert_eq!(
+            op51(&broke, StatusEffectType::Ward, false),
+            2,
+            "Ward removed"
+        );
+        assert!(!c.fighters[0].guard_up(t1), "the stun drops the guard");
+
+        // Control: the same fighter without Spellbreaker gets no ward.
+        let mut plain = combat2(now);
+        let up = raise(&mut plain, now);
+        assert_eq!(op51(&up, StatusEffectType::Ward, true), 0);
+        assert!(!plain.fighters[0].spellbreaker_ward_up());
+    }
+
     // ---- 03-D9 / 08-D10: a refused stagger is not announced ------------------
 
     /// ch03 §7: "Attacker under Reckless Fury is high-blocked. Expect no op51(3)
@@ -19828,6 +20123,202 @@ mod op53_op83_wire_tests {
         assert_eq!(
             idle_39_viewers(&drain_state_changes(&mut c, now), caster).len(),
             2
+        );
+    }
+
+    /// Swing at `t0` and run the swing tail to `PlayerRecovery`; returns the instant
+    /// Recovery was entered. The swing's own return to Idle is still scheduled.
+    fn swing_into_recovery(c: &mut MatchCombat, t0: Instant) -> Instant {
+        let _ = begin_swing_animation(c, 0, None, t0);
+        let recovery_at = t0 + FOLLOW_THROUGH_DELAY + RECOVERY_DELAY;
+        c.fighters[0].reconcile_scheduled_states(recovery_at);
+        let _ = drain_state_changes(c, recovery_at);
+        assert_eq!(
+            c.fighters[0].actor_state(),
+            ActorStateType::PlayerRecovery,
+            "fixture: the swing must be in its Recovery"
+        );
+        recovery_at
+    }
+
+    /// Report #546 (Pogagoga: "when using Frostbite or Paralysis, they just stand
+    /// there and the casting animation doesn't play", human opponent).
+    ///
+    /// A human may cast from a swing's `PlayerRecovery` once it passes the weapon's
+    /// combo point (`Actor$$get_CanCastInCurrentState@0x1c59178`); retail does this in
+    /// 58 of 338 captured spell casts (s503/s615/s616: history `… 16, 4`). There the
+    /// Channeling REPLACES Recovery, and the next state for the caster is the Idle (or
+    /// Blocking) that ends the channel — never the swing's own Idle.
+    ///
+    /// We recorded Channeling only presentationally and left the swing's scheduled
+    /// Idle standing, so it fired a fraction of a second into the cast and sent both
+    /// viewers a 39 Idle. The opponent's client leaves Channeling only on a state
+    /// message, so that Idle cut the cast animation while the spell still landed.
+    #[test]
+    fn a_spell_cast_from_recovery_is_not_cut_by_the_swings_idle() {
+        for editor in ["Frostbite", "Paralyze", "Fireball"] {
+            let uuid = uuid_of(editor);
+            let t0 = Instant::now();
+            let mut c = live(t0);
+            c.fighters[0].magicka = c.fighters[0].max_magicka;
+            let caster = c.fighters[0].net_object_id;
+            let recovery_at = swing_into_recovery(&mut c, t0);
+            let cast_at = recovery_at + Duration::from_millis(250);
+            let out = cast(&mut c, uuid, cast_at);
+            assert!(
+                out.iter()
+                    .any(|(_, f)| messages::user_message_gmid(f) == Some(53)),
+                "{editor}: fixture: the cast must go out with its op53"
+            );
+            let _ = drain_state_changes(&mut c, cast_at);
+            let r = super::super::gamedata::ability_rank_clamped(uuid, 1).unwrap();
+            let pose = r
+                .channel_duration()
+                .filter(|v| *v > 0.0)
+                .or(r.get(super::super::gamedata::AbilityField::ChannelMaxLength))
+                .unwrap();
+            let pose_ms = (pose * 1000.0) as u64;
+            let mut during = Vec::new();
+            let mut ms = 10;
+            while ms + 20 < pose_ms {
+                let t = cast_at + Duration::from_millis(ms);
+                c.fighters[0].reconcile_scheduled_states(t);
+                during.extend(drain_state_changes(&mut c, t));
+                ms += 10;
+            }
+            assert!(
+                idle_39_viewers(&during, caster).is_empty(),
+                "{editor}: no Idle may cut the {pose} s cast pose (retail: Recovery -> \
+                 Channeling -> Idle at the channel's end)"
+            );
+            let end = cast_at + Duration::from_millis(pose_ms + 20);
+            c.fighters[0].reconcile_scheduled_states(end);
+            let mut viewers = idle_39_viewers(&drain_state_changes(&mut c, end), caster);
+            viewers.sort();
+            assert_eq!(
+                viewers,
+                vec![0, 1],
+                "{editor}: the channel's end still sends one Idle per viewer"
+            );
+            assert_eq!(c.fighters[0].actor_state(), ActorStateType::Idle);
+        }
+    }
+
+    /// #549 point 2, same mechanism for a weapon maneuver: retail sends `… 16, 11`
+    /// in 49 of 222 captured op58 (s503/s615/s616) and the caster's next state is the
+    /// Idle after the maneuver. The swing's scheduled Idle must not land inside it.
+    #[test]
+    fn a_maneuver_cast_from_recovery_is_not_cut_by_the_swings_idle() {
+        let uuid = uuid_of("PiercingStrikes");
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.fighters[0].stamina = c.fighters[0].max_stamina;
+        let caster = c.fighters[0].net_object_id;
+        let recovery_at = swing_into_recovery(&mut c, t0);
+        let recovery_time = c.fighters[0].loadout.charge_params().recovery_time;
+        let cast_at = recovery_at + Duration::from_millis(250);
+        let swing_idle_at = recovery_at + Duration::from_secs_f32(recovery_time);
+        assert!(
+            swing_idle_at > cast_at,
+            "fixture: the swing's Idle is still pending"
+        );
+        let end = super::super::interrupts::maneuver_timing(
+            uuid,
+            1,
+            super::super::interrupts::timing_weapon(&c.fighters[0]),
+        )
+        .expect("PiercingStrikes ships its maneuver timing")
+        .end;
+        let maneuver_end = cast_at + Duration::from_secs_f32(end);
+        let window_end = swing_idle_at + Duration::from_millis(50);
+        assert!(
+            window_end < maneuver_end,
+            "fixture: the window sits inside the maneuver"
+        );
+        let out = cast(&mut c, uuid, cast_at);
+        assert!(
+            out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(58)),
+            "fixture: the maneuver must go out with its op58"
+        );
+        let _ = drain_state_changes(&mut c, cast_at);
+        let mut during = Vec::new();
+        let mut t = cast_at;
+        while t < window_end {
+            t += Duration::from_millis(10);
+            c.fighters[0].reconcile_scheduled_states(t);
+            during.extend(drain_state_changes(&mut c, t));
+        }
+        assert!(
+            idle_39_viewers(&during, caster).is_empty(),
+            "the swing's Idle must not cut the maneuver"
+        );
+    }
+
+    /// Control: an instant buff sends no state frame of its own, so the swing it was
+    /// cast from still owes both viewers its Idle (retail: 144 Ward echoes, no op53).
+    #[test]
+    fn an_instant_buff_from_recovery_keeps_the_swings_idle() {
+        let uuid = uuid_of("Ward");
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.fighters[0].magicka = c.fighters[0].max_magicka;
+        let caster = c.fighters[0].net_object_id;
+        let recovery_at = swing_into_recovery(&mut c, t0);
+        let recovery_time = c.fighters[0].loadout.charge_params().recovery_time;
+        let cast_at = recovery_at + Duration::from_millis(250);
+        let _ = cast(&mut c, uuid, cast_at);
+        let _ = drain_state_changes(&mut c, cast_at);
+        let t = recovery_at + Duration::from_secs_f32(recovery_time) + Duration::from_millis(20);
+        c.fighters[0].reconcile_scheduled_states(t);
+        assert_eq!(
+            idle_39_viewers(&drain_state_changes(&mut c, t), caster).len(),
+            2,
+            "the swing's Idle still reaches both viewers"
+        );
+    }
+
+    /// #549 point 3: gmid 41 prop 10 `OptimalBlockAllowed` is the latch the viewer's
+    /// `OpponentBlockingState` reads to show a HIGH block at all. It was a constant
+    /// `true`, so a guard re-raised inside the 0.8 s post-release cooldown looked high
+    /// to the opponent while our server resolved it as low (no stun). Retail sends
+    /// `false` there: 62 of 779 frames, 55 within a second of the previous release.
+    #[test]
+    fn a_guard_reraised_inside_the_cooldown_is_sent_as_no_optimal_block() {
+        fn prop10(out: &[(usize, Vec<u8>)]) -> Vec<bool> {
+            out.iter()
+                .filter(|(v, f)| *v == 1 && messages::user_message_gmid(f) == Some(41))
+                .map(|(_, f)| match nd(f).props.get(&10) {
+                    Some(arena_proto::NetDataValue::Bool(b)) => *b,
+                    other => panic!("gmid 41 prop 10 must be a Bool, got {other:?}"),
+                })
+                .collect()
+        }
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let raise_drop = |c: &mut MatchCombat, up: Instant, down: Instant| {
+            c.fighters[0].raise_guard(up);
+            let out = drain_state_changes(c, up);
+            c.fighters[0].blocking_until = Some(down);
+            c.fighters[0].reconcile_block(down);
+            let _ = drain_state_changes(c, down);
+            prop10(&out)
+        };
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        assert_eq!(
+            raise_drop(&mut c, ms(0), ms(500)),
+            vec![true],
+            "first guard"
+        );
+        assert_eq!(
+            raise_drop(&mut c, ms(800), ms(1200)),
+            vec![false],
+            "raised 0.3 s after the release: inside the 0.8 s cooldown"
+        );
+        assert_eq!(
+            raise_drop(&mut c, ms(2100), ms(2500)),
+            vec![true],
+            "raised 0.9 s after the release: the cooldown has run out"
         );
     }
 
@@ -21564,6 +22055,222 @@ mod report_332_storm_armor_tests {
         assert_eq!(nd.int(2), Some(1));
         assert_eq!(nd.int(3), Some(60));
         assert_eq!(nd.string(4), Some(BLIZZARD));
+    }
+}
+
+#[cfg(test)]
+mod restoration_vfx_tests {
+    use super::super::damage::flags;
+    use super::super::loadout;
+    use super::super::state::{DamageNegationSource, DamageType, Fighter, NegationPool};
+    use super::*;
+
+    fn combat2(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            c.fighters
+                .push(Fighter::new(slot, obj, loadout::starter(), now));
+        }
+        c.phase = FlowState::StateTimeout;
+        c
+    }
+
+    fn pool(
+        source: DamageNegationSource,
+        remaining: f32,
+        restoration_factor: f32,
+        on_absorb_restore: (f32, f32, f32),
+        now: Instant,
+    ) -> NegationPool {
+        let dodge = source == DamageNegationSource::Dodge;
+        NegationPool {
+            source,
+            remaining,
+            expires_at: now + Duration::from_secs(2),
+            restoration_factor,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore,
+            dodge_started_at: dodge.then_some(now),
+            dodge_status_expires_at: dodge.then(|| now + Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+            breaks_into_stagger: false,
+        }
+    }
+
+    fn sword_hit(amount: f32) -> ResolvedDamage {
+        ResolvedDamage {
+            source: DamageSource::Attack,
+            active_side: ActiveSide::Middle,
+            flags: flags::SHOW_DAMAGE | flags::HAS_ATTACKER,
+            pre_mitigation_components: vec![(DamageType::Slashing, amount)],
+            components: vec![(DamageType::Slashing, amount)],
+            raw_components: vec![(DamageType::Slashing, amount)],
+            total: amount,
+            most_resisted: DamageType::Slashing,
+            negated: false,
+            heal: 0.0,
+            block_physical: 1.0,
+            blocked: false,
+            resistance_scale: 1.0,
+        }
+    }
+
+    fn gmid(frame: &[u8]) -> Option<i64> {
+        (frame.len() > 2 && frame[1] == 0x36)
+            .then(|| arena_proto::parse_netdata(&frame[2..]).int(3))
+            .flatten()
+    }
+
+    /// (viewer, avatar obj, firstPerson, thirdPerson) of every op78, in send order.
+    fn op78s(out: &[(usize, Vec<u8>)]) -> Vec<(usize, i64, String, String)> {
+        out.iter()
+            .filter(|(_, f)| gmid(f) == Some(78))
+            .map(|(v, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                (
+                    *v,
+                    nd.int(0).unwrap(),
+                    nd.string(4).unwrap().to_string(),
+                    nd.string(5).unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn first_index_of(out: &[(usize, Vec<u8>)], id: i64) -> Option<usize> {
+        out.iter().position(|(_, f)| gmid(f) == Some(id))
+    }
+
+    /// s293: Absorb (op38 `4e760726…`) eats most of a hit → op78 HEALTH pair on the
+    /// caster, to both viewers, ahead of the op50 for that hit.
+    #[test]
+    fn an_absorb_that_heals_plays_the_health_restore_vfx_before_the_hit() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].health = c.fighters[1].max_health / 2;
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Absorb,
+            30.0,
+            1.0,
+            (0.0, 0.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(50.0), now);
+
+        let obj = c.fighters[1].net_object_id as i64;
+        let vfx = op78s(&out);
+        assert_eq!(vfx.len(), 2, "one op78 per viewer: {vfx:?}");
+        for (viewer, target, first, third) in &vfx {
+            assert!(*viewer < 2);
+            assert_eq!(*target, obj, "played on the fighter the pool healed");
+            assert_eq!(first, HEALTH_RESTORE_VFX.0);
+            assert_eq!(third, HEALTH_RESTORE_VFX.1);
+        }
+        assert!(
+            first_index_of(&out, 78) < first_index_of(&out, 50),
+            "the visual rides ahead of the op50, as captured"
+        );
+    }
+
+    /// The whole hit swallowed → op66, still with the restore visual first.
+    #[test]
+    fn a_fully_absorbed_hit_still_plays_the_restore_vfx() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].health = c.fighters[1].max_health / 2;
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Absorb,
+            100.0,
+            1.0,
+            (0.0, 0.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+        assert_eq!(op78s(&out).len(), 2);
+        assert!(first_index_of(&out, 78) < first_index_of(&out, 66));
+    }
+
+    /// Renewing Dodge restores MAGICKA → the magicka pair, not the health one.
+    #[test]
+    fn a_magicka_restoring_dodge_plays_the_magicka_pair() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Dodge,
+            100.0,
+            0.0,
+            (0.0, 40.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+        let vfx = op78s(&out);
+        assert_eq!(vfx.len(), 2, "{vfx:?}");
+        assert!(
+            vfx.iter()
+                .all(|(_, _, f, t)| f == MAGICKA_RESTORE_VFX.0 && t == MAGICKA_RESTORE_VFX.1)
+        );
+    }
+
+    /// s277: Adrenaline Dodge restores HEALTH → the health pair.
+    #[test]
+    fn a_health_restoring_dodge_plays_the_health_pair() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].health = c.fighters[1].max_health / 2;
+        c.fighters[1].negation_pools.push(pool(
+            DamageNegationSource::Dodge,
+            100.0,
+            0.0,
+            (40.0, 0.0, 0.0),
+            now,
+        ));
+        let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+        let vfx = op78s(&out);
+        assert_eq!(vfx.len(), 2, "{vfx:?}");
+        assert!(
+            vfx.iter()
+                .all(|(_, _, f, t)| f == HEALTH_RESTORE_VFX.0 && t == HEALTH_RESTORE_VFX.1)
+        );
+    }
+
+    /// Controls: no pool, a Ward (restoration 0) and a Focusing Dodge (cooldowns
+    /// only) restore no stat, so no restoration visual may appear.
+    #[test]
+    fn nothing_restored_means_no_restore_vfx() {
+        let now = Instant::now();
+        let cases: [(&str, Option<NegationPool>); 3] = [
+            ("plain hit", None),
+            (
+                "ward",
+                Some(pool(
+                    DamageNegationSource::Ward,
+                    100.0,
+                    0.0,
+                    (0.0, 0.0, 0.0),
+                    now,
+                )),
+            ),
+            (
+                "focusing dodge",
+                Some(pool(
+                    DamageNegationSource::Dodge,
+                    100.0,
+                    0.0,
+                    (0.0, 0.0, 2.0),
+                    now,
+                )),
+            ),
+        ];
+        for (name, p) in cases {
+            let mut c = combat2(now);
+            c.fighters[1].negation_pools.extend(p);
+            let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
+            assert!(op78s(&out).is_empty(), "{name}: no stat restored, no op78");
+        }
     }
 }
 

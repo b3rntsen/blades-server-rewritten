@@ -204,11 +204,11 @@ pub fn player_state_change(
 ///   1 (Middle)**. A block is centred; it has no left/right;
 /// * prop 10 is a Bool, `true` in 231 of 248.
 ///
-/// **prop 10 is a documented gap.** The dump names it `OptimalBlockAllowed`, but no
-/// decoded correlation explains the 17 `false` frames: they are not block-end (prop 6
-/// is still Blocking), not tied to an actor, a time, a sequence, or a history shape,
-/// and consecutive `false`s occur. `optimal_block_allowed` therefore defaults to the
-/// 94 % value at the call site rather than being derived from a guessed meaning.
+/// **prop 10 is the post-release cooldown latch** (`OptimalBlockAllowed =
+/// !_optimalBlockTimeCooldownEnabled`, set at the press). Over 779 de-duplicated
+/// frames in s503/s615/s616 it is `false` 62 times, 55 of them within a second of the
+/// same actor's previous guard release, against 1.3 % of later raises. The call site
+/// passes [`super::state::Fighter::optimal_block_allowed`] (#549).
 ///
 /// This replaces [`super::messages::player_blocking_state_change`], which took a
 /// `blocking: bool` for prop 10 and hardcoded props 4/5/7/8 to one round's captured

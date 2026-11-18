@@ -647,6 +647,10 @@ fn profile_base(p: &WeaponProfile) -> f32 {
 // Enchantments — dispatched on the shipped `ItemPropertyLogic` subclass
 // ---------------------------------------------------------------------------
 
+/// The ability Spellbreaker's `ShieldWardSpellCastPropertyLogic` casts
+/// (`_abilityToCast._abilityUid`): editor name `Spellbreaker`, one rank.
+const SPELLBREAKER_ABILITY: &str = "63c09fe6-a62b-42bd-93df-a9a6db6a2321";
+
 /// Apply one `{id, tier}` ENCHANTING property to `lo`, dispatching on the shipped
 /// family's **logic class** (correction 2: the `_value` curve is *shared* — 32 of
 /// 116 families use the identical `268 … 7591` ramp — so the logic class, not the
@@ -932,6 +936,16 @@ fn apply_enchant_with_rating_and_multiplier(
         // `PowerfulBlockBonusInstance.CausedStagger`. Adding it to block rating made
         // every point of it reduce incoming damage instead of punishing the attacker.
         "PowerfulBlockPropertyLogic" => lo.powerful_block += magnitude,
+
+        // Spellbreaker (tracker #550). `ShieldSpellCastBonusInstance` casts its
+        // `_abilityToCast` — `SpellbreakerRank1` — when the Blocking status is
+        // added and force-ends it when Blocking is removed (`CastSpell@0x1d52e88` /
+        // `EndSpell@0x1d52eb4`, both gated on `StatusEffectType == 1`). This arm
+        // records the ward's numbers; `resolve::sync_spellbreaker_ward` runs it.
+        "ShieldWardSpellCastPropertyLogic" => {
+            lo.spellbreaker_ward = gamedata::ability_rank_clamped(SPELLBREAKER_ABILITY, 1)
+                .and_then(|r| Some((r.ward_health()?, r.ward_armor()?)));
+        }
 
         // ---- piercing ------------------------------------------------------
         "ResistancePiercingElementalPropertyLogic" => lo.elem_resist_piercing_rating += magnitude,
@@ -3604,6 +3618,171 @@ mod report_259_material_regen_tests {
         );
         assert_eq!(lo.stamina_regen, 0.0);
         assert_eq!(lo.health_regen, 0.0);
+    }
+
+    /// Tracker #550: every light shield's material properties reach the fighter.
+    /// Tier-10 templates. The shipped data gives light shields typed BLOCK bonuses
+    /// (`BlockReduction*PropertyLogic`, "Block vs X") and material regeneration,
+    /// not armour resistances.
+    #[test]
+    fn report_550_every_light_shield_applies_its_material_properties() {
+        use DamageType::*;
+        // (template, name, block-bonus types, stamina regen?, magicka regen?)
+        let cases: [(&str, &str, &[DamageType], bool, bool); 6] = [
+            ("80af12db-32e9-47b5-aa04-14a3d610e426", "Stalhrim", &[Bashing, Frost], false, false),
+            ("08a302c9-fc5b-4a03-bd6c-e7974a81009f", "Daedric Light", &[Slashing, Fire], false, false),
+            ("33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6", "Glass", &[Shock], true, false),
+            ("e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada", "Hide", &[], true, false),
+            ("616b64ef-4184-4efb-af55-1a3f122431dc", "Elven", &[], false, true),
+            ("0d491a77-762d-4c31-85ad-5baf39eb90a7", "Chitin", &[Poison], false, true),
+        ];
+        for (template, name, types, stamina, magicka) in cases {
+            let lo = from_character(&character(), &inventory(vec![item(template, 0)]));
+            for ty in [Slashing, Cleaving, Bashing, Fire, Frost, Shock, Poison] {
+                let bonus: f32 = lo
+                    .block_rating_bonuses
+                    .iter()
+                    .filter(|(t, _)| *t == ty)
+                    .map(|(_, v)| *v)
+                    .sum();
+                assert_eq!(
+                    bonus > 0.0,
+                    types.contains(&ty),
+                    "{name} Shield: block bonus vs {ty:?} = {bonus}"
+                );
+            }
+            assert_eq!(
+                lo.stamina_regen > 0.0,
+                stamina,
+                "{name}: stamina regen {}",
+                lo.stamina_regen
+            );
+            assert_eq!(
+                lo.magicka_regen > 0.0,
+                magicka,
+                "{name}: magicka regen {}",
+                lo.magicka_regen
+            );
+            assert_eq!(lo.health_regen, 0.0, "{name}: health regen");
+        }
+    }
+
+    /// Tracker #550, follow-up: EVERY shield in `ShieldTemplateList`, not only the
+    /// light ones the reporter listed. For each template, every shipped mandatory
+    /// property must show up on the fighter as the effect its logic class names, and
+    /// a shield's block rating must reach the fighter. A logic this test has no
+    /// mapping for fails it, so a newly shipped property cannot slip through
+    /// unchecked. The two staves that live in the same list (block 0) are skipped.
+    #[test]
+    fn report_550_every_shield_applies_every_property() {
+        use DamageType::*;
+        let elem = |logic: &str, prefix: &str, suffix: &str| -> Option<DamageType> {
+            let ty = logic.strip_prefix(prefix)?.strip_suffix(suffix)?;
+            Some(match ty {
+                "Fire" => Fire,
+                "Frost" => Frost,
+                "Shock" => Shock,
+                "Poison" => Poison,
+                "Slashing" => Slashing,
+                "Cleaving" => Cleaving,
+                "Bashing" => Bashing,
+                "Stamina" => Stamina,
+                "Magicka" => Magicka,
+                "Health" => Health,
+                other => panic!("{logic}: unknown type {other}"),
+            })
+        };
+        let mut checked = 0;
+        let mut with_properties = 0;
+        for sh in gamedata::SHIELDS.iter().filter(|s| s.block_base > 0.0) {
+            checked += 1;
+            let lo = from_character(&character(), &inventory(vec![item(sh.uuid, 0)]));
+            let name = sh.name;
+            assert!(
+                lo.block_rating > 0.0,
+                "{name}: block rating {}",
+                lo.block_rating
+            );
+            let mut want_block: Vec<DamageType> = Vec::new();
+            let (mut stamina, mut magicka) = (false, false);
+            let mut want_ravage: Vec<DamageType> = Vec::new();
+            let mut want_bash: Vec<DamageType> = Vec::new();
+            let mut spellbreaker = false;
+            for (uuid, _) in sh.mandatory_properties {
+                let logic = gamedata::enchant_family(uuid)
+                    .unwrap_or_else(|| panic!("{name}: unknown property {uuid}"))
+                    .logic;
+                if let Some(t) = elem(logic, "BlockReduction", "PropertyLogic") {
+                    want_block.push(t);
+                } else if let Some(t) = elem(logic, "ShieldRavage", "PropertyLogic") {
+                    want_ravage.push(t);
+                } else if let Some(t) = elem(logic, "Shield", "DamagePropertyLogic") {
+                    want_bash.push(t);
+                } else {
+                    match logic {
+                        "FortifyStaminaRegenerationMaterialPropertyLogic" => stamina = true,
+                        "FortifyMagickaRegenerationMaterialPropertyLogic" => magicka = true,
+                        "ShieldWardSpellCastPropertyLogic" => spellbreaker = true,
+                        other => panic!("{name}: no check for {other} — model and pin it"),
+                    }
+                }
+            }
+            if !sh.mandatory_properties.is_empty() {
+                with_properties += 1;
+            }
+            for ty in [Slashing, Cleaving, Bashing, Fire, Frost, Shock, Poison] {
+                let bonus: f32 = lo
+                    .block_rating_bonuses
+                    .iter()
+                    .filter(|(t, _)| *t == ty)
+                    .map(|(_, v)| *v)
+                    .sum();
+                assert_eq!(
+                    bonus > 0.0,
+                    want_block.contains(&ty),
+                    "{name}: block vs {ty:?} = {bonus}"
+                );
+            }
+            assert_eq!(lo.stamina_regen > 0.0, stamina, "{name}: stamina regen {}", lo.stamina_regen);
+            assert_eq!(lo.magicka_regen > 0.0, magicka, "{name}: magicka regen {}", lo.magicka_regen);
+            assert_eq!(lo.health_regen, 0.0, "{name}: health regen");
+            let mut ravage: Vec<DamageType> = lo
+                .shield_ravage
+                .iter()
+                .filter(|(_, v)| *v > 0.0)
+                .map(|(t, _)| *t)
+                .collect();
+            ravage.sort_by_key(|t| *t as u8);
+            want_ravage.sort_by_key(|t| *t as u8);
+            assert_eq!(ravage, want_ravage, "{name}: shield ravage");
+            let mut bash: Vec<DamageType> = lo
+                .shield_enchant_damage
+                .iter()
+                .filter(|(_, v)| *v > 0.0)
+                .map(|(t, _)| *t)
+                .collect();
+            bash.sort_by_key(|t| *t as u8);
+            want_bash.sort_by_key(|t| *t as u8);
+            assert_eq!(bash, want_bash, "{name}: shield bash damage");
+            match (spellbreaker, lo.spellbreaker_ward) {
+                (true, Some((health, armor))) => {
+                    assert!(close(health, 176.59), "{name}: ward health {health}");
+                    assert!(close(armor, 111.43), "{name}: ward armor {armor}");
+                }
+                (false, Option::None) => {}
+                (want, got) => panic!("{name}: Spellbreaker ward want {want}, got {got:?}"),
+            }
+            assert!(
+                lo.resistances.is_empty(),
+                "{name}: resistances {:?}",
+                lo.resistances
+            );
+        }
+        assert_eq!(checked, 49, "49 shields (51 rows minus two staves)");
+        assert_eq!(
+            with_properties, 25,
+            "23 light shields, Pandemonium and Spellbreaker carry properties"
+        );
     }
 
     #[test]
