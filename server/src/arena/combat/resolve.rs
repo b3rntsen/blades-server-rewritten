@@ -828,10 +828,9 @@ pub fn on_c2s_input(
             // gesture. Retail does send such samples while merely repositioning the
             // sword; only a path inside the current Charging window is a committed
             // manual slash candidate.
-            if MANUAL_SLASH_FROM_START_FLAG
-                && sample.start_attack_trigger_ready
-                && f.charge_press_at.is_some()
-            {
+            // Computed even while MANUAL_SLASH_FROM_START_FLAG is off, so the commit can
+            // log how often live swipes would take the manual path (observe-only).
+            if sample.start_attack_trigger_ready && f.charge_press_at.is_some() {
                 f.pending_manual_attack =
                     previous.and_then(|p| manual_attack_gesture(p, (sample.x, sample.y)));
             }
@@ -1095,7 +1094,8 @@ pub fn on_c2s_input(
             if a != b
                 && matches!(a, ActiveSide::Left | ActiveSide::Right)
                 && matches!(b, ActiveSide::Left | ActiveSide::Right)
-                && combat.fighters[sender].pending_manual_attack.is_none()
+                && (!MANUAL_SLASH_FROM_START_FLAG
+                    || combat.fighters[sender].pending_manual_attack.is_none())
             {
                 debug!(
                     "combat: slot {sender} crossed the midline mid-hold ({a:?} → {b:?}) — combo reset"
@@ -1191,6 +1191,14 @@ fn resolve_swing_with_side(
     // Consume the gesture at commit even when the cadence gate rejects this swing;
     // otherwise a rejected release could make the NEXT tap look like a manual slash.
     let manual_attack = combat.fighters[sender].pending_manual_attack.take();
+    if manual_attack.is_some() {
+        // Measurement for #171: one line per committed swing whose hold carried a
+        // START-flagged path. Compare against `outcome=accepted` swing lines.
+        info!(
+            "combat: slot {sender} manual-slash candidate at commit (START flag) applied={MANUAL_SLASH_FROM_START_FLAG}"
+        );
+    }
+    let manual_attack = manual_attack.filter(|_| MANUAL_SLASH_FROM_START_FLAG);
     // SAME-SIDE CADENCE (02 X11). From Recovery the next charge may begin at
     // `recoveryToComboTime` only on the OPPOSITE side (`CanBeginCombo@0x1d75980`); the
     // same side waits for `recoveryToNeutralTime` (`CanBeginRegularAttack@0x1d75a38`).
@@ -6676,7 +6684,7 @@ fn spellbreaker_ward_broken(
     slot: usize,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    use super::state::{BASE_STAGGER_DURATION_SECS, StatusEffectType};
+    use super::state::{StatusEffectType, BASE_STAGGER_DURATION_SECS};
     let mut out = Vec::new();
     let f = &combat.fighters[slot];
     if f.is_staggered(now) {
@@ -11733,6 +11741,60 @@ mod phase4_tests {
         assert!(
             combat.fighters[1].health < before,
             "manual damage must land with the 150 ms follow-through",
+        );
+    }
+
+    /// While MANUAL_SLASH_FROM_START_FLAG is off, a START-flagged swipe is only
+    /// observed (logged at commit): it still takes the gmid 52 path, and the gesture
+    /// does not leak into the next swing.
+    #[test]
+    fn a_flagged_swipe_is_observe_only_while_the_manual_slash_is_off() {
+        if MANUAL_SLASH_FROM_START_FLAG {
+            return;
+        }
+        let now = Instant::now();
+        let mut combat = live_combat(now);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_pos_frame_with_flags(0.760_250, 0.435_185, 0.0, 410),
+            now,
+        );
+        on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, false), now);
+        drain_state_changes(&mut combat, now);
+        let release = now + Duration::from_millis(400);
+        on_c2s_input(
+            &mut combat,
+            0,
+            &make_pos_frame_with_flags(
+                0.729_055,
+                0.337_963,
+                0.4,
+                410 | POS_START_ATTACK_TRIGGER_FLAG,
+            ),
+            release - Duration::from_millis(1),
+        );
+        assert!(
+            combat.fighters[0].pending_manual_attack.is_some(),
+            "the candidate is recorded for the measurement log"
+        );
+        on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.4, false), release);
+        let swing = drain_state_changes(&mut combat, release);
+        assert!(
+            swing
+                .iter()
+                .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),
+            "no manual gmid 40 while the flag is off",
+        );
+        assert!(
+            swing
+                .iter()
+                .any(|(_, frame)| messages::user_message_gmid(frame) == Some(52)),
+            "the swing keeps the gmid 52 path",
+        );
+        assert!(
+            combat.fighters[0].pending_manual_attack.is_none(),
+            "the gesture is consumed at commit"
         );
     }
 
@@ -22290,10 +22352,9 @@ mod restoration_vfx_tests {
         let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
         let vfx = op78s(&out);
         assert_eq!(vfx.len(), 2, "{vfx:?}");
-        assert!(
-            vfx.iter()
-                .all(|(_, _, f, t)| f == MAGICKA_RESTORE_VFX.0 && t == MAGICKA_RESTORE_VFX.1)
-        );
+        assert!(vfx
+            .iter()
+            .all(|(_, _, f, t)| f == MAGICKA_RESTORE_VFX.0 && t == MAGICKA_RESTORE_VFX.1));
     }
 
     /// s277: Adrenaline Dodge restores HEALTH → the health pair.
@@ -22312,10 +22373,9 @@ mod restoration_vfx_tests {
         let out = emit_damage(&mut c, 0, 1, &sword_hit(20.0), now);
         let vfx = op78s(&out);
         assert_eq!(vfx.len(), 2, "{vfx:?}");
-        assert!(
-            vfx.iter()
-                .all(|(_, _, f, t)| f == HEALTH_RESTORE_VFX.0 && t == HEALTH_RESTORE_VFX.1)
-        );
+        assert!(vfx
+            .iter()
+            .all(|(_, _, f, t)| f == HEALTH_RESTORE_VFX.0 && t == HEALTH_RESTORE_VFX.1));
     }
 
     /// Controls: no pool, a Ward (restoration 0) and a Focusing Dodge (cooldowns
