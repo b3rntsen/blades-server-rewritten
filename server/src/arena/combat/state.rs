@@ -2521,6 +2521,26 @@ impl Fighter {
         self.packed_state_history()
     }
 
+    /// A cast whose own state frame (op53 Channeling, op58 Maneuver) goes out while
+    /// this fighter is still in a swing's `PlayerRecovery` REPLACES that Recovery, as
+    /// it does on the client (`Actor$$get_CanCastInCurrentState@0x1c59178` admits a
+    /// cast once Recovery passes the combo point). Drop the swing's scheduled return to
+    /// Idle, which would otherwise fire a 39 Idle into the running cast and cut its
+    /// animation on both viewers (report #546), and settle the logical state to Idle
+    /// without a transition of its own: the wire already shows the cast's state, and
+    /// the Idle that ends it carries the history `… 16, 4, 0` retail sends.
+    ///
+    /// No-op outside Recovery. Instant casts that send no state frame must not call
+    /// this — their swing still owes the viewers its own Idle.
+    pub fn replace_swing_recovery_with_cast(&mut self, now: Instant) {
+        if self.actor_state != ActorStateType::PlayerRecovery {
+            return;
+        }
+        self.clear_scheduled_states();
+        self.actor_state = ActorStateType::Idle;
+        self.state_entered = now;
+    }
+
     /// Record the `Channeling` state op53 announces and remember when the channel ends.
     /// Returns the history ring for op53's propId 7, whose newest entry is Channeling.
     ///
@@ -3046,6 +3066,25 @@ impl Fighter {
         up
     }
 
+    /// `OptimalBlockAllowed` for the guard raised at `raised`: false while the 0.8 s
+    /// post-release cooldown runs (`!_optimalBlockTimeCooldownEnabled`, latched at the
+    /// press by `PlayerActorState$$ChangeToBlockingState@0x1d5beec`).
+    fn optimal_block_allowed_at(&self, raised: Instant) -> bool {
+        self.last_block_dropped_at.is_none_or(|dropped| {
+            raised.saturating_duration_since(dropped).as_secs_f32() >= OPTIMAL_BLOCK_RECOVERY_SECS
+        })
+    }
+
+    /// The latch the gmid 41 frame carries at prop 10 (`PlayerBlockingState.Parameters
+    /// .OptimalBlockAllowed`, dump.cs:597108). The viewer's
+    /// `OpponentBlockingState` reads it to decide whether this guard can show the HIGH
+    /// (optimal) block at all, so it must agree with [`Self::block_phase`], which
+    /// decides whether the guard stuns. True when no guard is up.
+    pub fn optimal_block_allowed(&self) -> bool {
+        self.block_raised_at
+            .is_none_or(|raised| self.optimal_block_allowed_at(raised))
+    }
+
     /// The current OPTIMAL/LATE (low) block phase for `now`:
     /// - OPTIMAL iff the guard has been up for < `BLOCK_OPTIMAL_TIME_SECS` **and** it
     ///   was raised at least `OPTIMAL_BLOCK_RECOVERY_SECS` after the previous release
@@ -3072,10 +3111,7 @@ impl Fighter {
         if held_secs >= BLOCK_OPTIMAL_TIME_SECS {
             return Some(BlockPhase::Late);
         }
-        let optimal_allowed = self.last_block_dropped_at.is_none_or(|dropped| {
-            raised.saturating_duration_since(dropped).as_secs_f32() >= OPTIMAL_BLOCK_RECOVERY_SECS
-        });
-        Some(if optimal_allowed {
+        Some(if self.optimal_block_allowed_at(raised) {
             BlockPhase::Optimal
         } else {
             BlockPhase::Late

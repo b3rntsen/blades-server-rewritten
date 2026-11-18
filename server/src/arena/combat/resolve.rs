@@ -1804,6 +1804,7 @@ pub(super) fn resolve_ability_cast(
         // play nothing — the very bug being fixed — so skip the frame instead and
         // leave the omission visible.
         super::loadout::actor_animation_for_maneuver(&ea.ability_uuid).map(|anim| {
+            combat.fighters[sender].replace_swing_recovery_with_cast(now);
             // Every one of 2,941 retail op58 frames carries propId 7, and its newest
             // history entry is Maneuver. The old sparse frame omitted it; on device,
             // Piercing Strikes then fell back to a spell-like generic cast.
@@ -1867,6 +1868,7 @@ pub(super) fn resolve_ability_cast(
                     r.get(super::gamedata::AbilityField::ChannelMaxLength)
                         .unwrap_or(0.0)
                 };
+                combat.fighters[sender].replace_swing_recovery_with_cast(now);
                 let state_blob = combat.fighters[sender]
                     .begin_channel_pose(now + Duration::from_secs_f32(pose_secs.max(0.0)));
                 messages::player_channeling_state_change(
@@ -6438,10 +6440,15 @@ pub fn drain_state_changes_for(
                     messages_state::player_charging_state_change(&ctx, side, t)
                 }
                 ActorStateType::Blocking => {
-                    // prop 10 `OptimalBlockAllowed`: retail sent `true` in 231 of 248
-                    // frames and no decoded correlation explains the other 17, so the
-                    // majority value is sent rather than a guessed derivation.
-                    messages_state::player_blocking_state_change(&ctx, t, true)
+                    // prop 10 `OptimalBlockAllowed`: the same latch that decides
+                    // whether this guard can stun. It used to be a constant `true`, so
+                    // a guard re-raised inside the 0.8 s cooldown showed the viewer a
+                    // high block that our server then resolved as low (#549 point 3).
+                    // Retail sends `false` in 62 of 779 de-duplicated frames
+                    // (s503/s615/s616), 55 of them within a second of the previous
+                    // guard's release; 1.3 % of later re-raises.
+                    let allowed = combat.fighters[slot].optimal_block_allowed();
+                    messages_state::player_blocking_state_change(&ctx, t, allowed)
                 }
                 ActorStateType::PlayerAutoAttack => {
                     // prop 10 `Direction`: (0,0) in 21 of 25 retail frames. We have
@@ -19701,6 +19708,202 @@ mod op53_op83_wire_tests {
         assert_eq!(
             idle_39_viewers(&drain_state_changes(&mut c, now), caster).len(),
             2
+        );
+    }
+
+    /// Swing at `t0` and run the swing tail to `PlayerRecovery`; returns the instant
+    /// Recovery was entered. The swing's own return to Idle is still scheduled.
+    fn swing_into_recovery(c: &mut MatchCombat, t0: Instant) -> Instant {
+        let _ = begin_swing_animation(c, 0, None, t0);
+        let recovery_at = t0 + FOLLOW_THROUGH_DELAY + RECOVERY_DELAY;
+        c.fighters[0].reconcile_scheduled_states(recovery_at);
+        let _ = drain_state_changes(c, recovery_at);
+        assert_eq!(
+            c.fighters[0].actor_state(),
+            ActorStateType::PlayerRecovery,
+            "fixture: the swing must be in its Recovery"
+        );
+        recovery_at
+    }
+
+    /// Report #546 (Pogagoga: "when using Frostbite or Paralysis, they just stand
+    /// there and the casting animation doesn't play", human opponent).
+    ///
+    /// A human may cast from a swing's `PlayerRecovery` once it passes the weapon's
+    /// combo point (`Actor$$get_CanCastInCurrentState@0x1c59178`); retail does this in
+    /// 58 of 338 captured spell casts (s503/s615/s616: history `… 16, 4`). There the
+    /// Channeling REPLACES Recovery, and the next state for the caster is the Idle (or
+    /// Blocking) that ends the channel — never the swing's own Idle.
+    ///
+    /// We recorded Channeling only presentationally and left the swing's scheduled
+    /// Idle standing, so it fired a fraction of a second into the cast and sent both
+    /// viewers a 39 Idle. The opponent's client leaves Channeling only on a state
+    /// message, so that Idle cut the cast animation while the spell still landed.
+    #[test]
+    fn a_spell_cast_from_recovery_is_not_cut_by_the_swings_idle() {
+        for editor in ["Frostbite", "Paralyze", "Fireball"] {
+            let uuid = uuid_of(editor);
+            let t0 = Instant::now();
+            let mut c = live(t0);
+            c.fighters[0].magicka = c.fighters[0].max_magicka;
+            let caster = c.fighters[0].net_object_id;
+            let recovery_at = swing_into_recovery(&mut c, t0);
+            let cast_at = recovery_at + Duration::from_millis(250);
+            let out = cast(&mut c, uuid, cast_at);
+            assert!(
+                out.iter()
+                    .any(|(_, f)| messages::user_message_gmid(f) == Some(53)),
+                "{editor}: fixture: the cast must go out with its op53"
+            );
+            let _ = drain_state_changes(&mut c, cast_at);
+            let r = super::super::gamedata::ability_rank_clamped(uuid, 1).unwrap();
+            let pose = r
+                .channel_duration()
+                .filter(|v| *v > 0.0)
+                .or(r.get(super::super::gamedata::AbilityField::ChannelMaxLength))
+                .unwrap();
+            let pose_ms = (pose * 1000.0) as u64;
+            let mut during = Vec::new();
+            let mut ms = 10;
+            while ms + 20 < pose_ms {
+                let t = cast_at + Duration::from_millis(ms);
+                c.fighters[0].reconcile_scheduled_states(t);
+                during.extend(drain_state_changes(&mut c, t));
+                ms += 10;
+            }
+            assert!(
+                idle_39_viewers(&during, caster).is_empty(),
+                "{editor}: no Idle may cut the {pose} s cast pose (retail: Recovery -> \
+                 Channeling -> Idle at the channel's end)"
+            );
+            let end = cast_at + Duration::from_millis(pose_ms + 20);
+            c.fighters[0].reconcile_scheduled_states(end);
+            let mut viewers = idle_39_viewers(&drain_state_changes(&mut c, end), caster);
+            viewers.sort();
+            assert_eq!(
+                viewers,
+                vec![0, 1],
+                "{editor}: the channel's end still sends one Idle per viewer"
+            );
+            assert_eq!(c.fighters[0].actor_state(), ActorStateType::Idle);
+        }
+    }
+
+    /// #549 point 2, same mechanism for a weapon maneuver: retail sends `… 16, 11`
+    /// in 49 of 222 captured op58 (s503/s615/s616) and the caster's next state is the
+    /// Idle after the maneuver. The swing's scheduled Idle must not land inside it.
+    #[test]
+    fn a_maneuver_cast_from_recovery_is_not_cut_by_the_swings_idle() {
+        let uuid = uuid_of("PiercingStrikes");
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.fighters[0].stamina = c.fighters[0].max_stamina;
+        let caster = c.fighters[0].net_object_id;
+        let recovery_at = swing_into_recovery(&mut c, t0);
+        let recovery_time = c.fighters[0].loadout.charge_params().recovery_time;
+        let cast_at = recovery_at + Duration::from_millis(250);
+        let swing_idle_at = recovery_at + Duration::from_secs_f32(recovery_time);
+        assert!(
+            swing_idle_at > cast_at,
+            "fixture: the swing's Idle is still pending"
+        );
+        let end = super::super::interrupts::maneuver_timing(
+            uuid,
+            1,
+            super::super::interrupts::timing_weapon(&c.fighters[0]),
+        )
+        .expect("PiercingStrikes ships its maneuver timing")
+        .end;
+        let maneuver_end = cast_at + Duration::from_secs_f32(end);
+        let window_end = swing_idle_at + Duration::from_millis(50);
+        assert!(
+            window_end < maneuver_end,
+            "fixture: the window sits inside the maneuver"
+        );
+        let out = cast(&mut c, uuid, cast_at);
+        assert!(
+            out.iter()
+                .any(|(_, f)| messages::user_message_gmid(f) == Some(58)),
+            "fixture: the maneuver must go out with its op58"
+        );
+        let _ = drain_state_changes(&mut c, cast_at);
+        let mut during = Vec::new();
+        let mut t = cast_at;
+        while t < window_end {
+            t += Duration::from_millis(10);
+            c.fighters[0].reconcile_scheduled_states(t);
+            during.extend(drain_state_changes(&mut c, t));
+        }
+        assert!(
+            idle_39_viewers(&during, caster).is_empty(),
+            "the swing's Idle must not cut the maneuver"
+        );
+    }
+
+    /// Control: an instant buff sends no state frame of its own, so the swing it was
+    /// cast from still owes both viewers its Idle (retail: 144 Ward echoes, no op53).
+    #[test]
+    fn an_instant_buff_from_recovery_keeps_the_swings_idle() {
+        let uuid = uuid_of("Ward");
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        c.fighters[0].magicka = c.fighters[0].max_magicka;
+        let caster = c.fighters[0].net_object_id;
+        let recovery_at = swing_into_recovery(&mut c, t0);
+        let recovery_time = c.fighters[0].loadout.charge_params().recovery_time;
+        let cast_at = recovery_at + Duration::from_millis(250);
+        let _ = cast(&mut c, uuid, cast_at);
+        let _ = drain_state_changes(&mut c, cast_at);
+        let t = recovery_at + Duration::from_secs_f32(recovery_time) + Duration::from_millis(20);
+        c.fighters[0].reconcile_scheduled_states(t);
+        assert_eq!(
+            idle_39_viewers(&drain_state_changes(&mut c, t), caster).len(),
+            2,
+            "the swing's Idle still reaches both viewers"
+        );
+    }
+
+    /// #549 point 3: gmid 41 prop 10 `OptimalBlockAllowed` is the latch the viewer's
+    /// `OpponentBlockingState` reads to show a HIGH block at all. It was a constant
+    /// `true`, so a guard re-raised inside the 0.8 s post-release cooldown looked high
+    /// to the opponent while our server resolved it as low (no stun). Retail sends
+    /// `false` there: 62 of 779 frames, 55 within a second of the previous release.
+    #[test]
+    fn a_guard_reraised_inside_the_cooldown_is_sent_as_no_optimal_block() {
+        fn prop10(out: &[(usize, Vec<u8>)]) -> Vec<bool> {
+            out.iter()
+                .filter(|(v, f)| *v == 1 && messages::user_message_gmid(f) == Some(41))
+                .map(|(_, f)| match nd(f).props.get(&10) {
+                    Some(arena_proto::NetDataValue::Bool(b)) => *b,
+                    other => panic!("gmid 41 prop 10 must be a Bool, got {other:?}"),
+                })
+                .collect()
+        }
+        let t0 = Instant::now();
+        let mut c = live(t0);
+        let raise_drop = |c: &mut MatchCombat, up: Instant, down: Instant| {
+            c.fighters[0].raise_guard(up);
+            let out = drain_state_changes(c, up);
+            c.fighters[0].blocking_until = Some(down);
+            c.fighters[0].reconcile_block(down);
+            let _ = drain_state_changes(c, down);
+            prop10(&out)
+        };
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        assert_eq!(
+            raise_drop(&mut c, ms(0), ms(500)),
+            vec![true],
+            "first guard"
+        );
+        assert_eq!(
+            raise_drop(&mut c, ms(800), ms(1200)),
+            vec![false],
+            "raised 0.3 s after the release: inside the 0.8 s cooldown"
+        );
+        assert_eq!(
+            raise_drop(&mut c, ms(2100), ms(2500)),
+            vec![true],
+            "raised 0.9 s after the release: the cooldown has run out"
         );
     }
 
