@@ -3050,6 +3050,7 @@ fn apply_caster_begin_effects(
                 dodge_status_expires_at: status_expires,
                 dodge_effectiveness: eff,
                 bypass_types: &[],
+                breaks_into_stagger: false,
                 restoration_factor: 0.0,
                 absorb_fraction: 1.0,
                 elemental_only: false,
@@ -3329,6 +3330,7 @@ fn apply_shipped_effects_phased(
                 // TYPE and no magnitude, so "does not absorb it" is the faithful
                 // reading; a "takes extra fire" multiplier would be invented.
                 bypass_types: r.vulnerable_damage_types,
+                breaks_into_stagger: false,
             });
             let obj = combat.fighters[caster].net_object_id;
             info!("combat: slot {caster} storm-armor shield +{shield:.1} ({ability_uuid})");
@@ -5361,6 +5363,7 @@ fn apply_ward(
         elemental_only: true,
         consumes_overflow: true,
         bypass_types: &[],
+        breaks_into_stagger: false,
     });
     // Add transient flat physical armor (subtracted from incoming physical as a
     // transient resistance on the caster — `DamageType::Health` is NOT physical;
@@ -5428,6 +5431,7 @@ fn apply_absorb(
         elemental_only: false,
         consumes_overflow: false,
         bypass_types: &[],
+        breaks_into_stagger: false,
     });
     let obj = f.net_object_id;
     info!(
@@ -6395,6 +6399,23 @@ pub fn drain_state_changes_for(
     only: Option<usize>,
 ) -> Vec<(usize, Vec<u8>)> {
     let viewers = combat.fighters.len();
+    // A Spellbreaker ward that a hit just broke staggers its owner. Applied before
+    // the interrupt pass and the state drain so the stagger's op59/op39 go out in
+    // retail's order below; the op51s follow the state frames.
+    let mut spellbreaker_stuns: Vec<usize> = Vec::new();
+    for slot in 0..viewers {
+        if matches!(only, Some(s) if s != slot) {
+            continue;
+        }
+        if std::mem::take(&mut combat.fighters[slot].spellbreaker_broke) {
+            spellbreaker_stuns.push(slot);
+            if !combat.fighters[slot]
+                .apply_stagger_for(now, super::state::BASE_STAGGER_DURATION_SECS)
+            {
+                debug!("combat: slot {slot} Spellbreaker ward broke but it cannot be staggered");
+            }
+        }
+    }
     // op59 for any cast a stagger or paralysis just interrupted, BEFORE the state
     // frame: retail's order is damage → op59 → op39 → op51 in all 83 captured
     // selfInterrupt=false frames (06-D1).
@@ -6490,6 +6511,9 @@ pub fn drain_state_changes_for(
             combat.fighters[slot].active_manual_attack = None;
         }
     }
+    for slot in spellbreaker_stuns {
+        out.extend(spellbreaker_ward_broken(combat, slot, now));
+    }
     // The Blocking (1) status, after the actor-state frames so the op41 that raises
     // the shield (or the op39 that lowers it) goes out first, the order retail uses
     // for a state and its status. Synced here, at the seam every c2s and every tick
@@ -6514,9 +6538,115 @@ pub fn drain_state_changes_for(
             for viewer in 0..viewers {
                 out.push((viewer, frame.clone()));
             }
+            out.extend(sync_spellbreaker_ward(combat, slot, up, now));
         }
     }
     out
+}
+
+/// **Spellbreaker** (tracker #550): "Creates a Rank 5 Ward while blocking, but the
+/// wielder is stunned when the Ward breaks."
+///
+/// `ShieldSpellCastBonusInstance` registers on the Blocking status: `CastSpell
+/// @0x1d52e88` runs `Actor.ExecuteAbility(SpellbreakerRank1)` when status 1 is
+/// added, `EndSpell@0x1d52eb4` runs `Actor.TryForceEndAbility` when it is removed.
+/// The ability's `AbilityDoSpellbreaker` step is a Ward (176.59 elemental pool +
+/// 111.43 Armor Rating) with `_wardDuration` 0 — it keeps running while its health
+/// lasts, so it ends with the guard or when a hit exhausts it.
+///
+/// Called on every Blocking edge. Raising the guard arms the ward and announces
+/// Ward (15); dropping it removes an unbroken ward. The break path is
+/// [`spellbreaker_ward_broken`].
+fn sync_spellbreaker_ward(
+    combat: &mut MatchCombat,
+    slot: usize,
+    up: bool,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, NegationPool, StatusEffectType};
+    let Some((health, _armor)) = combat.fighters[slot].loadout.spellbreaker_ward else {
+        return Vec::new();
+    };
+    let f = &mut combat.fighters[slot];
+    let had_ward = f.spellbreaker_ward_up();
+    f.negation_pools.retain(|p| !p.breaks_into_stagger);
+    if up {
+        f.negation_pools.push(NegationPool {
+            source: DamageNegationSource::Ward,
+            remaining: health,
+            // No duration of its own: it ends with the guard (`EndSpell`) or breaks.
+            expires_at: now + Duration::from_secs(24 * 3600),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
+            elemental_only: true,
+            consumes_overflow: true,
+            bypass_types: &[],
+            breaks_into_stagger: true,
+        });
+        info!("combat: slot {slot} SPELLBREAKER ward up (pool {health:.2})");
+        let frame = messages::change_combat_status_effect(
+            f.net_object_id,
+            true,
+            StatusEffectType::Ward,
+            0.0,
+        );
+        return (0..combat.fighters.len())
+            .map(|v| (v, frame.clone()))
+            .collect();
+    }
+    if had_ward {
+        return ward_status_removed(combat, slot);
+    }
+    Vec::new()
+}
+
+/// A hit exhausted the Spellbreaker ward: `AbilityDoSpellbreaker$$Update@0x1e99f08`
+/// staggers the owner for its `BaseStaggerDuration` (the caller has applied it) and
+/// the step completes, removing Ward (15).
+fn spellbreaker_ward_broken(
+    combat: &mut MatchCombat,
+    slot: usize,
+    now: Instant,
+) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{BASE_STAGGER_DURATION_SECS, StatusEffectType};
+    let mut out = Vec::new();
+    let f = &combat.fighters[slot];
+    if f.is_staggered(now) {
+        let secs = f.shortened_stagger_secs(BASE_STAGGER_DURATION_SECS);
+        info!("combat: slot {slot} STUNNED {secs:.2}s — its Spellbreaker ward broke");
+        let frame = messages::change_combat_status_effect(
+            f.net_object_id,
+            true,
+            StatusEffectType::Staggered,
+            secs,
+        );
+        out.extend((0..combat.fighters.len()).map(|v| (v, frame.clone())));
+    }
+    out.extend(ward_status_removed(combat, slot));
+    out
+}
+
+/// op51 remove Ward (15) for `slot`, unless a cast Ward still stands.
+fn ward_status_removed(combat: &mut MatchCombat, slot: usize) -> Vec<(usize, Vec<u8>)> {
+    use super::state::{DamageNegationSource, StatusEffectType};
+    let f = &mut combat.fighters[slot];
+    let other_ward = f
+        .negation_pools
+        .iter()
+        .any(|p| p.source == DamageNegationSource::Ward && p.elemental_only && p.remaining > 0.0);
+    if other_ward {
+        return Vec::new();
+    }
+    f.acknowledge_status_removed(StatusEffectType::Ward);
+    let frame =
+        messages::change_combat_status_effect(f.net_object_id, false, StatusEffectType::Ward, 0.0);
+    (0..combat.fighters.len())
+        .map(|v| (v, frame.clone()))
+        .collect()
 }
 
 /// Walk the attacker through the three beats of a swing.
@@ -12570,6 +12700,7 @@ mod shipped_effects_tests {
             dodge_status_expires_at: None,
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let hp_before = c.fighters[1].health;
         let hit = ResolvedDamage {
@@ -13535,6 +13666,7 @@ mod shipped_effects_tests {
             dodge_status_expires_at: Some(now + Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let resolved = RetailDamageModel.resolve_flat(
             &c.fighters[1].loadout,
@@ -15133,6 +15265,7 @@ mod shipped_effects_tests {
                     dodge_status_expires_at: Some(now + Duration::from_secs(1)),
                     dodge_effectiveness: 1.0,
                     bypass_types: &[],
+                    breaks_into_stagger: false,
                 });
             }
 
@@ -17324,6 +17457,7 @@ mod report_31_high_block_stun {
                 dodge_status_expires_at: Some(now + Duration::from_secs(1)),
                 dodge_effectiveness: 1.0,
                 bypass_types: &[],
+                breaks_into_stagger: false,
             });
         assert!(
             super::bot_next_ready_ability(
@@ -19222,6 +19356,113 @@ mod status_removals_tests {
         assert!(c.fighters[0].apply_stagger_for(at(now, 0.2), 2.5));
         let out = drain_state_changes(&mut c, at(now, 0.2));
         assert_eq!(op51(&out, StatusEffectType::Blocking, false), 2);
+    }
+
+    /// Tracker #550: Spellbreaker — "Creates a Rank 5 Ward while blocking, but the
+    /// wielder is stunned when the Ward breaks." Raising the guard arms a 176.59
+    /// elemental ward with +111.43 armor and announces Ward (15); dropping it
+    /// removes the ward; a hit that exhausts it staggers the wielder.
+    #[test]
+    fn report_550_spellbreaker_wards_while_blocking_and_stuns_when_it_breaks() {
+        const SPELLBREAKER: &str = "9a22b59a-cdbc-4987-bf4a-0cc812428aeb";
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let character = blades_lib::user_data::CompleteCharacter {
+            level: 50,
+            ..Default::default()
+        };
+        let mut lo = blades_lib::user_data::Loadout::default();
+        let slot = uuid::Uuid::from_u128(0x550);
+        lo.equipped_items.0.insert(
+            slot,
+            blades_lib::user_data::SingleEquippedItem {
+                id: uuid::Uuid::from_u128(0x5501),
+                slot,
+                item: blades_lib::user_data::Item {
+                    item_template_id: uuid::Uuid::parse_str(SPELLBREAKER).unwrap(),
+                    tempering_level: 0,
+                    durability: 100.0,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: Default::default(),
+                },
+            },
+        );
+        let inv = blades_lib::user_data::CompleteInventory {
+            backpack: Default::default(),
+            loadout: lo,
+            treasury: Default::default(),
+            overflow_treasury: Default::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        c.fighters[0].loadout = loadout::from_character(&character, &inv);
+        let raise = |c: &mut MatchCombat, t: Instant| {
+            c.fighters[0].set_actor_state(ActorStateType::Blocking, t);
+            c.fighters[0].blocking_until = Some(t + Duration::from_secs(5));
+            c.fighters[0].block_raised_at = Some(t);
+            drain_state_changes(c, t)
+        };
+
+        // Guard up: the ward stands.
+        let up = raise(&mut c, now);
+        assert_eq!(op51(&up, StatusEffectType::Ward, true), 2, "Ward announced");
+        assert!(c.fighters[0].spellbreaker_ward_up());
+        let armor = c.fighters[0].transient_resistance_against(DamageType::Slashing, now);
+        assert!((armor - 111.43).abs() < 1e-2, "ward armor {armor}");
+        assert_eq!(
+            c.fighters[0].transient_resistance_against(DamageType::Fire, now),
+            0.0
+        );
+
+        // Guard down: the ward ends with it, no stun.
+        c.fighters[0].blocking_until = None;
+        c.fighters[0].reconcile_block(at(now, 0.5));
+        let down = drain_state_changes(&mut c, at(now, 0.5));
+        assert_eq!(
+            op51(&down, StatusEffectType::Ward, false),
+            2,
+            "Ward removed"
+        );
+        assert!(!c.fighters[0].spellbreaker_ward_up());
+        assert!(!c.fighters[0].is_staggered(at(now, 0.5)));
+
+        // Raise again; 100 fire is absorbed whole and does not break it.
+        let t1 = at(now, 1.0);
+        raise(&mut c, t1);
+        let mut hit = [(DamageType::Fire, 100.0)];
+        c.fighters[0].apply_non_dodge_negation_pools(DamageSource::Spell, &mut hit, t1);
+        assert_eq!(hit[0].1, 0.0);
+        drain_state_changes(&mut c, t1);
+        assert!(
+            !c.fighters[0].is_staggered(t1),
+            "an intact ward does not stun"
+        );
+        assert!(c.fighters[0].spellbreaker_ward_up());
+
+        // The next 100 exhausts it (76.59 left): the breaking hit's excess is
+        // negated too, and the wielder is staggered for the PvP base duration.
+        let mut hit = [(DamageType::Fire, 100.0)];
+        c.fighters[0].apply_non_dodge_negation_pools(DamageSource::Spell, &mut hit, t1);
+        assert_eq!(hit[0].1, 0.0, "excess of the breaking hit is negated");
+        let broke = drain_state_changes(&mut c, t1);
+        assert!(
+            c.fighters[0].is_staggered(t1),
+            "wielder stunned when the ward breaks"
+        );
+        assert_eq!(op51_staggered_secs(&broke).len(), 2, "Staggered announced");
+        assert_eq!(
+            op51(&broke, StatusEffectType::Ward, false),
+            2,
+            "Ward removed"
+        );
+        assert!(!c.fighters[0].guard_up(t1), "the stun drops the guard");
+
+        // Control: the same fighter without Spellbreaker gets no ward.
+        let mut plain = combat2(now);
+        let up = raise(&mut plain, now);
+        assert_eq!(op51(&up, StatusEffectType::Ward, true), 0);
+        assert!(!plain.fighters[0].spellbreaker_ward_up());
     }
 
     // ---- 03-D9 / 08-D10: a refused stagger is not announced ------------------
@@ -21479,6 +21720,7 @@ mod restoration_vfx_tests {
             dodge_status_expires_at: dodge.then(|| now + Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         }
     }
 
