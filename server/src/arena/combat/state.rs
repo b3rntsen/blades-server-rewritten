@@ -1068,6 +1068,15 @@ pub struct Loadout {
     /// parsed as. Tier magnitudes 18.0 .. 50.4.
     pub powerful_block: f32,
 
+    /// **Spellbreaker** — `ShieldWardSpellCastPropertyLogic`, the shield's only
+    /// property ("Creates a Rank 5 Ward while blocking, but the wielder is stunned
+    /// when the Ward breaks", `Artifact.Effect.WardSpellOnBlock`).
+    ///
+    /// `(ward health, ward armor)` of the ability the property casts,
+    /// `SpellbreakerRank1` (`63c09fe6…`): 176.59 / 111.43, Ward's rank-5 numbers.
+    /// `None` for every other loadout. See `resolve::sync_spellbreaker_ward`.
+    pub spellbreaker_ward: Option<(f32, f32)>,
+
     /// Reserved for weapon-alchemy poison status effectiveness. Venom Strikes ships
     /// `_poisonEffectIncrease`, but retail applies that to poison effects/duration,
     /// not to direct Poison damage components.
@@ -2026,6 +2035,9 @@ pub struct Fighter {
     /// Kept out of `announced_statuses` so the removal diff can never absorb a raise
     /// silently. See [`Self::sync_blocking_status`].
     announced_blocking: bool,
+    /// Set when a hit exhausts this fighter's Spellbreaker ward; consumed by
+    /// `resolve::drain_state_changes_for`, which staggers the fighter.
+    pub spellbreaker_broke: bool,
     /// Consumables used in the CURRENT round — gated by
     /// [`CONSUMABLES_PER_ROUND`] (1). Reset by `reset_fighters_for_next_round`.
     /// [Phase 4.3]
@@ -2183,6 +2195,12 @@ pub struct NegationPool {
     /// "takes 1.5x fire" multiplier would be making up a number the game never
     /// authored.
     pub bypass_types: &'static [i32],
+    /// Spellbreaker's ward (`AbilityDoSpellbreaker`): it lasts for as long as the
+    /// guard is up, and when a hit exhausts it the OWNER is staggered
+    /// (`AbilityDoSpellbreaker$$Update@0x1e99f08` applies a
+    /// `CombatStatusStaggerEffect(owner.BaseStaggerDuration)` once `_health <= 0`).
+    /// False for every other pool.
+    pub breaks_into_stagger: bool,
 }
 
 /// The sliding damage-history window length (`ElementalStatusEffectData._duration` ≈ 5 s
@@ -2393,6 +2411,7 @@ impl Fighter {
             announced_statuses: Vec::new(),
             status_timers: Vec::new(),
             announced_blocking: false,
+            spellbreaker_broke: false,
             consumables_used: 0,
             continuous_next_tick_at: None,
             continuous_carry: 0.0,
@@ -3160,7 +3179,23 @@ impl Fighter {
             .filter(|(t, _, exp)| *t == ty && now < *exp)
             .map(|(_, v, _)| *v)
             .sum();
-        all + per_type
+        // Spellbreaker's ward raises the Armor Rating by its `_wardArmor` while the
+        // ward stands (`AbilityDoWard$$GetArmorBonus`), the same physical term a
+        // cast Ward pushes as transient resistances.
+        let spellbreaker = match self.loadout.spellbreaker_ward {
+            Some((_, armor)) if super::damage::is_physical(ty) && self.spellbreaker_ward_up() => {
+                armor
+            }
+            _ => 0.0,
+        };
+        all + per_type + spellbreaker
+    }
+
+    /// Does this fighter hold a live Spellbreaker ward (guard up, not yet broken)?
+    pub fn spellbreaker_ward_up(&self) -> bool {
+        self.negation_pools
+            .iter()
+            .any(|p| p.breaks_into_stagger && p.remaining > 0.0)
     }
 
     /// Prune expired transient resistances.
@@ -3670,6 +3705,7 @@ impl Fighter {
         let mut restore_magicka = 0.0;
         let mut restore_cooldown_secs = 0.0;
         let mut absorbed = false;
+        let mut spellbreaker_broke = false;
         for pool in self.negation_pools.iter_mut() {
             let is_dodge = pool.source == DamageNegationSource::Dodge;
             if (is_dodge && !include_dodge) || (!is_dodge && !include_non_dodge) {
@@ -3813,6 +3849,9 @@ impl Fighter {
             // is negated too. Deliberately NOT healed back: the restoration factor is
             // paid on what the pool actually absorbed, and Ward (the only user of
             // this flag) heals nothing anyway.
+            if pool.breaks_into_stagger && had_budget && pool.remaining <= 0.0 {
+                spellbreaker_broke = true;
+            }
             if pool.consumes_overflow && had_budget && pool.remaining <= 0.0 {
                 for (ty, v) in components.iter_mut() {
                     if eligible_ty(*ty) && *v > 0.0 {
@@ -3825,6 +3864,7 @@ impl Fighter {
         self.negation_pools.retain(|p| {
             p.remaining > 0.0 || (p.source == DamageNegationSource::Dodge && now < p.expires_at)
         });
+        self.spellbreaker_broke |= spellbreaker_broke;
         let health_after: f32 = components
             .iter()
             .filter(|(t, _)| {
@@ -4432,6 +4472,7 @@ impl MatchCombat {
             f.announced_statuses.clear();
             f.status_timers.clear();
             f.announced_blocking = false;
+            f.spellbreaker_broke = false;
             f.consumables_used = 0; // consumablesPerRound is PER ROUND [Phase 4.3]
             f.continuous_next_tick_at = None;
             f.continuous_carry = 0.0;
@@ -5475,6 +5516,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: None,
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         }
     }
 
@@ -5536,6 +5578,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: None,
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         }
     }
 
@@ -5648,6 +5691,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         // A multi-component hit: the restoration must NOT be paid per component.
         let mut c = vec![
@@ -5690,6 +5734,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         // A non-dodgeable source: the pool stays armed and pays nothing.
         let mut c = vec![(DamageType::Magicka, 100.0)];
@@ -5716,6 +5761,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
 
         let mut dot = vec![(DamageType::Slashing, 100.0)];
@@ -5751,6 +5797,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         }
     }
 
@@ -5826,6 +5873,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: Some(now + std::time::Duration::from_secs(1)),
             dodge_effectiveness: 1.2,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let mut c = vec![(DamageType::Slashing, 10.0)];
         let r = f.apply_negation_pools_for_source(DamageSource::Attack, &mut c, hit_at);
@@ -5912,6 +5960,7 @@ mod absorb_fraction_tests {
             dodge_status_expires_at: None,
             dodge_effectiveness: 1.0,
             bypass_types: &[],
+            breaks_into_stagger: false,
         });
         let mut c = vec![(DamageType::Slashing, 130.0)];
         let r = f.apply_negation_pools(&mut c);
