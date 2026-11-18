@@ -1777,6 +1777,11 @@ pub struct Fighter {
     /// The `Instant` the last block was DROPPED (for the OPTIMAL-recovery cooldown).
     /// Guards raised within `OPTIMAL_BLOCK_RECOVERY_SECS` after dropping start as LATE.
     pub last_block_dropped_at: Option<Instant>,
+    /// `block_raised_at` of a guard raised by a shield bash's `_blockDuration` (report
+    /// #549). The guard is a bash guard only while the two are equal, so any other
+    /// raise or drop retires it without a separate clear. See
+    /// [`Self::is_ability_guard`].
+    pub ability_guard_raised_at: Option<Instant>,
     /// Time of this fighter's last landed swing (combat throttle / swing cadence).
     pub last_swing: Option<Instant>,
     /// The `ActiveSide` classified at the moment the attack button went DOWN, i.e.
@@ -2381,6 +2386,7 @@ impl Fighter {
             blocking_until: None,
             block_raised_at: None,
             last_block_dropped_at: None,
+            ability_guard_raised_at: None,
             last_swing: None,
             charge_press_at: None,
             charge_side: None,
@@ -3074,13 +3080,19 @@ impl Fighter {
     pub fn reconcile_block(&mut self, now: Instant) -> bool {
         let up = matches!(self.blocking_until, Some(t) if now < t);
         if !up && self.actor_state == ActorStateType::Blocking {
+            // A bash's guard is the Blocking STATUS removed by
+            // `AbilityDoShieldBash$$Update@0x1e98a78`, not a `PlayerBlockingState`
+            // exit, so it never arms `StartPostOptimalBlockCooldown` (#549).
+            let ability_guard = self.is_ability_guard();
             // Blocking → Idle. This transition is what LOWERS the shield on both
             // screens; before the outbox existed it happened silently.
             self.set_actor_state(ActorStateType::Idle, now);
             self.blocking_side = ActiveSide::None;
             self.blocking_until = None;
             self.block_raised_at = None;
-            self.last_block_dropped_at = Some(now);
+            if !ability_guard {
+                self.last_block_dropped_at = Some(now);
+            }
         }
         up
     }
@@ -3100,8 +3112,24 @@ impl Fighter {
     /// (optimal) block at all, so it must agree with [`Self::block_phase`], which
     /// decides whether the guard stuns. True when no guard is up.
     pub fn optimal_block_allowed(&self) -> bool {
-        self.block_raised_at
-            .is_none_or(|raised| self.optimal_block_allowed_at(raised))
+        self.is_ability_guard()
+            || self
+                .block_raised_at
+                .is_none_or(|raised| self.optimal_block_allowed_at(raised))
+    }
+
+    /// True while the guard that is up was raised by a shield bash (report #549).
+    ///
+    /// Retail's bash guard is not a `PlayerBlockingState`: `AbilityDoShieldBash` adds
+    /// the Blocking status while the actor is in the Maneuver state, and
+    /// `PlayerActor$$get_IsOptimalBlocking@0x1862e94` answers `HasStatus(Blocking)`
+    /// there, so the whole `_blockDuration` window is optimal with no
+    /// `OptimalBlockAllowed` latch and no post-release cooldown (combat-spec 03 §2.6,
+    /// §5.1). Casting a bash from a raised guard ends that guard and arms the cooldown,
+    /// and we were then latching the bash's own guard LOW against it.
+    pub fn is_ability_guard(&self) -> bool {
+        self.ability_guard_raised_at.is_some()
+            && self.ability_guard_raised_at == self.block_raised_at
     }
 
     /// The current OPTIMAL/LATE (low) block phase for `now`:
@@ -3125,6 +3153,11 @@ impl Fighter {
         // Guard must still be up.
         if !matches!(self.blocking_until, Some(until) if now < until) {
             return None;
+        }
+        if self.is_ability_guard() {
+            // The bash window is its own length (`_blockDuration`, 0.5 s) and optimal
+            // throughout: see `is_ability_guard`.
+            return Some(BlockPhase::Optimal);
         }
         let held_secs = now.saturating_duration_since(raised).as_secs_f32();
         if held_secs >= BLOCK_OPTIMAL_TIME_SECS {

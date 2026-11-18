@@ -2732,6 +2732,8 @@ fn begin_ability_guard(
     f.blocking_side = ActiveSide::Middle;
     f.blocking_until = Some(until);
     f.block_raised_at = Some(now);
+    // Optimal for the whole window, whatever guard was released just before (#549).
+    f.ability_guard_raised_at = Some(now);
 
     if let Some(reduction) = r.damage_reduction().filter(|v| v.is_finite() && *v > 0.0) {
         use super::state::DamageType;
@@ -8508,6 +8510,85 @@ mod tests {
             combat.fighters[1].is_staggered(impact),
             "an unblocking target is staggered only at the strike phase",
         );
+    }
+
+    /// Report #549: "characters aren't stunned during the short burst block after
+    /// activating Shield Bash and other shield-related skills". The reporter blocks,
+    /// then bashes. Casting the bash ends the raised guard, which arms the 0.8 s
+    /// post-release cooldown, and the bash's own guard was then latched LOW against it,
+    /// so a swing into the bash window never stunned. Retail's bash guard is the
+    /// Blocking status read in the Maneuver state (`PlayerActor$$get_IsOptimalBlocking
+    /// @0x1862e94` -> `HasStatus(Blocking)`): optimal for the whole window, no latch.
+    ///
+    /// Control: the same swing into a plain guard re-raised inside the cooldown stays
+    /// LOW and does not stun (`a_guard_reraised_inside_the_cooldown_...`).
+    #[test]
+    fn report_549_a_bash_out_of_a_recent_guard_still_stuns_the_swinger() {
+        use super::phase4_tests::make_act_frame;
+        let bashes = ["ShieldBash", "HarryingBash", "StaggeringBash", "ReflectingBash"];
+        for name in bashes {
+            let uuid = super::super::gamedata::ABILITIES
+                .iter()
+                .find(|a| a.editor_name == name && !a.enemy_only)
+                .map(|a| a.uuid)
+                .unwrap_or_else(|| panic!("{name} missing"));
+            // held_through: block held up to the cast. Otherwise released 0.3 s before.
+            for held_through in [true, false] {
+                let now = Instant::now();
+                let mut combat = make_live_combat(now);
+                on_c2s_input(&mut combat, 0, &make_act_frame(true, 0.0, true), now);
+                assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+                let cast_at = now + Duration::from_millis(400);
+                if !held_through {
+                    let release = cast_at - Duration::from_millis(300);
+                    on_c2s_input(&mut combat, 0, &make_act_frame(false, 0.0, true), release);
+                    assert_ne!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+                }
+                let _ = cast(&mut combat, uuid, AbilityTag::Maneuver, cast_at);
+                assert!(
+                    combat.fighters[0].is_ability_guard(),
+                    "{name}/{held_through}: the bash raised its own guard"
+                );
+                assert!(
+                    combat.fighters[0].optimal_block_allowed(),
+                    "{name}/{held_through}: gmid 41 prop 10 must show the bash guard HIGH"
+                );
+
+                // The opponent swings into the window; the hit lands 0.2 s into it.
+                let swing_at = cast_at + Duration::from_millis(150);
+                let impact = swing_at + super::FOLLOW_THROUGH_DELAY + Duration::from_millis(1);
+                let mut out = super::resolve_swing(&mut combat, 1, 0, 1.0, swing_at);
+                out.extend(super::land_due_hits(&mut combat, impact));
+                assert_eq!(
+                    combat.fighters[0].block_phase(impact),
+                    Some(BlockPhase::Optimal),
+                    "{name}/{held_through}: the bash window is an optimal block",
+                );
+                assert!(
+                    combat.fighters[1].is_staggered(impact),
+                    "{name}/{held_through}: a swing into the bash guard stuns the swinger",
+                );
+            }
+        }
+    }
+
+    /// Report #549: the bash window ending is a status removal, not a guard release, so
+    /// it does not arm the post-release cooldown either. A plain guard ending still does.
+    #[test]
+    fn report_549_the_bash_window_ending_arms_no_optimal_block_cooldown() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let _ = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, now);
+        let after = now + Duration::from_millis(600);
+        assert!(!combat.fighters[0].reconcile_block(after), "window over");
+        assert_eq!(combat.fighters[0].last_block_dropped_at, None);
+
+        // Control: a plain guard that lapses records the drop.
+        let mut plain = make_live_combat(now);
+        plain.fighters[0].raise_guard(now);
+        plain.fighters[0].blocking_until = None;
+        let _ = plain.fighters[0].reconcile_block(after);
+        assert_eq!(plain.fighters[0].last_block_dropped_at, Some(after));
     }
 
     /// Report #530: "After using shield bash skills (all skills), the high block isn't
