@@ -279,10 +279,31 @@ const PROP_POS_X: u8 = 4;
 const PROP_POS_Y: u8 = 5;
 const PROP_POS_CHARGE: u8 = 7;
 const PROP_POS_FLAGS: u8 = 8;
-/// `PlayerCombatInputPositionMessage.START_TRIGGER_FLAG` (dump.cs:589451).
+/// `PlayerCombatInputPositionMessage.START_TRIGGER_FLAG` (dump.cs:589452).
 /// The client sets this after its measured screen-swipe speed and attack angle cross
 /// the shipped `PlayerCombatParameters` gates (5.0 and 75 degrees on device).
-const POS_START_ATTACK_TRIGGER_FLAG: i32 = 512;
+const POS_START_ATTACK_TRIGGER_FLAG: u16 = 512;
+/// Whether a START-flagged pointer sample during a charge selects the manual gmid 40
+/// slash (report #171). Off: until #551 the flag was never decoded in production
+/// (prop 8 is a `UInt16`), so turning it on changes live damage timing and combo
+/// carry-over for every flagged swipe. Shipped separately so its prod frequency can
+/// be measured first; the swipe-down cancel (END flag) does not depend on it.
+const MANUAL_SLASH_FROM_START_FLAG: bool = false;
+/// `PlayerCombatInputPositionMessage.END_TRIGGER_FLAG` (dump.cs:589453) — the
+/// touch client's ATTACK CANCEL (tracker #551).
+///
+/// A swipe DOWN during a held charge is how a touch player cancels, and it never
+/// reaches the server as gmid 31 `PlayerInputCancelCharge`: the only sender of that
+/// message (`PvpClientPlayerCombatController$$ReceiveInput@0x1877168`) fires on
+/// `ActionEvent.CancelCharge`, which only the gamepad paths raise
+/// (`InputContextCombat$$OnButtonDown`, `ControllerCombatProcessor$$ProcessMotionCombat`).
+/// Across all 746 815 captured c2s frames — every ENet command walked, retail and
+/// ours — gmid 31 appears zero times. What the touch client sends instead is this
+/// bit on its gmid-47 pointer stream, and retail honoured it: over the 46 retail
+/// sessions, a hold whose pointer samples carried END_TRIGGER ended in Idle with no
+/// swing 155 times and swung 4 times (each with the bit on the very last sample
+/// only), while holds without it swung 3 868 times.
+const POS_END_ATTACK_TRIGGER_FLAG: u16 = 1024;
 // NetData propIds — gmid 46 `PlayerCombatInputActivate`.
 const PROP_ACT_HELD: u8 = 4;
 const PROP_ACT_CHARGE: u8 = 5;
@@ -306,11 +327,15 @@ fn netdata_bool(nd: &arena_proto::NetDataParse, prop: u8) -> Option<bool> {
     }
 }
 
-/// Read an exact `Int` NetData prop. Prop 8 of gmid 47 is a packed ushort-shaped
-/// integer; accepting a Bool/Byte coercion here would manufacture trigger flags.
-fn netdata_i32(nd: &arena_proto::NetDataParse, prop: u8) -> Option<i32> {
+/// Read gmid 47's packed trigger flags (prop 8). On the wire this is a `UInt16` —
+/// all 93 526 captured gmid-47 samples, retail and ours, carry that type — so an
+/// `Int`-only reader never saw a single flag in production. `Int` is still accepted
+/// for older synthetic frames. A Bool/Byte coercion would manufacture flags, so
+/// nothing else is.
+fn netdata_flags(nd: &arena_proto::NetDataParse, prop: u8) -> Option<u16> {
     match nd.get(prop) {
-        Some(arena_proto::NetDataValue::Int(v)) => Some(*v),
+        Some(arena_proto::NetDataValue::UInt16(v)) => Some(*v),
+        Some(arena_proto::NetDataValue::Int(v)) => u16::try_from(*v).ok(),
         _ => None,
     }
 }
@@ -325,9 +350,13 @@ struct PointerSample {
     /// Client-reported charge seconds latched at propId 7 (telemetry only).
     client_charge: Option<f32>,
     /// The client-side input path crossed the authored swipe-speed and angle gates.
-    /// This selects only the visual state (manual gmid 40 vs fallback gmid 52); it
-    /// never changes damage, charge, target, or hit acceptance.
+    /// Acted on only when [`MANUAL_SLASH_FROM_START_FLAG`] is on: it selects the
+    /// manual gmid 40 path, which also moves the hit to the 150 ms follow-through and
+    /// skips the midline combo reset, so it is NOT visual-only.
     start_attack_trigger_ready: bool,
+    /// The client recognised its cancel gesture (a swipe down during the hold).
+    /// See [`POS_END_ATTACK_TRIGGER_FLAG`].
+    end_attack_trigger_ready: bool,
 }
 
 /// One decoded `PlayerCombatInputActivate` (gmid 46) press/release event.
@@ -349,12 +378,13 @@ fn parse_input_position(user_data: &[u8]) -> Option<PointerSample> {
         return None;
     }
     let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    let flags = netdata_flags(&nd, PROP_POS_FLAGS).unwrap_or(0);
     Some(PointerSample {
         x: netdata_f32(&nd, PROP_POS_X)?,
         y: netdata_f32(&nd, PROP_POS_Y)?,
         client_charge: netdata_f32(&nd, PROP_POS_CHARGE),
-        start_attack_trigger_ready: netdata_i32(&nd, PROP_POS_FLAGS)
-            .is_some_and(|flags| flags & POS_START_ATTACK_TRIGGER_FLAG != 0),
+        start_attack_trigger_ready: flags & POS_START_ATTACK_TRIGGER_FLAG != 0,
+        end_attack_trigger_ready: flags & POS_END_ATTACK_TRIGGER_FLAG != 0,
     })
 }
 
@@ -492,6 +522,34 @@ fn parse_op46_held(user_data: &[u8]) -> Option<bool> {
     // bit0 of the MSB of the f32 LE [user_data[8:12]] = bit0 of user_data[11].
     let held_bit = user_data[11] & 0x01;
     Some(held_bit == 1)
+}
+
+/// Abort `sender`'s wind-up without a swing: the attack cancel (trackers #449,
+/// #551). Clears the charge clock so the finger's later release is "a release with
+/// no recorded press" and starts nothing; a fighter that was winding up goes Idle,
+/// whose client `OnEnter` resets the combo, and the drain mirrors that Idle to both
+/// viewers. `via` names the wire signal for the log: `gmid31` (gamepad) or
+/// `swipe_down` (touch, gmid-47 END_TRIGGER).
+fn cancel_charge(combat: &mut MatchCombat, sender: usize, now: Instant, via: &str) {
+    let Some(f) = combat.fighters.get_mut(sender) else {
+        return;
+    };
+    let was_charging = matches!(
+        f.actor_state(),
+        ActorStateType::Charging | ActorStateType::PlayerDraining
+    );
+    f.charge_press_at = None;
+    f.charge_began_at = None;
+    f.charge_side = None;
+    f.pending_manual_attack = None;
+    if was_charging {
+        f.reset_combo();
+        f.set_actor_state(ActorStateType::Idle, now);
+    }
+    info!(
+        "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=cancelled via={via} was_charging={was_charging}",
+        combat.game_session_id, combat.fighters[sender].loadout.display_name,
+    );
 }
 
 /// Resolve one inbound, decrypted c2s combat input from `sender`.
@@ -750,22 +808,7 @@ pub fn on_c2s_input(
     // client leaves Charging for Idle, whose `OnEnter` resets the combo, so the
     // server does the same; the drain then mirrors the Idle to both viewers.
     if messages::user_message_gmid(user_data) == Some(messages::GMID_PLAYER_INPUT_CANCEL_CHARGE) {
-        if sender < combat.fighters.len() {
-            let f = &mut combat.fighters[sender];
-            let was_charging = f.actor_state() == ActorStateType::Charging;
-            f.charge_press_at = None;
-            f.charge_began_at = None;
-            f.charge_side = None;
-            f.pending_manual_attack = None;
-            if was_charging {
-                f.reset_combo();
-                f.set_actor_state(ActorStateType::Idle, now);
-            }
-            info!(
-                "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=cancelled was_charging={was_charging}",
-                combat.game_session_id, combat.fighters[sender].loadout.display_name,
-            );
-        }
+        cancel_charge(combat, sender, now, "gmid31");
         return Vec::new();
     }
 
@@ -785,7 +828,10 @@ pub fn on_c2s_input(
             // gesture. Retail does send such samples while merely repositioning the
             // sword; only a path inside the current Charging window is a committed
             // manual slash candidate.
-            if sample.start_attack_trigger_ready && f.charge_press_at.is_some() {
+            if MANUAL_SLASH_FROM_START_FLAG
+                && sample.start_attack_trigger_ready
+                && f.charge_press_at.is_some()
+            {
                 f.pending_manual_attack =
                     previous.and_then(|p| manual_attack_gesture(p, (sample.x, sample.y)));
             }
@@ -794,6 +840,11 @@ pub fn on_c2s_input(
             f.last_input_at = Some(now);
             if let Some(cc) = sample.client_charge {
                 f.last_client_charge = Some(cc);
+            }
+            // Tracker #551: the touch client's attack cancel. Only a LIVE charge is
+            // cancelled; the bit on a sample outside a hold means nothing.
+            if sample.end_attack_trigger_ready && f.charge_press_at.is_some() {
+                cancel_charge(combat, sender, now, "swipe_down");
             }
             return Vec::new();
         }
@@ -1393,7 +1444,7 @@ fn stun_the_blocked_attacker(
     blocker_slot: usize,
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
-    use super::state::{BASE_STAGGER_DURATION_SECS, StatusEffectType};
+    use super::state::{StatusEffectType, BASE_STAGGER_DURATION_SECS};
     let mut out = Vec::new();
     let viewers = combat.fighters.len();
     if attacker_slot >= viewers || combat.fighters[attacker_slot].is_dead() {
@@ -4238,7 +4289,8 @@ fn emit_damage_with_outcome(
         return EmittedDamage {
             frames: out,
             health_damage: total,
-        poison_damage,        };
+            poison_damage,
+        };
     }
 
     // REFLECTING BASH: send part of what just landed back at the attacker, capped by
@@ -4296,7 +4348,8 @@ fn emit_damage_with_outcome(
         return EmittedDamage {
             frames: out,
             health_damage: total,
-        poison_damage,        };
+            poison_damage,
+        };
     }
     if shield_retaliates {
         out.extend(apply_shield_enchant_retaliation(
@@ -4309,7 +4362,8 @@ fn emit_damage_with_outcome(
             return EmittedDamage {
                 frames: out,
                 health_damage: total,
-            poison_damage,            };
+                poison_damage,
+            };
         }
     }
 
@@ -4330,7 +4384,8 @@ fn emit_damage_with_outcome(
     EmittedDamage {
         frames: out,
         health_damage: total,
-    poison_damage,    }
+        poison_damage,
+    }
 }
 
 fn apply_shield_enchant_retaliation(
@@ -4640,7 +4695,7 @@ fn apply_status_conditioning_at_health(
     now: Instant,
 ) -> Vec<(usize, Vec<u8>)> {
     use super::damage::{is_elemental, is_health_type};
-    use super::state::{DamageType, condition_for_element};
+    use super::state::{condition_for_element, DamageType};
 
     let mut out = Vec::new();
     let target_obj = combat.fighters[target_slot].net_object_id;
@@ -8106,9 +8161,9 @@ mod tests {
         // _isWithinBlockZone byte + structural separator
         frame.push(0x00); // blockZone (not decoded, any value)
         frame.push(0xcc); // separator
-        // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
-        // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
-        // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
+                          // _clientChargeTime f32 LE packed with _held in bit0 of MSB (byte [11]).
+                          // Use a representative chargeTime of 52.22s (s293 swing1 chargeTime, both directions).
+                          // DOWN: raw bytes e1 e2 50 43; UP: e1 e2 50 42 (bit0 of MSB flipped).
         let (b8, b9, b10, b11): (u8, u8, u8, u8) = if held {
             (0xe1, 0xe2, 0x50, 0x43) // DOWN: bit0 of MSB = 1
         } else {
@@ -8192,7 +8247,7 @@ mod tests {
                 weight: Some(weight),
             };
             f.loadout.weapon_template = None; // synthetic profile → fallback cadence
-            // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
+                                              // No enchants → pure physical, ratio of crit:uncharged == swing_factor exactly.
             f.loadout.enchants = vec![];
             combat.fighters.push(f);
         }
@@ -9964,8 +10019,8 @@ mod cooldown_data_tests {
         assert!((ms("d07a8d30-9a1c-49b0-866d-97a8aa1534cf", 1) - 3.54).abs() < 1e-3); // Fireball
         assert!((ms("ce6b63e9-9f18-49c4-aee0-51f7985f9892", 1) - 8.09).abs() < 1e-2); // Power Attack
         assert!((ms("65ede044-d68a-4b2b-8f0c-02075ad133cc", 1) - 7.5).abs() < 1e-3); // Ward
-        // The old table had Thunderstorm under a fabricated uuid, so it silently fell
-        // back to 3 s; the real id now resolves.
+                                                                                     // The old table had Thunderstorm under a fabricated uuid, so it silently fell
+                                                                                     // back to 3 s; the real id now resolves.
         assert_ne!(
             ability_cooldown("2ab06506-2114-4738-bd87-f6f402d3ce2e", 1),
             ABILITY_COOLDOWN
@@ -10879,8 +10934,9 @@ mod phase4_tests {
 
     /// A prod-shaped `PlayerCombatInputPosition` (gmid 47) on the generic 0x36
     /// carrier: `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 47 · 4:Float x ·
-    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:Int flags}`.
-    fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: i32) -> Vec<u8> {
+    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:UInt16 flags}`. Prop 8 is a
+    /// `UInt16` on the wire (all 93 526 captured samples), not an `Int`.
+    fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: u16) -> Vec<u8> {
         let mut w = arena_proto::NetDataWriter::new();
         w.int(0, 565)
             .byte(1, 56)
@@ -10890,7 +10946,7 @@ mod phase4_tests {
             .float(5, y)
             .float(6, 0.033_334)
             .float(7, charge)
-            .int(8, flags);
+            .put(8, arena_proto::NetDataValue::UInt16(flags));
         let mut f = messages::frame_for_test(w.finish());
         f[0] = 0x84; // c2s marker
         f
@@ -10966,6 +11022,138 @@ mod phase4_tests {
             c.fighters[1].health, target_hp,
             "the cancelled attack must not land"
         );
+    }
+
+    /// Tracker #551: the TOUCH attack cancel. A swipe down during a held charge
+    /// reaches the server as gmid 47 samples carrying `END_TRIGGER_FLAG` (1024) — the
+    /// touch client never sends gmid 31 — and retail answered it with Idle and no
+    /// swing (155 of 159 retail holds that carried the bit). The flag values are real
+    /// retail samples (s468: 200 → 1223 → 1735 on the way down), so this also pins
+    /// that prop 8 is read as the `UInt16` it is on the wire.
+    #[test]
+    fn a_swipe_down_during_a_charge_cancels_it_without_a_swing() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        let target_hp = c.fighters[1].health;
+
+        on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.70, 0.59, 0.5, 200),
+            now + Duration::from_millis(500),
+        );
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let t = now + Duration::from_millis(900);
+        let out = on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.72, 0.30, 0.9, 1223),
+            t,
+        );
+        assert!(out.is_empty());
+        assert_eq!(
+            c.fighters[0].actor_state(),
+            ActorStateType::Idle,
+            "the swipe down ends the wind-up"
+        );
+        assert!(c.fighters[0].charge_press_at.is_none());
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.78, 0.12, 0.95, 1735),
+            t + Duration::from_millis(30),
+        );
+
+        let t2 = t + Duration::from_millis(100);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 1.02, false), t2);
+        on_tick(
+            &mut c,
+            t2 + FOLLOW_THROUGH_DELAY + Duration::from_millis(50),
+            false,
+        );
+        assert!(
+            c.pending_hits.is_empty(),
+            "the release after a swipe-down cancel is no swing"
+        );
+        assert_eq!(
+            c.fighters[1].health, target_hp,
+            "the cancelled attack must not land"
+        );
+    }
+
+    /// The control for the test above: the same hold without the cancel bit swings.
+    /// Without it, the cancel test could pass because the hold never swings at all.
+    #[test]
+    fn the_same_hold_without_the_cancel_bit_still_swings() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        let target_hp = c.fighters[1].health;
+
+        on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.70, 0.59, 0.5, 200),
+            now + Duration::from_millis(500),
+        );
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.72, 0.30, 0.9, 199),
+            now + Duration::from_millis(900),
+        );
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let t2 = now + Duration::from_millis(1000);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 1.0, false), t2);
+        on_tick(
+            &mut c,
+            t2 + FOLLOW_THROUGH_DELAY + Duration::from_millis(50),
+            false,
+        );
+        assert!(
+            c.fighters[1].health < target_hp,
+            "a hold released without the cancel bit lands"
+        );
+    }
+
+    /// The cancel bit outside a hold cancels nothing: no Idle forced over a
+    /// swing's follow-through, no log line claiming a cancel.
+    #[test]
+    fn the_cancel_bit_outside_a_hold_is_ignored() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        assert!(c.fighters[0].charge_press_at.is_none());
+        let before = c.fighters[0].actor_state();
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.72, 0.30, 0.0, 1223),
+            now,
+        );
+        assert_eq!(c.fighters[0].actor_state(), before);
+        assert!(c.fighters[0].take_state_changes().is_empty());
+    }
+
+    /// Prop 8 arrives as `UInt16`. The old `Int`-only reader decoded no flag from any
+    /// production sample, so the START bit (manual gmid 40 slash, report #171) never
+    /// fired either. Both bits decode from the wire type; `Int` still works.
+    #[test]
+    fn pointer_flags_decode_from_the_wire_uint16() {
+        let s = parse_input_position(&make_pos_frame_with_flags(0.7, 0.3, 0.9, 1735)).unwrap();
+        assert!(
+            s.start_attack_trigger_ready && s.end_attack_trigger_ready,
+            "1735 = 1024 | 512 | 199"
+        );
+        let s = parse_input_position(&make_pos_frame_with_flags(0.7, 0.3, 0.9, 704)).unwrap();
+        assert!(
+            s.start_attack_trigger_ready && !s.end_attack_trigger_ready,
+            "704 = 512 | 192"
+        );
+        let s = parse_input_position(&make_pos_frame_with_flags(0.7, 0.3, 0.9, 410)).unwrap();
+        assert!(!s.start_attack_trigger_ready && !s.end_attack_trigger_ready);
     }
 
     /// Report #113, the phantom hit: releasing a held block struck the opponent.
@@ -11394,6 +11582,7 @@ mod phase4_tests {
     /// weapon trail/collision effects, rather than flattening every swing to gmid 52.
     /// Damage remains server-owned and lands at the capture-measured 150 ms beat.
     #[test]
+    #[ignore = "manual slash from the START flag is off (MANUAL_SLASH_FROM_START_FLAG); re-enabled with it"]
     fn a_flagged_swipe_emits_manual_attack_and_lands_at_its_follow_through() {
         let now = Instant::now();
         let mut combat = live_combat(now);
@@ -11490,11 +11679,9 @@ mod phase4_tests {
                 .count(),
             2,
         );
-        assert!(
-            swing
-                .iter()
-                .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),
-        );
+        assert!(swing
+            .iter()
+            .all(|(_, frame)| messages::user_message_gmid(frame) != Some(40)),);
     }
 
     /// The X midpoint splits Left from Right; garbage coordinates classify to nothing
@@ -11810,15 +11997,13 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].consumables_used, 0);
 
         // op56 latches the equipped item.
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, POTION, 6),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, POTION, 6),
+            now
+        )
+        .is_empty());
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(POTION)
@@ -11896,15 +12081,13 @@ mod phase4_tests {
         assert_eq!(combat.fighters[0].consumables_used, 0);
         assert_eq!(combat.fighters[0].stamina, 100);
 
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, ULTIMATE_STAMINA, 63),
+            now
+        )
+        .is_empty());
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(ULTIMATE_STAMINA)
@@ -11997,15 +12180,13 @@ mod phase4_tests {
         combat.fighters[0].regen_carry_magicka = 0.0;
         combat.last_regen_tick = now;
 
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, EXTREME_MAGICKA, 100),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, EXTREME_MAGICKA, 100),
+            now
+        )
+        .is_empty());
 
         let consume = on_c2s_input(&mut combat, 0, &make_request_consume_frame(obj), now);
         let op64: Vec<_> = consume
@@ -12292,15 +12473,13 @@ mod phase4_tests {
         combat.phase = FlowState::BackendMatchCreated;
         let obj = combat.fighters[0].net_object_id;
         const POTION: &str = "819094ad-e749-4c02-9210-38c3bb1ec535";
-        assert!(
-            on_c2s_input(
-                &mut combat,
-                0,
-                &make_equip_consumable_frame(obj, POTION, 3),
-                now
-            )
-            .is_empty()
-        );
+        assert!(on_c2s_input(
+            &mut combat,
+            0,
+            &make_equip_consumable_frame(obj, POTION, 3),
+            now
+        )
+        .is_empty());
         assert_eq!(
             combat.fighters[0].equipped_consumable.as_deref(),
             Some(POTION)
@@ -14391,12 +14570,10 @@ mod shipped_effects_tests {
             2,
             "one Blind removal per viewer",
         );
-        assert!(
-            !c.fighters[1]
-                .effects
-                .iter()
-                .any(|e| e.effect == StatusEffectType::Blind),
-        );
+        assert!(!c.fighters[1]
+            .effects
+            .iter()
+            .any(|e| e.effect == StatusEffectType::Blind),);
         assert!(
             emit_status_removals(&mut c, now + Duration::from_millis(1)).is_empty(),
             "the cure was already acknowledged on the wire",
@@ -14589,11 +14766,10 @@ mod shipped_effects_tests {
         );
         assert!(c.fighters.iter().all(|f| f.effects.is_empty()));
         assert!(c.fighters.iter().all(|f| f.status_timers.is_empty()));
-        assert!(
-            c.fighters
-                .iter()
-                .all(|f| f.transient_resistances.is_empty())
-        );
+        assert!(c
+            .fighters
+            .iter()
+            .all(|f| f.transient_resistances.is_empty()));
         assert!(c.fighters.iter().all(|f| f.health_damage_carry == 0.0));
 
         let out = apply_dot_ticks(&mut c, now + DOT_TICK_INTERVAL * 2);
@@ -15091,7 +15267,7 @@ mod shipped_effects_tests {
     /// living in the `Paralyze | Damage | Generic` arm was unreachable for them.
     #[test]
     fn the_stagger_field_is_carried_mostly_by_maneuvers() {
-        use super::super::gamedata::{ABILITIES, AbilityKind, ability_rank_clamped};
+        use super::super::gamedata::{ability_rank_clamped, AbilityKind, ABILITIES};
         let carriers: Vec<(&str, AbilityKind)> = ABILITIES
             .iter()
             .filter(|a| {
@@ -15800,9 +15976,9 @@ mod report_31_high_block_stun {
     use super::super::damage::flags;
     use super::super::loadout::starter;
     use super::super::state::{
-        AbilityTag, ActorStateType, BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS,
-        BlockPhase, BotObservedState, BotOpponentSnapshot, EquippedAbility, Fighter, FlowState,
-        MatchCombat, StatusEffectType, WeaponProfile,
+        AbilityTag, ActorStateType, BlockPhase, BotObservedState, BotOpponentSnapshot,
+        EquippedAbility, Fighter, FlowState, MatchCombat, StatusEffectType, WeaponProfile,
+        BASE_STAGGER_DURATION_SECS, BLOCK_OPTIMAL_TIME_SECS,
     };
     use super::*;
 
@@ -17223,16 +17399,14 @@ mod report_31_high_block_stun {
         let now = Instant::now();
         let mut c = combat(now, 1);
         let gsid = c.game_session_id.clone();
-        assert!(
-            super::bot_next_ready_ability(
-                &mut c.fighters[1],
-                &gsid,
-                1,
-                snapshot(BotObservedState::Idle),
-                now,
-            )
-            .is_none()
-        );
+        assert!(super::bot_next_ready_ability(
+            &mut c.fighters[1],
+            &gsid,
+            1,
+            snapshot(BotObservedState::Idle),
+            now,
+        )
+        .is_none());
 
         let at = bot_decision_due(&mut c, 1, now);
         super::on_tick(&mut c, at, false);
@@ -21338,7 +21512,7 @@ mod report_231_artifact_regen_tick_tests {
     use std::time::Instant;
 
     use super::super::state::MatchCombat;
-    use super::{HEALTH_REGEN_RATE_PER_S, REGEN_TICK_INTERVAL, apply_regen_tick};
+    use super::{apply_regen_tick, HEALTH_REGEN_RATE_PER_S, REGEN_TICK_INTERVAL};
 
     fn live() -> (MatchCombat, Instant) {
         let now = Instant::now();
@@ -22105,7 +22279,7 @@ mod restoration_vfx_tests {
 /// skills take effect immediately without waiting for their animation".
 #[cfg(test)]
 mod report542_tests {
-    use super::super::damage::{ResolvedDamage, flags};
+    use super::super::damage::{flags, ResolvedDamage};
     use super::super::state::{
         ActiveSide, DamageSource, DamageType, Fighter, FlowState, MatchCombat, StatusEffectType,
     };
