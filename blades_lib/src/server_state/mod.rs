@@ -101,6 +101,12 @@ pub struct CharacterRenameAuditEntry {
     pub previous_name: String,
     pub new_name: String,
     pub renamed_at_secs: i64,
+    /// Set by a rename the player's limit does not apply to (an admin's, or the
+    /// website re-applying a name already chosen). Such an entry does not start
+    /// the player's rename cooldown. Entries written before the field load as
+    /// `false`, so renames from before the limit count (tracker #527).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exempt: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -303,6 +309,7 @@ mod tests {
                 previous_name: "Old Hero".into(),
                 new_name: "New Hero".into(),
                 renamed_at_secs: 1_789_999_999,
+                exempt: false,
             });
         let value = serde_json::to_value(&state).unwrap();
         assert_eq!(

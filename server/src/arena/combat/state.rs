@@ -927,6 +927,44 @@ pub struct WeaponProfile {
 /// source-compatible and the item stats live one level up.
 pub type WeaponTemplate = &'static crate::arena::combat::gamedata::WeaponStats;
 
+/// One equipped Absorb enchantment (`AbsorbBonusInstance`, combat-spec 09 §2.3).
+///
+/// `AbsorbBonusInstance$$GetAbsorbAmount@0x1e83960` reads the family's class table
+/// with the EQUIPPED WEAPON's `_weaponClass` (WeaponTemplate +0xD4) for a
+/// weapon-based source (Attack 1, WeaponManeuver 3) and with class 3 (Heavy) for
+/// every other source, then multiplies by `GetXValueMultiplier`. All three columns
+/// are kept so the source decides at hit time.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AbsorbEnchant {
+    /// The pool restored: `DamageType::Health`, `Stamina` or `Magicka`
+    /// (`AbsorbStaticData._targetStat`, +0x48).
+    pub stat: DamageType,
+    /// X per weapon class: `[Light, Versatile (Balanced), Heavy]`.
+    pub by_weight: [f32; 3],
+}
+
+impl AbsorbEnchant {
+    /// X for one hit: the weapon's own class column on a weapon-based source, the
+    /// Heavy column otherwise.
+    pub fn amount(
+        &self,
+        source: DamageSource,
+        weapon: Option<crate::arena::combat::tables::Weight>,
+    ) -> f32 {
+        use crate::arena::combat::tables::Weight;
+        let w = if source.is_weapon_based() {
+            weapon.unwrap_or(Weight::Light)
+        } else {
+            Weight::Heavy
+        };
+        match w {
+            Weight::Light => self.by_weight[0],
+            Weight::Versatile => self.by_weight[1],
+            Weight::Heavy => self.by_weight[2],
+        }
+    }
+}
+
 /// A fighter's combat-relevant equipment, derived from the imported character.
 #[derive(Debug, Clone, Default)]
 pub struct Loadout {
@@ -1092,6 +1130,25 @@ pub struct Loadout {
     ///
     /// A shield has no weapon weight, so these ship a single curve — 52.66 at tier 10.
     pub shield_ravage: Vec<(DamageType, f32)>,
+    /// `Absorb {Health,Stamina,Magicka}` (and the Bloodthirst "Absorb Health Or Self
+    /// Repair" variant): the attacker gets back `min(health damage dealt, X)` of
+    /// [`AbsorbEnchant::stat`] on every landed hit. Applied in
+    /// `resolve::apply_absorb_enchants`; see [`AbsorbEnchant`].
+    pub absorb: Vec<AbsorbEnchant>,
+    /// `FortifyComboDamagePropertyLogic` — flat physical damage added to the weapon's
+    /// own damage type on a weapon-based hit while the attacker's combo count is >= 1.
+    /// `FortifyComboDamageBonusInstance$$GetBonusDamage@0x1d4e834`.
+    pub fortify_combo_damage: f32,
+    /// `ExtraDamageOnBlockingEnemyPropertyLogic` ("Fortify Blocked Damage") — flat
+    /// physical damage added to the weapon's own damage type on a weapon-based hit
+    /// against a target that is Blocking.
+    /// `DamageBlockingEnemyBonusInstance$$GetBonusDamage@0x1d4ca98`.
+    pub fortify_blocked_damage: f32,
+    /// `FortifyHealingPropertyLogic` — flat additive in the `RestoreStat` heal fold
+    /// for Health restored by a Potion (1), Restoration (3) or InstantConsumable (5)
+    /// source. Never regeneration (2) or Absorb (4).
+    /// `FortifyHealingBonusInstance$$GetHealingBonus@0x1d4f278`.
+    pub fortify_healing: f32,
     /// Shield elemental/stamina/magicka damage enchants. They ride the owner's shield
     /// bash and retaliate on an optimal blocked weapon/bash hit.
     pub shield_enchant_damage: Vec<(DamageType, f32)>,
@@ -1185,6 +1242,25 @@ pub struct Loadout {
     /// the elemental four. Staggered, Blind and Paralyzed do NOT count.
     pub opportunist_physical: f32,
     pub opportunist_elemental: f32,
+    /// **Adrenaline** — `Adrenaline{Physical,Elemental}PropertyLogic`, "Increases
+    /// physical/elemental damage by {0} while Health is critical" (report #530).
+    /// `AdrenalineBonusInstance$$GetBonusDamage@0x1D49D20` adds X to every component
+    /// whose type is in `_targetDamageTypes` (Physical [1,2,3], Elemental [4,5,6,7])
+    /// while the WEARER `IsAtCriticalHealth`, in the situational-additive list (01 D3:
+    /// before the attack-type factor). No source filter.
+    pub adrenaline_physical: f32,
+    pub adrenaline_elemental: f32,
+    /// **Mercy** — `Mercy{Physical,Elemental}PropertyLogic`, "+{0} Resistance to
+    /// physical/elemental damage while Health is critical" (report #530).
+    /// `MercyBonusInstance$$GetResistanceBonus@0x1D50858` registers in
+    /// `_resistanceAdditiveSources`, the same list as Resist <Element> (01 E6c).
+    pub mercy_physical: f32,
+    pub mercy_elemental: f32,
+    /// Transient, per hit: the ATTACKER is at critical health
+    /// (`Actor$$get_IsAtCriticalHealth`). Set on the per-hit loadout clone by the
+    /// caller, because the damage model sees only the attacker's `Loadout`. Gates
+    /// Adrenaline. Never set on a fighter's stored loadout.
+    pub attacker_at_critical_health: bool,
     /// Flat BLOCK-piercing ratings, subtracted from the defender's Block Rating before
     /// the block reduction is computed — the block-stage mirror of
     /// `armor_piercing_rating`. `block_piercing_rating` applies to physical,
@@ -1620,6 +1696,11 @@ pub struct Fighter {
     pub regen_carry_health: f32,
     pub regen_carry_stamina: f32,
     pub regen_carry_magicka: f32,
+    /// Report #531: a regen/restoration pool change not yet sent in an op65, and when
+    /// the last regen-driven op65 for this fighter went out. See
+    /// `resolve::REGEN_STATS_MIN_INTERVAL`.
+    pub regen_stats_pending: bool,
+    pub regen_stats_sent_at: Option<Instant>,
     pub effects: Vec<ActiveEffect>,
     /// The fighter's current animation/logic state.
     ///
@@ -1789,6 +1870,11 @@ pub struct Fighter {
     /// is still holding. Retail raises such a guard the moment the stagger ends
     /// (report #357; see [`Self::reconcile_stagger`]).
     pub guard_held: bool,
+    /// Something that locks the guard out began — a weapon maneuver (a shield bash,
+    /// Power Attack, a dodge…) or a paralysis — while the guard button may still be
+    /// down, so the held guard goes back up when the lock ends — see
+    /// [`Self::reconcile_held_guard_resume`] (report #530).
+    pub guard_resume_pending: bool,
 
     // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
     /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
@@ -1969,6 +2055,10 @@ pub struct Fighter {
     /// changes and already emits the stats update, so nothing new has to
     /// learn how to talk to the client.
     pub pending_restore: Option<PendingRestore>,
+    /// Fractional Absorb restoration not yet paid, per pool (Health, Stamina,
+    /// Magicka). Pools are integers here while retail's are floats; a periodic tick
+    /// absorbs `X × 0.075` (well under a point), so the tail is carried, not dropped.
+    pub absorb_carry: [f32; 3],
     /// A weapon poison armed by a non-restoration alchemy consumable. Delivered on
     /// later unblocked landed weapon hits; `None` when no poison is coated.
     pub active_poison: Option<ActiveAlchemyPoison>,
@@ -2256,6 +2346,8 @@ impl Fighter {
             regen_carry_health: 0.0,
             regen_carry_stamina: 0.0,
             regen_carry_magicka: 0.0,
+            regen_stats_pending: false,
+            regen_stats_sent_at: None,
             effects: Vec::new(),
             // Construction, not a transition — nothing to tell a client that has no
             // avatar yet, so the field is set directly rather than via the mutator.
@@ -2291,6 +2383,7 @@ impl Fighter {
             last_client_charge: None,
             last_input_block_zone: None,
             guard_held: false,
+            guard_resume_pending: false,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
@@ -2306,6 +2399,7 @@ impl Fighter {
             stats_reduction_carry: 0.0,
             equipped_consumable: None,
             pending_restore: None,
+            absorb_carry: [0.0; 3],
             active_poison: None,
             paralyze_secs: paralyze_duration_secs(1),
             interrupt_pending: None,
@@ -2676,6 +2770,42 @@ impl Fighter {
             }
         }
         false
+    }
+
+    /// Report #530: a guard held through a weapon maneuver, or through a paralysis,
+    /// goes back up when the lock ends. (A stagger: [`Self::reconcile_stagger`]. A
+    /// spell cannot be cast from a raised guard at all — `Actor$$CanCast` — so it
+    /// never needs this.)
+    ///
+    /// The same shape as report #357's stagger. The maneuver lock (05-D5) drops a
+    /// guard PRESS that arrives mid-maneuver, and casting a maneuver from a raised
+    /// guard ends that guard; in both cases the player is still holding the button
+    /// and the client will not send the press again. Without this the server fought
+    /// on with the guard down after every shield bash while the player held block —
+    /// "after using shield bash skills the high block isn't activated afterwards".
+    /// A release at any point clears `guard_held`, so a guard let go during the
+    /// maneuver stays down.
+    ///
+    /// Returns true when the guard went up.
+    pub fn reconcile_held_guard_resume(&mut self, now: Instant) -> bool {
+        if !self.guard_resume_pending || self.maneuver_active(now) {
+            return false;
+        }
+        self.guard_resume_pending = false;
+        if !self.guard_held
+            || self.is_dead()
+            || self.is_paralyzed()
+            || self.is_staggered(now)
+            || self.has_reckless_fury(now)
+            || matches!(
+                self.actor_state,
+                ActorStateType::Blocking | ActorStateType::Charging
+            )
+        {
+            return false;
+        }
+        self.raise_guard(now);
+        true
     }
 
     /// The statuses this fighter is currently under, restricted to the ones whose
@@ -3239,11 +3369,30 @@ impl Fighter {
             .filter(|(t, _)| *t == ty)
             .map(|(_, v)| *v)
             .sum();
+        rating += self.mercy_against(ty);
         if super::damage::is_elemental(ty) {
             rating = (rating - pierce_rating).max(0.0);
             rating *= (1.0 - pierce_frac).clamp(0.0, 1.0);
         }
         rating.max(0.0)
+    }
+
+    /// Mercy's flat resistance against `ty`, live only while this fighter is at
+    /// critical health (report #530). It sits in the same additive list as the
+    /// Resist enchants, so elemental piercing applies to it as well.
+    pub fn mercy_against(&self, ty: DamageType) -> f32 {
+        let amount = if super::damage::is_physical(ty) {
+            self.loadout.mercy_physical
+        } else if super::damage::is_elemental(ty) {
+            self.loadout.mercy_elemental
+        } else {
+            0.0
+        };
+        if amount > 0.0 && super::perks::fighter_health_is_critical(self) {
+            amount
+        } else {
+            0.0
+        }
     }
 
     pub fn resistance_rating_against_source(
@@ -4178,6 +4327,7 @@ impl MatchCombat {
             f.regen_carry_stamina = 0.0;
             f.regen_carry_magicka = 0.0;
             f.pending_restore = None;
+            f.absorb_carry = [0.0; 3];
             f.active_poison = None;
             f.magicka_surge_until = None;
             f.magicka_surge_bonus = 0.0;
@@ -4230,6 +4380,7 @@ impl MatchCombat {
             f.last_client_charge = None;
             f.last_input_block_zone = None;
             f.guard_held = false;
+            f.guard_resume_pending = false;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();

@@ -162,6 +162,15 @@ fn repair_story_quest_difficulty(info: &mut blades_lib::user_data::Quest) -> boo
     true
 }
 
+/// The repairs `/quests` applies to a stored story row; true when it changed.
+///
+/// It never removes an objective: a stored row can be behind what the client
+/// already did (see `report_521_read_keeps_objectives`), and an objective taken
+/// away hides the NPC that serves it.
+fn repair_stored_story_row(info: &mut blades_lib::user_data::Quest) -> bool {
+    repair_story_quest_difficulty(info)
+}
+
 /// "Ordinary" excludes the two row kinds that have their own lifecycle: town jobs
 /// (rotated on the daily reset) and event quests (retired when their window
 /// closes). What is left is the quest log proper, and a completed entry there is
@@ -186,6 +195,37 @@ fn split_quest_rows(
     Vec<QuestWithId>,
     Vec<DungeonGeneratedDataWithId>,
 ) {
+    split_quest_rows_with(rows, open_event_instances, |_| false)
+}
+
+/// True for a story quest with no dungeon behind it (a town / dialogue quest such as
+/// GH01): its row legitimately holds no generated data.
+fn is_dialogue_quest(game_data: &blades_lib::game_data::GameData, gld_quest_id: Uuid) -> bool {
+    game_data.quests.get(&gld_quest_id).is_some_and(|q| {
+        q.dungeon_info
+            .as_ref()
+            .is_none_or(|d| d.dungeon_uuid.is_nil())
+    })
+}
+
+/// [`split_quest_rows`], except that an ordinary quest for which `is_dialogue`
+/// holds is listed even without generated data — with no `generatedData` entry,
+/// exactly as retail served it (report #521).
+fn split_quest_rows_with(
+    rows: impl Iterator<
+        Item = (
+            Uuid,
+            blades_lib::user_data::Quest,
+            Option<blades_lib::user_data::DungeonGeneratedData>,
+        ),
+    >,
+    open_event_instances: &std::collections::HashSet<Uuid>,
+    is_dialogue: impl Fn(Uuid) -> bool,
+) -> (
+    Vec<QuestWithId>,
+    Vec<QuestWithId>,
+    Vec<DungeonGeneratedDataWithId>,
+) {
     let mut quests = Vec::new();
     let mut event_quests = Vec::new();
     let mut generated = Vec::new();
@@ -198,6 +238,12 @@ fn split_quest_rows(
             continue;
         }
         let Some(inner) = generated_data else {
+            if !is_event && is_dialogue(info.gld_quest_id) {
+                quests.push(QuestWithId {
+                    quest_id,
+                    quest: info,
+                });
+            }
             continue;
         };
         let with_id = QuestWithId {
@@ -1736,13 +1782,7 @@ pub async fn get_quests(
                 // Same shape as the loot repair below, and deliberately ahead of
                 // it: that one gives up when a row has no generated_data, and
                 // this must run for every story row regardless.
-                // #521: an older accept switched on every objective at once; take
-                // back the gated ones the player has not reached (bitwise `|` so
-                // both repairs always run).
-                let story_repaired = !is_event
-                    && (repair_story_quest_difficulty(&mut row.info.0)
-                        | blades_lib::util::quest::drop_premature_objectives(&mut row.info.0));
-                if story_repaired {
+                if !is_event && repair_stored_story_row(&mut row.info.0) {
                     use crate::schema::quests;
                     diesel::update(
                         quests::table
@@ -1845,11 +1885,12 @@ pub async fn get_quests(
                 }
             }
 
-            let (result_quests, game_event_quests, row_generated_data) = split_quest_rows(
+            let (result_quests, game_event_quests, row_generated_data) = split_quest_rows_with(
                 quests
                     .into_iter()
                     .map(|q| (q.id, q.info.0, q.generated_data.0)),
                 &open_event_instances,
+                |gld| is_dialogue_quest(&globals.game_data, gld),
             );
             let result_generated_data =
                 assemble_generated_data_list(
@@ -2871,7 +2912,11 @@ pub(crate) async fn complete_quest_in_tx(
                     !jobs_gen::is_job_row(&q.info.0)
                         && !q.info.0.completed
                         && !matches!(q.info.0.r#type, blades_lib::user_data::QuestType::GameEvent)
-                        && q.generated_data.0.is_some()
+                        // A dialogue quest has no data and is still listed, as
+                        // retail did in its job `/complete` bodies (10 of 255
+                        // entries, report #521).
+                        && (q.generated_data.0.is_some()
+                            || is_dialogue_quest(game_data, q.info.0.gld_quest_id))
                 })
                 .map(|q| QuestWithId {
                     quest_id: q.id,
@@ -11464,6 +11509,53 @@ pub(crate) mod report353_quest_town_xp_db {
         );
     }
 
+    /// Report #521: a job `/complete` lists the character's dialogue quests too.
+    ///
+    /// Its `quests` array is the client's quest log after the job. Retail kept
+    /// dialogue quests in it (10 of 255 captured entries); leaving GH01 out made the
+    /// client drop it mid-session. A dungeon quest whose data is missing stays
+    /// withheld (#62).
+    #[tokio::test]
+    async fn a_job_complete_lists_the_dialogue_quests_and_withholds_dataless_dungeon_ones() {
+        const GH01: Uuid = Uuid::from_u128(0x095b8109_0e57_400d_bcf4_70e10df8cdbf);
+        // MQ13 "Lost in Translation" has a dungeon.
+        const MQ13: Uuid = Uuid::from_u128(0xf4a9bc81_e652_45d0_ab1c_dc184c06ecd6);
+        let mut conn = db!();
+        let mut job = quest_row("JOB", jobs_gen::JOB_SENTINEL_GLD);
+        job["jobReward"] = json!({"characterXp": 10});
+        let ids = seed(&mut conn, job).await;
+        for gld in [GH01, MQ13] {
+            diesel::sql_query(
+                "INSERT INTO quests (id, character_id, info, generated_data) \
+                 VALUES ($1, $2, $3::jsonb, 'null'::jsonb)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(gld)
+            .bind::<diesel::sql_types::Uuid, _>(ids.1)
+            .bind::<diesel::sql_types::Text, _>(quest_row("NORMAL", gld).to_string())
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+
+        let out = complete(&mut conn, ids).await;
+        // An empty quest log is left out of the body entirely.
+        let listed: Vec<String> = out["quests"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|q| q["questId"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            listed.contains(&GH01.to_string()),
+            "GH01 listed: {listed:?}"
+        );
+        assert!(
+            !listed.contains(&MQ13.to_string()),
+            "dataless dungeon quest withheld"
+        );
+    }
+
     async fn objectives(
         conn: &mut AsyncPgConnection,
         gd: &blades_lib::game_data::GameData,
@@ -11956,5 +12048,139 @@ mod report465_completed_jobs_stay_off_the_board_db {
     struct Count {
         #[diesel(sql_type = diesel::sql_types::BigInt)]
         n: i64,
+    }
+}
+
+/// Report #521 follow-up: the `/quests` read must not take objectives away.
+///
+/// #619 also dropped untouched gated objectives from stored rows. On prod that
+/// hid NPCs: the client's own MQ15 progress (Saashi's per-quest dialogue flag,
+/// one increment per location debriefed) runs ahead of the server's for 7 of 13
+/// holders — the client never reported it — so "ask the Traveling Merchant" was
+/// legitimately reached, and removing it made Arven Dalas vanish for Rim Rusefm.
+/// The accept-side fix stays; stored rows keep what they hold.
+#[cfg(test)]
+mod report_521_read_keeps_objectives {
+    use super::*;
+    use blades_lib::user_data::{ObjectiveStatus, Quest, QuestStatus, QuestType};
+
+    const MQ15: Uuid = Uuid::from_u128(0xb7f4d378_566b_45eb_9bda_206911901821);
+    const EXPLORE: Uuid = Uuid::from_u128(0x6a939788_1f5c_4749_894d_5fc5f338d7b7);
+    const MERCHANT: Uuid = Uuid::from_u128(0x8bad0859_002e_4521_9007_949490dcef40);
+    const SAASHI: Uuid = Uuid::from_u128(0xb42723e3_8621_4c00_b734_c04955fb39f4);
+
+    fn st(progress: f64) -> ObjectiveStatus {
+        ObjectiveStatus {
+            status: QuestStatus::Active,
+            progress,
+            completed: false,
+        }
+    }
+
+    #[test]
+    fn a_stored_story_row_keeps_its_gated_objectives() {
+        let mut info = Quest {
+            version: 1,
+            r#type: QuestType::Normal,
+            objective_statuses: [(EXPLORE, st(2.0)), (MERCHANT, st(0.0)), (SAASHI, st(0.0))]
+                .into_iter()
+                .collect(),
+            difficulty_level: blades_lib::user_data::STORY_QUEST_DIFFICULTY_LEVEL,
+            seed: 1234.into(),
+            gld_quest_id: MQ15,
+            completed: false,
+            game_event_quest_data: None,
+            rewards: None,
+            final_reward: None,
+            job_reward: None,
+            job_dungeon_template_id: None,
+        };
+        assert!(!repair_stored_story_row(&mut info));
+        assert!(info.objective_statuses.contains_key(&MERCHANT));
+        assert!(info.objective_statuses.contains_key(&SAASHI));
+    }
+}
+
+/// Report #521: a dialogue-only story quest must stay in `quests[]` after a restart.
+///
+/// GH01 "The Justiciar Cometh" and MQ15 "The Lich's Lair" have no dungeon, so their
+/// rows hold no generated data, and `/quests` skipped them (#62's rule). The client
+/// then rebuilt its quest log without them: on the next session the quest was not
+/// active, so every "progress objective" dialogue node did nothing and no
+/// `/objectives` was sent, and Henrik's GH01 line (gated on GH01 being active) never
+/// appeared. An in-session accept worked because the `/accept` response itself
+/// creates the quest.
+///
+/// MEASURED: all 11 dialogue-quest entries in captured retail `/quests` bodies
+/// (MQ04, MQ24, BQ200) are listed in `quests[]` with NO `dungeonGeneratedDataList`
+/// entry; all 202 dungeon-quest entries carry one. So #62's invariant holds only for
+/// quests that have a dungeon.
+#[cfg(test)]
+mod report_521_dialogue_quests_listed {
+    use super::*;
+    use blades_lib::user_data::{ObjectiveStatus, Quest, QuestStatus, QuestType};
+
+    const GH01: Uuid = Uuid::from_u128(0x095b8109_0e57_400d_bcf4_70e10df8cdbf);
+    const DUNGEON_QUEST: Uuid = Uuid::from_u128(0xAAAA);
+
+    fn quest(gld: Uuid) -> Quest {
+        Quest {
+            version: 0,
+            r#type: QuestType::Normal,
+            objective_statuses: [(
+                Uuid::from_u128(1),
+                ObjectiveStatus {
+                    status: QuestStatus::Active,
+                    progress: 0.0,
+                    completed: false,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            difficulty_level: blades_lib::user_data::STORY_QUEST_DIFFICULTY_LEVEL,
+            seed: 1234.into(),
+            gld_quest_id: gld,
+            completed: false,
+            game_event_quest_data: None,
+            rewards: None,
+            final_reward: None,
+            job_reward: None,
+            job_dungeon_template_id: None,
+        }
+    }
+
+    #[test]
+    fn a_dialogue_quest_without_data_is_listed_with_no_generated_entry() {
+        let (quests, _events, data) = split_quest_rows_with(
+            vec![(GH01, quest(GH01), None)].into_iter(),
+            &Default::default(),
+            |gld| gld == GH01,
+        );
+        assert_eq!(quests.len(), 1);
+        assert_eq!(quests[0].quest_id, GH01);
+        assert!(data.is_empty(), "retail sends no generated entry for it");
+    }
+
+    /// #62 still holds for a quest that HAS a dungeon but lost its data.
+    #[test]
+    fn a_dungeon_quest_without_data_is_still_withheld() {
+        let (quests, _events, _data) = split_quest_rows_with(
+            vec![(DUNGEON_QUEST, quest(DUNGEON_QUEST), None)].into_iter(),
+            &Default::default(),
+            |gld| gld == GH01,
+        );
+        assert!(quests.is_empty());
+    }
+
+    /// The predicate is the real game data: GH01 has no dungeon, a dungeon quest has one.
+    #[test]
+    fn gh01_is_a_dialogue_quest_in_the_shipped_game_data() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+        let gd: blades_lib::game_data::GameData =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert!(is_dialogue_quest(&gd, GH01));
+        // MQ13 "Lost in Translation" is played in a dungeon.
+        let mq13 = Uuid::from_u128(0xf4a9bc81_e652_45d0_ab1c_dc184c06ecd6);
+        assert!(!is_dialogue_quest(&gd, mq13));
     }
 }

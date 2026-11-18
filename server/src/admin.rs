@@ -171,6 +171,12 @@ pub struct ImportCharacterRequest {
     /// ARRIVING — which files the old character under the new alt's id.
     #[serde(default)]
     pub outgoing_alt_uuid: Option<Uuid>,
+    /// This import is an AI copy (the website's "AI mimic", under the isolated
+    /// account it minted for it). The account is recorded as an AI copy BEFORE
+    /// the name is settled, so the copy keeps the name it was copied with
+    /// instead of being numbered against the player it copies.
+    #[serde(default)]
+    pub ai_copy: bool,
 }
 
 /// The alt a snapshot of an unstamped live row is filed under: the caller's
@@ -1359,6 +1365,9 @@ pub async fn import_character(
                         .flatten()
                         .unwrap_or(character_id),
                 };
+                if body.ai_copy {
+                    crate::character_names::mark_ai_copy_user(&mut conn, user_id).await?;
+                }
                 let settled = crate::character_names::settle_name(
                     &mut conn,
                     user_id,
@@ -1949,6 +1958,10 @@ pub struct CurrentCharacterSummary {
     /// The captured character this live row was imported from (`characters.source_alt_uuid`),
     /// so the web can keep that archived alt's name in step with a rename.
     source_alt_uuid: Option<Uuid>,
+    /// When the player may next rename this character from the website (unix
+    /// seconds; tracker #527). `None` when no rename of theirs is on record or the
+    /// limit is off. A value in the past means a rename is allowed now.
+    next_rename_at_secs: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -1962,6 +1975,51 @@ pub struct CurrentCharacterResponse {
 pub struct SetCurrentCharacterNameRequest {
     pub user_id: Uuid,
     pub name: String,
+    /// The rename limit does not apply (tracker #527): the website sets this for
+    /// an admin, and when it re-applies a name the player already chose on the
+    /// alt list as that alt goes live. Defaults to a limited, player rename.
+    #[serde(default)]
+    pub exempt: bool,
+}
+
+/// `IMPORT_SERVICE_ID` error: the character was renamed by its player less
+/// than [`rename_cooldown_secs`] ago (tracker #527). The website reads the
+/// date it may be renamed again from `current-character`'s `nextRenameAtSecs`.
+pub(crate) const RENAME_TOO_SOON: u64 = 122;
+
+/// Tracker #527 (HauDrauf): a player may rename a character from the website
+/// once per this many days; renames from before the rule count. Override with
+/// `CHARACTER_RENAME_COOLDOWN_DAYS` in the arena env (`0` turns the limit off).
+/// Admin and system renames are exempt and do not start the cooldown.
+pub(crate) const DEFAULT_RENAME_COOLDOWN_DAYS: i64 = 30;
+
+fn rename_cooldown_secs() -> i64 {
+    static SECS: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *SECS.get_or_init(|| {
+        let days = std::env::var("CHARACTER_RENAME_COOLDOWN_DAYS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|d| *d >= 0)
+            .unwrap_or(DEFAULT_RENAME_COOLDOWN_DAYS);
+        days * 86_400
+    })
+}
+
+/// When the player may next rename, from the character's rename audit: the
+/// latest non-exempt rename plus `cooldown_secs`. `None` when none is on record
+/// or the limit is off.
+fn next_rename_at_secs(server_state: &Value, cooldown_secs: i64) -> Option<i64> {
+    if cooldown_secs <= 0 {
+        return None;
+    }
+    server_state
+        .get("currentCharacterRenames")?
+        .as_array()?
+        .iter()
+        .filter(|e| e.get("exempt").and_then(Value::as_bool) != Some(true))
+        .filter_map(|e| e.get("renamedAtSecs").and_then(Value::as_i64))
+        .max()
+        .map(|last| last + cooldown_secs)
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -2037,6 +2095,7 @@ const AI_NAME_SUFFIX: &str = "(AI)";
 fn current_character_summary(
     row: CharacterDbEntryCharacterAlone,
     source_alt_uuid: Option<Uuid>,
+    next_rename_at_secs: Option<i64>,
 ) -> CurrentCharacterSummary {
     CurrentCharacterSummary {
         user_id: row.user_id,
@@ -2045,6 +2104,7 @@ fn current_character_summary(
         level: row.character.0.level,
         pvp_trophies: row.character.0.pvp_trophies,
         source_alt_uuid,
+        next_rename_at_secs,
     }
 }
 
@@ -2071,14 +2131,13 @@ pub async fn get_current_character(
 
     let character = match row {
         Some(row) => {
-            let source_alt_uuid: Option<Uuid> = characters::table
+            let (source_alt_uuid, server_state): (Option<Uuid>, Value) = characters::table
                 .filter(characters::id.eq(row.id))
-                .select(characters::source_alt_uuid)
-                .first::<Option<Uuid>>(&mut conn)
-                .await
-                .optional()?
-                .flatten();
-            Some(current_character_summary(row, source_alt_uuid))
+                .select((characters::source_alt_uuid, characters::server_state))
+                .first::<(Option<Uuid>, Value)>(&mut conn)
+                .await?;
+            let next = next_rename_at_secs(&server_state, rename_cooldown_secs());
+            Some(current_character_summary(row, source_alt_uuid, next))
         }
         None => None,
     };
@@ -2106,8 +2165,18 @@ pub async fn set_current_character_name(
         })?;
 
     conn.transaction(move |mut conn| {
-        async move { rename_current_character(&mut conn, character_id, body.user_id, name).await }
-            .scope_boxed()
+        async move {
+            rename_current_character_as(
+                &mut conn,
+                character_id,
+                body.user_id,
+                name,
+                body.exempt,
+                rename_cooldown_secs(),
+            )
+            .await
+        }
+        .scope_boxed()
     })
     .await
     .map(Json)
@@ -2265,15 +2334,44 @@ fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
     Ok(name)
 }
 
+/// The AI marker in any form ("Ravena AI", "Ravena (АІ)", "Ravena-A.I.", …):
+/// reserved for server-run opponents (`character_names::is_reserved_ai_name`).
 fn is_reserved_ai_name(name: &str) -> bool {
+    crate::character_names::is_reserved_ai_name(name)
+}
+
+/// The label an AI copy is shown with. A character still carrying it is not
+/// renamed from the website (it is how players tell it is not a real one).
+fn has_ai_label(name: &str) -> bool {
     name.trim().ends_with(AI_NAME_SUFFIX)
 }
 
+/// A player's rename, under the default limit.
+#[cfg(test)]
 async fn rename_current_character(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
     name: String,
+) -> Result<SetCurrentCharacterNameResponse, BladeApiError> {
+    rename_current_character_as(
+        conn,
+        character_id,
+        user_id,
+        name,
+        false,
+        DEFAULT_RENAME_COOLDOWN_DAYS * 86_400,
+    )
+    .await
+}
+
+async fn rename_current_character_as(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    name: String,
+    exempt: bool,
+    cooldown_secs: i64,
 ) -> Result<SetCurrentCharacterNameResponse, BladeApiError> {
     let (mut character, mut server_state): (Value, Value) = characters::table
         .filter(characters::id.eq(character_id))
@@ -2288,6 +2386,16 @@ async fn rename_current_character(
             BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 27)
         })?
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 28))?;
+
+    // Tracker #527: one player rename per cooldown, counted from the audit.
+    let now = arena_season::now_unix();
+    if !exempt && next_rename_at_secs(&server_state, cooldown_secs).is_some_and(|next| next > now) {
+        return Err(BladeApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            IMPORT_SERVICE_ID,
+            RENAME_TOO_SOON,
+        ));
+    }
 
     // One name, one character: refused with NAME_TAKEN when another character
     // holds it; the character's own name (in any case) is fine.
@@ -2314,7 +2422,9 @@ async fn rename_current_character(
         .to_string();
     // An operator test character keeps its " (Test)" label: renaming would drop
     // it, and the label is how players tell it is not a real one.
-    if is_reserved_ai_name(&previous_name) || crate::testchar::is_test_name(&previous_name) {
+    // Only the label, not the whole reserved form: a player whose name reads
+    // "Ravena AI" must be able to rename it away.
+    if has_ai_label(&previous_name) || crate::testchar::is_test_name(&previous_name) {
         return Err(BladeApiError::new(
             StatusCode::CONFLICT,
             IMPORT_SERVICE_ID,
@@ -2336,7 +2446,8 @@ async fn rename_current_character(
         CharacterRenameAuditEntry {
             previous_name: previous_name.clone(),
             new_name: name.clone(),
-            renamed_at_secs: arena_season::now_unix(),
+            renamed_at_secs: now,
+            exempt,
         },
     )?;
 
@@ -4481,6 +4592,7 @@ mod tests {
                     }),
                 },
                 Some(Uuid::from_u128(3)),
+                Some(1_800_000_000),
             );
             let value = serde_json::to_value(summary).unwrap();
             let mut keys: Vec<&str> = value
@@ -4496,6 +4608,7 @@ mod tests {
                     "characterId",
                     "level",
                     "name",
+                    "nextRenameAtSecs",
                     "pvpTrophies",
                     "sourceAltUuid",
                     "userId"
@@ -4678,6 +4791,29 @@ mod tests {
                 Ok(Some("Adventurer".into()))
             );
             assert!(new_alt_requested_name(Some("Tureduus Callidus")).is_err());
+            // The AI marker is reserved on new alts too (owner, 2026-11-16).
+            assert!(new_alt_requested_name(Some("Ravena AI")).is_err());
+            assert!(new_alt_requested_name(Some("Ravena-АІ")).is_err());
+            assert!(new_alt_requested_name(Some("Kaiden")).is_ok());
+        }
+
+        #[test]
+        fn a_website_rename_to_the_ai_marker_is_an_invalid_name() {
+            // The prod case (2026-11-15 23:41, `…/characters/{id}/name`) and
+            // look-alikes the game's own whitelist admits.
+            for bad in [
+                "Ravena AI",
+                "Ravena Al",
+                "Ravena A-I",
+                "Ravena Aİ",
+                "Ravena АІ",
+                "AI Ravena",
+            ] {
+                assert!(normalise_current_character_name(bad).is_err(), "{bad:?}");
+            }
+            for good in ["Kaiden", "Aiwa", "Laila", "Ravena 3"] {
+                assert!(normalise_current_character_name(good).is_ok(), "{good:?}");
+            }
         }
 
         #[actix_web::test]
@@ -4791,6 +4927,119 @@ mod tests {
                     .unwrap()
                     > 0
             );
+        }
+        // ---- Tracker #527: one player rename per cooldown ----
+
+        const COOLDOWN: i64 = DEFAULT_RENAME_COOLDOWN_DAYS * 86_400;
+
+        /// Put one rename on the audit, `days_ago` days back, in the shape rows
+        /// written before the limit have (no `exempt` field).
+        async fn renamed_days_ago(conn: &mut AsyncPgConnection, id: Uuid, days_ago: i64) {
+            let at = arena_season::now_unix() - days_ago * 86_400;
+            sql_query(
+                "UPDATE characters SET server_state = jsonb_build_object( \
+                   'currentCharacterRenames', jsonb_build_array(jsonb_build_object( \
+                     'previousName', 'Before', 'newName', character->>'name', \
+                     'renamedAtSecs', $2::bigint))) \
+                 WHERE id = $1",
+            )
+            .bind::<SqlUuid, _>(id)
+            .bind::<diesel::sql_types::BigInt, _>(at)
+            .execute(conn)
+            .await
+            .unwrap();
+        }
+
+        #[test]
+        fn the_next_rename_is_the_latest_counted_rename_plus_the_cooldown() {
+            let state = serde_json::json!({"currentCharacterRenames": [
+                {"previousName": "a", "newName": "b", "renamedAtSecs": 100},
+                {"previousName": "b", "newName": "c", "renamedAtSecs": 300},
+                {"previousName": "c", "newName": "d", "renamedAtSecs": 900, "exempt": true},
+            ]});
+            assert_eq!(next_rename_at_secs(&state, 1000), Some(1300));
+            assert_eq!(
+                next_rename_at_secs(&state, 0),
+                None,
+                "0 turns the limit off"
+            );
+            assert_eq!(next_rename_at_secs(&serde_json::json!({}), 1000), None);
+            assert_eq!(DEFAULT_RENAME_COOLDOWN_DAYS, 30);
+        }
+
+        #[actix_web::test]
+        async fn a_second_rename_within_the_cooldown_is_refused() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"First"})).await;
+            rename_current_character(&mut conn, id, user, "Second".into())
+                .await
+                .expect("the first rename is free");
+            let err = rename_current_character(&mut conn, id, user, "Yaskrava".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.status_code(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(err.error_code(), RENAME_TOO_SOON);
+            let row = stored(&mut conn, id).await;
+            assert_eq!(row.character["name"], "Second");
+            assert_eq!(
+                row.server_state["currentCharacterRenames"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1,
+                "a refused rename is not audited"
+            );
+        }
+
+        #[actix_web::test]
+        async fn a_rename_from_before_the_rule_counts_and_expires_after_the_cooldown() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"Old"})).await;
+            renamed_days_ago(&mut conn, id, 29).await;
+            let err = rename_current_character(&mut conn, id, user, "New".into())
+                .await
+                .unwrap_err();
+            assert_eq!(err.error_code(), RENAME_TOO_SOON);
+
+            renamed_days_ago(&mut conn, id, 30).await;
+            rename_current_character(&mut conn, id, user, "New".into())
+                .await
+                .expect("30 days on, the player may rename again");
+            assert_eq!(stored(&mut conn, id).await.character["name"], "New");
+        }
+
+        #[actix_web::test]
+        async fn an_exempt_rename_ignores_the_cooldown_and_does_not_start_one() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"Old"})).await;
+            renamed_days_ago(&mut conn, id, 1).await;
+            rename_current_character_as(&mut conn, id, user, "Admin Pick".into(), true, COOLDOWN)
+                .await
+                .expect("an admin is exempt");
+            let row = stored(&mut conn, id).await;
+            assert_eq!(
+                row.server_state["currentCharacterRenames"][1]["exempt"],
+                true
+            );
+
+            // A fresh character an admin renamed: the player's own rename is free.
+            let (id2, user2) = seed_character(&mut conn, serde_json::json!({"name":"Fresh"})).await;
+            rename_current_character_as(&mut conn, id2, user2, "Synced".into(), true, COOLDOWN)
+                .await
+                .unwrap();
+            rename_current_character(&mut conn, id2, user2, "Players Own".into())
+                .await
+                .expect("an exempt rename does not start the cooldown");
+        }
+
+        #[actix_web::test]
+        async fn a_zero_cooldown_turns_the_limit_off() {
+            let mut conn = db!();
+            let (id, user) = seed_character(&mut conn, serde_json::json!({"name":"Old"})).await;
+            renamed_days_ago(&mut conn, id, 0).await;
+            rename_current_character_as(&mut conn, id, user, "New".into(), false, 0)
+                .await
+                .expect("limit off");
         }
     }
 
@@ -5586,7 +5835,11 @@ mod tests {
         const NAMES_MIGRATION: &str = concat!(
             include_str!("../../migrations/2026-11-16-000000-0000_unique_character_names/up.sql"),
             "\n",
-            include_str!("../../migrations/2026-11-16-000001-0000_unique_names_holder_check/up.sql"),
+            include_str!(
+                "../../migrations/2026-11-16-000001-0000_unique_names_holder_check/up.sql"
+            ),
+            "\n",
+            include_str!("../../migrations/2026-11-16-000002-0000_ai_copy_users/up.sql"),
         );
 
         async fn fixture() -> Option<AsyncPgConnection> {
@@ -6108,9 +6361,7 @@ mod tests {
             let mut c = db!();
             diesel_async::SimpleAsyncConnection::batch_execute(
                 &mut c,
-                include_str!(
-                    "../../migrations/2026-11-15-000000-0000_arena_alt_fight_ai/up.sql"
-                ),
+                include_str!("../../migrations/2026-11-15-000000-0000_arena_alt_fight_ai/up.sql"),
             )
             .await
             .unwrap();
@@ -6134,16 +6385,23 @@ mod tests {
                 "no row = Fight AI on"
             );
             set_fight_ai(&mut c, uid, alt_a, false).await.unwrap();
-            assert_eq!(live_alt_fights_ai(&mut c, uid).await.unwrap(), Some((alt_a, false)));
+            assert_eq!(
+                live_alt_fights_ai(&mut c, uid).await.unwrap(),
+                Some((alt_a, false))
+            );
 
-            apply_switch_alt(&mut c, &switch(uid, alt_b, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                .await
+                .unwrap();
             assert_eq!(
                 live_alt_fights_ai(&mut c, uid).await.unwrap(),
                 Some((alt_b, true)),
                 "the arriving alt has its own setting, not the parked one's"
             );
 
-            apply_switch_alt(&mut c, &switch(uid, alt_a, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                .await
+                .unwrap();
             assert_eq!(
                 live_alt_fights_ai(&mut c, uid).await.unwrap(),
                 Some((alt_a, false)),
@@ -6477,7 +6735,11 @@ mod tests {
             assert!(!out.created);
             // The placeholder is replaced by a generated, unique name.
             assert_eq!(out.level, 1);
-            assert!(!crate::character_names::is_default_name(&out.name), "{}", out.name);
+            assert!(
+                !crate::character_names::is_default_name(&out.name),
+                "{}",
+                out.name
+            );
             assert_eq!(out.name, crate::character_names::combo_candidate(level1, 0));
 
             let live = fresh_live(&mut c, uid).await;
@@ -6966,22 +7228,26 @@ mod tests {
                 #[diesel(sql_type = diesel::sql_types::Bool)]
                 grandfathered: bool,
             }
-            let rows: Vec<R> = diesel::sql_query(
-                "SELECT name, grandfathered FROM character_names ORDER BY name",
-            )
-            .load(c)
-            .await
-            .unwrap();
+            let rows: Vec<R> =
+                diesel::sql_query("SELECT name, grandfathered FROM character_names ORDER BY name")
+                    .load(c)
+                    .await
+                    .unwrap();
             // Sorted here, not by ORDER BY: collation order differs between
             // databases (CI vs local), byte order does not.
-            let mut out: Vec<(String, bool)> =
-                rows.into_iter().map(|r| (r.name, r.grandfathered)).collect();
+            let mut out: Vec<(String, bool)> = rows
+                .into_iter()
+                .map(|r| (r.name, r.grandfathered))
+                .collect();
             out.sort();
             out
         }
 
         async fn live_name(c: &mut AsyncPgConnection, id: Uuid) -> String {
-            live(c, id).await.character["name"].as_str().unwrap().to_string()
+            live(c, id).await.character["name"]
+                .as_str()
+                .unwrap()
+                .to_string()
         }
 
         #[tokio::test]
@@ -7031,9 +7297,13 @@ mod tests {
                 .await
                 .unwrap();
             flush(&mut c).await.unwrap();
-            apply_switch_alt(&mut c, &switch(uid, main_alt, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(uid, main_alt, None))
+                .await
+                .unwrap();
             flush(&mut c).await.unwrap();
-            apply_switch_alt(&mut c, &switch(uid, level1, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(uid, level1, None))
+                .await
+                .unwrap();
             flush(&mut c).await.unwrap();
 
             let names = registry(&mut c).await;
@@ -7095,7 +7365,9 @@ mod tests {
                     name: None,
                     ..new_alt(uid, alt)
                 };
-                let out = apply_new_alt(&mut c, &req, &appearance_cost()).await.unwrap();
+                let out = apply_new_alt(&mut c, &req, &appearance_cost())
+                    .await
+                    .unwrap();
                 assert!(crate::admin::is_game_name(&out.name), "{}", out.name);
                 assert!(!crate::character_names::is_default_name(&out.name));
                 let live = live(&mut c, out.character_id).await;
@@ -7133,7 +7405,9 @@ mod tests {
             flush(&mut c).await.unwrap();
             let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
             assert_eq!(
-                crate::character_names::settle_name(&mut c, u, a, "ravena").await.unwrap(),
+                crate::character_names::settle_name(&mut c, u, a, "ravena")
+                    .await
+                    .unwrap(),
                 "ravena 3"
             );
             let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
@@ -7146,9 +7420,333 @@ mod tests {
             );
             let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
             assert_eq!(
-                crate::character_names::settle_name(&mut c, u, a, "Free Name").await.unwrap(),
+                crate::character_names::settle_name(&mut c, u, a, "Free Name")
+                    .await
+                    .unwrap(),
                 "Free Name"
             );
+        }
+
+        #[tokio::test]
+        async fn an_imported_or_created_name_never_keeps_the_ai_marker() {
+            let mut c = db!();
+            seed_character(&mut c, "Ravena", 30, 0).await;
+            flush(&mut c).await.unwrap();
+            let settle = |name: &'static str| {
+                let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+                (u, a, name)
+            };
+            for (u, a, name) in [settle("Ravena AI"), settle("Ravena (AI)")] {
+                assert_eq!(
+                    crate::character_names::settle_name(&mut c, u, a, name)
+                        .await
+                        .unwrap(),
+                    "Ravena 2",
+                    "{name:?}: the marker goes, the taken base is numbered"
+                );
+                diesel::sql_query("DELETE FROM character_names WHERE user_id = $1")
+                    .bind::<diesel::sql_types::Uuid, _>(u)
+                    .execute(&mut c)
+                    .await
+                    .unwrap();
+            }
+            let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(
+                crate::character_names::settle_name(&mut c, u, a, "Thorn AI")
+                    .await
+                    .unwrap(),
+                "Thorn"
+            );
+            let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(
+                crate::character_names::settle_name(&mut c, u, a, "(AI)")
+                    .await
+                    .unwrap(),
+                crate::character_names::combo_candidate(a, 0),
+                "nothing left: a generated name"
+            );
+            // The starter path: a new alt that asks for no name still gets a
+            // generated one, never the marker.
+            let (uid, alt) = (Uuid::new_v4(), Uuid::new_v4());
+            let out = apply_new_alt(
+                &mut c,
+                &NewAltRequest {
+                    name: None,
+                    ..new_alt(uid, alt)
+                },
+                &appearance_cost(),
+            )
+            .await
+            .unwrap();
+            assert!(!crate::character_names::is_reserved_ai_name(&out.name));
+        }
+
+        #[tokio::test]
+        async fn a_player_can_rename_away_from_a_reserved_name_but_not_to_one() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Ravena AI", 85, 0).await;
+            flush(&mut c).await.unwrap();
+            super::super::rename_current_character(&mut c, cid, uid, "Ravena Dawn".into())
+                .await
+                .expect("the old name only blocks the \"(AI)\" label, not the reserved form");
+            flush(&mut c).await.unwrap();
+            assert_eq!(live_name(&mut c, cid).await, "Ravena Dawn");
+        }
+
+        /// Tracker #527: the rename limit is the PLAYER's. The uniqueness
+        /// backfill renames a duplicate even inside its cooldown, and does not
+        /// count against the player.
+        #[tokio::test]
+        async fn the_backfill_renames_through_a_players_rename_cooldown() {
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let (c1, _u1) = seed_character(&mut c, "Twinned", 60, 0).await;
+            let (c2, _u2) = seed_character(&mut c, "Twinned", 61, 0).await;
+            let now = crate::arena::arena_season::now_unix();
+            for cid in [c1, c2] {
+                diesel::sql_query(
+                    "UPDATE characters SET server_state = jsonb_build_object( \
+                       'currentCharacterRenames', jsonb_build_array(jsonb_build_object( \
+                         'previousName', 'Before', 'newName', 'Twinned', \
+                         'renamedAtSecs', $2::bigint))) WHERE id = $1",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .bind::<diesel::sql_types::BigInt, _>(now)
+                .execute(&mut c)
+                .await
+                .map(|_: usize| ())
+                .unwrap();
+            }
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            let mut names = vec![live_name(&mut c, c1).await, live_name(&mut c, c2).await];
+            names.sort();
+            assert_eq!(names, vec!["Twinned".to_string(), "Twinned 2".to_string()]);
+            for cid in [c1, c2] {
+                let audit: i32 = diesel::sql_query(
+                    "SELECT jsonb_array_length(server_state->'currentCharacterRenames') AS n \
+                     FROM characters WHERE id = $1",
+                )
+                .bind::<diesel::sql_types::Uuid, _>(cid)
+                .get_result::<AuditLen>(&mut c)
+                .await
+                .unwrap()
+                .n;
+                assert_eq!(audit, 1, "the backfill adds no player rename");
+            }
+        }
+
+        #[derive(diesel::QueryableByName)]
+        struct AuditLen {
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            n: i32,
+        }
+
+        #[tokio::test]
+        async fn an_ai_copy_is_recognised_by_its_account_not_its_name() {
+            let mut c = db!();
+            let (_holder, _) = seed_character(&mut c, "Ravena", 89, 0).await;
+            flush(&mut c).await.unwrap();
+            // The website's mimic: an isolated account, the bare name.
+            let copy_user = Uuid::new_v4();
+            crate::character_names::mark_ai_copy_user(&mut c, copy_user)
+                .await
+                .unwrap();
+            let got =
+                crate::character_names::settle_name(&mut c, copy_user, Uuid::new_v4(), "Ravena")
+                    .await
+                    .unwrap();
+            assert_eq!(got, "Ravena", "an AI copy keeps the name it copies");
+            // `flush` left the check immediate: this insert is checked now.
+            diesel::sql_query(
+                "INSERT INTO characters (id, user_id, character, data, inventory, wallet, \
+                                         server_state) \
+                 VALUES ($1, $2, '{\"name\":\"Ravena\",\"level\":89}', '{}', '{}', '{}', '{}')",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+            .bind::<diesel::sql_types::Uuid, _>(copy_user)
+            .execute(&mut c)
+            .await
+            .expect("the copy is outside the registry");
+            assert_eq!(registry(&mut c).await, vec![("Ravena".to_string(), false)]);
+            // A backfill leaves it alone.
+            let plan = crate::character_names::run_backfill(&mut c, true)
+                .await
+                .unwrap();
+            assert!(plan.changes.is_empty(), "{:?}", plan.changes);
+        }
+
+        /// The second prod case (2026-11-16): the REAL Yaskrava renamed his main
+        /// "Yaskrava AI"; the only other "Yaskrava" is his AI copy (numbered
+        /// "Yaskrava 2" by the backfill). Copies do not hold names, so the
+        /// player gets the BARE name back — on the repair and on the import path.
+        #[tokio::test]
+        async fn a_stripped_name_is_bare_when_only_an_ai_copy_holds_it() {
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let (copy_cid, copy_user) = seed_character(&mut c, "Yaskrava", 100, 0).await;
+            add_user_row(&mut c, copy_user).await;
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            let (pcid, _) = seed_character(&mut c, "Yaskrava AI", 100, 0).await;
+            flush(&mut c).await.unwrap();
+
+            let dry = crate::character_names::run_ai_fix(&mut c, true, &[copy_user])
+                .await
+                .unwrap();
+            assert_eq!(dry.renames.len(), 1, "{:?}", dry.renames);
+            assert_eq!(
+                dry.renames[0].new_name, "Yaskrava",
+                "bare: only the copy has it"
+            );
+            let out = crate::character_names::run_ai_fix(&mut c, false, &[copy_user])
+                .await
+                .unwrap();
+            flush(&mut c).await.expect("commit-time check passes");
+            assert_eq!(out.renames, dry.renames);
+            assert_eq!(live_name(&mut c, pcid).await, "Yaskrava");
+            assert_eq!(
+                live_name(&mut c, copy_cid).await,
+                "Yaskrava",
+                "the copy keeps its name"
+            );
+
+            // Import/starter path: the bare name is free of players -> bare;
+            // once a player holds it -> numbered.
+            let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(
+                crate::character_names::settle_name(&mut c, u, a, "Thorn (AI)")
+                    .await
+                    .unwrap(),
+                "Thorn"
+            );
+            let (u, a) = (Uuid::new_v4(), Uuid::new_v4());
+            assert_eq!(
+                crate::character_names::settle_name(&mut c, u, a, "Yaskrava AI")
+                    .await
+                    .unwrap(),
+                "Yaskrava 2",
+                "the player who now holds it keeps it"
+            );
+        }
+
+        /// The 2026-11-16 repair, on the prod shape: a holder "Ravena", an AI
+        /// copy the backfill numbered "Ravena 2", and a player who then took
+        /// "Ravena AI".
+        #[tokio::test]
+        async fn the_ai_fix_restores_copies_and_renames_reserved_names_and_undoes() {
+            let mut c = match fixture_without_names().await {
+                Some(c) => c,
+                None => return eprintln!("SKIP: TEST_DATABASE_URL unset"),
+            };
+            let (_h, holder) = seed_character(&mut c, "Ravena", 89, 0).await;
+            let (copy_cid, copy_user) = seed_character(&mut c, "Ravena", 89, 0).await;
+            add_user_row(&mut c, copy_user).await;
+            for (device, user, days) in [("h", holder, 30), ("x", Uuid::new_v4(), 1)] {
+                diesel::sql_query(format!(
+                    "INSERT INTO device_bindings (device_id, user_id, bound_at) \
+                     VALUES ('{device}', '{user}', now() - interval '{days} days')"
+                ))
+                .execute(&mut c)
+                .await
+                .unwrap();
+            }
+            diesel_async::SimpleAsyncConnection::batch_execute(&mut c, NAMES_MIGRATION)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            // What run b3e053c2 did: the copy, unrecognised, lost the name.
+            let backfill = crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
+            flush(&mut c).await.unwrap();
+            assert_eq!(live_name(&mut c, copy_cid).await, "Ravena 2");
+            // Then a player took the marker.
+            let (pcid, puid) = seed_character(&mut c, "Ravena AI", 85, 0).await;
+            flush(&mut c).await.unwrap();
+
+            let dry =
+                crate::character_names::run_ai_fix(&mut c, true, &[copy_user, Uuid::new_v4()])
+                    .await
+                    .unwrap();
+            assert!(dry.run_id.is_none());
+            assert_eq!(
+                dry.marked,
+                vec![copy_user],
+                "only existing accounts are marked"
+            );
+            assert_eq!(dry.restores.len(), 1);
+            assert_eq!(
+                (
+                    dry.restores[0].old_name.as_str(),
+                    dry.restores[0].new_name.as_str()
+                ),
+                ("Ravena 2", "Ravena")
+            );
+            assert_eq!(dry.renames.len(), 1);
+            assert_eq!(dry.renames[0].user_id, puid);
+            assert_eq!(
+                dry.renames[0].new_name, "Ravena 2",
+                "the copy's number is free for players"
+            );
+            assert_eq!(
+                live_name(&mut c, copy_cid).await,
+                "Ravena 2",
+                "dry run writes nothing"
+            );
+
+            let out = crate::character_names::run_ai_fix(&mut c, false, &[copy_user])
+                .await
+                .unwrap();
+            flush(&mut c).await.expect("commit-time check passes");
+            assert_eq!(
+                out.restores, dry.restores,
+                "the dry run names exactly as the run"
+            );
+            assert_eq!(out.renames, dry.renames);
+            assert_eq!(live_name(&mut c, copy_cid).await, "Ravena");
+            assert_eq!(live_name(&mut c, pcid).await, "Ravena 2");
+            assert_eq!(
+                registry(&mut c).await,
+                vec![
+                    ("Ravena".to_string(), false),
+                    ("Ravena 2".to_string(), false)
+                ],
+                "holder + player; the copy is out"
+            );
+            let again = crate::character_names::run_ai_fix(&mut c, false, &[copy_user])
+                .await
+                .unwrap();
+            assert!(
+                again.run_id.is_none() && again.restores.is_empty() && again.renames.is_empty()
+            );
+            // The original backfill can no longer re-number the copy.
+            let re = crate::character_names::run_backfill(&mut c, true)
+                .await
+                .unwrap();
+            assert!(re.changes.is_empty(), "{:?}", re.changes);
+            // The backfill's own undo skips the restored copy (renamed since).
+            let _ = backfill;
+
+            let undo = crate::character_names::run_undo(&mut c, out.run_id.unwrap())
+                .await
+                .unwrap();
+            assert_eq!(undo.restored, 2);
+            flush(&mut c).await.expect("undo passes the check");
+            assert_eq!(live_name(&mut c, copy_cid).await, "Ravena 2");
+            assert_eq!(live_name(&mut c, pcid).await, "Ravena AI");
         }
 
         #[tokio::test]
@@ -7180,14 +7778,20 @@ mod tests {
             );
             // The grandfathered one can still park and come back.
             let fresh = Uuid::new_v4();
-            apply_new_alt(&mut c, &new_alt(u2, fresh), &appearance_cost()).await.unwrap();
+            apply_new_alt(&mut c, &new_alt(u2, fresh), &appearance_cost())
+                .await
+                .unwrap();
             flush(&mut c).await.unwrap();
-            apply_switch_alt(&mut c, &switch(u2, alt2, None)).await.unwrap();
+            apply_switch_alt(&mut c, &switch(u2, alt2, None))
+                .await
+                .unwrap();
             flush(&mut c).await.unwrap();
             // But no third character may join them.
             let (u3, a3) = (Uuid::new_v4(), Uuid::new_v4());
             assert_eq!(
-                crate::character_names::settle_name(&mut c, u3, a3, "ÍSDÍS").await.unwrap(),
+                crate::character_names::settle_name(&mut c, u3, a3, "ÍSDÍS")
+                    .await
+                    .unwrap(),
                 "ÍSDÍS 2"
             );
         }
@@ -7239,7 +7843,9 @@ mod tests {
                 .unwrap();
             flush(&mut c).await.unwrap();
 
-            let out = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            let out = crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
             assert_eq!(out.changes.len(), 2, "{:?}", out.changes);
             flush(&mut c)
                 .await
@@ -7275,13 +7881,19 @@ mod tests {
                 .await
                 .unwrap();
             flush(&mut c).await.unwrap();
-            let dry = crate::character_names::run_backfill(&mut c, true).await.unwrap();
-            let out = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            let dry = crate::character_names::run_backfill(&mut c, true)
+                .await
+                .unwrap();
+            let out = crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
             assert_eq!(dry.changes, out.changes);
             flush(&mut c).await.expect("commit-time check passes");
             eprintln!("prod snapshot: {} renames applied", out.changes.len());
             assert!(registry(&mut c).await.iter().all(|(_, gf)| !gf));
-            let again = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            let again = crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
             assert!(again.changes.is_empty(), "{:?}", again.changes);
             let undo = crate::character_names::run_undo(&mut c, out.run_id.unwrap())
                 .await
@@ -7333,17 +7945,32 @@ mod tests {
             flush(&mut c).await.unwrap();
 
             // Dry run: a plan, no writes.
-            let plan = crate::character_names::run_backfill(&mut c, true).await.unwrap();
+            let plan = crate::character_names::run_backfill(&mut c, true)
+                .await
+                .unwrap();
             assert_eq!(plan.changes.len(), 3, "{:?}", plan.changes);
             assert!(plan.run_id.is_none());
             assert_eq!(live_name(&mut c, c_new).await, "markus valerius");
 
-            let applied = crate::character_names::run_backfill(&mut c, false).await.unwrap();
-            assert_eq!(applied.changes, plan.changes, "the dry run names exactly as the run");
+            let applied = crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
+            assert_eq!(
+                applied.changes, plan.changes,
+                "the dry run names exactly as the run"
+            );
             flush(&mut c).await.unwrap();
-            assert_eq!(live_name(&mut c, c_old).await, "Markus Valerius", "oldest keeps it");
+            assert_eq!(
+                live_name(&mut c, c_old).await,
+                "Markus Valerius",
+                "oldest keeps it"
+            );
             assert_eq!(live_name(&mut c, c_new).await, "markus valeriu 2");
-            assert_eq!(live_name(&mut c, c_ai).await, "Markus Valerius (AI)", "AI untouched");
+            assert_eq!(
+                live_name(&mut c, c_ai).await,
+                "Markus Valerius (AI)",
+                "AI untouched"
+            );
             let adv = live_name(&mut c, c_adv).await;
             assert_eq!(adv, crate::character_names::combo_candidate(c_adv, 0));
             let parked: VersionRow = diesel::sql_query(
@@ -7354,25 +7981,37 @@ mod tests {
             .get_result(&mut c)
             .await
             .unwrap();
-            assert_eq!(parked.name, crate::character_names::combo_candidate(parked_alt, 0));
+            assert_eq!(
+                parked.name,
+                crate::character_names::combo_candidate(parked_alt, 0)
+            );
             #[derive(diesel::QueryableByName)]
             struct D {
                 #[diesel(sql_type = diesel::sql_types::Jsonb)]
                 data: serde_json::Value,
             }
-            let d: D = diesel::sql_query("SELECT data FROM character_versions WHERE source_alt_uuid = $1")
-                .bind::<diesel::sql_types::Uuid, _>(parked_alt)
-                .get_result(&mut c)
-                .await
-                .unwrap();
+            let d: D =
+                diesel::sql_query("SELECT data FROM character_versions WHERE source_alt_uuid = $1")
+                    .bind::<diesel::sql_types::Uuid, _>(parked_alt)
+                    .get_result(&mut c)
+                    .await
+                    .unwrap();
             let mut expect = serde_json::json!({"Name": {"_t": "String", "_v": ""},
                 "NameVersion": {"_t": "String", "_v": "base64"}});
             crate::character_names::set_customization_name(&mut expect, &parked.name);
-            assert_eq!(d.data["customization"]["Name"], expect["Name"], "client-side name too");
-            assert!(registry(&mut c).await.iter().all(|(_, gf)| !gf), "nothing grandfathered");
+            assert_eq!(
+                d.data["customization"]["Name"], expect["Name"],
+                "client-side name too"
+            );
+            assert!(
+                registry(&mut c).await.iter().all(|(_, gf)| !gf),
+                "nothing grandfathered"
+            );
 
             // Idempotent.
-            let again = crate::character_names::run_backfill(&mut c, false).await.unwrap();
+            let again = crate::character_names::run_backfill(&mut c, false)
+                .await
+                .unwrap();
             assert!(again.changes.is_empty(), "{:?}", again.changes);
 
             // Undo restores every old name, and the restored duplicates pass.
@@ -7388,11 +8027,12 @@ mod tests {
                 #[diesel(sql_type = diesel::sql_types::Uuid)]
                 id: Uuid,
             }
-            let i: I = diesel::sql_query("SELECT id FROM character_versions WHERE source_alt_uuid = $1")
-                .bind::<diesel::sql_types::Uuid, _>(parked_alt)
-                .get_result(&mut c)
-                .await
-                .unwrap();
+            let i: I =
+                diesel::sql_query("SELECT id FROM character_versions WHERE source_alt_uuid = $1")
+                    .bind::<diesel::sql_types::Uuid, _>(parked_alt)
+                    .get_result(&mut c)
+                    .await
+                    .unwrap();
             assert_eq!(version(&mut c, i.id).await.name, "Adventurer 2");
         }
 

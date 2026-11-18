@@ -1253,3 +1253,67 @@ fn soak_replay_one() {
     eprintln!("SOAK_ONE {spec}: {r:?}");
     r.unwrap();
 }
+
+/// Combined sanity for the six enchantment families wired for tracker #536's
+/// follow-up (Absorb Health/Stamina/Magicka, Fortify Healing, Fortify Combo Damage,
+/// Fortify Blocked Damage): every fixture is ARMED with all six at tier 10 through
+/// the production dispatch (`loadout::apply_enchant`) and full matches must still
+/// terminate cleanly — no panic, no NaN, pools inside `[0, max]` (checked per tick by
+/// `run_match`), every frame well-formed.
+#[test]
+fn soak_the_missing_enchantments_armed_matches_terminate_cleanly() {
+    const SIX: [&str; 6] = [
+        "cc432e27-813c-4afa-a3df-d587cfd550d2", // Absorb Health
+        "652d5ac9-3076-405b-a163-dde1a950fb26", // Absorb Stamina
+        "94aa3774-cd7e-400c-9d17-a4652fb88a93", // Absorb Magicka
+        "c02cf339-2c63-4456-bdd1-f4ad1e25bf3f", // Fortify Healing
+        "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd", // Fortify Combo Damage
+        "af1e56bf-1974-452c-aa70-36b2140cbb07", // Fortify Blocked Damage
+    ];
+    let arm = |f: &Fixture| {
+        let mut f = f.clone();
+        let before = f.loadout.absorb.len();
+        for id in SIX {
+            loadout::apply_enchant(&mut f.loadout, &uuid::Uuid::parse_str(id).unwrap(), 10);
+        }
+        assert_eq!(
+            f.loadout.absorb.len(),
+            before + 3,
+            "{}: three absorbs armed",
+            f.name
+        );
+        assert!(f.loadout.fortify_combo_damage > 0.0 && f.loadout.fortify_blocked_damage > 0.0);
+        assert!(f.loadout.fortify_healing > 0.0);
+        f
+    };
+    let fx = load_fixtures();
+    let bound = match_bound(MAX_TICK);
+    let mut failures = Vec::new();
+    let mut damage_frames = 0usize;
+    for seed in 0..24u64 {
+        let a = arm(&fx[(seed as usize * 5) % fx.len()]);
+        let b = arm(&fx[(seed as usize * 11 + 3) % fx.len()]);
+        let mode = match seed % 3 {
+            0 => Mode::BotVsBot,
+            1 => Mode::ScriptedHumanVsBot,
+            _ => Mode::ScriptedPvp,
+        };
+        match run_guarded(0x0536_AB50 + seed, &a, &b, mode, bound) {
+            Ok(o) => damage_frames += o.damage_frames,
+            Err(e) => failures.push(format!(
+                "seed {seed} {:?} {} vs {}: {e}",
+                mode, a.name, b.name
+            )),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    assert!(
+        damage_frames > 0,
+        "the armed matches must actually trade hits"
+    );
+}
