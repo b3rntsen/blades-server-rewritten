@@ -3606,6 +3606,43 @@ mod report_259_material_regen_tests {
         assert_eq!(lo.health_regen, 0.0);
     }
 
+    /// Tracker #550: every light shield's material properties reach the fighter.
+    /// Tier-10 templates. The shipped data gives light shields typed BLOCK bonuses
+    /// (`BlockReduction*PropertyLogic`, "Block vs X") and material regeneration,
+    /// not armour resistances.
+    #[test]
+    fn report_550_every_light_shield_applies_its_material_properties() {
+        use DamageType::*;
+        // (template, name, block-bonus types, stamina regen?, magicka regen?)
+        let cases: [(&str, &str, &[DamageType], bool, bool); 6] = [
+            ("80af12db-32e9-47b5-aa04-14a3d610e426", "Stalhrim", &[Bashing, Frost], false, false),
+            ("08a302c9-fc5b-4a03-bd6c-e7974a81009f", "Daedric Light", &[Slashing, Fire], false, false),
+            ("33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6", "Glass", &[Shock], true, false),
+            ("e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada", "Hide", &[], true, false),
+            ("616b64ef-4184-4efb-af55-1a3f122431dc", "Elven", &[], false, true),
+            ("0d491a77-762d-4c31-85ad-5baf39eb90a7", "Chitin", &[Poison], false, true),
+        ];
+        for (template, name, types, stamina, magicka) in cases {
+            let lo = from_character(&character(), &inventory(vec![item(template, 0)]));
+            for ty in [Slashing, Cleaving, Bashing, Fire, Frost, Shock, Poison] {
+                let bonus: f32 = lo
+                    .block_rating_bonuses
+                    .iter()
+                    .filter(|(t, _)| *t == ty)
+                    .map(|(_, v)| *v)
+                    .sum();
+                assert_eq!(
+                    bonus > 0.0,
+                    types.contains(&ty),
+                    "{name} Shield: block bonus vs {ty:?} = {bonus}"
+                );
+            }
+            assert_eq!(lo.stamina_regen > 0.0, stamina, "{name}: stamina regen {}", lo.stamina_regen);
+            assert_eq!(lo.magicka_regen > 0.0, magicka, "{name}: magicka regen {}", lo.magicka_regen);
+            assert_eq!(lo.health_regen, 0.0, "{name}: health regen");
+        }
+    }
+
     #[test]
     fn negative_control_flat_necklace_regeneration_stays_flat() {
         let lo = from_character(&character(), &inventory(vec![enchanted_necklace()]));
