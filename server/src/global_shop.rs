@@ -685,6 +685,16 @@ pub(crate) fn is_town_level_up_offer(product: Uuid) -> bool {
 /// product stays once per character (`maxPurchases` 1, the APK's
 /// `perUserMaximum`), which also caps what a 1-Gem price can be bought for. An
 /// entry already in the catalogue for the same product (none ship) is replaced.
+///
+/// The cap must be in `maxPurchaseLimits`, not only `maxPurchases` (tracker
+/// #557). The client builds its sold-out check from the override's
+/// `maxPurchaseLimits` and reads `limit` 0 as unlimited, so an entry naming the
+/// product id at 0 told it a bought offer could be bought again: the offer
+/// stayed in Offers, a tap hit the server's lifetime cap, and the 400 rebooted
+/// the client. Served in retail's own shape for a once-per-user override (all
+/// 21 such entries in `global_shop_overrides.json`, e.g. the farewell sale's
+/// 1-Gem `0ec90748-…`): the product-id tracking entry at `limit` = `maxPurchases`
+/// and the top-level `purchaseTrackingId` set to the product id.
 fn apply_level_up_offer_price(
     mut catalog: Value,
     level_up_offers: &HashMap<u16, Uuid>,
@@ -711,10 +721,10 @@ fn apply_level_up_offer_price(
                 "activeStartDate": LEVEL_UP_OFFER_WINDOW.0,
                 "activeEndDate": LEVEL_UP_OFFER_WINDOW.1,
                 "isActive": true,
-                "maxPurchaseLimits": [{ "limit": 0, "purchaseTrackingId": id }],
+                "maxPurchaseLimits": [{ "limit": 1, "purchaseTrackingId": id }],
                 "maxPurchases": 1,
                 "prices": [{ "currencyId": blades_lib::economy::GEMS, "quantity": price }],
-                "purchaseTrackingId": null,
+                "purchaseTrackingId": id,
             }),
         );
     }
@@ -6591,6 +6601,69 @@ mod level_up_offer_price_tests {
         }
         assert_eq!(town_level_up_offer(2), None);
         assert_eq!(town_level_up_offer(11), None);
+    }
+
+    /// The product-id entry of `maxPurchaseLimits` in a served override: the cap
+    /// the client counts `globalShopPurchases[{id: product}]` against.
+    fn product_limit(entry: &Value, product: &str) -> Option<u64> {
+        entry["maxPurchaseLimits"]
+            .as_array()?
+            .iter()
+            .find(|l| l["purchaseTrackingId"] == product)?["limit"]
+            .as_u64()
+    }
+
+    /// Tracker #557 (SpaceMunk): a bought town level-up offer ("Imperial
+    /// Shipment") stayed in Offers; tapping it hit the lifetime cap (prod log:
+    /// "at the lifetime cap for product 8e35aa43-… (1/1) — refusing") and the
+    /// 400 rebooted the client. The served override named the product's tracking
+    /// id at `limit` 0, which the client reads as unlimited. Every level-up
+    /// offer, player and town, must tell the client it is once per character.
+    #[test]
+    fn report_557_a_bought_level_up_offer_is_sold_out_on_the_client() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let sd = crate::static_loader::load(&dir);
+        let now = 1_794_000_000;
+        let served = served_catalog(&sd, now);
+        let products = sd
+            .level_up_offers
+            .values()
+            .chain(TOWN_LEVEL_UP_OFFERS.iter().map(|(_, p)| p));
+        for product in products {
+            let id = product.to_string();
+            let e = &served["globalShopOverrides"][&id];
+            assert_eq!(e["maxPurchases"], 1, "{id}");
+            assert_eq!(
+                product_limit(e, &id),
+                Some(1),
+                "{id}: the client must see a cap of 1 on the product's tracking id"
+            );
+            assert_eq!(e["purchaseTrackingId"], id.as_str(), "{id}");
+            // The server's own gate agrees with what the client is told.
+            assert_eq!(lifetime_purchase_cap(&sd, *product, now), Some(1));
+        }
+    }
+
+    /// Control for the shape above: retail's own once-per-user overrides (top-level
+    /// `purchaseTrackingId` = product, `maxPurchases` N) all carry the product-id
+    /// tracking entry at `limit` N — never 0.
+    #[test]
+    fn report_557_retail_caps_a_once_per_user_override_in_max_purchase_limits() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/global_shop_overrides.json"
+        );
+        let raw: Value = serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let mut seen = 0;
+        for (product, e) in raw["globalShopOverrides"].as_object().unwrap() {
+            let cap = e["maxPurchases"].as_u64().unwrap_or(0);
+            if cap == 0 || e["purchaseTrackingId"] != product.as_str() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(product_limit(e, product), Some(cap), "{product}");
+        }
+        assert!(seen >= 20, "retail ships such overrides ({seen})");
     }
 }
 
