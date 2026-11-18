@@ -279,10 +279,25 @@ const PROP_POS_X: u8 = 4;
 const PROP_POS_Y: u8 = 5;
 const PROP_POS_CHARGE: u8 = 7;
 const PROP_POS_FLAGS: u8 = 8;
-/// `PlayerCombatInputPositionMessage.START_TRIGGER_FLAG` (dump.cs:589451).
+/// `PlayerCombatInputPositionMessage.START_TRIGGER_FLAG` (dump.cs:589452).
 /// The client sets this after its measured screen-swipe speed and attack angle cross
 /// the shipped `PlayerCombatParameters` gates (5.0 and 75 degrees on device).
-const POS_START_ATTACK_TRIGGER_FLAG: i32 = 512;
+const POS_START_ATTACK_TRIGGER_FLAG: u16 = 512;
+/// `PlayerCombatInputPositionMessage.END_TRIGGER_FLAG` (dump.cs:589453) — the
+/// touch client's ATTACK CANCEL (tracker #551).
+///
+/// A swipe DOWN during a held charge is how a touch player cancels, and it never
+/// reaches the server as gmid 31 `PlayerInputCancelCharge`: the only sender of that
+/// message (`PvpClientPlayerCombatController$$ReceiveInput@0x1877168`) fires on
+/// `ActionEvent.CancelCharge`, which only the gamepad paths raise
+/// (`InputContextCombat$$OnButtonDown`, `ControllerCombatProcessor$$ProcessMotionCombat`).
+/// Across all 746 815 captured c2s frames — every ENet command walked, retail and
+/// ours — gmid 31 appears zero times. What the touch client sends instead is this
+/// bit on its gmid-47 pointer stream, and retail honoured it: over the 46 retail
+/// sessions, a hold whose pointer samples carried END_TRIGGER ended in Idle with no
+/// swing 155 times and swung 4 times (each with the bit on the very last sample
+/// only), while holds without it swung 3 868 times.
+const POS_END_ATTACK_TRIGGER_FLAG: u16 = 1024;
 // NetData propIds — gmid 46 `PlayerCombatInputActivate`.
 const PROP_ACT_HELD: u8 = 4;
 const PROP_ACT_CHARGE: u8 = 5;
@@ -306,11 +321,15 @@ fn netdata_bool(nd: &arena_proto::NetDataParse, prop: u8) -> Option<bool> {
     }
 }
 
-/// Read an exact `Int` NetData prop. Prop 8 of gmid 47 is a packed ushort-shaped
-/// integer; accepting a Bool/Byte coercion here would manufacture trigger flags.
-fn netdata_i32(nd: &arena_proto::NetDataParse, prop: u8) -> Option<i32> {
+/// Read gmid 47's packed trigger flags (prop 8). On the wire this is a `UInt16` —
+/// all 93 526 captured gmid-47 samples, retail and ours, carry that type — so an
+/// `Int`-only reader never saw a single flag in production. `Int` is still accepted
+/// for older synthetic frames. A Bool/Byte coercion would manufacture flags, so
+/// nothing else is.
+fn netdata_flags(nd: &arena_proto::NetDataParse, prop: u8) -> Option<u16> {
     match nd.get(prop) {
-        Some(arena_proto::NetDataValue::Int(v)) => Some(*v),
+        Some(arena_proto::NetDataValue::UInt16(v)) => Some(*v),
+        Some(arena_proto::NetDataValue::Int(v)) => u16::try_from(*v).ok(),
         _ => None,
     }
 }
@@ -328,6 +347,9 @@ struct PointerSample {
     /// This selects only the visual state (manual gmid 40 vs fallback gmid 52); it
     /// never changes damage, charge, target, or hit acceptance.
     start_attack_trigger_ready: bool,
+    /// The client recognised its cancel gesture (a swipe down during the hold).
+    /// See [`POS_END_ATTACK_TRIGGER_FLAG`].
+    end_attack_trigger_ready: bool,
 }
 
 /// One decoded `PlayerCombatInputActivate` (gmid 46) press/release event.
@@ -349,12 +371,13 @@ fn parse_input_position(user_data: &[u8]) -> Option<PointerSample> {
         return None;
     }
     let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+    let flags = netdata_flags(&nd, PROP_POS_FLAGS).unwrap_or(0);
     Some(PointerSample {
         x: netdata_f32(&nd, PROP_POS_X)?,
         y: netdata_f32(&nd, PROP_POS_Y)?,
         client_charge: netdata_f32(&nd, PROP_POS_CHARGE),
-        start_attack_trigger_ready: netdata_i32(&nd, PROP_POS_FLAGS)
-            .is_some_and(|flags| flags & POS_START_ATTACK_TRIGGER_FLAG != 0),
+        start_attack_trigger_ready: flags & POS_START_ATTACK_TRIGGER_FLAG != 0,
+        end_attack_trigger_ready: flags & POS_END_ATTACK_TRIGGER_FLAG != 0,
     })
 }
 
@@ -492,6 +515,34 @@ fn parse_op46_held(user_data: &[u8]) -> Option<bool> {
     // bit0 of the MSB of the f32 LE [user_data[8:12]] = bit0 of user_data[11].
     let held_bit = user_data[11] & 0x01;
     Some(held_bit == 1)
+}
+
+/// Abort `sender`'s wind-up without a swing: the attack cancel (trackers #449,
+/// #551). Clears the charge clock so the finger's later release is "a release with
+/// no recorded press" and starts nothing; a fighter that was winding up goes Idle,
+/// whose client `OnEnter` resets the combo, and the drain mirrors that Idle to both
+/// viewers. `via` names the wire signal for the log: `gmid31` (gamepad) or
+/// `swipe_down` (touch, gmid-47 END_TRIGGER).
+fn cancel_charge(combat: &mut MatchCombat, sender: usize, now: Instant, via: &str) {
+    let Some(f) = combat.fighters.get_mut(sender) else {
+        return;
+    };
+    let was_charging = matches!(
+        f.actor_state(),
+        ActorStateType::Charging | ActorStateType::PlayerDraining
+    );
+    f.charge_press_at = None;
+    f.charge_began_at = None;
+    f.charge_side = None;
+    f.pending_manual_attack = None;
+    if was_charging {
+        f.reset_combo();
+        f.set_actor_state(ActorStateType::Idle, now);
+    }
+    info!(
+        "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=cancelled via={via} was_charging={was_charging}",
+        combat.game_session_id, combat.fighters[sender].loadout.display_name,
+    );
 }
 
 /// Resolve one inbound, decrypted c2s combat input from `sender`.
@@ -750,22 +801,7 @@ pub fn on_c2s_input(
     // client leaves Charging for Idle, whose `OnEnter` resets the combo, so the
     // server does the same; the drain then mirrors the Idle to both viewers.
     if messages::user_message_gmid(user_data) == Some(messages::GMID_PLAYER_INPUT_CANCEL_CHARGE) {
-        if sender < combat.fighters.len() {
-            let f = &mut combat.fighters[sender];
-            let was_charging = f.actor_state() == ActorStateType::Charging;
-            f.charge_press_at = None;
-            f.charge_began_at = None;
-            f.charge_side = None;
-            f.pending_manual_attack = None;
-            if was_charging {
-                f.reset_combo();
-                f.set_actor_state(ActorStateType::Idle, now);
-            }
-            info!(
-                "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=cancelled was_charging={was_charging}",
-                combat.game_session_id, combat.fighters[sender].loadout.display_name,
-            );
-        }
+        cancel_charge(combat, sender, now, "gmid31");
         return Vec::new();
     }
 
@@ -794,6 +830,11 @@ pub fn on_c2s_input(
             f.last_input_at = Some(now);
             if let Some(cc) = sample.client_charge {
                 f.last_client_charge = Some(cc);
+            }
+            // Tracker #551: the touch client's attack cancel. Only a LIVE charge is
+            // cancelled; the bit on a sample outside a hold means nothing.
+            if sample.end_attack_trigger_ready && f.charge_press_at.is_some() {
+                cancel_charge(combat, sender, now, "swipe_down");
             }
             return Vec::new();
         }
@@ -10695,8 +10736,9 @@ mod phase4_tests {
 
     /// A prod-shaped `PlayerCombatInputPosition` (gmid 47) on the generic 0x36
     /// carrier: `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 47 · 4:Float x ·
-    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:Int flags}`.
-    fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: i32) -> Vec<u8> {
+    /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:UInt16 flags}`. Prop 8 is a
+    /// `UInt16` on the wire (all 93 526 captured samples), not an `Int`.
+    fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: u16) -> Vec<u8> {
         let mut w = arena_proto::NetDataWriter::new();
         w.int(0, 565)
             .byte(1, 56)
@@ -10706,7 +10748,7 @@ mod phase4_tests {
             .float(5, y)
             .float(6, 0.033_334)
             .float(7, charge)
-            .int(8, flags);
+            .put(8, arena_proto::NetDataValue::UInt16(flags));
         let mut f = messages::frame_for_test(w.finish());
         f[0] = 0x84; // c2s marker
         f
@@ -10782,6 +10824,138 @@ mod phase4_tests {
             c.fighters[1].health, target_hp,
             "the cancelled attack must not land"
         );
+    }
+
+    /// Tracker #551: the TOUCH attack cancel. A swipe down during a held charge
+    /// reaches the server as gmid 47 samples carrying `END_TRIGGER_FLAG` (1024) — the
+    /// touch client never sends gmid 31 — and retail answered it with Idle and no
+    /// swing (155 of 159 retail holds that carried the bit). The flag values are real
+    /// retail samples (s468: 200 → 1223 → 1735 on the way down), so this also pins
+    /// that prop 8 is read as the `UInt16` it is on the wire.
+    #[test]
+    fn a_swipe_down_during_a_charge_cancels_it_without_a_swing() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        let target_hp = c.fighters[1].health;
+
+        on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.70, 0.59, 0.5, 200),
+            now + Duration::from_millis(500),
+        );
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let t = now + Duration::from_millis(900);
+        let out = on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.72, 0.30, 0.9, 1223),
+            t,
+        );
+        assert!(out.is_empty());
+        assert_eq!(
+            c.fighters[0].actor_state(),
+            ActorStateType::Idle,
+            "the swipe down ends the wind-up"
+        );
+        assert!(c.fighters[0].charge_press_at.is_none());
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.78, 0.12, 0.95, 1735),
+            t + Duration::from_millis(30),
+        );
+
+        let t2 = t + Duration::from_millis(100);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 1.02, false), t2);
+        on_tick(
+            &mut c,
+            t2 + FOLLOW_THROUGH_DELAY + Duration::from_millis(50),
+            false,
+        );
+        assert!(
+            c.pending_hits.is_empty(),
+            "the release after a swipe-down cancel is no swing"
+        );
+        assert_eq!(
+            c.fighters[1].health, target_hp,
+            "the cancelled attack must not land"
+        );
+    }
+
+    /// The control for the test above: the same hold without the cancel bit swings.
+    /// Without it, the cancel test could pass because the hold never swings at all.
+    #[test]
+    fn the_same_hold_without_the_cancel_bit_still_swings() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        let target_hp = c.fighters[1].health;
+
+        on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.70, 0.59, 0.5, 200),
+            now + Duration::from_millis(500),
+        );
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.72, 0.30, 0.9, 199),
+            now + Duration::from_millis(900),
+        );
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Charging);
+
+        let t2 = now + Duration::from_millis(1000);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 1.0, false), t2);
+        on_tick(
+            &mut c,
+            t2 + FOLLOW_THROUGH_DELAY + Duration::from_millis(50),
+            false,
+        );
+        assert!(
+            c.fighters[1].health < target_hp,
+            "a hold released without the cancel bit lands"
+        );
+    }
+
+    /// The cancel bit outside a hold cancels nothing: no Idle forced over a
+    /// swing's follow-through, no log line claiming a cancel.
+    #[test]
+    fn the_cancel_bit_outside_a_hold_is_ignored() {
+        let now = Instant::now();
+        let mut c = super::tests::make_live_combat(now);
+        assert!(c.fighters[0].charge_press_at.is_none());
+        let before = c.fighters[0].actor_state();
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.72, 0.30, 0.0, 1223),
+            now,
+        );
+        assert_eq!(c.fighters[0].actor_state(), before);
+        assert!(c.fighters[0].take_state_changes().is_empty());
+    }
+
+    /// Prop 8 arrives as `UInt16`. The old `Int`-only reader decoded no flag from any
+    /// production sample, so the START bit (manual gmid 40 slash, report #171) never
+    /// fired either. Both bits decode from the wire type; `Int` still works.
+    #[test]
+    fn pointer_flags_decode_from_the_wire_uint16() {
+        let s = parse_input_position(&make_pos_frame_with_flags(0.7, 0.3, 0.9, 1735)).unwrap();
+        assert!(
+            s.start_attack_trigger_ready && s.end_attack_trigger_ready,
+            "1735 = 1024 | 512 | 199"
+        );
+        let s = parse_input_position(&make_pos_frame_with_flags(0.7, 0.3, 0.9, 704)).unwrap();
+        assert!(
+            s.start_attack_trigger_ready && !s.end_attack_trigger_ready,
+            "704 = 512 | 192"
+        );
+        let s = parse_input_position(&make_pos_frame_with_flags(0.7, 0.3, 0.9, 410)).unwrap();
+        assert!(!s.start_attack_trigger_ready && !s.end_attack_trigger_ready);
     }
 
     /// Report #113, the phantom hit: releasing a held block struck the opponent.
