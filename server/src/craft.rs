@@ -1604,8 +1604,9 @@ fn grade_bare_jewelry_results<R: Rng + ?Sized>(
         let Ok(mut reward_item) = serde_json::from_value::<RewardItem>(raw.clone()) else {
             continue;
         };
-        // A crafted ring or necklace: HauDrauf's crafted grade split (#560).
-        crate::jewelry_grade::grade_if_bare_crafted(&mut reward_item.item, game_items, rng);
+        // A crafted ring or necklace: HauDrauf's crafted grade split (#560), also
+        // over a grade the recipe's captured result carries.
+        crate::jewelry_grade::regrade_crafted(&mut reward_item.item, game_items, rng);
         if let Ok(graded) = serde_json::to_value(reward_item) {
             *raw = graded;
         }
@@ -3243,6 +3244,36 @@ mod tests {
                 "grade {grade} {got:.1}% (want {pct}%)"
             );
         }
+    }
+
+    /// #560 reviewer: Ebony Diamond Necklace (Smithing recipe 94c7abd4) was captured
+    /// at grade 5 with its GRADING, and that captured grade used to survive every
+    /// craft. Through the real remint path it now follows the crafted split.
+    #[test]
+    fn a_captured_grade_5_necklace_recipe_is_regraded() {
+        let sd = static_data_from_deploy();
+        let recipe = &sd.recipes[&uuid("94c7abd4-d6a6-4b04-9b79-a38c95e53753")];
+        assert_eq!(
+            recipe.results["items"][0]["grade"], 5,
+            "the captured shell is grade 5"
+        );
+        let mut rng = seeded(5605);
+        let mut by_grade = [0u32; 7];
+        for _ in 0..400 {
+            let results = remint_result_item_ids(apply_tempering_to_results(&recipe.results, 0));
+            let graded = grade_bare_jewelry_results(results, deploy_items(), &mut rng);
+            let item = serde_json::from_value::<RewardItem>(graded["items"][0].clone())
+                .expect("reward item")
+                .item;
+            let grade = item.grade.expect("graded");
+            assert!((1..=4).contains(&grade), "crafted grade {grade}");
+            assert_eq!(
+                grade,
+                item.properties.grading.iter().map(|p| p.tier).sum::<u64>()
+            );
+            by_grade[grade as usize] += 1;
+        }
+        assert!(by_grade[1..=4].iter().all(|n| *n > 0), "{by_grade:?}");
     }
 
     #[test]

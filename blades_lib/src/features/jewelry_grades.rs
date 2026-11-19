@@ -9,12 +9,13 @@
 //! APK list.
 //!
 //! WHERE IT APPLIES: every ring and necklace the server grades at random — town
-//! merchants, crafting results, the Sigil shop, Wooden/Silver/Gold treasury
+//! merchants, the Sigil shop, Wooden/Silver/Gold treasury
 //! chests, the Golden store chest, and dungeon enemy loot. NOT the Elder and
 //! Legendary store chests: HauDrauf (#393, 2026-10-15) wants their jewellery as
 //! retail paid it, so they keep the recorded shell's grade (5 / 7 / 88%). Never to a fixed
 //! (mandatory-property) template, to authored GRADING the server keeps as it is,
-//! or to an item the player already owns.
+//! or to an item the player already owns. CRAFTED jewellery has its own grade
+//! split instead (#560, [`CRAFTED_JEWELRY_GRADE_PERCENT`]).
 //!
 //! This crate holds it because the chest and enemy-loot rolls live here; the
 //! server's `jewelry_grade` re-exports it.
@@ -144,7 +145,6 @@ pub fn tiers_from_seed(seed: u64) -> &'static [u64] {
 mod tests {
     use super::*;
 
-    /// Every count and every grade is reachable, at the stated shares.
     /// #560: every draw 0..100 maps to grade 1-4 in the stated split, never 5 or 6,
     /// and the tiers are that grade's APK `providedBonuses`.
     #[test]
@@ -162,6 +162,7 @@ mod tests {
         assert_eq!(by_grade, [0, 15, 20, 25, 40, 0, 0]);
     }
 
+    /// Every count and every grade is reachable, at the stated shares.
     #[test]
     fn the_split_and_the_grades_are_the_stated_ones() {
         let n = 100_000u64;
