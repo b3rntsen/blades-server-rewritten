@@ -1853,6 +1853,14 @@ pub struct Fighter {
     /// / future vertical gestures; it carries **no side signal** (prod medians 0.529
     /// Left vs 0.497 Right — indistinguishable).
     pub last_input_y: Option<f32>,
+    /// Normalised screen Y of the OPPONENT's head on this player's screen, from the
+    /// low byte of gmid 47 prop 8 (`_opponentHeadScreenPos`). With
+    /// [`Self::last_input_y`] it decides whether a swing passes over the head
+    /// (tracker #549).
+    pub last_input_head_y: Option<f32>,
+    /// The swing being committed was released above the opponent's head: it animates
+    /// but deals no damage. Set by the gmid-46 release, consumed by the swing commit.
+    pub swing_aimed_above_head: bool,
     /// When [`Self::last_input_x`] was recorded. A sample older than
     /// `SIDE_CLASSIFY_SAMPLE_TTL` is treated as stale and ignored.
     pub last_input_at: Option<Instant>,
@@ -2401,6 +2409,8 @@ impl Fighter {
             recovery_began_at: None,
             last_input_x: None,
             last_input_y: None,
+            last_input_head_y: None,
+            swing_aimed_above_head: false,
             last_input_at: None,
             pending_manual_attack: None,
             active_manual_attack: None,
@@ -4483,6 +4493,8 @@ impl MatchCombat {
             // new round can never be classified from a stale pre-reset sample.
             f.last_input_x = None;
             f.last_input_y = None;
+            f.last_input_head_y = None;
+            f.swing_aimed_above_head = false;
             f.last_input_at = None;
             f.pending_manual_attack = None;
             f.active_manual_attack = None;
