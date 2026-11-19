@@ -2657,10 +2657,16 @@ impl Fighter {
             return;
         }
         self.maneuver_pose = None;
+        // Only an Idle closes the pose. A Quick strike cast while staggered or
+        // paralysed (`performable_while_staggered`) leaves that state held; replaying
+        // it here would send a second 39 Staggered mid-stagger, and the stagger's own
+        // end already sends the Idle that closes the client's maneuver.
+        if self.actor_state != ActorStateType::Idle {
+            return;
+        }
         // propId 8 of the closing 39 is the time spent in the maneuver.
         self.state_entered = started;
-        let logical = self.actor_state;
-        self.force_actor_state(logical, until);
+        self.force_actor_state(ActorStateType::Idle, until);
     }
 
     /// Change the LOGICAL state without a wire transition, for the guard a shield

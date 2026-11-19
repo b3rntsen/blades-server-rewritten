@@ -1038,9 +1038,19 @@ pub fn on_c2s_input(
                 // this, immediately after the release. `reconcile_block` already maps
                 // Blocking → Idle, so clearing the window is all that is needed and the
                 // drain emits the 39.
-                f.blocking_until = None;
-                f.reconcile_block(now);
-                debug!("combat: slot {sender} op46 blockZone UP — guard DOWN");
+                // ...except a shield bash's own guard. Retail's is the Blocking STATUS
+                // the bash applies and `AbilityDoShieldBash$$Update@0x1e98a78` removes
+                // after `_blockDuration`; a release does not touch it, and in the
+                // Maneuver state `PlayerActor$$get_IsOptimalBlocking@0x1862e94` is just
+                // `HasStatus(Blocking)` (combat-spec 03 §2.6, §5.1). Hold block, bash,
+                // let go: the bash still guards high for its whole window (#549).
+                if f.is_ability_guard() && f.actor_state() == ActorStateType::Blocking {
+                    debug!("combat: slot {sender} op46 blockZone UP — bash guard stays up");
+                } else {
+                    f.blocking_until = None;
+                    f.reconcile_block(now);
+                    debug!("combat: slot {sender} op46 blockZone UP — guard DOWN");
+                }
             }
             // A block press is not a charge and never a swing.
             f.charge_press_at = None;
@@ -1879,10 +1889,8 @@ pub(super) fn resolve_ability_cast(
     // the bar drop — matches retail ordering).
     out.extend(stat_frames);
 
-    // A shield bash is a compound action: raise the guard now, then land the strike
-    // after the shipped `_blockDuration`. Queue and drain the Blocking transition
-    // before op58 so the wire history remains chronological (Blocking → Maneuver).
-    begin_ability_guard(combat, sender, &ea.ability_uuid, level, now);
+    // Anything the cast itself moved (a held guard lowered, a charge dropped) goes out
+    // before the cast's own state frame, so the wire history stays chronological.
     out.extend(drain_state_changes_for(combat, now, Some(sender)));
 
     // op53 `PlayerChannelingStateChange` — the CAST ANIMATION / channelling feedback.
@@ -2011,6 +2019,14 @@ pub(super) fn resolve_ability_cast(
         out.push((sender, f.clone()));
         out.push((target_slot, f));
     }
+
+    // A shield bash is a compound action: raise the guard now, then land the strike
+    // after the shipped `_blockDuration`. The guard is logical only (no 41), and its
+    // Blocking status op51 follows the op58, as retail's does: the add comes after the
+    // bash's op58 in 280 of 297 bash casts (s503…s616), before it in none that
+    // belonged to the bash (#549).
+    begin_ability_guard(combat, sender, &ea.ability_uuid, level, now);
+    out.extend(drain_state_changes_for(combat, now, Some(sender)));
 
     info!(
         "combat ability: gsid={} caster_slot={sender} caster={} target_slot={target_slot} target={} ability={} tag={tag:?} effective_rank={level}",
@@ -8514,20 +8530,113 @@ mod tests {
         let mut combat = make_live_combat(now);
         let _ = cast(&mut combat, PIERCING_STRIKES, AbilityTag::Maneuver, now);
         let _ = drain_state_changes(&mut combat, now);
+        // A stagger mid-maneuver, over before OnManeuverEnded (1.197 s): its own end
+        // already put both clients in Idle.
         let mid = now + Duration::from_millis(400);
         combat.fighters[0].set_actor_state(ActorStateType::Staggered, mid);
-        let _ = drain_state_changes(&mut combat, mid);
+        let over = now + Duration::from_millis(700);
+        combat.fighters[0].set_actor_state(ActorStateType::Idle, over);
+        let _ = combat.fighters[0].take_state_changes();
         combat.fighters[0].reconcile_scheduled_states(now + Duration::from_millis(1_300));
         let late = combat.fighters[0].take_state_changes();
         assert!(
-            !combat.fighters[0].in_maneuver_pose(now + Duration::from_millis(1_300)),
-            "the stagger ended the pose",
+            late.is_empty(),
+            "the stagger already ended the maneuver; nothing more is owed: {late:?}",
         );
+    }
+
+    /// A Quick strike cast while staggered (`performable_while_staggered`) leaves the
+    /// logical state Staggered. The pose must not replay that as a second 39 Staggered
+    /// at OnManeuverEnded; the stagger's own end closes the client's maneuver.
+    #[test]
+    fn report_549_a_quick_strike_from_a_stagger_does_not_replay_the_stagger() {
+        let recovery = super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == "RecoveryStrikes")
+            .map(|a| a.uuid)
+            .expect("Recovery Strikes ships");
+        assert!(super::performable_while_staggered(recovery));
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let caster = i64::from(combat.fighters[0].net_object_id);
+        assert!(combat.fighters[0].apply_stagger_for(now, 1.5));
+        let _ = drain_state_changes(&mut combat, now);
+        let at = now + Duration::from_millis(60);
+        let out = cast(&mut combat, recovery, AbilityTag::Maneuver, at);
         assert!(
-            !late
+            gmids(&out).contains(&58),
+            "the Quick strike is performed: {:?}",
+            gmids(&out)
+        );
+        let mut rows = Vec::new();
+        for i in 3..=80u64 {
+            let t = now + Duration::from_millis(i * 30);
+            for (viewer, f) in on_tick(&mut combat, t, false) {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                if viewer == 1
+                    && messages::user_message_gmid(&f) == Some(39)
+                    && nd.int(0) == Some(caster)
+                {
+                    rows.push((i * 30, nd.int(6)));
+                }
+            }
+        }
+        assert!(
+            !rows
                 .iter()
-                .any(|t| t.to == ActorStateType::Idle && t.time_in_previous > 1.0),
-            "no closing Idle stamped with the maneuver's duration after a stagger: {late:?}",
+                .any(|r| r.1 == Some(ActorStateType::Staggered as i64)),
+            "no replayed 39 Staggered: {rows:?}",
+        );
+        assert_eq!(
+            rows.iter()
+                .filter(|r| r.1 == Some(ActorStateType::Idle as i64))
+                .count(),
+            1,
+            "one Idle, at the stagger's end: {rows:?}",
+        );
+    }
+
+    /// Retail sends a bash's Blocking status op51 after its op58 (280 of 297 casts).
+    #[test]
+    fn report_549_a_bash_sends_its_guard_status_after_op58() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let out = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, now);
+        let ids = gmids(&out);
+        let op58 = ids.iter().position(|g| *g == 58).expect("op58");
+        let op51 = ids.iter().position(|g| *g == 51).expect("the guard's op51");
+        assert!(op51 > op58, "op51 after op58, as retail: {ids:?}");
+        assert!(!ids.contains(&41), "no 41 for a bash: {ids:?}");
+    }
+
+    /// Hold block, bash, let go: retail's bash guard is the Blocking STATUS the bash
+    /// applies and removes after `_blockDuration`; the release does not end it, and
+    /// in Maneuver `get_IsOptimalBlocking` is `HasStatus(Blocking)` (combat-spec 03
+    /// §2.6, §5.1). Our release cleared `blocking_until` and dropped the bash's guard.
+    #[test]
+    fn report_549_releasing_block_keeps_the_bash_guard_for_its_window() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let press = super::phase4_tests::make_act_frame(true, 0.0, true);
+        let _ = on_c2s_input(&mut combat, 0, &press, now);
+        assert_eq!(combat.fighters[0].actor_state(), ActorStateType::Blocking);
+        let bash_at = now + Duration::from_millis(300);
+        let _ = cast(&mut combat, STAGGERING_BASH, AbilityTag::Maneuver, bash_at);
+        let release_at = bash_at + Duration::from_millis(100);
+        let release = super::phase4_tests::make_act_frame(false, 0.0, true);
+        let _ = on_c2s_input(&mut combat, 0, &release, release_at);
+        let probe = bash_at + Duration::from_millis(450);
+        assert_eq!(
+            combat.fighters[0].block_phase(probe),
+            Some(BlockPhase::Optimal),
+            "the bash still guards high 0.45 s in, after the release",
+        );
+        let after = bash_at + Duration::from_millis(560);
+        combat.fighters[0].reconcile_block(after);
+        assert_eq!(
+            combat.fighters[0].block_phase(after),
+            None,
+            "and ends with its window"
         );
     }
 
