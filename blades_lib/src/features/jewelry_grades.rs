@@ -95,11 +95,13 @@ pub fn tiers(count_draw: u32, grade_draw: impl FnOnce(u32) -> u32) -> &'static [
 }
 
 /// Percent of CRAFTED rings and necklaces at each grade: `(grade, percent)`,
-/// summing to 100. HauDrauf's rule, tracker #560 (2026-11-19): "Ringe und Ketten:
-/// Qualität 4 40%, 3 25%, 2 20%, 1 15%" for the ones you make yourself; grades 5
-/// and 6 are never crafted. Every other source keeps [`tiers`]. Not retail.
-/// Revert: make the craft path call `jewelry_grade::grade_if_bare` again.
-pub const CRAFTED_JEWELRY_GRADE_PERCENT: [(u64, u32); 4] = [(1, 15), (2, 20), (3, 25), (4, 40)];
+/// summing to 100. HauDrauf's rule, tracker #560 (corrected 2026-11-19, msg 3600):
+/// "Ringe und Ketten: 6 35%, 5 25%, 4 20%, 3 15%, 2 5%, 1 0%, 6 ist dabei die beste
+/// Qualität" for the ones you make yourself; grade 1 is never crafted. Every other
+/// source keeps [`tiers`]. Not retail. Revert: make the craft path call
+/// `jewelry_grade::grade_if_bare` again.
+pub const CRAFTED_JEWELRY_GRADE_PERCENT: [(u64, u32); 5] =
+    [(2, 5), (3, 15), (4, 20), (5, 25), (6, 35)];
 
 const _: () = {
     let mut sum = 0;
@@ -126,11 +128,11 @@ pub fn crafted_tiers(draw: u32) -> &'static [u64] {
                 false
             }
         })
-        .map_or(4, |(g, _)| *g);
+        .map_or(6, |(g, _)| *g);
     JEWELRY_GRADES
         .iter()
         .find(|g| g.0 == grade)
-        .map_or(JEWELRY_GRADES[3].2, |g| g.2)
+        .map_or(JEWELRY_GRADES[5].2, |g| g.2)
 }
 
 /// [`tiers`] from a 64-bit seed (the chest and enemy-loot rolls).
@@ -145,7 +147,7 @@ pub fn tiers_from_seed(seed: u64) -> &'static [u64] {
 mod tests {
     use super::*;
 
-    /// #560: every draw 0..100 maps to grade 1-4 in the stated split, never 5 or 6,
+    /// #560: every draw 0..100 maps to grade 2-6 in the stated split, never 1,
     /// and the tiers are that grade's APK `providedBonuses`.
     #[test]
     fn crafted_grades_are_haudraufs_split() {
@@ -159,7 +161,7 @@ mod tests {
             );
             by_grade[g] += 1;
         }
-        assert_eq!(by_grade, [0, 15, 20, 25, 40, 0, 0]);
+        assert_eq!(by_grade, [0, 0, 5, 15, 20, 25, 35]);
     }
 
     /// Every count and every grade is reachable, at the stated shares.

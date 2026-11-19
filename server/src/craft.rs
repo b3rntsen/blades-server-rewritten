@@ -3201,10 +3201,10 @@ mod tests {
         );
     }
 
-    /// #560 (HauDrauf, 2026-11-19): a crafted ring is grade 1 / 2 / 3 / 4 15 / 20 /
-    /// 25 / 40% of the time and never 5 or 6. Before, crafting used the #393 split
-    /// every source shares (8 / 17 / 75% by property count), which made grade 1 8%
-    /// and grades 5-6 31%.
+    /// #560 (HauDrauf, corrected 2026-11-19): a crafted ring is grade 2 / 3 / 4 / 5 / 6
+    /// 5 / 15 / 20 / 25 / 35% of the time and never 1. Before #560, crafting used the
+    /// #393 split every source shares (8 / 17 / 75% by property count), which made
+    /// grade 1 8% and grades 5-6 31%.
     #[test]
     fn crafted_jewelry_follows_haudraufs_grade_split() {
         use blades_lib::features::jewelry_grades::CRAFTED_JEWELRY_GRADE_PERCENT;
@@ -3232,11 +3232,7 @@ mod tests {
             by_grade[grade as usize] += 1;
         }
         eprintln!("#560 crafted grades: {by_grade:?} of {n}");
-        assert_eq!(
-            by_grade[5] + by_grade[6],
-            0,
-            "grades 5 and 6 are never crafted"
-        );
+        assert_eq!(by_grade[1], 0, "grade 1 is never crafted");
         for (grade, pct) in CRAFTED_JEWELRY_GRADE_PERCENT {
             let got = by_grade[grade as usize] as f64 * 100.0 / n as f64;
             assert!(
@@ -3248,7 +3244,8 @@ mod tests {
 
     /// #560 reviewer: Ebony Diamond Necklace (Smithing recipe 94c7abd4) was captured
     /// at grade 5 with its GRADING, and that captured grade used to survive every
-    /// craft. Through the real remint path it now follows the crafted split.
+    /// craft. Through the real remint path it now follows the crafted split
+    /// (grades 2-6, never 1).
     #[test]
     fn a_captured_grade_5_necklace_recipe_is_regraded() {
         let sd = static_data_from_deploy();
@@ -3266,14 +3263,14 @@ mod tests {
                 .expect("reward item")
                 .item;
             let grade = item.grade.expect("graded");
-            assert!((1..=4).contains(&grade), "crafted grade {grade}");
+            assert!((2..=6).contains(&grade), "crafted grade {grade}");
             assert_eq!(
                 grade,
                 item.properties.grading.iter().map(|p| p.tier).sum::<u64>()
             );
             by_grade[grade as usize] += 1;
         }
-        assert!(by_grade[1..=4].iter().all(|n| *n > 0), "{by_grade:?}");
+        assert!(by_grade[2..=6].iter().all(|n| *n > 0), "{by_grade:?}");
     }
 
     #[test]
