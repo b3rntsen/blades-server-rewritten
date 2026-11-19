@@ -13,8 +13,8 @@
 //!
 //! THE RULE:
 //!
-//! * CRAFTED jewellery (#560, HauDrauf 2026-11-19): grade 1/2/3/4 at 15/20/25/40%,
-//!   never 5 or 6 ([`regrade_crafted`]). Every other source:
+//! * CRAFTED jewellery (#560, HauDrauf 2026-11-19): grade 2/3/4/5/6 at
+//!   5/15/20/25/35%, never 1 ([`regrade_crafted`]). Every other source:
 //! * the property COUNT by [`JEWELRY_PROPERTY_COUNT_PERCENT`] — 8% one, 17% two,
 //!   75% three — per HauDrauf #393 (2026-10-15, "überall, keine Unterschiede":
 //!   every ring and necklace from every source, as in the Sigil shop, except the
@@ -151,8 +151,9 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
 }
 
 /// [`grade_if_bare`] for a ring or necklace the player CRAFTED: the grade by
-/// HauDrauf's crafted split (#560, `CRAFTED_JEWELRY_GRADE_PERCENT`: 1 = 15%,
-/// 2 = 20%, 3 = 25%, 4 = 40%), properties by [`fill`] as for every other source.
+/// HauDrauf's crafted split (#560, `CRAFTED_JEWELRY_GRADE_PERCENT`: 2 = 5%,
+/// 3 = 15%, 4 = 20%, 5 = 25%, 6 = 35%, never 1), properties by [`fill`] as for
+/// every other source.
 pub fn grade_if_bare_crafted<R: Rng + ?Sized>(
     item: &mut Item,
     items: &HashMap<Uuid, GameDataItem>,
@@ -164,7 +165,7 @@ pub fn grade_if_bare_crafted<R: Rng + ?Sized>(
 /// Grade a ring or necklace the player just CRAFTED by HauDrauf's crafted split
 /// (#560), even when the recipe's captured result already carries a grade: that
 /// grade is one retail roll, not a rule (Ebony Diamond Necklace `94c7abd4` was
-/// captured at grade 5, which the crafted split never gives). Fixed (named,
+/// captured at grade 5, which would otherwise survive every craft). Fixed (named,
 /// mandatory-property) templates keep theirs; non-jewellery is untouched.
 pub fn regrade_crafted<R: Rng + ?Sized>(
     item: &mut Item,
