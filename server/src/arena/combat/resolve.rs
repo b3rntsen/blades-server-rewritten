@@ -304,6 +304,11 @@ const MANUAL_SLASH_FROM_START_FLAG: bool = false;
 /// swing 155 times and swung 4 times (each with the bit on the very last sample
 /// only), while holds without it swung 3 868 times.
 const POS_END_ATTACK_TRIGGER_FLAG: u16 = 1024;
+/// The low byte of gmid 47's prop 8 is `PlayerCombatInputPositionMessage._opponentHeadScreenPos`
+/// (`dump.cs:589461`, a `byte`): where the opponent's head sits on the sender's screen,
+/// as normalised screen Y × 255. The message packs it under the three flag bits
+/// (256/512/1024), which is why prod values look like 410 = 256 | 154.
+const POS_OPPONENT_HEAD_MASK: u16 = 0x00FF;
 // NetData propIds — gmid 46 `PlayerCombatInputActivate`.
 const PROP_ACT_HELD: u8 = 4;
 const PROP_ACT_CHARGE: u8 = 5;
@@ -357,6 +362,9 @@ struct PointerSample {
     /// The client recognised its cancel gesture (a swipe down during the hold).
     /// See [`POS_END_ATTACK_TRIGGER_FLAG`].
     end_attack_trigger_ready: bool,
+    /// Normalised screen Y of the opponent's head on the sender's screen
+    /// ([`POS_OPPONENT_HEAD_MASK`]). `None` when the byte is 0 (nothing reported).
+    opponent_head_y: Option<f32>,
 }
 
 /// One decoded `PlayerCombatInputActivate` (gmid 46) press/release event.
@@ -385,6 +393,10 @@ fn parse_input_position(user_data: &[u8]) -> Option<PointerSample> {
         client_charge: netdata_f32(&nd, PROP_POS_CHARGE),
         start_attack_trigger_ready: flags & POS_START_ATTACK_TRIGGER_FLAG != 0,
         end_attack_trigger_ready: flags & POS_END_ATTACK_TRIGGER_FLAG != 0,
+        opponent_head_y: match flags & POS_OPPONENT_HEAD_MASK {
+            0 => None,
+            b => Some(f32::from(b) / 255.0),
+        },
     })
 }
 
@@ -458,6 +470,35 @@ fn classified_side_for(fighter: &super::state::Fighter, now: Instant) -> Option<
         return None;
     }
     classify_side_from_x(fighter.last_input_x?)
+}
+
+/// **Tracker #549: a swing aimed above the opponent's head whiffs.**
+///
+/// In PvE the sword collides with the enemy's body, so a strike near the top of the
+/// screen passes over its head. In PvP the client does no local hit test on the
+/// opponent (`PvpOpponentActor$$NotifySlashed@0x1964ff0` only when forced); it streams
+/// the pointer (gmid 47) together with `_opponentHeadScreenPos`, and retail's server
+/// made the call. The capture shows the rule exactly. Over 42 retail arena sessions
+/// (2026-05-07 to 06-29, duplicate rows removed), swings the server started whose last
+/// pointer sample of the hold was at or below the reported head line hit 1 191 of
+/// 1 393 times (85 %; the rest are dodges, round ends and the like). Swings released
+/// above it hit 2 of 62. The cut is a cliff at `y = head`: the nearest hit sits at
+/// −0.0006, the nearest miss at +0.0013. Retail still animated those swings (it sent
+/// the gmid 52); it just dealt no damage.
+///
+/// Judged only on a sample taken during THIS hold (at or after the press), so a
+/// bot, a client that streams nothing, or geometry left over from an earlier gesture
+/// never makes a swing miss.
+fn aimed_above_opponent_head(fighter: &super::state::Fighter, press_at: Option<Instant>) -> bool {
+    let (Some(press), Some(at), Some(y), Some(head)) = (
+        press_at,
+        fighter.last_input_at,
+        fighter.last_input_y,
+        fighter.last_input_head_y,
+    ) else {
+        return false;
+    };
+    at >= press && y.is_finite() && y > head
 }
 
 /// Compare the server-measured hold against the client-reported one and log a
@@ -837,6 +878,7 @@ pub fn on_c2s_input(
             f.last_input_x = Some(sample.x);
             f.last_input_y = Some(sample.y);
             f.last_input_at = Some(now);
+            f.last_input_head_y = sample.opponent_head_y;
             if let Some(cc) = sample.client_charge {
                 f.last_client_charge = Some(cc);
             }
@@ -1066,6 +1108,10 @@ pub fn on_c2s_input(
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
             .unwrap_or(0.0);
+        combat.fighters[sender].swing_aimed_above_head = aimed_above_opponent_head(
+            &combat.fighters[sender],
+            combat.fighters[sender].charge_press_at,
+        );
         combat.fighters[sender].charge_press_at = None;
         charge_cross_check(sender, server_hold, act.client_charge);
         // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
@@ -1191,6 +1237,8 @@ fn resolve_swing_with_side(
     // Consume the gesture at commit even when the cadence gate rejects this swing;
     // otherwise a rejected release could make the NEXT tap look like a manual slash.
     let manual_attack = combat.fighters[sender].pending_manual_attack.take();
+    // Taken here for the same reason: a throttled release must not leave it set.
+    let whiff = std::mem::take(&mut combat.fighters[sender].swing_aimed_above_head);
     if manual_attack.is_some() {
         // Measurement for #171: one line per committed swing whose hold carried a
         // START-flagged path. Compare against `outcome=accepted` swing lines.
@@ -1313,6 +1361,19 @@ fn resolve_swing_with_side(
     //
     // Reuses FOLLOW_THROUGH_DELAY rather than adding a second constant: there is one
     // moment of impact and it should have one name.
+    if whiff {
+        // Tracker #549: aimed above the opponent's head. The swing animates on both
+        // screens, as retail's did, but nothing lands, so the combo does not advance
+        // either ("a swing that never collides does not increment", 02 §4.1).
+        info!(
+            "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=whiff_above_head y={:?} head={:?}",
+            combat.game_session_id,
+            combat.fighters[sender].loadout.display_name,
+            combat.fighters[sender].last_input_y,
+            combat.fighters[sender].last_input_head_y,
+        );
+        return Vec::new();
+    }
     combat.pending_hits.push(PendingHit {
         sender,
         target: target_slot,
@@ -11919,6 +11980,114 @@ mod phase4_tests {
 
         // The two must diverge — that is the behavioural fix.
         assert!(alt.fighters[0].combo_count > same.fighters[0].combo_count);
+    }
+
+    /// One full press → hold → release at pointer `(x, y)`, with the opponent's head
+    /// reported at `head_byte` (low byte of prop 8; 256 = BLOCK_ZONE bit as in prod).
+    fn swing_aimed(combat: &mut MatchCombat, y: f32, head_byte: u16, t: Instant) {
+        let press = t - Duration::from_millis(250);
+        let flags = 256 | head_byte;
+        on_c2s_input(
+            combat,
+            0,
+            &make_pos_frame_with_flags(0.8, y, 0.0, flags),
+            press,
+        );
+        on_c2s_input(combat, 0, &make_act_frame(true, 0.0, false), press);
+        on_c2s_input(
+            combat,
+            0,
+            &make_pos_frame_with_flags(0.8, y, 0.25, flags),
+            t,
+        );
+        on_c2s_input(combat, 0, &make_act_frame(false, 0.25, false), t);
+        land(combat, t);
+    }
+
+    /// Tracker #549: a swing released ABOVE the opponent's head passes over it.
+    /// Retail: 2 of 62 such swings hit, against 1 191 of 1 393 below the head line.
+    /// Head byte 160 = screen Y 0.627 (the commonest retail value).
+    #[test]
+    fn swing_above_the_opponents_head_whiffs() {
+        let now = Instant::now();
+        let mut c = live_combat(now);
+        let hp = c.fighters[1].health;
+        swing_aimed(&mut c, 0.70, 160, now + Duration::from_millis(900));
+        assert_eq!(
+            c.fighters[1].health, hp,
+            "a swing over the head deals nothing"
+        );
+        assert!(c.pending_hits.is_empty(), "and leaves no hit in flight");
+        assert!(
+            c.fighters[0].last_swing.is_some(),
+            "the swing itself still happened"
+        );
+        assert_eq!(
+            c.fighters[0].combo_count, 0,
+            "a whiff does not advance the combo"
+        );
+        assert!(
+            !c.fighters[0].swing_aimed_above_head,
+            "the flag is consumed"
+        );
+    }
+
+    /// The control for the test above: the same swing just below the head line lands.
+    #[test]
+    fn swing_below_the_opponents_head_lands() {
+        let now = Instant::now();
+        let mut c = live_combat(now);
+        let hp = c.fighters[1].health;
+        swing_aimed(&mut c, 0.60, 160, now + Duration::from_millis(900));
+        assert!(c.fighters[1].health < hp, "a swing at the body hits");
+    }
+
+    /// No head reported (byte 0), or the only high sample predates the press: no miss.
+    /// A whiff needs geometry from THIS hold.
+    #[test]
+    fn whiff_needs_a_head_and_a_sample_from_this_hold() {
+        let now = Instant::now();
+        let mut c = live_combat(now);
+        let hp = c.fighters[1].health;
+        swing_aimed(&mut c, 0.95, 0, now + Duration::from_millis(900));
+        assert!(
+            c.fighters[1].health < hp,
+            "no head byte → the swing is not judged"
+        );
+
+        let mut c = live_combat(now);
+        let hp = c.fighters[1].health;
+        let t = now + Duration::from_millis(900);
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_pos_frame_with_flags(0.8, 0.95, 0.0, 256 | 160),
+            t - Duration::from_millis(300),
+        );
+        on_c2s_input(
+            &mut c,
+            0,
+            &make_act_frame(true, 0.0, false),
+            t - Duration::from_millis(250),
+        );
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 0.25, false), t);
+        land(&mut c, t);
+        assert!(
+            c.fighters[1].health < hp,
+            "a high sample from before the press is stale"
+        );
+    }
+
+    /// The head byte is the low byte of prop 8, under the three flag bits.
+    #[test]
+    fn opponent_head_decodes_from_the_low_byte_of_the_flags() {
+        let s = parse_input_position(&make_pos_frame_with_flags(0.5, 0.3, 0.0, 410)).unwrap();
+        assert!(
+            (s.opponent_head_y.unwrap() - 154.0 / 255.0).abs() < 1e-6,
+            "410 = 256 | 154"
+        );
+        let s = parse_input_position(&make_pos_frame_with_flags(0.5, 0.3, 0.0, 1024)).unwrap();
+        assert_eq!(s.opponent_head_y, None, "a zero byte reports no head");
     }
 
     /// A left-half press is a LEFT swing and a right-half press is a RIGHT swing,
