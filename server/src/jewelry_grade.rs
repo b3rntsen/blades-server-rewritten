@@ -13,6 +13,8 @@
 //!
 //! THE RULE:
 //!
+//! * CRAFTED jewellery (#560, HauDrauf 2026-11-19): grade 1/2/3/4 at 15/20/25/40%,
+//!   never 5 or 6 ([`regrade_crafted`]). Every other source:
 //! * the property COUNT by [`JEWELRY_PROPERTY_COUNT_PERCENT`] — 8% one, 17% two,
 //!   75% three — per HauDrauf #393 (2026-10-15, "überall, keine Unterschiede":
 //!   every ring and necklace from every source, as in the Sigil shop, except the
@@ -145,6 +147,55 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
     items: &HashMap<Uuid, GameDataItem>,
     rng: &mut R,
 ) {
+    grade_if_bare_with(item, items, rng, roll_tiers);
+}
+
+/// [`grade_if_bare`] for a ring or necklace the player CRAFTED: the grade by
+/// HauDrauf's crafted split (#560, `CRAFTED_JEWELRY_GRADE_PERCENT`: 1 = 15%,
+/// 2 = 20%, 3 = 25%, 4 = 40%), properties by [`fill`] as for every other source.
+pub fn grade_if_bare_crafted<R: Rng + ?Sized>(
+    item: &mut Item,
+    items: &HashMap<Uuid, GameDataItem>,
+    rng: &mut R,
+) {
+    grade_if_bare_with(item, items, rng, roll_crafted_tiers);
+}
+
+/// Grade a ring or necklace the player just CRAFTED by HauDrauf's crafted split
+/// (#560), even when the recipe's captured result already carries a grade: that
+/// grade is one retail roll, not a rule (Ebony Diamond Necklace `94c7abd4` was
+/// captured at grade 5, which the crafted split never gives). Fixed (named,
+/// mandatory-property) templates keep theirs; non-jewellery is untouched.
+pub fn regrade_crafted<R: Rng + ?Sized>(
+    item: &mut Item,
+    items: &HashMap<Uuid, GameDataItem>,
+    rng: &mut R,
+) {
+    if crate::fixed_templates::has_mandatory_properties(item.item_template_id) {
+        return;
+    }
+    let is_jewellery = items
+        .get(&item.item_template_id)
+        .is_some_and(|t| matches!(t.r#type, RING | NECKLACE));
+    if !is_jewellery {
+        return;
+    }
+    item.grade = None;
+    item.properties.grading.clear();
+    grade_if_bare_crafted(item, items, rng);
+}
+
+/// The GRADING tiers of one crafted ring or necklace (#560): one draw `0..100`.
+pub fn roll_crafted_tiers<R: Rng + ?Sized>(rng: &mut R) -> &'static [u64] {
+    blades_lib::features::jewelry_grades::crafted_tiers(rng.random_range(0..100u32))
+}
+
+fn grade_if_bare_with<R: Rng + ?Sized>(
+    item: &mut Item,
+    items: &HashMap<Uuid, GameDataItem>,
+    rng: &mut R,
+    tiers: fn(&mut R) -> &'static [u64],
+) {
     if item.grade.is_some() || !item.properties.grading.is_empty() {
         return;
     }
@@ -156,9 +207,14 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
     let Some(item_type) = items.get(&item.item_template_id).map(|t| t.r#type) else {
         return;
     };
-    let Some((grade, grading)) = roll(item_type, rng) else {
+    if !matches!(item_type, RING | NECKLACE) {
+        return;
+    }
+    let t = tiers(rng);
+    let Some(grading) = fill(item_type, t, rng) else {
         return;
     };
+    let grade = grading.iter().map(|p| p.tier).sum();
     item.grade = Some(grade);
     item.properties.grading = grading;
     item.tempering_level = 0;

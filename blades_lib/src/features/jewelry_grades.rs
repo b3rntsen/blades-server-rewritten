@@ -9,12 +9,13 @@
 //! APK list.
 //!
 //! WHERE IT APPLIES: every ring and necklace the server grades at random — town
-//! merchants, crafting results, the Sigil shop, Wooden/Silver/Gold treasury
+//! merchants, the Sigil shop, Wooden/Silver/Gold treasury
 //! chests, the Golden store chest, and dungeon enemy loot. NOT the Elder and
 //! Legendary store chests: HauDrauf (#393, 2026-10-15) wants their jewellery as
 //! retail paid it, so they keep the recorded shell's grade (5 / 7 / 88%). Never to a fixed
 //! (mandatory-property) template, to authored GRADING the server keeps as it is,
-//! or to an item the player already owns.
+//! or to an item the player already owns. CRAFTED jewellery has its own grade
+//! split instead (#560, [`CRAFTED_JEWELRY_GRADE_PERCENT`]).
 //!
 //! This crate holds it because the chest and enemy-loot rolls live here; the
 //! server's `jewelry_grade` re-exports it.
@@ -93,6 +94,45 @@ pub fn tiers(count_draw: u32, grade_draw: impl FnOnce(u32) -> u32) -> &'static [
     JEWELRY_GRADES[JEWELRY_GRADES.len() - 1].2
 }
 
+/// Percent of CRAFTED rings and necklaces at each grade: `(grade, percent)`,
+/// summing to 100. HauDrauf's rule, tracker #560 (2026-11-19): "Ringe und Ketten:
+/// Qualität 4 40%, 3 25%, 2 20%, 1 15%" for the ones you make yourself; grades 5
+/// and 6 are never crafted. Every other source keeps [`tiers`]. Not retail.
+/// Revert: make the craft path call `jewelry_grade::grade_if_bare` again.
+pub const CRAFTED_JEWELRY_GRADE_PERCENT: [(u64, u32); 4] = [(1, 15), (2, 20), (3, 25), (4, 40)];
+
+const _: () = {
+    let mut sum = 0;
+    let mut i = 0;
+    while i < CRAFTED_JEWELRY_GRADE_PERCENT.len() {
+        sum += CRAFTED_JEWELRY_GRADE_PERCENT[i].1;
+        i += 1;
+    }
+    assert!(sum == 100, "CRAFTED_JEWELRY_GRADE_PERCENT must sum to 100");
+};
+
+/// The GRADING tiers of one crafted ring or necklace (#560): the grade by
+/// [`CRAFTED_JEWELRY_GRADE_PERCENT`] from `draw` (uniform in `0..100`), its tiers
+/// the APK's `providedBonuses` for that grade ([`JEWELRY_GRADES`]).
+pub fn crafted_tiers(draw: u32) -> &'static [u64] {
+    let mut pick = draw % 100;
+    let grade = CRAFTED_JEWELRY_GRADE_PERCENT
+        .iter()
+        .find(|(_, pct)| {
+            if pick < *pct {
+                true
+            } else {
+                pick -= pct;
+                false
+            }
+        })
+        .map_or(4, |(g, _)| *g);
+    JEWELRY_GRADES
+        .iter()
+        .find(|g| g.0 == grade)
+        .map_or(JEWELRY_GRADES[3].2, |g| g.2)
+}
+
 /// [`tiers`] from a 64-bit seed (the chest and enemy-loot rolls).
 pub fn tiers_from_seed(seed: u64) -> &'static [u64] {
     use super::store_bundles::mix;
@@ -104,6 +144,23 @@ pub fn tiers_from_seed(seed: u64) -> &'static [u64] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #560: every draw 0..100 maps to grade 1-4 in the stated split, never 5 or 6,
+    /// and the tiers are that grade's APK `providedBonuses`.
+    #[test]
+    fn crafted_grades_are_haudraufs_split() {
+        let mut by_grade = [0u32; 7];
+        for d in 0..100 {
+            let t = crafted_tiers(d);
+            let g = t.iter().sum::<u64>() as usize;
+            assert_eq!(
+                t,
+                JEWELRY_GRADES.iter().find(|j| j.0 == g as u64).unwrap().2
+            );
+            by_grade[g] += 1;
+        }
+        assert_eq!(by_grade, [0, 15, 20, 25, 40, 0, 0]);
+    }
 
     /// Every count and every grade is reachable, at the stated shares.
     #[test]

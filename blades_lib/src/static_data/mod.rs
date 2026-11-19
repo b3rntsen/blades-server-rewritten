@@ -273,6 +273,24 @@ impl EnchantingData {
             .map_or_else(|| self.count_odds_for(table), Vec::as_slice)
     }
 
+    /// The draw weight of a secondary property with APK weight `apk_weight` in
+    /// `table`: 1 for every rollable property when a `uniformSecondaryPools` rule
+    /// matches the table (#560), else the APK weight. A property the APK never
+    /// rolls (weight 0) stays at 0 either way.
+    pub fn secondary_weight(&self, table: &SecondaryEnchantTable, apk_weight: f64) -> f64 {
+        if apk_weight > 0.0
+            && self
+                .tuning
+                .uniform_secondary_pools
+                .iter()
+                .any(|r| r.matches(table))
+        {
+            1.0
+        } else {
+            apk_weight
+        }
+    }
+
     /// Which odds class an item's enchant is rolled in: `"arcane<N>"` when the catalog
     /// has count odds for its arcane tier, else `"normal"`. The double-Ravage pity
     /// timer keeps one counter per class, because the class is the only thing that
@@ -306,6 +324,40 @@ pub struct EnchantTuning {
     /// (first match wins; tracker #493: Arcane I weapons and shields roll two
     /// secondaries half the time). Empty = `arcane_tier_count_odds` for every type.
     pub arcane_count_odds: Vec<ArcaneCountOddsRule>,
+    /// Tables whose secondary pool is drawn with EQUAL weights: every property the
+    /// table can roll at all (APK weight > 0) gets the same chance, replacing the
+    /// APK's per-property weights (tracker #560: every armour combination equally
+    /// likely). Empty = the APK's weights for every table.
+    pub uniform_secondary_pools: Vec<TableMatch>,
+}
+
+/// Which secondary tables a tuning rule covers, by the table's own keys.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TableMatch {
+    /// Free text for the reader of the file; never matched.
+    #[serde(default)]
+    pub label: String,
+    /// The table's `_itemType` (2 weapon, 3 armor, 9 shield, 10 ring, 11 necklace).
+    pub item_type: i64,
+    /// The table's `_weaponType`; absent = any.
+    #[serde(default)]
+    pub weapon_type: Option<i64>,
+    /// The table's `_equipmentSlot`; absent = any.
+    #[serde(default)]
+    pub equipment_slot: Option<i64>,
+}
+
+impl TableMatch {
+    pub fn matches(&self, table: &SecondaryEnchantTable) -> bool {
+        table.item_type == Some(self.item_type)
+            && self
+                .weapon_type
+                .is_none_or(|w| table.weapon_type == Some(w))
+            && self
+                .equipment_slot
+                .is_none_or(|s| table.equipment_slot == Some(s))
+    }
 }
 
 /// One `arcaneCountOdds` rule: a `secondaryCountOdds` rule for one arcane tier.
