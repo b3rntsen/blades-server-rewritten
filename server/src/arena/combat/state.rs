@@ -1751,6 +1751,10 @@ pub struct Fighter {
     /// ends it: `(when the channel ends, transitions_total right after op53 recorded
     /// Channeling)`. See [`Self::begin_channel_pose`].
     channel_pose: Option<(Instant, u32)>,
+    /// The op58 counterpart of [`Self::channel_pose`]: `(OnManeuverEnded, when the
+    /// maneuver began, transitions_total right after op58 recorded Maneuver)`. See
+    /// [`Self::begin_maneuver_pose`].
+    maneuver_pose: Option<(Instant, Instant, u32)>,
     pub state_entered: Instant,
     /// Slot of the implicit arena target (the opponent) for `RequestExecuteAbility`.
     pub arena_target: usize,
@@ -2388,6 +2392,7 @@ impl Fighter {
             state_history: VecDeque::new(),
             transitions_total: 0,
             channel_pose: None,
+            maneuver_pose: None,
             state_entered: now,
             arena_target: 1 - slot.min(1), // 2-player: the other slot
             blocking_side: ActiveSide::None,
@@ -2614,6 +2619,59 @@ impl Fighter {
         self.force_actor_state(logical, now);
     }
 
+    /// Record the `Maneuver` state op58 announces and remember when the maneuver ends
+    /// (`OnManeuverEnded`). Returns the history ring for op58's propId 7.
+    ///
+    /// Like op53, op58 puts the caster in a state the opponent's copy never leaves on
+    /// its own (`PvpOpponentActor$$TryChangeState@0x1964cc8` refuses local changes), so
+    /// the server owes both viewers the state that ends it. Retail sends a 39 for the
+    /// caster after the maneuver's last hit: Idle in 201 of 226 shield-bash op58s that
+    /// were not cut short by another cast, and after the bash's strike in 137 of 139
+    /// that landed one (s503…s616, report #549). We sent nothing for a strike
+    /// maneuver, and for a bash the guard's own end, 0.5 s in and 0.3 s before the
+    /// strike, which put both screens back in Idle before the bash had struck.
+    pub fn begin_maneuver_pose(&mut self, started: Instant, ends_at: Instant) -> Vec<u8> {
+        let blob = self.record_presentational_state(ActorStateType::Maneuver);
+        self.maneuver_pose = Some((ends_at, started, self.transitions_total));
+        blob
+    }
+
+    /// Is an op58 maneuver pose still standing (nothing has entered a state since)?
+    pub fn in_maneuver_pose(&self, now: Instant) -> bool {
+        matches!(self.maneuver_pose, Some((until, _, at)) if at == self.transitions_total && now < until)
+    }
+
+    /// End an op58 maneuver pose that is due by re-asserting the logical state (Idle
+    /// in practice), exactly as [`Self::reconcile_channel_pose`] does for op53. A later
+    /// transition (a swing, a stagger, another cast, a re-raised guard) already took the
+    /// client out of the maneuver, and then nothing is sent.
+    pub fn reconcile_maneuver_pose(&mut self, now: Instant) {
+        let Some((until, started, recorded_at)) = self.maneuver_pose else {
+            return;
+        };
+        if self.transitions_total != recorded_at {
+            self.maneuver_pose = None;
+            return;
+        }
+        if now < until {
+            return;
+        }
+        self.maneuver_pose = None;
+        // propId 8 of the closing 39 is the time spent in the maneuver.
+        self.state_entered = started;
+        let logical = self.actor_state;
+        self.force_actor_state(logical, until);
+    }
+
+    /// Change the LOGICAL state without a wire transition, for the guard a shield
+    /// bash holds inside its own op58 animation. Retail sends no 41 when a bash
+    /// raises its guard (297 of 338 bash op38 echoes go straight to op58) and no 39
+    /// when the guard phase ends; the op58 clip shows both halves itself.
+    pub fn set_logical_state_silently(&mut self, next: ActorStateType, now: Instant) {
+        self.actor_state = next;
+        self.state_entered = now;
+    }
+
     /// Take everything queued since the last drain, leaving the queue empty.
     pub fn take_state_changes(&mut self) -> Vec<StateTransition> {
         std::mem::take(&mut self.pending_state_changes)
@@ -2647,6 +2705,7 @@ impl Fighter {
             self.set_actor_state(state, when);
         }
         self.reconcile_channel_pose(now);
+        self.reconcile_maneuver_pose(now);
     }
 
     /// Seconds spent in the current actor state — the `timeInState` float the
@@ -3096,7 +3155,15 @@ impl Fighter {
             let ability_guard = self.is_ability_guard();
             // Blocking → Idle. This transition is what LOWERS the shield on both
             // screens; before the outbox existed it happened silently.
-            self.set_actor_state(ActorStateType::Idle, now);
+            //
+            // Except for a bash's own guard while its op58 is still playing: there
+            // the clip is mid-strike, and a 39 here cut it on both screens (#549).
+            // The maneuver pose sends the Idle at `OnManeuverEnded` instead.
+            if ability_guard && self.in_maneuver_pose(now) {
+                self.set_logical_state_silently(ActorStateType::Idle, now);
+            } else {
+                self.set_actor_state(ActorStateType::Idle, now);
+            }
             self.blocking_side = ActiveSide::None;
             self.blocking_until = None;
             self.block_raised_at = None;
@@ -4424,6 +4491,7 @@ impl MatchCombat {
             f.pending_manual_attack = None;
             f.active_manual_attack = None;
             f.channel_pose = None;
+            f.maneuver_pose = None;
             if f.actor_state != ActorStateType::Emote {
                 f.pending_state_changes.clear();
                 f.set_actor_state(ActorStateType::Emote, now);
@@ -4471,6 +4539,7 @@ impl MatchCombat {
             f.transitions_total = 0;
             // The pose key is a transition count, and the count restarts here.
             f.channel_pose = None;
+            f.maneuver_pose = None;
             f.force_actor_state(ActorStateType::Idle, now);
             f.blocking_side = ActiveSide::None;
             f.blocking_until = None;

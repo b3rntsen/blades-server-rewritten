@@ -1928,8 +1928,14 @@ pub(super) fn resolve_ability_cast(
             // Every one of 2,941 retail op58 frames carries propId 7, and its newest
             // history entry is Maneuver. The old sparse frame omitted it; on device,
             // Piercing Strikes then fell back to a spell-like generic cast.
-            let state_blob =
-                combat.fighters[sender].record_presentational_state(ActorStateType::Maneuver);
+            // ...and the Idle that ends it goes out at `OnManeuverEnded` (#549). A
+            // maneuver with no authored timing keeps the old open-ended pose rather
+            // than an Idle on the very next tick.
+            let state_blob = if maneuver_timing.is_some() {
+                combat.fighters[sender].begin_maneuver_pose(now, now + interruptible_duration)
+            } else {
+                combat.fighters[sender].record_presentational_state(ActorStateType::Maneuver)
+            };
             messages::player_maneuver_state_change(
                 combat.fighters[sender].net_object_id,
                 combat.fighters[sender].packed_stats(),
@@ -2797,7 +2803,10 @@ fn begin_ability_guard(
     let until = now + Duration::from_secs_f32(window);
     let f = &mut combat.fighters[caster];
     f.clear_scheduled_states();
-    f.set_actor_state(ActorStateType::Blocking, now);
+    // Logical only: the op58 that follows carries the guard on the wire. Retail sends
+    // no 41 for a bash (#549); ours made the history read Blocking → Maneuver where
+    // retail's reads Idle → Maneuver.
+    f.set_logical_state_silently(ActorStateType::Blocking, now);
     f.blocking_side = ActiveSide::Middle;
     f.blocking_until = Some(until);
     f.block_raised_at = Some(now);
@@ -8403,6 +8412,123 @@ mod tests {
         out.iter()
             .filter_map(|(_, f)| messages::user_message_gmid(f))
             .collect()
+    }
+
+    /// `(ms since the cast, gmid, prop 6)` for every frame about slot 0's avatar or a
+    /// damage frame, as viewer 1 (the opponent) receives them, over a cast and 3 s of
+    /// ticks.
+    fn cast_timeline(uuid: &str) -> Vec<(u64, u8, Option<i64>)> {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let caster = i64::from(combat.fighters[0].net_object_id);
+        let mut rows = Vec::new();
+        let keep = |out: Vec<(usize, Vec<u8>)>, ms: u64, rows: &mut Vec<(u64, u8, Option<i64>)>| {
+            for (viewer, f) in out {
+                let Some(g) = messages::user_message_gmid(&f) else {
+                    continue;
+                };
+                if viewer != 1 {
+                    continue;
+                }
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                if nd.int(0) == Some(caster) || g == 50 {
+                    rows.push((ms, g, nd.int(6)));
+                }
+            }
+        };
+        let out = cast(&mut combat, uuid, AbilityTag::Maneuver, now);
+        keep(out, 0, &mut rows);
+        let out = drain_state_changes(&mut combat, now);
+        keep(out, 0, &mut rows);
+        for i in 1..=100u64 {
+            let out = on_tick(&mut combat, now + Duration::from_millis(i * 30), false);
+            keep(out, i * 30, &mut rows);
+        }
+        rows
+    }
+
+    /// Report #549: "animations still play incorrectly" in the arena only. Retail sends
+    /// the bash as one op58 (ShieldBashBegin) and ends it with a 39 Idle AFTER the
+    /// strike: 137 of 139 landed bashes (s503…s616), with no 41 between op38 and op58
+    /// in 297 of 338 echoes. We sent a 41 Blocking before the op58 and a 39 Idle when
+    /// the 0.5 s guard ran out, 0.3 s before the strike, so both screens dropped the
+    /// bash to Idle mid-clip.
+    #[test]
+    fn report_549_a_bash_plays_through_its_strike_before_idle() {
+        for (uuid, name) in BASHES.iter().filter(|(_, n)| *n != "Guardbreaker") {
+            let rows = cast_timeline(uuid);
+            let op58 = rows
+                .iter()
+                .position(|r| r.1 == 58)
+                .unwrap_or_else(|| panic!("{name}: no op58 in {rows:?}"));
+            assert!(
+                !rows[..op58].iter().any(|r| r.1 == 41),
+                "{name}: retail sends no 41 Blocking for a bash's own guard: {rows:?}",
+            );
+            let strike = rows
+                .iter()
+                .position(|r| r.1 == 50)
+                .unwrap_or_else(|| panic!("{name}: no strike in {rows:?}"));
+            let idle = rows
+                .iter()
+                .position(|r| r.1 == 39 && r.2 == Some(ActorStateType::Idle as i64))
+                .unwrap_or_else(|| panic!("{name}: the maneuver never ended in Idle: {rows:?}"));
+            assert!(
+                idle > strike,
+                "{name}: Idle went out before the strike: {rows:?}"
+            );
+            assert!(
+                rows[idle].0 >= 1_500,
+                "{name}: Idle at {} ms; retail ends a bash at 0.5 + 1.007 s: {rows:?}",
+                rows[idle].0,
+            );
+        }
+    }
+
+    /// The other half of #549: a strike maneuver's op58 put the opponent's copy of the
+    /// caster in `Maneuver`, which it never leaves on its own, and we never sent the
+    /// state that ends it. Retail ends Piercing Strikes with a 39 Idle in 185 of 195
+    /// op58s not cut short by another action.
+    #[test]
+    fn report_549_a_strike_maneuver_ends_in_idle_at_on_maneuver_ended() {
+        let rows = cast_timeline(PIERCING_STRIKES);
+        let hits: Vec<_> = rows.iter().filter(|r| r.1 == 50).collect();
+        assert_eq!(hits.len(), 2, "Piercing Strikes lands two hits: {rows:?}");
+        let idle: Vec<_> = rows
+            .iter()
+            .filter(|r| r.1 == 39 && r.2 == Some(ActorStateType::Idle as i64))
+            .collect();
+        assert_eq!(idle.len(), 1, "exactly one closing Idle: {rows:?}");
+        assert!(
+            (1_170..=1_260).contains(&idle[0].0),
+            "Idle at OnManeuverEnded (1.197 s one-handed), got {} ms: {rows:?}",
+            idle[0].0,
+        );
+    }
+
+    /// Control: anything that moves the caster's state during the maneuver already
+    /// takes the client out of it, and the closing Idle must then not be sent on top.
+    #[test]
+    fn report_549_a_stagger_mid_maneuver_sends_no_late_idle() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let _ = cast(&mut combat, PIERCING_STRIKES, AbilityTag::Maneuver, now);
+        let _ = drain_state_changes(&mut combat, now);
+        let mid = now + Duration::from_millis(400);
+        combat.fighters[0].set_actor_state(ActorStateType::Staggered, mid);
+        let _ = drain_state_changes(&mut combat, mid);
+        combat.fighters[0].reconcile_scheduled_states(now + Duration::from_millis(1_300));
+        let late = combat.fighters[0].take_state_changes();
+        assert!(
+            !combat.fighters[0].in_maneuver_pose(now + Duration::from_millis(1_300)),
+            "the stagger ended the pose",
+        );
+        assert!(
+            !late
+                .iter()
+                .any(|t| t.to == ActorStateType::Idle && t.time_in_previous > 1.0),
+            "no closing Idle stamped with the maneuver's duration after a stagger: {late:?}",
+        );
     }
 
     /// The production classifier must call every bash a `Maneuver`, or the gate in
