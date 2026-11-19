@@ -4940,7 +4940,15 @@ fn apply_status_conditioning_at_health(
             continue;
         }
         if running < health_before {
-            elementals.push((*t, *v));
+            // Tracker #562: retail's DamageList holds ONE entry per damage type, so a
+            // hit carrying an enchant's Fire and Augmented Flames' Fire records a single
+            // Fire instance (0 of 15,996 retail elemental hits carry two components of
+            // one element). Merge them here, so the attacker's Fortify is added once
+            // per element per hit and not once per component.
+            match elementals.iter_mut().find(|(et, _)| et == t) {
+                Some((_, acc)) => *acc += *v,
+                None => elementals.push((*t, *v)),
+            }
         } else {
             debug!(
                 "combat status: slot {target_slot} {t:?} {v:.1} is lethal against \
@@ -15774,6 +15782,41 @@ mod shipped_effects_tests {
             c.fighters[1].recent_element_damage(DamageType::Fire),
             0.0,
             "damage taken while the condition is active is not counted toward the next landing",
+        );
+    }
+
+    /// Tracker #562, prod match c45d9e19 (2026-11-19 11:52 UTC): a high-blocked hit
+    /// from an attacker with a Fire enchant AND Augmented Flames arrives as two Fire
+    /// components. Fortify Burning must be added once for the hit, not once per
+    /// component: 62.88 + 79.90 + 42.0 = 184.78, which stays under a 200 threshold.
+    #[test]
+    fn fortify_is_added_once_per_element_per_hit() {
+        use super::super::state::DamageType;
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let threshold = c.fighters[1].condition_threshold(StatusEffectType::Burning);
+        c.fighters[0].loadout.status_fortify = vec![(StatusEffectType::Burning, 42.0)];
+        // 21 below the threshold after ONE Fortify, 21 above it after two.
+        let fire = threshold - 63.0;
+        let (a, b) = (fire * 0.44, fire * 0.56);
+        let out = apply_status_conditioning(
+            &mut c,
+            1,
+            &[
+                (DamageType::Slashing, 0.08),
+                (DamageType::Fire, a),
+                (DamageType::Fire, b),
+            ],
+            now,
+        );
+        assert!(
+            out.is_empty(),
+            "two Fire components of one hit carry ONE Fortify, so {} + 42 stays below {threshold}",
+            a + b
+        );
+        assert!(
+            (c.fighters[1].recent_element_damage(DamageType::Fire) - (a + b + 42.0)).abs() < 0.01,
+            "the hit records its summed Fire plus a single Fortify",
         );
     }
 
