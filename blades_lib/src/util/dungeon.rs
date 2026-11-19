@@ -1498,6 +1498,17 @@ const SPAWN_GROUP_LOOT: &[(u128, u128, u64)] = &[
     (0x9cb35702_def0_441e_b760_9c8a23ffd8bf, DOOR_KEY_ITEM_ID, 1),
     (0x3d0a198d_6ab7_4c54_addf_1e67c55c3e78, DOOR_KEY_ITEM_ID, 1),
     (0x681c0add_1f49_46cc_bafb_e240680406e7, DOOR_KEY_ITEM_ID, 1),
+    // Found by mining every retail /quests, /accept and /enter body on prod (821,
+    // 2026-11-19), which the earlier corpus had not covered (report #564).
+    // DS02_DungeonSettings, "Scorched Earth": retail keyed THREE groups
+    // (capture 188667, 2026-06-28); without them the gate guard dies keyless.
+    (0xb4e36b86_2032_47f7_b886_71397b56568e, DOOR_KEY_ITEM_ID, 1),
+    (0xc208e19f_a1e9_4ef3_9dc2_fdf31b42f345, DOOR_KEY_ITEM_ID, 1),
+    (0x22b6d75d_a790_4e23_8654_e0d30af735e0, DOOR_KEY_ITEM_ID, 1),
+    // BQ203_DungeonSettings_B, "The Cave of Thieves".
+    (0xc87d3a6c_2692_49ba_8f74_a9fe6e34f82e, DOOR_KEY_ITEM_ID, 1),
+    // BQ204_DungeonSettings_B (BQ204_GabriellesApprentice).
+    (0x2a6c8c92_1fa9_4ca7_bd6f_50638f078f5f, DOOR_KEY_ITEM_ID, 1),
 ];
 
 /// The fixed `spawnGroupLoot` retail gave the first enemy of `spawn_group_id`.
@@ -4023,6 +4034,13 @@ mod key_holder_tests {
     const EQ15: &str = "924f1147-fd7f-4736-9e2d-f33fa942dbdd";
     /// Its Mercenary: the enemy the key rides on.
     const MERCENARY: &str = "a91ebfe6-0167-4643-bd6f-ed27d8dfad41";
+    /// DS02_DungeonSettings, "Scorched Earth" (report #564).
+    const DS02: &str = "ccdae458-83a9-4dcf-8a3c-5112f2ffa81b";
+    const DS02_KEY_HOLDERS: [&str; 3] = [
+        "b4e36b86-2032-47f7-b886-71397b56568e",
+        "c208e19f-a1e9-4ef3-9dc2-fdf31b42f345",
+        "22b6d75d-a790-4e23-8654-e0d30af735e0",
+    ];
     const DOOR_KEY: &str = "faa3aeb3-9284-4d83-8981-1af00e3a6398";
     const KEY_TABLE: &str = "8858f284-4f33-4da4-8085-0befa7ef2637";
     /// The groups retail keyed the DoorKey loot TABLE on: EQ13's key-holder,
@@ -4092,6 +4110,34 @@ mod key_holder_tests {
         }
     }
 
+    /// #564: in Scorched Earth the gate guard died keyless, so the quest stopped at the
+    /// gate. Retail put the DoorKey in spawnGroupLoot on exactly these three groups, and
+    /// no other DS02 enemy carried one.
+    #[test]
+    fn scorched_earth_key_holders_drop_the_door_key() {
+        let game_data = game_data();
+        for level in [1, 24, 35, 89] {
+            let generated = generate_for_dungeon(&game_data, &uuid(DS02), level, 100).unwrap();
+            let mut keys = 0;
+            for (group, spawners) in &generated.enemy_generated_data {
+                for enemy in spawners.iter().flatten() {
+                    let k = keys_on(enemy);
+                    if DS02_KEY_HOLDERS.contains(&group.to_string().as_str()) {
+                        assert_eq!(
+                            serde_json::to_value(&enemy.spawn_group_loot).unwrap(),
+                            serde_json::json!({ "stackableItems": { DOOR_KEY: 1 } }),
+                            "level {level}: key-holder {group} carries no key"
+                        );
+                    } else {
+                        assert_eq!(k, 0, "level {level}: {group} must not hold a key");
+                    }
+                    keys += k;
+                }
+            }
+            assert_eq!(keys, 3, "level {level}: retail keyed three DS02 groups");
+        }
+    }
+
     /// CONTROL: one key, on one enemy. A key on every corpse would pass the test
     /// above and make the locked door meaningless.
     #[test]
@@ -4131,6 +4177,11 @@ mod key_holder_tests {
             "9cb35702-def0-441e-b760-9c8a23ffd8bf",
             "3d0a198d-6ab7-4c54-addf-1e67c55c3e78",
             "681c0add-1f49-46cc-bafb-e240680406e7",
+            DS02_KEY_HOLDERS[0],
+            DS02_KEY_HOLDERS[1],
+            DS02_KEY_HOLDERS[2],
+            "c87d3a6c-2692-49ba-8f74-a9fe6e34f82e",
+            "2a6c8c92-1fa9-4ca7-bd6f-50638f078f5f",
         ]
         .into_iter()
         .map(|group| (uuid(group), 0))
