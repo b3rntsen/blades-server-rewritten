@@ -625,6 +625,9 @@ fn cancel_charge(combat: &mut MatchCombat, sender: usize, now: Instant, via: &st
     f.charge_began_at = None;
     f.charge_side = None;
     f.pending_manual_attack = None;
+    // A press held through a maneuver (#562) is cancelled too, or it would still
+    // swing when the maneuver ends (#449).
+    f.attack_resume_pending = false;
     if was_charging {
         f.reset_combo();
         f.set_actor_state(ActorStateType::Idle, now);
@@ -758,6 +761,7 @@ pub fn on_c2s_input(
                     reconcile_paralysis(f, now);
                     f.prune_negation_pools(now);
                 }
+                resume_held_attacks(combat, now);
                 if combat.fighters[sender].is_paralyzed() {
                     info!(
                         "combat attack_input: gsid={} input={} slot={sender} actor={} outcome=paralyzed hold_ms={:.1}",
@@ -812,6 +816,7 @@ pub fn on_c2s_input(
         reconcile_paralysis(f, now);
         f.prune_negation_pools(now);
     }
+    resume_held_attacks(combat, now);
     // op41 PlayerBlockingStateChange (c2s) — the client raised/refreshed its guard.
     // Apply a BLOCK state on the sender: incoming hits within the block window are
     // reduced/negated per `damage::block_outcome` (optimal on the matching side,
@@ -926,7 +931,9 @@ pub fn on_c2s_input(
             }
             // Tracker #551: the touch client's attack cancel. Only a LIVE charge is
             // cancelled; the bit on a sample outside a hold means nothing.
-            if sample.end_attack_trigger_ready && f.charge_press_at.is_some() {
+            if sample.end_attack_trigger_ready
+                && (f.charge_press_at.is_some() || f.attack_resume_pending)
+            {
                 cancel_charge(combat, sender, now, "swipe_down");
             }
             return Vec::new();
@@ -5083,17 +5090,31 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     f.reconcile_stagger(now);
     // Report #530: a guard held through a maneuver goes up at its end.
     f.reconcile_held_guard_resume(now);
-    // Report #562: so does a swing held through it.
-    resume_held_attack(f, now);
+}
+
+/// Tracker #562: start the charge of every attack held through a maneuver that has
+/// now ended. Runs after the per-fighter reconcile pass, so it can log the match.
+fn resume_held_attacks(combat: &mut MatchCombat, now: Instant) {
+    for slot in 0..combat.fighters.len() {
+        if let Some(at) = resume_held_attack(&mut combat.fighters[slot], now) {
+            info!(
+                "combat attack_input: gsid={} input=player slot={slot} actor={} outcome=resumed_after_maneuver_lock late_ms={:.1}",
+                combat.game_session_id,
+                combat.fighters[slot].loadout.display_name,
+                now.saturating_duration_since(at).as_secs_f32() * 1000.0,
+            );
+        }
+    }
 }
 
 /// Tracker #562: an attack press made during a maneuver, still held when it ends,
 /// begins its charge then — the same wind-up the press path starts. See the maneuver
-/// lock in [`on_c2s_input`]. Returns true when the charge began.
-fn resume_held_attack(f: &mut super::state::Fighter, now: Instant) -> bool {
+/// lock in [`on_c2s_input`]. Returns the instant the charge is timed from (the
+/// maneuver's end) when it began.
+fn resume_held_attack(f: &mut super::state::Fighter, now: Instant) -> Option<Instant> {
     use super::state::ActorStateType;
     if !f.attack_resume_pending || f.maneuver_active(now) {
-        return false;
+        return None;
     }
     f.attack_resume_pending = false;
     if f.is_dead()
@@ -5104,21 +5125,26 @@ fn resume_held_attack(f: &mut super::state::Fighter, now: Instant) -> bool {
             ActorStateType::Blocking | ActorStateType::Charging
         )
     {
-        return false;
+        return None;
     }
-    f.charge_press_at = Some(now);
-    f.charge_began_at = Some(now);
+    // The hold counts from OnManeuverEnded, where the client's Charging began, not
+    // from whichever tick noticed it.
+    let ended = f
+        .executions
+        .iter()
+        .filter(|e| e.is_maneuver && e.until <= now)
+        .map(|e| e.until)
+        .max()
+        .unwrap_or(now);
+    f.charge_press_at = Some(ended);
+    f.charge_began_at = Some(ended);
     f.pending_manual_attack = None;
     f.charge_side = classified_side_for(f, now);
     // The maneuver's own closing Idle (due at its end) goes out first, then Charging.
     f.reconcile_scheduled_states(now);
     f.clear_scheduled_states();
     f.set_actor_state(ActorStateType::Charging, now);
-    info!(
-        "combat attack_input: input=player actor={} outcome=resumed_after_maneuver_lock",
-        f.loadout.display_name
-    );
-    true
+    Some(ended)
 }
 
 /// Deliver the due ticks of every in-flight channelled spell.
@@ -7382,6 +7408,7 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
         let charge = f.charge_began_at.unwrap_or(now);
         f.expire_combo_chain(charge);
     }
+    resume_held_attacks(combat, now);
     let mut out = Vec::new();
 
     // Land any swings whose FollowThrough beat has arrived, BEFORE the DoT ticks and
@@ -9131,12 +9158,88 @@ mod tests {
                 ActorStateType::Charging,
                 "the held press starts its charge at OnManeuverEnded"
             );
+            assert_eq!(
+                c.fighters[0].charge_press_at,
+                Some(end),
+                "the hold is timed from the maneuver's end, not the tick"
+            );
             let release = t + Duration::from_millis(300);
             on_c2s_input(&mut c, 0, &make_act_frame(false, 0.7, false), release);
             let _ = on_tick(&mut c, release + Duration::from_millis(200), false);
             assert!(
                 c.fighters[1].health < hp_after_bash,
                 "the first swing after the skill must land"
+            );
+        }
+    }
+
+    /// #562 review: a cancel inside the maneuver lock must cancel the remembered press
+    /// too, or the cancelled attack swings when the maneuver ends (#449). Both cancel
+    /// paths: gmid 31 and the touch swipe-down bit (#551).
+    #[test]
+    fn report_562_a_cancel_inside_the_lock_cancels_the_held_press() {
+        use super::phase4_tests::{
+            make_act_frame, make_cancel_charge_frame, make_pos_frame_with_flags,
+        };
+        let harrying = super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == "HarryingBash")
+            .expect("HarryingBash is shipped")
+            .uuid;
+        for via_swipe in [false, true] {
+            let now = Instant::now();
+            let mut c = make_live_combat(now);
+            let _ = cast(&mut c, harrying, AbilityTag::Maneuver, now);
+            let end = c.fighters[0]
+                .executions
+                .iter()
+                .filter(|e| e.is_maneuver)
+                .map(|e| e.until)
+                .max()
+                .unwrap();
+            let mut t = now;
+            while t + Duration::from_millis(20) < end - Duration::from_millis(416) {
+                t += Duration::from_millis(20);
+                let _ = on_tick(&mut c, t, false);
+            }
+            let hp = c.fighters[1].health;
+            let press = end - Duration::from_millis(416);
+            on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), press);
+            assert!(
+                c.fighters[0].attack_resume_pending,
+                "precondition: press held"
+            );
+            let cancel = press + Duration::from_millis(100);
+            if via_swipe {
+                on_c2s_input(
+                    &mut c,
+                    0,
+                    &make_pos_frame_with_flags(0.8, 0.3, 0.1, 1024 | 160),
+                    cancel,
+                );
+            } else {
+                on_c2s_input(&mut c, 0, &make_cancel_charge_frame(), cancel);
+            }
+            assert!(
+                !c.fighters[0].attack_resume_pending,
+                "via_swipe={via_swipe}: cancelled"
+            );
+            let mut t = press;
+            while t < end + Duration::from_millis(40) {
+                t += Duration::from_millis(20);
+                let _ = on_tick(&mut c, t, false);
+            }
+            assert_ne!(c.fighters[0].actor_state(), ActorStateType::Charging);
+            let release = t + Duration::from_millis(300);
+            on_c2s_input(&mut c, 0, &make_act_frame(false, 0.7, false), release);
+            let _ = on_tick(&mut c, release + Duration::from_millis(200), false);
+            assert!(
+                c.pending_hits.is_empty(),
+                "via_swipe={via_swipe}: no swing queued"
+            );
+            assert!(
+                c.fighters[1].health >= hp,
+                "via_swipe={via_swipe}: the cancelled attack must not swing"
             );
         }
     }
@@ -11567,7 +11670,7 @@ mod phase4_tests {
     /// carrier: `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 47 · 4:Float x ·
     /// 5:Float y · 6:Float frameDelta · 7:Float charge · 8:UInt16 flags}`. Prop 8 is a
     /// `UInt16` on the wire (all 93 526 captured samples), not an `Int`.
-    fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: u16) -> Vec<u8> {
+    pub(super) fn make_pos_frame_with_flags(x: f32, y: f32, charge: f32, flags: u16) -> Vec<u8> {
         let mut w = arena_proto::NetDataWriter::new();
         w.int(0, 565)
             .byte(1, 56)
@@ -11608,7 +11711,7 @@ mod phase4_tests {
     /// A prod-shaped `PlayerInputCancelCharge` (gmid 31) on the generic 0x36 carrier:
     /// `{0:Int obj · 1:Byte 56 · 2:Byte 3 · 3:Byte 31}` — the message carries no
     /// fields of its own (`PlayerInputCancelChargeMessage`, dump.cs:589556).
-    fn make_cancel_charge_frame() -> Vec<u8> {
+    pub(super) fn make_cancel_charge_frame() -> Vec<u8> {
         let mut w = arena_proto::NetDataWriter::new();
         w.int(0, 565).byte(1, 56).byte(2, 3).byte(3, 31);
         let mut f = messages::frame_for_test(w.finish());
