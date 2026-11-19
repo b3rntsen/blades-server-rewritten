@@ -1752,7 +1752,15 @@ mod tests {
         perked.perks.element_damage.push((DamageType::Fire, 22.5));
         perked.element_fortify.push((DamageType::Fire, 7.5));
         let hit = |lo: &Loadout| {
-            m.resolve_attack(lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now)
+            m.resolve_attack(
+                lo,
+                &target(),
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                now,
+            )
         };
         let plain = comp(&hit(&base), DamageType::Fire);
         let boosted = comp(&hit(&perked), DamageType::Fire);
