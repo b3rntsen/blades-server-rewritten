@@ -3932,6 +3932,43 @@ fn apply_absorb_enchants(
     paid
 }
 
+/// Keep each Frost→Stamina / Shock→Magicka mirror equal to its element AFTER the
+/// Ward / Absorb / storm-armor pools have run (report #528).
+///
+/// The client derives the mirror last, from the element's final value
+/// (`Actor$$ResolveDamageTaken@0x1c5389c` tail, combat-spec 01 E7), and the Ward's
+/// `DamageAbsorption` hooks run before that (E1). Our pools run here, after
+/// [`super::damage`] has already appended the mirror, so a Ward that ate the Frost left
+/// the Stamina drain standing. `damage::append_mirrored_drains` puts the mirror
+/// directly after its element; only a pair that was still an exact mirror going into
+/// the pools is touched, so a direct Stamina/Magicka component is never rewritten, and
+/// a drain is only ever lowered.
+fn remirror_drains_after_pools(
+    before: &[(super::state::DamageType, f32)],
+    components: &mut [(super::state::DamageType, f32)],
+) {
+    if before.len() != components.len() {
+        return;
+    }
+    for i in 0..components.len().saturating_sub(1) {
+        let (el_ty, el_after) = components[i];
+        let Some((drain_ty, ratio)) = super::damage::mirrored_drain(el_ty) else {
+            continue;
+        };
+        let (el_before, drain_before) = (before[i].1, before[i + 1].1);
+        if components[i + 1].0 != drain_ty
+            || before[i + 1].0 != drain_ty
+            || (drain_before - el_before * ratio).abs() > 1e-3
+        {
+            continue;
+        }
+        let target = (el_after * ratio).max(0.0);
+        if target < components[i + 1].1 {
+            components[i + 1].1 = target;
+        }
+    }
+}
+
 fn emit_damage(
     combat: &mut MatchCombat,
     attacker_slot: usize,
@@ -3980,11 +4017,13 @@ fn emit_damage_with_outcome(
             .sum()
     };
     let before_pools = health_of(&components);
+    let pre_pool_components = components.clone();
     let non_dodge = combat.fighters[target_slot].apply_non_dodge_negation_pools(
         resolved.source,
         &mut components,
         now,
     );
+    remirror_drains_after_pools(&pre_pool_components, &mut components);
     // What Ward / Absorb / a storm armor ate of this hit, and what is left of them —
     // the two numbers a "did my Blizzard Armor work?" report needs (#332).
     let pool_absorbed = (before_pools - health_of(&components)).max(0.0);
@@ -16811,6 +16850,71 @@ mod report_31_high_block_stun {
         );
         let (_, s, m, _) = PackedStats::unpack(other);
         assert!(s > 100 && m > 100, "wire fractions of 115/1000 ({s}, {m})");
+    }
+
+    /// Report #528: a Ward that eats a hit's Frost also eats its Stamina mirror.
+    ///
+    /// The client derives `Frost → Stamina` / `Shock → Magicka` at the very end of
+    /// `Actor$$ResolveDamageTaken@0x1c5389c` (01 E7), from the element's FINAL value —
+    /// after the Ward's `DamageAbsorption` hooks (E1). Prod 2026-11-18 20:39:22,
+    /// Flappety → Pogagoga, low block + Ward: `Frost 0.0, Stamina 25.2`,
+    /// `pool_absorbed=25.2`, `drained_stam=25` — a hit that did nothing still took
+    /// the whole drain.
+    #[test]
+    fn a_ward_that_eats_the_element_also_eats_its_mirrored_drain() {
+        use super::super::state::{DamageNegationSource, DamageSource, DamageType, NegationPool};
+        let now = Instant::now();
+        let ward = |remaining: f32| NegationPool {
+            source: DamageNegationSource::Ward,
+            remaining,
+            expires_at: now + Duration::from_secs(5),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: true,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: None,
+            dodge_status_expires_at: None,
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+            breaks_into_stagger: false,
+        };
+        let hit = || {
+            absorb_hit(
+                DamageSource::Attack,
+                vec![
+                    (DamageType::Cleaving, 50.0),
+                    (DamageType::Frost, 25.2),
+                    (DamageType::Stamina, 25.2),
+                    (DamageType::Shock, 40.0),
+                    (DamageType::Magicka, 40.0),
+                ],
+            )
+        };
+        let run = |pool: Option<NegationPool>| {
+            let mut c = absorb_combat(now, vec![]);
+            c.fighters[1].max_stamina = 1_000;
+            c.fighters[1].stamina = 1_000;
+            c.fighters[1].max_magicka = 1_000;
+            c.fighters[1].magicka = 1_000;
+            if let Some(p) = pool {
+                c.fighters[1].negation_pools.push(p);
+            }
+            super::emit_damage(&mut c, 0, 1, &hit(), now);
+            (c.fighters[1].stamina, c.fighters[1].magicka)
+        };
+        // Control: no Ward, both mirrors land in full.
+        assert_eq!(run(None), (975, 960));
+        // A Ward with room for both elements: no drain at all.
+        assert_eq!(run(Some(ward(100.0))), (1_000, 1_000));
+        // A Ward with 30 left: Frost 25.2 eaten whole (no Stamina), Shock 40 → 35.2
+        // left (Magicka 35.2). Pools round on the way in.
+        let (s, m) = run(Some(ward(30.0)));
+        assert_eq!(s, 1_000, "Frost fully warded, so no Stamina");
+        assert!(
+            (964..=965).contains(&m),
+            "Magicka follows the post-Ward Shock: {m}"
+        );
     }
 
     /// Report #231: Weapon Ravage rides weapon-based hits only
