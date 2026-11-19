@@ -1025,11 +1025,19 @@ pub fn on_c2s_input(
         && input::parse_execute_ability(user_data).is_none()
         && !matches!(parse_input_activate(user_data), Some(act) if !act.held && act.block_zone == Some(true))
     {
-        // Tracker #562 lead: an attack press dropped here loses the whole swing. If the
-        // client's maneuver ends before ours, that reads as "the first swing after a
-        // skill doesn't hit", so make it visible in prod. No behaviour change.
-        if matches!(parse_input_activate(user_data), Some(act) if act.held && act.block_zone != Some(true))
-        {
+        // Tracker #562: an attack press made during the maneuver is HELD, not dropped.
+        // The client keeps the finger's hold and enters Charging the moment its
+        // maneuver ends, and retail's server did the same: a press 1.037 s into a
+        // dodge (end 1.25 s) got its Charging at 1.235 s, one 1.447 s into a bash
+        // (end 1.507 s) at 1.457 s. Dropping it lost the whole swing, because the
+        // release then had no press: 100 % of Pogagoga's first swings after a skill.
+        // The charge starts at the maneuver's end ([`resume_held_attack`]); a release
+        // before then cancels it, as letting go during the maneuver does on the client.
+        let attack_act = parse_input_activate(user_data).filter(|a| a.block_zone != Some(true));
+        if let Some(act) = attack_act {
+            combat.fighters[sender].attack_resume_pending = act.held;
+        }
+        if matches!(attack_act, Some(act) if act.held) {
             let f = &combat.fighters[sender];
             let running = f
                 .executions
@@ -1043,7 +1051,7 @@ pub fn on_c2s_input(
                 .and_then(|e| super::gamedata::ability(&e.ability_uuid).map(|a| a.editor_name))
                 .unwrap_or("?");
             info!(
-                "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=dropped_maneuver_lock remaining_ms={remaining_ms:.1} maneuver={maneuver}",
+                "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=held_through_maneuver_lock remaining_ms={remaining_ms:.1} maneuver={maneuver}",
                 combat.game_session_id, f.loadout.display_name,
             );
         }
@@ -5075,6 +5083,42 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     f.reconcile_stagger(now);
     // Report #530: a guard held through a maneuver goes up at its end.
     f.reconcile_held_guard_resume(now);
+    // Report #562: so does a swing held through it.
+    resume_held_attack(f, now);
+}
+
+/// Tracker #562: an attack press made during a maneuver, still held when it ends,
+/// begins its charge then — the same wind-up the press path starts. See the maneuver
+/// lock in [`on_c2s_input`]. Returns true when the charge began.
+fn resume_held_attack(f: &mut super::state::Fighter, now: Instant) -> bool {
+    use super::state::ActorStateType;
+    if !f.attack_resume_pending || f.maneuver_active(now) {
+        return false;
+    }
+    f.attack_resume_pending = false;
+    if f.is_dead()
+        || f.is_paralyzed()
+        || f.is_staggered(now)
+        || matches!(
+            f.actor_state(),
+            ActorStateType::Blocking | ActorStateType::Charging
+        )
+    {
+        return false;
+    }
+    f.charge_press_at = Some(now);
+    f.charge_began_at = Some(now);
+    f.pending_manual_attack = None;
+    f.charge_side = classified_side_for(f, now);
+    // The maneuver's own closing Idle (due at its end) goes out first, then Charging.
+    f.reconcile_scheduled_states(now);
+    f.clear_scheduled_states();
+    f.set_actor_state(ActorStateType::Charging, now);
+    info!(
+        "combat attack_input: input=player actor={} outcome=resumed_after_maneuver_lock",
+        f.loadout.display_name
+    );
+    true
 }
 
 /// Deliver the due ticks of every in-flight channelled spell.
@@ -9010,6 +9054,91 @@ mod tests {
         plain.fighters[0].blocking_until = None;
         let _ = plain.fighters[0].reconcile_block(after);
         assert_eq!(plain.fighters[0].last_block_dropped_at, Some(after));
+    }
+
+    /// Tracker #562, the live log shape: Pogagoga casts Harrying Bash and presses
+    /// attack with ~400 ms of the maneuver left (prod `held_through_maneuver_lock
+    /// remaining_ms=416`), keeps holding, and releases after it ends. The press must
+    /// start the charge at OnManeuverEnded and the release must swing, as retail's
+    /// server did (Charging at 1.457 s for a press 1.447 s into a 1.507 s bash). A
+    /// press released before the maneuver ends still does nothing.
+    #[test]
+    fn report_562_an_attack_held_through_a_maneuver_swings_after_it() {
+        use super::phase4_tests::make_act_frame;
+        let harrying = super::super::gamedata::ABILITIES
+            .iter()
+            .find(|a| a.editor_name == "HarryingBash")
+            .expect("HarryingBash is shipped")
+            .uuid;
+        for release_inside in [false, true] {
+            let now = Instant::now();
+            let mut c = make_live_combat(now);
+            let hp = c.fighters[1].health;
+            let _ = cast(&mut c, harrying, AbilityTag::Maneuver, now);
+            let end = c.fighters[0]
+                .executions
+                .iter()
+                .filter(|e| e.is_maneuver)
+                .map(|e| e.until)
+                .max()
+                .expect("a maneuver execution");
+            // Let the bash land first, so only the swing can change health below.
+            let mut t = now;
+            while t + Duration::from_millis(20) < end - Duration::from_millis(416) {
+                t += Duration::from_millis(20);
+                let _ = on_tick(&mut c, t, false);
+            }
+            let hp_after_bash = c.fighters[1].health;
+            assert!(hp_after_bash <= hp);
+            let press = end - Duration::from_millis(416);
+            on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), press);
+            assert!(
+                c.fighters[0].maneuver_active(press),
+                "precondition: inside the lock"
+            );
+            if release_inside {
+                on_c2s_input(
+                    &mut c,
+                    0,
+                    &make_act_frame(false, 0.2, false),
+                    press + Duration::from_millis(200),
+                );
+            }
+            let mut t = press;
+            while t < end + Duration::from_millis(40) {
+                t += Duration::from_millis(20);
+                let _ = on_tick(&mut c, t, false);
+            }
+            if release_inside {
+                assert_ne!(c.fighters[0].actor_state(), ActorStateType::Charging);
+                on_c2s_input(
+                    &mut c,
+                    0,
+                    &make_act_frame(false, 0.6, false),
+                    t + Duration::from_millis(300),
+                );
+                let _ = on_tick(&mut c, t + Duration::from_millis(500), false);
+                // Regeneration may add a little; a swing would take far more.
+                assert!(
+                    c.fighters[1].health >= hp_after_bash,
+                    "a press let go during the maneuver must not swing"
+                );
+                assert!(c.pending_hits.is_empty());
+                continue;
+            }
+            assert_eq!(
+                c.fighters[0].actor_state(),
+                ActorStateType::Charging,
+                "the held press starts its charge at OnManeuverEnded"
+            );
+            let release = t + Duration::from_millis(300);
+            on_c2s_input(&mut c, 0, &make_act_frame(false, 0.7, false), release);
+            let _ = on_tick(&mut c, release + Duration::from_millis(200), false);
+            assert!(
+                c.fighters[1].health < hp_after_bash,
+                "the first swing after the skill must land"
+            );
+        }
     }
 
     /// Report #530: "After using shield bash skills (all skills), the high block isn't
