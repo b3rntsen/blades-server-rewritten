@@ -1604,7 +1604,8 @@ fn grade_bare_jewelry_results<R: Rng + ?Sized>(
         let Ok(mut reward_item) = serde_json::from_value::<RewardItem>(raw.clone()) else {
             continue;
         };
-        crate::jewelry_grade::grade_if_bare(&mut reward_item.item, game_items, rng);
+        // A crafted ring or necklace: HauDrauf's crafted grade split (#560).
+        crate::jewelry_grade::grade_if_bare_crafted(&mut reward_item.item, game_items, rng);
         if let Ok(graded) = serde_json::to_value(reward_item) {
             *raw = graded;
         }
@@ -1768,7 +1769,7 @@ fn roll_enchant<R: Rng + ?Sized>(
         .properties
         .iter()
         .filter(|p| p.weight > 0.0 && p.id != recipe.property)
-        .map(|p| (p.id, p.weight))
+        .map(|p| (p.id, enchanting.secondary_weight(table, p.weight)))
         .collect();
     for _ in 0..count {
         let weights: Vec<f64> = pool.iter().map(|p| p.1).collect();
@@ -2611,6 +2612,94 @@ mod tests {
         }
     }
 
+    /// #560 (HauDrauf, 2026-11-19): with the shipped tuning every armour slot draws
+    /// its secondaries with equal weights, so every pair of two is equally likely;
+    /// without it (the code default) the APK's 0.13 / 0.07 weights hold, and weapons
+    /// keep the APK weights either way.
+    #[test]
+    fn armour_secondary_pairs_are_equally_likely() {
+        let shipped = static_data_from_deploy().enchanting;
+        let code_default = deploy_enchanting();
+        let mut armour = 0;
+        for t in shipped
+            .secondary_tables
+            .iter()
+            .filter(|t| t.item_type == Some(3))
+        {
+            armour += 1;
+            let rollable: Vec<f64> = t
+                .properties
+                .iter()
+                .filter(|p| p.weight > 0.0)
+                .map(|p| shipped.secondary_weight(t, p.weight))
+                .collect();
+            assert!(
+                rollable.iter().all(|w| *w == 1.0),
+                "slot {:?}",
+                t.equipment_slot
+            );
+            for p in t.properties.iter().filter(|p| p.weight == 0.0) {
+                assert_eq!(
+                    shipped.secondary_weight(t, p.weight),
+                    0.0,
+                    "never-rolled stays 0"
+                );
+            }
+            assert!(
+                t.properties
+                    .iter()
+                    .any(|p| code_default.secondary_weight(t, p.weight) != 1.0 && p.weight > 0.0),
+                "control: retail weights are not uniform"
+            );
+        }
+        assert_eq!(armour, 4, "head, body, hands, feet");
+        let weapon = shipped.table_for(&uuid(MADNESS_BATTLEAXE)).unwrap();
+        for p in &weapon.properties {
+            assert_eq!(
+                shipped.secondary_weight(weapon, p.weight),
+                p.weight,
+                "weapons keep APK weights"
+            );
+        }
+
+        // Statistically: on a body armour table, two-secondary rolls hit every pair of
+        // the rollable pool about equally often.
+        let body = shipped
+            .secondary_tables
+            .iter()
+            .find(|t| t.item_type == Some(3) && t.equipment_slot == Some(3))
+            .unwrap();
+        let recipe = shipped
+            .recipes
+            .values()
+            .find(|r| !body.properties.iter().any(|p| p.id == r.property))
+            .expect("a recipe whose primary is outside the body pool")
+            .clone();
+        let pool = body.properties.iter().filter(|p| p.weight > 0.0).count();
+        let pairs = pool * (pool - 1) / 2;
+        let mut forced = shipped.clone();
+        for rule in forced.tuning.secondary_count_odds.iter_mut() {
+            rule.odds = vec![0.0, 0.0, 1.0];
+        }
+        let mut rng = seeded(560);
+        let n = 20_000;
+        let mut seen: HashMap<(Uuid, Uuid), u32> = HashMap::new();
+        for _ in 0..n {
+            let out = roll_enchant(&mut rng, &recipe, Some(body), None, &forced);
+            assert_eq!(out.len(), 3);
+            let (a, b) = (out[1].id.min(out[2].id), out[1].id.max(out[2].id));
+            *seen.entry((a, b)).or_default() += 1;
+        }
+        assert_eq!(seen.len(), pairs, "every pair occurs");
+        let want = n as f64 / pairs as f64;
+        for (pair, got) in &seen {
+            assert!(
+                (f64::from(*got) - want).abs() < want * 0.2,
+                "{pair:?}: {got} vs {want:.0}"
+            );
+        }
+    }
+
     /// Owner decision d22 (tracker #415): the secondary-count odds are one config
     /// value, and its default is retail. Both defaults: no file (the code's own) and
     /// the shipped `enchant_tuning.json`, whose explicit numbers must equal the APK's.
@@ -2646,12 +2735,14 @@ mod tests {
             "retail rings"
         );
         // The shipped file: HauDrauf's rules. Weapons and shields 25/50/25 (#415,
-        // 2026-10-25; shields #493, 2026-11-11); rings, necklaces and every armour slot
-        // 25/40/35 (#493, 2026-11-11). Every table is covered, so none is retail.
+        // 2026-10-25; shields #493, 2026-11-11); every armour slot 25/40/35 (#493,
+        // 2026-11-11); rings and necklaces 15/35/50 (#560, 2026-11-19). Every table is
+        // covered, so none is retail.
         for (i, t) in shipped.secondary_tables.iter().enumerate() {
             let want: &[f64] = match t.item_type {
                 Some(2) | Some(9) => &[0.25, 0.5, 0.25],
-                Some(3) | Some(10) | Some(11) => &[0.25, 0.4, 0.35],
+                Some(3) => &[0.25, 0.4, 0.35],
+                Some(10) | Some(11) => &[0.15, 0.35, 0.5],
                 other => panic!("table {i}: unexpected item type {other:?}"),
             };
             assert_eq!(
@@ -3109,15 +3200,16 @@ mod tests {
         );
     }
 
-    /// #393 (HauDrauf, 2026-10-15, "überall, keine Unterschiede"): a crafted
-    /// ring has one, two or three GRADING properties 8 / 17 / 75% of the time.
-    /// Before, the APK weights alone gave 22 / 20 / 58%.
+    /// #560 (HauDrauf, 2026-11-19): a crafted ring is grade 1 / 2 / 3 / 4 15 / 20 /
+    /// 25 / 40% of the time and never 5 or 6. Before, crafting used the #393 split
+    /// every source shares (8 / 17 / 75% by property count), which made grade 1 8%
+    /// and grades 5-6 31%.
     #[test]
-    fn crafted_jewelry_follows_the_property_count_split() {
-        use crate::jewelry_grade::JEWELRY_PROPERTY_COUNT_PERCENT;
-        let mut rng = seeded(393);
-        let n = 2400u64;
-        let mut count = [0u64; 4];
+    fn crafted_jewelry_follows_haudraufs_grade_split() {
+        use blades_lib::features::jewelry_grades::CRAFTED_JEWELRY_GRADE_PERCENT;
+        let mut rng = seeded(560);
+        let n = 4000u64;
+        let mut by_grade = [0u64; 7];
         for _ in 0..n {
             let results = serde_json::json!({"items":[{
                 "id": Uuid::new_v4(),
@@ -3130,19 +3222,25 @@ mod tests {
                 .expect("reward item")
                 .item;
             let g = &item.properties.grading;
+            let grade = item.grade.expect("crafted jewelry is graded");
             assert_eq!(
-                item.grade,
-                Some(g.iter().map(|p| p.tier).sum()),
+                grade,
+                g.iter().map(|p| p.tier).sum::<u64>(),
                 "grade = sum of tiers"
             );
-            count[g.len()] += 1;
+            by_grade[grade as usize] += 1;
         }
-        eprintln!("#393 crafted: {count:?} of {n}");
-        for (props, pct) in JEWELRY_PROPERTY_COUNT_PERCENT {
-            let got = count[props] as f64 * 100.0 / n as f64;
+        eprintln!("#560 crafted grades: {by_grade:?} of {n}");
+        assert_eq!(
+            by_grade[5] + by_grade[6],
+            0,
+            "grades 5 and 6 are never crafted"
+        );
+        for (grade, pct) in CRAFTED_JEWELRY_GRADE_PERCENT {
+            let got = by_grade[grade as usize] as f64 * 100.0 / n as f64;
             assert!(
-                (got - f64::from(pct)).abs() <= 3.0,
-                "{props} properties {got:.1}% (want {pct}%)"
+                (got - f64::from(pct)).abs() <= 2.5,
+                "grade {grade} {got:.1}% (want {pct}%)"
             );
         }
     }

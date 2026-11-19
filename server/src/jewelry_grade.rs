@@ -145,6 +145,31 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
     items: &HashMap<Uuid, GameDataItem>,
     rng: &mut R,
 ) {
+    grade_if_bare_with(item, items, rng, roll_tiers);
+}
+
+/// [`grade_if_bare`] for a ring or necklace the player CRAFTED: the grade by
+/// HauDrauf's crafted split (#560, `CRAFTED_JEWELRY_GRADE_PERCENT`: 1 = 15%,
+/// 2 = 20%, 3 = 25%, 4 = 40%), properties by [`fill`] as for every other source.
+pub fn grade_if_bare_crafted<R: Rng + ?Sized>(
+    item: &mut Item,
+    items: &HashMap<Uuid, GameDataItem>,
+    rng: &mut R,
+) {
+    grade_if_bare_with(item, items, rng, roll_crafted_tiers);
+}
+
+/// The GRADING tiers of one crafted ring or necklace (#560): one draw `0..100`.
+pub fn roll_crafted_tiers<R: Rng + ?Sized>(rng: &mut R) -> &'static [u64] {
+    blades_lib::features::jewelry_grades::crafted_tiers(rng.random_range(0..100u32))
+}
+
+fn grade_if_bare_with<R: Rng + ?Sized>(
+    item: &mut Item,
+    items: &HashMap<Uuid, GameDataItem>,
+    rng: &mut R,
+    tiers: fn(&mut R) -> &'static [u64],
+) {
     if item.grade.is_some() || !item.properties.grading.is_empty() {
         return;
     }
@@ -156,9 +181,14 @@ pub fn grade_if_bare<R: Rng + ?Sized>(
     let Some(item_type) = items.get(&item.item_template_id).map(|t| t.r#type) else {
         return;
     };
-    let Some((grade, grading)) = roll(item_type, rng) else {
+    if !matches!(item_type, RING | NECKLACE) {
+        return;
+    }
+    let t = tiers(rng);
+    let Some(grading) = fill(item_type, t, rng) else {
         return;
     };
+    let grade = grading.iter().map(|p| p.tier).sum();
     item.grade = Some(grade);
     item.properties.grading = grading;
     item.tempering_level = 0;
