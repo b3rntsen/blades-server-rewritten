@@ -1263,9 +1263,18 @@ fn finish_resolved(
     // already does for the perks.
     // Venom Strikes boosts weapon-alchemy poison status effectiveness/duration, not
     // Poison damage components (`VenomStrikesAbility` feeds `PoisonAlchemy`, 05 §3.5).
+    // ONCE PER ELEMENT per hit (#562, 2026-11-19). Retail's `DamageList` is a
+    // `Dictionary<int, Damage>` keyed by damage type (dump.cs:546280), so a hit holds
+    // at most one Fire entry and `ResolvePermanentDamageBonuses` pays the flat bonus
+    // once per element (retail corpus: 0 of 15,996 elemental hits carry two
+    // components of one element). We keep one component per enchant track, so a
+    // weapon with two fire tracks used to get Augmented Flames + Fortify Fire twice.
+    // Paid on the first positive component of each element only.
     if single_impact {
+        let mut paid: Vec<DamageType> = Vec::new();
         for (ty, v) in components.iter_mut() {
-            if is_elemental(*ty) && *v > 0.0 {
+            if is_elemental(*ty) && *v > 0.0 && !paid.contains(ty) {
+                paid.push(*ty);
                 *v += (attacker.perks.element_bonus(*ty) + fortify_for(attacker, *ty))
                     * fortify_scale;
             }
@@ -1727,6 +1736,31 @@ mod tests {
             (comp(&ordered, DamageType::Fire) - 115.5).abs() < 0.01,
             "racial % must multiply the flat fortify too, got {}",
             comp(&ordered, DamageType::Fire)
+        );
+    }
+
+    /// Tracker #562: a weapon with TWO fire enchant tracks and Augmented Flames got the
+    /// perk's flat +22.5 once per track. Retail keys the hit's damage by type, so the
+    /// flat bonus (perk + Fortify gear) is paid once per element per hit.
+    #[test]
+    fn augmented_and_fortify_are_paid_once_per_element_per_hit() {
+        let m = RetailDamageModel;
+        let now = Instant::now();
+        let mut base = plain_blade(Weight::Light);
+        base.enchants = vec![(DamageType::Fire, 10), (DamageType::Fire, 10)];
+        let mut perked = base.clone();
+        perked.perks.element_damage.push((DamageType::Fire, 22.5));
+        perked.element_fortify.push((DamageType::Fire, 7.5));
+        let hit = |lo: &Loadout| {
+            m.resolve_attack(lo, &target(), DamageSource::Attack, ActiveSide::Right, 1.0, 0, now)
+        };
+        let plain = comp(&hit(&base), DamageType::Fire);
+        let boosted = comp(&hit(&perked), DamageType::Fire);
+        assert!(plain > 0.0, "the two fire tracks must deal fire");
+        assert!(
+            (boosted - plain - 30.0).abs() < 0.01,
+            "perk + fortify must be paid once per hit (+30), got +{}",
+            boosted - plain
         );
     }
 
