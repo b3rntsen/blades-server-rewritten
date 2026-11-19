@@ -489,17 +489,59 @@ fn classified_side_for(fighter: &super::state::Fighter, now: Instant) -> Option<
 /// Judged only on a sample taken during THIS hold (at or after the press), so a
 /// bot, a client that streams nothing, or geometry left over from an earlier gesture
 /// never makes a swing miss.
-fn aimed_above_opponent_head(fighter: &super::state::Fighter, press_at: Option<Instant>) -> bool {
+///
+/// **Tracker #562.** Two further limits, so the rule only fires where retail evidence
+/// exists:
+/// * The sample must also postdate the end of the fighter's last maneuver. A skill's
+///   own touch is not this swing's aim.
+/// * The sample must be at or below [`WHIFF_JUDGED_Y_MAX`]. No retail swing was ever
+///   released higher than y 0.733 (p99 0.647, 1 455 swings), so retail tells us
+///   nothing about the top of the screen. All 10 live whiffs after #647 shipped came
+///   from one player at y 0.899–0.980, who reports hitting the body.
+fn aimed_above_opponent_head(
+    fighter: &super::state::Fighter,
+    press_at: Option<Instant>,
+) -> AimCall {
     let (Some(press), Some(at), Some(y), Some(head)) = (
         press_at,
         fighter.last_input_at,
         fighter.last_input_y,
         fighter.last_input_head_y,
     ) else {
-        return false;
+        return AimCall::NotJudged;
     };
-    at >= press && y.is_finite() && y > head
+    let after_last_maneuver = fighter
+        .executions
+        .iter()
+        .filter(|e| e.is_maneuver)
+        .map(|e| e.until)
+        .max()
+        .is_none_or(|end| at >= end);
+    if at < press || !after_last_maneuver || !y.is_finite() || y <= head {
+        return AimCall::NotJudged;
+    }
+    if y > WHIFF_JUDGED_Y_MAX {
+        return AimCall::AboveRetailRange { y, head };
+    }
+    AimCall::Whiff
 }
+
+/// What [`aimed_above_opponent_head`] decided about one release.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AimCall {
+    /// No usable sample, or aimed at the body: the swing is not a whiff.
+    NotJudged,
+    /// Above the head line: the swing whiffs.
+    Whiff,
+    /// Above the head line but higher than any retail swing release: not judged,
+    /// and logged with the swing once it is accepted (#562).
+    AboveRetailRange { y: f32, head: f32 },
+}
+
+/// The highest pointer Y at which a swing may be judged a whiff (#562). Retail's
+/// highest swing release in 42 captured sessions was 0.733; the margin keeps every
+/// retail-observed miss inside the rule.
+const WHIFF_JUDGED_Y_MAX: f32 = 0.80;
 
 /// Compare the server-measured hold against the client-reported one and log a
 /// divergence. **Purely observational** — the returned value is never used for damage.
@@ -983,6 +1025,28 @@ pub fn on_c2s_input(
         && input::parse_execute_ability(user_data).is_none()
         && !matches!(parse_input_activate(user_data), Some(act) if !act.held && act.block_zone == Some(true))
     {
+        // Tracker #562 lead: an attack press dropped here loses the whole swing. If the
+        // client's maneuver ends before ours, that reads as "the first swing after a
+        // skill doesn't hit", so make it visible in prod. No behaviour change.
+        if matches!(parse_input_activate(user_data), Some(act) if act.held && act.block_zone != Some(true))
+        {
+            let f = &combat.fighters[sender];
+            let running = f
+                .executions
+                .iter()
+                .filter(|e| e.is_maneuver && now < e.until)
+                .max_by_key(|e| e.until);
+            let remaining_ms = running
+                .map(|e| e.until.saturating_duration_since(now).as_secs_f32() * 1000.0)
+                .unwrap_or(0.0);
+            let maneuver = running
+                .and_then(|e| super::gamedata::ability(&e.ability_uuid).map(|a| a.editor_name))
+                .unwrap_or("?");
+            info!(
+                "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=dropped_maneuver_lock remaining_ms={remaining_ms:.1} maneuver={maneuver}",
+                combat.game_session_id, f.loadout.display_name,
+            );
+        }
         let f = &mut combat.fighters[sender];
         f.charge_press_at = None;
         f.pending_manual_attack = None;
@@ -1118,10 +1182,15 @@ pub fn on_c2s_input(
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
             .unwrap_or(0.0);
-        combat.fighters[sender].swing_aimed_above_head = aimed_above_opponent_head(
+        let aim = aimed_above_opponent_head(
             &combat.fighters[sender],
             combat.fighters[sender].charge_press_at,
         );
+        combat.fighters[sender].swing_aimed_above_head = aim == AimCall::Whiff;
+        combat.fighters[sender].swing_aim_not_judged = match aim {
+            AimCall::AboveRetailRange { y, head } => Some((y, head)),
+            _ => None,
+        };
         combat.fighters[sender].charge_press_at = None;
         charge_cross_check(sender, server_hold, act.client_charge);
         // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
@@ -1249,6 +1318,7 @@ fn resolve_swing_with_side(
     let manual_attack = combat.fighters[sender].pending_manual_attack.take();
     // Taken here for the same reason: a throttled release must not leave it set.
     let whiff = std::mem::take(&mut combat.fighters[sender].swing_aimed_above_head);
+    let not_judged_high = combat.fighters[sender].swing_aim_not_judged.take();
     if manual_attack.is_some() {
         // Measurement for #171: one line per committed swing whose hold carried a
         // START-flagged path. Compare against `outcome=accepted` swing lines.
@@ -1371,6 +1441,14 @@ fn resolve_swing_with_side(
     //
     // Reuses FOLLOW_THROUGH_DELAY rather than adding a second constant: there is one
     // moment of impact and it should have one name.
+    if let Some((y, head)) = not_judged_high {
+        // Tracker #562: logged here, once per accepted swing, in the whiff line's shape.
+        info!(
+            "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=aim_not_judged_above_retail y={y:.3} head={head:.3}",
+            combat.game_session_id,
+            combat.fighters[sender].loadout.display_name,
+        );
+    }
     if whiff {
         // Tracker #549: aimed above the opponent's head. The swing animates on both
         // screens, as retail's did, but nothing lands, so the combo does not advance
@@ -12349,6 +12427,53 @@ mod phase4_tests {
         assert!(
             c.fighters[1].health < hp,
             "a high sample from before the press is stale"
+        );
+    }
+
+    /// Tracker #562, the live log shape (match 758d98d5, 08:29:49Z): a normal swing
+    /// at the body after a skill reached the server with a last sample at y 0.98
+    /// (head 0.69) and was whiffed. Retail never released a swing above y 0.733, so
+    /// such a sample is not judged, and the swing lands.
+    #[test]
+    fn report_562_a_swing_sample_above_any_retail_release_is_not_judged() {
+        let now = Instant::now();
+        let mut c = live_combat(now);
+        let hp = c.fighters[1].health;
+        // head byte 176 = 0.690
+        swing_aimed(&mut c, 0.9798, 176, now + Duration::from_millis(900));
+        assert!(c.fighters[1].health < hp, "the swing must land");
+        assert!(
+            c.fighters[0].swing_aim_not_judged.is_none(),
+            "the unjudged sample is consumed (and logged) by the commit"
+        );
+    }
+
+    /// Tracker #562: a sample taken before the last maneuver ended is the skill's
+    /// touch, not this swing's aim, even if it arrived after the press.
+    #[test]
+    fn report_562_a_sample_from_before_the_maneuver_ended_is_not_judged() {
+        let now = Instant::now();
+        let mut f = live_combat(now).fighters[0].clone();
+        let press = now;
+        f.last_input_at = Some(now + Duration::from_millis(100));
+        f.last_input_y = Some(0.70);
+        f.last_input_head_y = Some(0.60);
+        assert_eq!(
+            aimed_above_opponent_head(&f, Some(press)),
+            AimCall::Whiff,
+            "control: judged with no maneuver"
+        );
+        f.executions.push(super::super::state::Execution {
+            ability_uuid: "9b915ec3-c63b-4b62-b417-4c5436d45fc1".into(),
+            started_at: now,
+            until: now + Duration::from_millis(200),
+            cooldown: Duration::ZERO,
+            is_maneuver: true,
+        });
+        assert_eq!(
+            aimed_above_opponent_head(&f, Some(press)),
+            AimCall::NotJudged,
+            "a sample older than the maneuver's end must not decide the swing"
         );
     }
 
