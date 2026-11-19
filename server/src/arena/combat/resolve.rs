@@ -489,6 +489,15 @@ fn classified_side_for(fighter: &super::state::Fighter, now: Instant) -> Option<
 /// Judged only on a sample taken during THIS hold (at or after the press), so a
 /// bot, a client that streams nothing, or geometry left over from an earlier gesture
 /// never makes a swing miss.
+///
+/// **Tracker #562.** Two further limits, so the rule only fires where retail evidence
+/// exists:
+/// * The sample must also postdate the end of the fighter's last maneuver. A skill's
+///   own touch is not this swing's aim.
+/// * The sample must be at or below [`WHIFF_JUDGED_Y_MAX`]. No retail swing was ever
+///   released higher than y 0.733 (p99 0.647, 1 455 swings), so retail tells us
+///   nothing about the top of the screen. All 10 live whiffs after #647 shipped came
+///   from one player at y 0.899–0.980, who reports hitting the body.
 fn aimed_above_opponent_head(fighter: &super::state::Fighter, press_at: Option<Instant>) -> bool {
     let (Some(press), Some(at), Some(y), Some(head)) = (
         press_at,
@@ -498,8 +507,30 @@ fn aimed_above_opponent_head(fighter: &super::state::Fighter, press_at: Option<I
     ) else {
         return false;
     };
-    at >= press && y.is_finite() && y > head
+    let after_last_maneuver = fighter
+        .executions
+        .iter()
+        .filter(|e| e.is_maneuver)
+        .map(|e| e.until)
+        .max()
+        .is_none_or(|end| at >= end);
+    if at < press || !after_last_maneuver || !y.is_finite() || y <= head {
+        return false;
+    }
+    if y > WHIFF_JUDGED_Y_MAX {
+        info!(
+            "combat: swing released at y={y:.3} (head {head:.3}) is above any retail \
+             swing release — not judged as a whiff (#562)"
+        );
+        return false;
+    }
+    true
 }
+
+/// The highest pointer Y at which a swing may be judged a whiff (#562). Retail's
+/// highest swing release in 42 captured sessions was 0.733; the margin keeps every
+/// retail-observed miss inside the rule.
+const WHIFF_JUDGED_Y_MAX: f32 = 0.80;
 
 /// Compare the server-measured hold against the client-reported one and log a
 /// divergence. **Purely observational** — the returned value is never used for damage.
@@ -12349,6 +12380,47 @@ mod phase4_tests {
         assert!(
             c.fighters[1].health < hp,
             "a high sample from before the press is stale"
+        );
+    }
+
+    /// Tracker #562, the live log shape (match 758d98d5, 08:29:49Z): a normal swing
+    /// at the body after a skill reached the server with a last sample at y 0.98
+    /// (head 0.69) and was whiffed. Retail never released a swing above y 0.733, so
+    /// such a sample is not judged, and the swing lands.
+    #[test]
+    fn report_562_a_swing_sample_above_any_retail_release_is_not_judged() {
+        let now = Instant::now();
+        let mut c = live_combat(now);
+        let hp = c.fighters[1].health;
+        // head byte 176 = 0.690
+        swing_aimed(&mut c, 0.9798, 176, now + Duration::from_millis(900));
+        assert!(c.fighters[1].health < hp, "the swing must land");
+    }
+
+    /// Tracker #562: a sample taken before the last maneuver ended is the skill's
+    /// touch, not this swing's aim, even if it arrived after the press.
+    #[test]
+    fn report_562_a_sample_from_before_the_maneuver_ended_is_not_judged() {
+        let now = Instant::now();
+        let mut f = live_combat(now).fighters[0].clone();
+        let press = now;
+        f.last_input_at = Some(now + Duration::from_millis(100));
+        f.last_input_y = Some(0.70);
+        f.last_input_head_y = Some(0.60);
+        assert!(
+            aimed_above_opponent_head(&f, Some(press)),
+            "control: judged with no maneuver"
+        );
+        f.executions.push(super::super::state::Execution {
+            ability_uuid: "9b915ec3-c63b-4b62-b417-4c5436d45fc1".into(),
+            started_at: now,
+            until: now + Duration::from_millis(200),
+            cooldown: Duration::ZERO,
+            is_maneuver: true,
+        });
+        assert!(
+            !aimed_above_opponent_head(&f, Some(press)),
+            "a sample older than the maneuver's end must not decide the swing"
         );
     }
 
