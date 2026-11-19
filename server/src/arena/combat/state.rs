@@ -1904,6 +1904,9 @@ pub struct Fighter {
     /// down, so the held guard goes back up when the lock ends — see
     /// [`Self::reconcile_held_guard_resume`] (report #530).
     pub guard_resume_pending: bool,
+    /// An attack press arrived during a maneuver and has not been released: its charge
+    /// begins when the maneuver ends (tracker #562; `resolve::resume_held_attack`).
+    pub attack_resume_pending: bool,
 
     // --- Conditioning / status-effect machinery (status-resistance-spec §5) ---
     /// Sliding per-element damage window: `DamageType → [(amount, recorded_at)]`. Each
@@ -2427,6 +2430,7 @@ impl Fighter {
             last_input_block_zone: None,
             guard_held: false,
             guard_resume_pending: false,
+            attack_resume_pending: false,
             damage_history: HashMap::new(),
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
@@ -4582,6 +4586,7 @@ impl MatchCombat {
             f.last_input_block_zone = None;
             f.guard_held = false;
             f.guard_resume_pending = false;
+            f.attack_resume_pending = false;
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();
