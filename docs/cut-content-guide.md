@@ -106,7 +106,10 @@ small extension of it.
    `_targetSectionIndex` 1, `_quantity` 4, `_countPerSpawnerMin/Max` 1/1):
    - `_uid._id` → a fresh UUID (also used on the server, see A4);
    - `EnemyDataPointer._uid._id` → `67d9e5a6-191c-4c8f-863e-4c608d7cf3d3`;
-   - `_targetSectionIndex` → `0` (EQ18 has exactly one section, see B3);
+   - `_targetSectionIndex` → `-1` (ALL_SECTIONS). Every one of EQ18's 9 room constraints has
+     `_targetSection = -1`, so no room is in section 0 and a group targeting 0 finds no spawner
+     (#555, 2026-11-19; all 36 retail procedural groups on fixed layouts target a section some room
+     constraint carries, and EQ28/MQ23, all -1, use -1);
    - `Spawner._uidDungeon._id` → the target dungeon's uid.
    Appending to the `_spawnGroupsEnemy` list is a typetree edit
    (`o.save_typetree(t)`), not a new object, so no path-id work is needed.
@@ -233,7 +236,7 @@ whose title is a placeholder (`[PL] EQ18 Title`). It is an event quest (`_type` 
 `_questDifficulty._targetLevel` 10, `_difficultyOffsets` [-6,-3,0,3,7],
 level-based rewards Lumber + Sigils (Medium), final reward Smithing 1).
 Its dungeon `EQ18_DungeonSettings` `57da57d2-4ca4-43a1-ac87-26801fe602d0`:
-forest kit, **one section of 5 rooms**, a fixed layout, one player spawn group,
+forest kit, **9 room entries (7 distinct rooms), all room constraints at section -1**, a fixed layout, one player spawn group,
 **zero** enemy, chest or item groups. Its rooms, with how many Enemy-type
 spawners each `RoomInfo` declares:
 
