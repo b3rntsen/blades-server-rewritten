@@ -1865,9 +1865,6 @@ pub struct Fighter {
     /// The swing being committed was released above the opponent's head: it animates
     /// but deals no damage. Set by the gmid-46 release, consumed by the swing commit.
     pub swing_aimed_above_head: bool,
-    /// The swing being committed was released above the head line but higher than any
-    /// retail swing, so it was not judged (#562). `(y, head)`, logged at commit.
-    pub swing_aim_not_judged: Option<(f32, f32)>,
     /// When [`Self::last_input_x`] was recorded. A sample older than
     /// `SIDE_CLASSIFY_SAMPLE_TTL` is treated as stale and ignored.
     pub last_input_at: Option<Instant>,
@@ -2422,7 +2419,6 @@ impl Fighter {
             last_input_y: None,
             last_input_head_y: None,
             swing_aimed_above_head: false,
-            swing_aim_not_judged: None,
             last_input_at: None,
             pending_manual_attack: None,
             active_manual_attack: None,
@@ -4578,7 +4574,6 @@ impl MatchCombat {
             f.last_input_y = None;
             f.last_input_head_y = None;
             f.swing_aimed_above_head = false;
-            f.swing_aim_not_judged = None;
             f.last_input_at = None;
             f.pending_manual_attack = None;
             f.active_manual_attack = None;

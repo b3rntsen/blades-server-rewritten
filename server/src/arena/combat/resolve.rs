@@ -494,10 +494,10 @@ fn classified_side_for(fighter: &super::state::Fighter, now: Instant) -> Option<
 /// exists:
 /// * The sample must also postdate the end of the fighter's last maneuver. A skill's
 ///   own touch is not this swing's aim.
-/// * The sample must be at or below [`WHIFF_JUDGED_Y_MAX`]. No retail swing was ever
-///   released higher than y 0.733 (p99 0.647, 1 455 swings), so retail tells us
-///   nothing about the top of the screen. All 10 live whiffs after #647 shipped came
-///   from one player at y 0.899–0.980, who reports hitting the body.
+/// * There is no upper bound: a swing released anywhere above the head line whiffs,
+///   however high (#562). A 0.80 cap (#652) was removed once the real cause of the
+///   "first swing after a skill misses" reports turned out to be the maneuver lock
+///   (#653); the cap only let deliberate over-the-guard swings land.
 fn aimed_above_opponent_head(
     fighter: &super::state::Fighter,
     press_at: Option<Instant>,
@@ -520,9 +520,6 @@ fn aimed_above_opponent_head(
     if at < press || !after_last_maneuver || !y.is_finite() || y <= head {
         return AimCall::NotJudged;
     }
-    if y > WHIFF_JUDGED_Y_MAX {
-        return AimCall::AboveRetailRange { y, head };
-    }
     AimCall::Whiff
 }
 
@@ -533,15 +530,7 @@ enum AimCall {
     NotJudged,
     /// Above the head line: the swing whiffs.
     Whiff,
-    /// Above the head line but higher than any retail swing release: not judged,
-    /// and logged with the swing once it is accepted (#562).
-    AboveRetailRange { y: f32, head: f32 },
 }
-
-/// The highest pointer Y at which a swing may be judged a whiff (#562). Retail's
-/// highest swing release in 42 captured sessions was 0.733; the margin keeps every
-/// retail-observed miss inside the rule.
-const WHIFF_JUDGED_Y_MAX: f32 = 0.80;
 
 /// Compare the server-measured hold against the client-reported one and log a
 /// divergence. **Purely observational** — the returned value is never used for damage.
@@ -1202,10 +1191,6 @@ pub fn on_c2s_input(
             combat.fighters[sender].charge_press_at,
         );
         combat.fighters[sender].swing_aimed_above_head = aim == AimCall::Whiff;
-        combat.fighters[sender].swing_aim_not_judged = match aim {
-            AimCall::AboveRetailRange { y, head } => Some((y, head)),
-            _ => None,
-        };
         combat.fighters[sender].charge_press_at = None;
         charge_cross_check(sender, server_hold, act.client_charge);
         // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
@@ -1333,7 +1318,6 @@ fn resolve_swing_with_side(
     let manual_attack = combat.fighters[sender].pending_manual_attack.take();
     // Taken here for the same reason: a throttled release must not leave it set.
     let whiff = std::mem::take(&mut combat.fighters[sender].swing_aimed_above_head);
-    let not_judged_high = combat.fighters[sender].swing_aim_not_judged.take();
     if manual_attack.is_some() {
         // Measurement for #171: one line per committed swing whose hold carried a
         // START-flagged path. Compare against `outcome=accepted` swing lines.
@@ -1456,14 +1440,6 @@ fn resolve_swing_with_side(
     //
     // Reuses FOLLOW_THROUGH_DELAY rather than adding a second constant: there is one
     // moment of impact and it should have one name.
-    if let Some((y, head)) = not_judged_high {
-        // Tracker #562: logged here, once per accepted swing, in the whiff line's shape.
-        info!(
-            "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=aim_not_judged_above_retail y={y:.3} head={head:.3}",
-            combat.game_session_id,
-            combat.fighters[sender].loadout.display_name,
-        );
-    }
     if whiff {
         // Tracker #549: aimed above the opponent's head. The swing animates on both
         // screens, as retail's did, but nothing lands, so the combo does not advance
@@ -12670,22 +12646,18 @@ mod phase4_tests {
         );
     }
 
-    /// Tracker #562, the live log shape (match 758d98d5, 08:29:49Z): a normal swing
-    /// at the body after a skill reached the server with a last sample at y 0.98
-    /// (head 0.69) and was whiffed. Retail never released a swing above y 0.733, so
-    /// such a sample is not judged, and the swing lands.
+    /// Tracker #562 (msg 3683, "overhead strikes stopped working again"): a swing
+    /// released at the very top of the screen (y 0.95, head 0.69) is aimed over the
+    /// head and whiffs like any other; the retail rule has no upper bound.
     #[test]
-    fn report_562_a_swing_sample_above_any_retail_release_is_not_judged() {
+    fn report_562_a_swing_released_at_the_top_of_the_screen_whiffs() {
         let now = Instant::now();
         let mut c = live_combat(now);
         let hp = c.fighters[1].health;
         // head byte 176 = 0.690
-        swing_aimed(&mut c, 0.9798, 176, now + Duration::from_millis(900));
-        assert!(c.fighters[1].health < hp, "the swing must land");
-        assert!(
-            c.fighters[0].swing_aim_not_judged.is_none(),
-            "the unjudged sample is consumed (and logged) by the commit"
-        );
+        swing_aimed(&mut c, 0.95, 176, now + Duration::from_millis(900));
+        assert_eq!(c.fighters[1].health, hp, "an overhead swing deals nothing");
+        assert!(c.pending_hits.is_empty(), "and leaves no hit in flight");
     }
 
     /// Tracker #562: a sample taken before the last maneuver ended is the skill's
