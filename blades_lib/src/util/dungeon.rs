@@ -341,12 +341,6 @@ fn spawn_loot_tables() -> &'static serde_json::Value {
     })
 }
 
-/// The loot tables this floor spawn carries: what retail was observed sending,
-/// unioned with what the spawn's interactable names.
-///
-/// Order is deterministic (the interactable's first, then the mined additions in
-/// corpus order) and each table is rolled under its own seed, so adding one
-/// never moves the result of another.
 // -- APK key tables never captured ------------------------------------------
 //
 // A floor spawn or enemy group whose APK `_lootTableList` names the DoorKey
@@ -357,7 +351,7 @@ fn spawn_loot_tables() -> &'static serde_json::Value {
 // the key never dropped: the locked final door of "Into the Fire" (DS03) could
 // not be opened (report #573). Read from the 1.31 APK `dungeonsettings`; the
 // BreakableTest gym spawn is left out.
-pub(crate) const DOOR_KEY_TABLE_ID: u128 = 0x8858f284_4f33_4da4_8085_0befa7ef2637;
+pub const DOOR_KEY_TABLE_ID: u128 = 0x8858f284_4f33_4da4_8085_0befa7ef2637;
 /// Floor spawns: DS03 "KEY", EQ17 "Key_Section01", GH03a's key breakable.
 const APK_KEY_TABLE_ITEM_SPAWNS: &[u128] = &[
     0x6f2bc468_97c3_491c_aef3_b0f515a30dcf,
@@ -365,8 +359,15 @@ const APK_KEY_TABLE_ITEM_SPAWNS: &[u128] = &[
     0x9abc76b6_4c98_4c0b_b2a8_e045e0e7697a,
 ];
 /// Enemy groups: SQ202_DungeonSettings_C's key holder.
-const APK_KEY_TABLE_ENEMY_GROUPS: &[u128] = &[0x692777ad_5627_4984_b45d_6d9f3d09e809];
+pub const APK_KEY_TABLE_ENEMY_GROUPS: &[u128] = &[0x692777ad_5627_4984_b45d_6d9f3d09e809];
 
+/// The loot tables this floor spawn carries: what retail was observed sending,
+/// unioned with what the spawn's interactable names, plus the DoorKey table on
+/// an APK key spawn retail was never captured on (#573).
+///
+/// Order is deterministic (the interactable's first, then the APK DoorKey table,
+/// then the mined additions in corpus order) and each table is rolled under its
+/// own seed, so adding one never moves the result of another.
 fn tables_for_spawn(spawn_id: &Uuid, from_interactable: &[Uuid]) -> Vec<Uuid> {
     let mut out: Vec<Uuid> = from_interactable.to_vec();
     if APK_KEY_TABLE_ITEM_SPAWNS.contains(&spawn_id.as_u128()) {
@@ -3979,7 +3980,7 @@ mod spawn_table_tests {
             .flat_map(|e| e.loot_table_loot.values())
             .filter_map(|l| l.stackable_items.get(&uuid(DOOR_KEY)))
             .sum();
-        assert!(keys >= 1, "SQ202_C's key holder dropped no door key");
+        assert_eq!(keys, 1, "SQ202_C's key holder drops exactly one door key");
     }
 
     /// CONTROL, and the one that keeps the test above honest: the other
