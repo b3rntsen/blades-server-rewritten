@@ -152,9 +152,13 @@ fn install_shield(lo: &mut Loadout, s: &'static gamedata::ShieldStats, tempering
 /// applied: PvP items do not degrade (`DegradeBlockingItem` is a `ret` stub on both
 /// PvP actors) and its value is not extracted.
 pub fn blocking_item_rating(uuid: &str, block_base: f32, tempering_level: u64) -> f32 {
-    super::block_temper::tempered_block_value(uuid, tempering_level)
-        .unwrap_or(block_base)
-        .ceil()
+    blocking_item_raw_rating(uuid, block_base, tempering_level).ceil()
+}
+
+/// The blocking item's rating before `CeilToInt`: what `GetRawXValue@0x24d0ae4`
+/// multiplies a material property by (tracker #562).
+pub fn blocking_item_raw_rating(uuid: &str, block_base: f32, tempering_level: u64) -> f32 {
+    super::block_temper::tempered_block_value(uuid, tempering_level).unwrap_or(block_base)
 }
 
 /// One armour piece's rating `P`: the temper-level `protection` value when the piece
@@ -296,7 +300,9 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             item_rating_for_material = Some(rating);
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
-            item_rating_for_material = Some(blocking_item_rating(
+            // Material properties scale by the UNROUNDED rating, as the armour path
+            // does; only the equipped block rating is ceiled.
+            item_rating_for_material = Some(blocking_item_raw_rating(
                 &template,
                 s.block_base,
                 eq.item.tempering_level,
@@ -1095,8 +1101,13 @@ fn enchant_logic_is_primary(logic: &str) -> bool {
     )
 }
 
+/// A material property (`_propertyType` 2): the client scales it by the item's
+/// rating and never by Synergy or the primary multiplier. Most carry "Material" in
+/// the logic name; the typed block bonuses do not (tracker #562), and Templar is
+/// `_propertyType` 4, so it is not one of them.
 fn enchant_logic_is_material(logic: &str) -> bool {
     logic.contains("MaterialPropertyLogic")
+        || (logic.starts_with("BlockReduction") && logic != "BlockReductionTemplarPropertyLogic")
 }
 
 fn item_property_xvalue_multiplier(
@@ -4284,6 +4295,20 @@ mod report_562_material_block_bonus {
                 "optimal={optimal}: bashing {bash} before armour"
             );
         }
+    }
+
+    /// A material block bonus is never multiplied by Enchantment Synergy, even when
+    /// the same property sits on two equipped items (`_propertyType` 2).
+    #[test]
+    fn synergy_never_multiplies_a_material_block_bonus() {
+        for logic in [
+            "BlockReductionFrostPropertyLogic",
+            "BlockReductionBashingPropertyLogic",
+        ] {
+            assert_eq!(item_property_xvalue_multiplier(logic, 1.0, 0.25, 2), 1.0, "{logic}");
+        }
+        // Templar is `_propertyType` 4, not material: unchanged behaviour.
+        assert!(!enchant_logic_is_material("BlockReductionTemplarPropertyLogic"));
     }
 
     /// Control: a shield WITHOUT a matching bonus keeps the textbook cut. s572 ALF,
