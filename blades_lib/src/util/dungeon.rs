@@ -347,8 +347,34 @@ fn spawn_loot_tables() -> &'static serde_json::Value {
 /// Order is deterministic (the interactable's first, then the mined additions in
 /// corpus order) and each table is rolled under its own seed, so adding one
 /// never moves the result of another.
+// -- APK key tables never captured ------------------------------------------
+//
+// A floor spawn or enemy group whose APK `_lootTableList` names the DoorKey
+// table (8858f284) is a key holder. Retail sent that table in `lootTableLoot` on
+// every such spawn it was captured on (all 11 mined item spawns, e.g. EQ01's
+// "Key" 3b817645 next to its interactable's own table; and 5 of the 6 enemy
+// groups). These were never captured, so neither corpus names the table and
+// the key never dropped: the locked final door of "Into the Fire" (DS03) could
+// not be opened (report #573). Read from the 1.31 APK `dungeonsettings`; the
+// BreakableTest gym spawn is left out.
+pub(crate) const DOOR_KEY_TABLE_ID: u128 = 0x8858f284_4f33_4da4_8085_0befa7ef2637;
+/// Floor spawns: DS03 "KEY", EQ17 "Key_Section01", GH03a's key breakable.
+const APK_KEY_TABLE_ITEM_SPAWNS: &[u128] = &[
+    0x6f2bc468_97c3_491c_aef3_b0f515a30dcf,
+    0xc2758d02_b482_43d2_9a81_cb334232a422,
+    0x9abc76b6_4c98_4c0b_b2a8_e045e0e7697a,
+];
+/// Enemy groups: SQ202_DungeonSettings_C's key holder.
+const APK_KEY_TABLE_ENEMY_GROUPS: &[u128] = &[0x692777ad_5627_4984_b45d_6d9f3d09e809];
+
 fn tables_for_spawn(spawn_id: &Uuid, from_interactable: &[Uuid]) -> Vec<Uuid> {
     let mut out: Vec<Uuid> = from_interactable.to_vec();
+    if APK_KEY_TABLE_ITEM_SPAWNS.contains(&spawn_id.as_u128()) {
+        let key = Uuid::from_u128(DOOR_KEY_TABLE_ID);
+        if !out.contains(&key) {
+            out.push(key);
+        }
+    }
     let mined = spawn_loot_tables()
         .get("spawns")
         .and_then(|s| s.get(spawn_id.to_string()))
@@ -1020,6 +1046,13 @@ fn roll_enemy_loot_with_context(
         // Never observed: see GOLD_LOOT_TABLE_ID.
         None => vec![Uuid::from_u128(GOLD_LOOT_TABLE_ID)],
     };
+    let mut tables = tables;
+    if !ctx.abyss && APK_KEY_TABLE_ENEMY_GROUPS.contains(&spawn_group_id.as_u128()) {
+        let key = Uuid::from_u128(DOOR_KEY_TABLE_ID);
+        if !tables.contains(&key) {
+            tables.push(key);
+        }
+    }
 
     for table_id in tables {
         let abyss_table = ctx
@@ -3437,6 +3470,8 @@ mod enemy_loot_tests {
         let unobserved: Vec<(Uuid, Uuid)> = all_spawn_groups(&game_data)
             .into_iter()
             .filter(|(_, g)| !observed.contains_key(&g.to_string()))
+            // The APK key holders also carry their DoorKey table (#573).
+            .filter(|(_, g)| !APK_KEY_TABLE_ENEMY_GROUPS.contains(&g.as_u128()))
             .collect();
         assert!(
             unobserved.len() > 800,
@@ -3874,6 +3909,77 @@ mod spawn_table_tests {
                 .sum();
             assert!(keys >= 1, "pot {spawn} yielded no door key");
         }
+    }
+
+    /// Report #573: DS03 "Into the Fire" — the "KEY" floor spawn names the
+    /// DoorKey table only in the APK's `_lootTableList`; retail was never captured
+    /// on it, so the key never dropped and the final door stayed locked. The same
+    /// holds for EQ17's "Key_Section01" and GH03a's key breakable. Exactly the
+    /// listed spawn of each dungeon yields the key; no other spawn does.
+    #[test]
+    fn report_573_apk_key_spawns_yield_the_door_key_and_only_they_do() {
+        let game_data = game_data();
+        for (dungeon, key_spawn) in [
+            (
+                "172c856c-bde1-4261-91db-e1101964029f",
+                "6f2bc468-97c3-491c-aef3-b0f515a30dcf",
+            ),
+            (
+                "69137ee3-95e3-4b3a-a9fa-8db5a4159c18",
+                "c2758d02-b482-43d2-9a81-cb334232a422",
+            ),
+            (
+                "91890529-00c0-437a-9b36-1dffb7505561",
+                "9abc76b6-4c98-4c0b-b2a8-e045e0e7697a",
+            ),
+        ] {
+            for level in [5, 30, 60] {
+                let generated = generate_for_dungeon(&game_data, &uuid(dungeon), level, 3)
+                    .unwrap_or_else(|| panic!("{dungeon} generates"));
+                let with_key: Vec<Uuid> = generated
+                    .item_generated_data
+                    .iter()
+                    .filter(|(_, results)| {
+                        results.iter().any(|r| {
+                            r.loot_table_loot
+                                .values()
+                                .any(|l| l.stackable_items.contains_key(&uuid(DOOR_KEY)))
+                        })
+                    })
+                    .map(|(spawn, _)| *spawn)
+                    .collect();
+                assert_eq!(
+                    with_key,
+                    vec![uuid(key_spawn)],
+                    "{dungeon} at level {level}: exactly its key spawn holds the door key"
+                );
+            }
+        }
+    }
+
+    /// Report #573, the enemy half: SQ202_C's key holder names the DoorKey
+    /// table in the APK but was never captured, so it fell back to gold only.
+    #[test]
+    fn report_573_sq202c_key_holder_drops_the_door_key() {
+        let game_data = game_data();
+        let group = uuid("692777ad-5627-4984-b45d-6d9f3d09e809");
+        let generated = generate_for_dungeon(
+            &game_data,
+            &uuid("1329f02d-2d6e-4915-8e88-d3b90e737471"),
+            20,
+            3,
+        )
+        .expect("SQ202_C generates");
+        let keys: u64 = generated
+            .enemy_generated_data
+            .get(&group)
+            .expect("the key holder is a group of SQ202_C")
+            .iter()
+            .flatten()
+            .flat_map(|e| e.loot_table_loot.values())
+            .filter_map(|l| l.stackable_items.get(&uuid(DOOR_KEY)))
+            .sum();
+        assert!(keys >= 1, "SQ202_C's key holder dropped no door key");
     }
 
     /// CONTROL, and the one that keeps the test above honest: the other
