@@ -1062,6 +1062,26 @@ pub async fn enter_quest_dungeon(
         return Ok(entered);
     }
 
+    enter_ordinary_dungeon(
+        &mut conn,
+        &globals.game_data,
+        character_id_normal,
+        quest_id,
+        body,
+    )
+    .await
+}
+
+/// The ordinary (story quest, town job) half of [`enter_quest_dungeon`], lifted out
+/// so tests drive the real path. Both a first entry and a re-entry set
+/// `currentQuestDungeon` in the same transaction (tracker #566).
+async fn enter_ordinary_dungeon(
+    conn: &mut AsyncPgConnection,
+    game_data: &GameData,
+    character_id_normal: Uuid,
+    quest_id: Uuid,
+    body: EnterDungeonRequest,
+) -> Result<Json<EnterDungeonResponse>, BladeApiError> {
     conn.transaction(move |mut conn| {
         async move {
             let quest_query = {
@@ -1082,7 +1102,7 @@ pub async fn enter_quest_dungeon(
 
             // Before the row-existence check on purpose — see the doc comment.
             let dungeon_settings_id = resolve_dungeon_settings_id(
-                &globals.game_data,
+                game_data,
                 quest_id,
                 quest_row.as_ref().map(|q| &q.info.0),
             )?;
@@ -1175,6 +1195,8 @@ pub async fn enter_quest_dungeon(
                         .await
                         .unwrap();
                 }
+                // Same transaction as the attempt it names (tracker #566).
+                mark_current_dungeon(conn, character_id_normal, quest_id).await?;
 
                 Ok(Json(EnterDungeonResponse {
                     dungeon_status: status,
@@ -4033,6 +4055,49 @@ mod event_run_lifecycle_db {
             .await
             .unwrap();
         assert_eq!(map.get(&tpl), Some(&p.instance));
+    }
+
+    /// A FIRST entry into a story quest or job sets the pointer too: the emulator run
+    /// of #658 showed a job not resuming because only the re-entry branch did. Drives
+    /// the real ordinary path ([`enter_ordinary_dungeon`]).
+    #[tokio::test]
+    async fn a_first_ordinary_entry_sets_the_pointer() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let quest_id = Uuid::new_v4();
+        let mut info = quest_info(&mut conn, &p).await;
+        info["type"] = json!("JOB");
+        info["completed"] = json!(false);
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data) VALUES ($1, $2, $3, 'null'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(quest_id)
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Jsonb, _>(info)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(pointer(&mut conn, p.character).await, Value::Null);
+
+        enter_ordinary_dungeon(
+            &mut conn,
+            &world().gd,
+            p.character,
+            quest_id,
+            EnterDungeonRequest {
+                dungeon_instance: Some(b64("INSTANCE")),
+                current_state: b64("SAVE-AT-ENTRY"),
+            },
+        )
+        .await
+        .expect("first entry");
+        let id = Value::String(quest_id.to_string());
+        assert_eq!(
+            pointer(&mut conn, p.character).await,
+            id,
+            "first entry stores the quest"
+        );
+        assert_eq!(boot(&mut conn, &p, NOW).await, id, "and a boot serves it");
     }
 
     /// An exit whose row is already pruned (404) still clears a pointer to it, and
