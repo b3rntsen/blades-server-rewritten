@@ -350,6 +350,75 @@ fn restarted_status(mut status: DungeonStatus) -> DungeonStatus {
     status
 }
 
+/// The `currentQuestDungeon` to serve on `GET character` (tracker #566).
+///
+/// Retail's boot `GET character` carried the instance too (2026-06-03, Flappety:
+/// `5cce6350…` both there and in `/quests`). Served only while that quest row still
+/// exists for this character and is not completed; anything
+/// else is `null`, so a stale pointer can never send a relaunched client into a
+/// dungeon the server no longer has.
+pub(crate) async fn live_current_dungeon(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+    stored: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(qid) = stored.as_str().and_then(|s| s.parse::<Uuid>().ok()) else {
+        return serde_json::Value::Null;
+    };
+    use crate::schema::quests::dsl as q;
+    let row: Option<QuestDbEntry> = q::quests
+        .filter(q::id.eq(qid).and(q::character_id.eq(char_id)))
+        .select(QuestDbEntry::as_select())
+        .first(conn)
+        .await
+        .ok();
+    match row {
+        // Event attempts live in `event_dungeons`, not `quests.dungeon_state`, so the
+        // row and its completion are the test both kinds share.
+        Some(r) if !r.info.0.completed => stored.clone(),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Point the character at the quest instance it just entered (tracker #566).
+///
+/// Retail's boot `/quests` carried `character.currentQuestDungeon` = the instance
+/// the player was inside (12/12 non-null captures while in a dungeon), and every
+/// `/exit` answered it `null` (216/216). A client relaunched after a crash reads it
+/// to load straight back into the run: retail capture 2026-06-03 (Flappety) went
+/// from auth to `dungeons/current/update` on the same event instance with no
+/// `/enter`. This server only ever cleared the field, so a crash always landed in
+/// town and the run had to be restarted. Cleared again by
+/// [`release_current_dungeon`] on exit.
+async fn mark_current_dungeon(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+    quest_instance_id: Uuid,
+) -> Result<(), BladeApiError> {
+    use crate::schema::characters::dsl::*;
+    let mut current: JsonDbWrapper<blades_lib::user_data::CompleteCharacter> = characters
+        .filter(id.eq(char_id))
+        .select(character)
+        .for_update()
+        .load(conn)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 3))?;
+
+    let wanted = serde_json::Value::String(quest_instance_id.to_string());
+    if current.0.current_quest_dungeon == wanted {
+        return Ok(());
+    }
+    current.0.current_quest_dungeon = wanted;
+    diesel::update(characters)
+        .filter(id.eq(char_id))
+        .set(character.eq(&current))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// Clear the character's pointer to its dungeon and hand the saved character back.
 ///
 /// Only the `character` column: this touches one field of it, and selecting a wider
@@ -944,7 +1013,7 @@ pub async fn enter_quest_dungeon(
     .await?;
 
     if app_state.event_quests.templates.contains_key(&gld_quest_id) {
-        return handle_event_dungeon_entry(
+        let entered = handle_event_dungeon_entry(
             &mut conn,
             &app_state.game_data,
             &app_state.event_quests,
@@ -956,11 +1025,14 @@ pub async fn enter_quest_dungeon(
             body,
             chrono::Utc::now().timestamp(),
         )
-        .await;
+        .await?;
+        mark_current_dungeon(&mut conn, character_id_normal, quest_id).await?;
+        return Ok(entered);
     }
 
-    conn.transaction(move |mut conn| {
-        async move {
+    let entered = conn
+        .transaction(move |mut conn| {
+            async move {
             let quest_query = {
                 use crate::schema::quests::dsl::*;
 
@@ -1099,8 +1171,10 @@ pub async fn enter_quest_dungeon(
             }
         }
         .scope_boxed()
-    })
-    .await
+        })
+        .await?;
+    mark_current_dungeon(&mut conn, character_id_normal, quest_id).await?;
+    Ok(entered)
 }
 
 /// Tracker #90: the enter-dungeon door resolved the quest TEMPLATE by the URL's
@@ -3780,5 +3854,66 @@ mod event_run_lifecycle_db {
             "finished, as the game shows it"
         );
         assert_eq!(completions(&mut conn, &p).await as usize, tiers);
+    }
+
+    /// #566: a relaunch after a crash resumes into the run only if the boot
+    /// `GET character` names it. Retail: `currentQuestDungeon` = the instance while
+    /// inside (2026-06-03 Flappety, auth → `update` on the same event, no `/enter`),
+    /// `null` after every exit. This server never set it, so a crash always landed in
+    /// town and the run had to be restarted.
+    #[tokio::test]
+    async fn the_boot_character_names_the_run_until_exit() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        mark_current_dungeon(&mut conn, p.character, p.instance)
+            .await
+            .unwrap();
+
+        let stored = json_of(
+            &mut conn,
+            "SELECT character->'currentQuestDungeon' AS v FROM characters WHERE id = $1 AND $2 = $2",
+            p.character,
+            p.character,
+        )
+        .await
+        .unwrap_or(Value::Null);
+        assert_eq!(
+            stored,
+            Value::String(p.instance.to_string()),
+            "enter stores the instance"
+        );
+        assert_eq!(
+            live_current_dungeon(&mut conn, p.character, &stored).await,
+            stored,
+            "a live attempt is served to the relaunched client"
+        );
+
+        // A pointer at a quest this character does not hold is never served.
+        let stray = Value::String(Uuid::new_v4().to_string());
+        assert_eq!(
+            live_current_dungeon(&mut conn, p.character, &stray).await,
+            Value::Null
+        );
+
+        let out = exit(&mut conn, &p, false).await;
+        assert_eq!(
+            out["character"]["currentQuestDungeon"],
+            Value::Null,
+            "exit clears it"
+        );
+    }
+
+    /// Both doors into a dungeon (the event handler and the ordinary transaction)
+    /// must set the pointer; the event-lifecycle tests drive the handler directly, so
+    /// guard the wiring in `enter_quest_dungeon` by source.
+    #[test]
+    fn both_enter_paths_mark_the_current_dungeon() {
+        let src = include_str!("dungeon.rs");
+        let start = src.find("pub async fn enter_quest_dungeon(").unwrap();
+        let end = start + src[start..].find("\n}\n").unwrap();
+        assert_eq!(src[start..end].matches("mark_current_dungeon(").count(), 2);
     }
 }

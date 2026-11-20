@@ -211,6 +211,68 @@ fn is_dialogue_quest(game_data: &blades_lib::game_data::GameData, gld_quest_id: 
 /// [`split_quest_rows`], except that an ordinary quest for which `is_dialogue`
 /// holds is listed even without generated data — with no `generatedData` entry,
 /// exactly as retail served it (report #521).
+/// The `currentQuestDungeon` a boot `/quests` may hand the client (tracker #566).
+///
+/// A relaunched client resumes straight into the instance this names, so it must
+/// name a quest the same response advertises (with its generated data) and is not
+/// completed. A pointer left behind by a quest that is gone (abandoned, an event
+/// window that closed, an alt switch) is answered `null`, which sends the client to
+/// town, exactly as before this pointer was ever set.
+#[cfg(test)]
+mod boot_current_dungeon_566 {
+    use super::*;
+
+    fn quest(id: Uuid, completed: bool) -> QuestWithId {
+        let mut q: blades_lib::user_data::Quest = serde_json::from_value(serde_json::json!({
+            "version": 1, "type": "GAME_EVENT", "objectiveStatuses": {}, "difficultyLevel": 1,
+            "seed": 1, "gldQuestId": Uuid::nil().to_string(), "completed": completed, "rewards": []
+        }))
+        .expect("minimal quest");
+        q.completed = completed;
+        QuestWithId {
+            quest_id: id,
+            quest: q,
+        }
+    }
+
+    #[test]
+    fn only_an_advertised_open_quest_is_named() {
+        let a = Uuid::new_v4();
+        let stored = serde_json::Value::String(a.to_string());
+        let open = [quest(a, false)];
+        assert_eq!(advertised_current_dungeon(&stored, open.iter()), stored);
+        let done = [quest(a, true)];
+        assert_eq!(
+            advertised_current_dungeon(&stored, done.iter()),
+            serde_json::Value::Null
+        );
+        let other = [quest(Uuid::new_v4(), false)];
+        assert_eq!(
+            advertised_current_dungeon(&stored, other.iter()),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            advertised_current_dungeon(&serde_json::Value::Null, open.iter()),
+            serde_json::Value::Null
+        );
+    }
+}
+
+pub(crate) fn advertised_current_dungeon<'a>(
+    stored: &serde_json::Value,
+    advertised: impl Iterator<Item = &'a QuestWithId>,
+) -> serde_json::Value {
+    let Some(id) = stored.as_str().and_then(|s| s.parse::<Uuid>().ok()) else {
+        return serde_json::Value::Null;
+    };
+    let mut advertised = advertised;
+    if advertised.any(|q| q.quest_id == id && !q.quest.completed) {
+        stored.clone()
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 fn split_quest_rows_with(
     rows: impl Iterator<
         Item = (
@@ -1911,13 +1973,19 @@ pub async fn get_quests(
                 now as i64,
             );
 
+            let mut boot_character = character.character.0;
+            boot_character.current_quest_dungeon = advertised_current_dungeon(
+                &boot_character.current_quest_dungeon,
+                result_quests.iter().chain(game_event_quests.iter()),
+            );
+
             Ok(Json(GetQuestsResponse {
                 deleted_quest_ids,
                 quests: result_quests,
                 dungeon_generated_data_list: result_generated_data,
                 character: CompleteCharacterWithIdWithoutData {
                     id: character_id_var,
-                    character: character.character.0,
+                    character: boot_character,
                 },
                 jobs,
                 game_event_quests,

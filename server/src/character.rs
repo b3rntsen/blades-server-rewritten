@@ -95,6 +95,12 @@ async fn get_character(
             character: {
                 let mut served_character = character.character.0.clone();
                 character_ops::normalize_loadout_profiles_for_retail(&mut served_character);
+                served_character.current_quest_dungeon = crate::dungeon::live_current_dungeon(
+                    &mut conn,
+                    character_id,
+                    &served_character.current_quest_dungeon,
+                )
+                .await;
                 served_character
             },
             data: character.data.0.clone(),
