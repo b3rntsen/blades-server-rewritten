@@ -812,8 +812,17 @@ pub(crate) async fn character_level(
 /// "completed":false}` — 155/155 completed event exits. `completed` is also what
 /// `/complete` uses as its once-per-run guard, so an instance left `true` would
 /// make every later run's `/complete` a replay that pays nothing.
+///
+/// It also rolls a new `seed`. The client lays the dungeon out from the quest's
+/// `seed` (`GameQuestManager.GetCurrentQuestGenerationSeed`), and retail handed every
+/// event instance a fresh, random one on each exit after a completed run (e.g. one
+/// character's six consecutive runs of `a008cbbc…`, 2026-05-28: 1851601071,
+/// -378231763, -563233043, -698353239, -969030930, 1825418945). Keeping one seed
+/// for the whole window put every container, breakable and enemy in the same spot
+/// run after run (report #567).
 pub(crate) fn reset_event_instance_for_next_run(info: &mut Quest) {
     info.completed = false;
+    info.seed = serde_json::Number::from(rand::random::<i32>());
     for status in info.objective_statuses.values_mut() {
         *status = ObjectiveStatus {
             status: QuestStatus::Active,
@@ -1261,6 +1270,32 @@ mod event_dungeon_shadowing_guard {
                 "self-comparing filter `{needle}` matches every row"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod event_seed_567 {
+    use super::*;
+
+    /// Report #567: retail rolled a new event layout seed on every exit after a
+    /// completed run; we kept the instance's seed forever, so containers stood in
+    /// the same spots run after run.
+    #[test]
+    fn a_completed_run_rolls_a_new_layout_seed() {
+        let mut info: Quest = serde_json::from_value(serde_json::json!({
+            "version": 2, "type": "GAME_EVENT", "objectiveStatuses": {},
+            "difficultyLevel": 40, "seed": 1234,
+            "gldQuestId": "a008cbbc-a164-4183-8b69-470ac8cd5707", "completed": true
+        }))
+        .expect("quest row");
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..8 {
+            reset_event_instance_for_next_run(&mut info);
+            assert!(!info.completed);
+            seen.insert(info.seed.to_string());
+        }
+        assert!(!seen.contains("1234"), "the fixed seed must be replaced");
+        assert!(seen.len() >= 7, "each run gets its own seed: {seen:?}");
     }
 }
 

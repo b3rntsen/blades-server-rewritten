@@ -5636,6 +5636,13 @@ pub(crate) mod event_quests {
         Uuid::from_bytes(bytes)
     }
 
+    /// The first layout seed of an event instance: a signed 32-bit value (retail's
+    /// range) taken from the instance id, so it is stable across re-mints.
+    pub fn initial_event_seed(quest_id: &Uuid) -> i32 {
+        let b = quest_id.as_bytes();
+        i32::from_le_bytes([b[0] ^ b[8], b[1] ^ b[9], b[2] ^ b[10], b[3] ^ b[11]])
+    }
+
     /// Build the wire body for one event instance. `None` when the template quest is
     /// not in `parsed.json` (then we cannot honestly produce objectives or a dungeon,
     /// so the event is simply not advertised rather than advertised unplayable).
@@ -5684,6 +5691,11 @@ pub(crate) mod event_quests {
 
         quest.r#type = QuestType::GameEvent;
         quest.gld_quest_id = def.quest_id;
+        // A per-instance layout seed instead of `generate_quest_data`'s fixed 1234,
+        // which gave every player the same dungeon layout (#567). Derived from the
+        // instance id so a re-mint before the row is stored is identical; each
+        // completed run then rolls a fresh one (`reset_event_instance_for_next_run`).
+        quest.seed = serde_json::Number::from(initial_event_seed(&quest_id));
         quest.game_event_quest_data = Some(GameEventQuestData {
             game_event_instance_id: instance_id,
         });
@@ -7150,6 +7162,27 @@ mod event_quest_tests {
     /// objectives, the dungeon, the version and the rewards. Retail's corpus is
     /// unambiguous: 1271 of the event-quest entries had `questId != gldQuestId` and
     /// not one had them equal.
+    /// Report #567: every event instance was minted with `generate_quest_data`'s
+    /// fixed `seed: 1234`, so every player got the same dungeon layout and kept it
+    /// for the whole window. The seed must vary between characters and be stable
+    /// for one instance across re-mints.
+    #[test]
+    fn event_instances_get_their_own_layout_seed() {
+        let sd = static_data();
+        let gd = game_data();
+        let a = event_quests::mint(&sd, &gd, CHAR, 40, NOW);
+        let again = event_quests::mint(&sd, &gd, CHAR, 40, NOW);
+        let other = Uuid::from_u128(CHAR.as_u128() ^ 0xFFFF);
+        let b = event_quests::mint(&sd, &gd, other, 40, NOW);
+        assert!(!a.is_empty());
+        for (x, y) in a.iter().zip(&again) {
+            assert_eq!(x.quest.seed, y.quest.seed, "stable across re-mints");
+            assert_ne!(x.quest.seed, serde_json::Number::from(1234), "not the fixed seed");
+        }
+        let differ = a.iter().zip(&b).filter(|(x, y)| x.quest.seed != y.quest.seed).count();
+        assert_eq!(differ, a.len(), "two characters never share a layout seed");
+    }
+
     #[test]
     fn an_event_quest_instance_id_is_not_its_template_id() {
         let sd = static_data();
