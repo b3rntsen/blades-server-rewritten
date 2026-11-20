@@ -56,6 +56,7 @@ pub struct DungeonResponse {
 #[diesel(table_name = crate::schema::event_dungeons)]
 pub struct EventDungeonEntryInfo {
     pub id: Uuid,
+    pub dungeon_id: Uuid,
     pub dungeon_state: Option<serde_json::Value>,
     pub initial_state: Option<serde_json::Value>,
     pub entry_count: i32,
@@ -138,7 +139,9 @@ pub async fn get_dungeons(
             .await?
     };
 
-    // Convert event dungeons to the same response format
+    // Convert event dungeons to the same response format, listed under the quest
+    // INSTANCE id like retail (see `event_instances_by_template`).
+    let instance_of = event_instances_by_template(&mut conn, character_id_normal).await?;
     for entry in event_dungeons_query {
         if let (Some(state_value), Some(initial_value)) = (entry.dungeon_state, entry.initial_state)
         {
@@ -147,7 +150,10 @@ pub async fn get_dungeons(
             let initial: B64EncodedData = serde_json::from_value(initial_value)
                 .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, 20001, 3))?;
             dungeons.push(DungeonResponseEntry {
-                quest_id: entry.id, // This is the event dungeon ID
+                quest_id: instance_of
+                    .get(&entry.dungeon_id)
+                    .copied()
+                    .unwrap_or(entry.id),
                 initial_state: initial,
                 status: state.dungeon_status,
                 remaining_entries: Some(entry.max_entries - entry.entry_count),
@@ -293,7 +299,10 @@ pub async fn exit_quest_dungeon(
         .await
     {
         Ok(info) => info,
-        Err(_) => return Err(BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2)),
+        Err(_) => {
+            clear_current_dungeon_if(&mut conn, char_id, quest_id).await;
+            return Err(BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2));
+        }
     };
 
     // Extract gldQuestId from the quest's info field
@@ -348,6 +357,92 @@ fn restarted_status(mut status: DungeonStatus) -> DungeonStatus {
         enemy.killed = false;
     }
     status
+}
+
+/// Point the character at the quest instance it just entered (tracker #566).
+///
+/// Retail's boot `GET character` and `/quests` carried `character.currentQuestDungeon`
+/// = the instance the player was inside (12/12 non-null boot captures while in a
+/// dungeon), and every `/exit` answered it `null` (216/216). A client relaunched
+/// after a crash reads it to load straight back into the run: retail capture
+/// 2026-06-03 (Flappety) went from auth to `dungeons/current/update` on the same
+/// event instance with no `/enter`. This server only ever cleared the field, so a
+/// crash always landed in town. One atomic `jsonb_set`, no read-modify-write of the
+/// save. What a boot may SERVE is decided by `quest::boot_current_dungeon`.
+pub(crate) async fn mark_current_dungeon(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+    quest_instance_id: Uuid,
+) -> Result<(), BladeApiError> {
+    diesel::sql_query(
+        "UPDATE characters SET character = jsonb_set(character, '{currentQuestDungeon}', to_jsonb($1::text)) \
+         WHERE id = $2",
+    )
+    .bind::<diesel::sql_types::Text, _>(quest_instance_id.to_string())
+    .bind::<diesel::sql_types::Uuid, _>(char_id)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Clear the pointer only if it still names `quest_id` (tracker #566): an exit that
+/// finds its row already pruned must not leave a relaunch pointing at nothing, and
+/// must not clobber a pointer to some other live run either.
+pub(crate) async fn clear_current_dungeon_if(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+    quest_id: Uuid,
+) {
+    let r = diesel::sql_query(
+        "UPDATE characters SET character = jsonb_set(character, '{currentQuestDungeon}', 'null'::jsonb) \
+         WHERE id = $1 AND character->>'currentQuestDungeon' = $2",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(char_id)
+    .bind::<diesel::sql_types::Text, _>(quest_id.to_string())
+    .execute(conn)
+    .await;
+    if let Err(e) = r {
+        log::warn!("currentQuestDungeon clear for {char_id} / {quest_id} failed: {e:?}");
+    }
+}
+
+/// The GAME_EVENT quest instance each of this character's event templates is held
+/// under, for listing event attempts on `GET /dungeons` (tracker #566). Retail listed
+/// an event attempt under the INSTANCE id (captures 49695 -> 5cce6350, 11964 ->
+/// 949dece0): the id `currentQuestDungeon` names and every dungeon route uses. This
+/// listed the `event_dungeons` row's own random id, which nothing else knows. An open
+/// instance wins over a completed one when a template has several.
+pub(crate) async fn event_instances_by_template(
+    conn: &mut AsyncPgConnection,
+    char_id: Uuid,
+) -> Result<std::collections::HashMap<Uuid, Uuid>, BladeApiError> {
+    use crate::schema::quests::dsl as q;
+    let rows: Vec<(Uuid, JsonDbWrapper<serde_json::Value>)> = q::quests
+        .filter(q::character_id.eq(char_id))
+        .select((q::id, q::info))
+        .load(conn)
+        .await?;
+    let mut out: std::collections::HashMap<Uuid, (Uuid, bool)> = Default::default();
+    for (qid, info) in rows {
+        let i = &info.0;
+        if i["type"].as_str() != Some("GAME_EVENT") {
+            continue;
+        }
+        let Some(tpl) = i["gldQuestId"]
+            .as_str()
+            .and_then(|s| s.parse::<Uuid>().ok())
+        else {
+            continue;
+        };
+        let open = !i["completed"].as_bool().unwrap_or(false);
+        match out.get(&tpl) {
+            Some((_, true)) if !open => {}
+            _ => {
+                out.insert(tpl, (qid, open));
+            }
+        }
+    }
+    Ok(out.into_iter().map(|(k, (v, _))| (k, v)).collect())
 }
 
 /// Clear the character's pointer to its dungeon and hand the saved character back.
@@ -944,7 +1039,7 @@ pub async fn enter_quest_dungeon(
     .await?;
 
     if app_state.event_quests.templates.contains_key(&gld_quest_id) {
-        return handle_event_dungeon_entry(
+        let entered = handle_event_dungeon_entry(
             &mut conn,
             &app_state.game_data,
             &app_state.event_quests,
@@ -956,9 +1051,37 @@ pub async fn enter_quest_dungeon(
             body,
             chrono::Utc::now().timestamp(),
         )
-        .await;
+        .await?;
+        // The run is committed; a failed pointer write only costs crash-resume, so it
+        // must not turn a successful enter into a 5xx (tracker #566).
+        if let Err(e) = mark_current_dungeon(&mut conn, character_id_normal, quest_id).await {
+            log::warn!(
+                "currentQuestDungeon set for {character_id_normal} / {quest_id} failed: {e:?}"
+            );
+        }
+        return Ok(entered);
     }
 
+    enter_ordinary_dungeon(
+        &mut conn,
+        &globals.game_data,
+        character_id_normal,
+        quest_id,
+        body,
+    )
+    .await
+}
+
+/// The ordinary (story quest, town job) half of [`enter_quest_dungeon`], lifted out
+/// so tests drive the real path. Both a first entry and a re-entry set
+/// `currentQuestDungeon` in the same transaction (tracker #566).
+async fn enter_ordinary_dungeon(
+    conn: &mut AsyncPgConnection,
+    game_data: &GameData,
+    character_id_normal: Uuid,
+    quest_id: Uuid,
+    body: EnterDungeonRequest,
+) -> Result<Json<EnterDungeonResponse>, BladeApiError> {
     conn.transaction(move |mut conn| {
         async move {
             let quest_query = {
@@ -979,7 +1102,7 @@ pub async fn enter_quest_dungeon(
 
             // Before the row-existence check on purpose — see the doc comment.
             let dungeon_settings_id = resolve_dungeon_settings_id(
-                &globals.game_data,
+                game_data,
                 quest_id,
                 quest_row.as_ref().map(|q| &q.info.0),
             )?;
@@ -1072,6 +1195,8 @@ pub async fn enter_quest_dungeon(
                         .await
                         .unwrap();
                 }
+                // Same transaction as the attempt it names (tracker #566).
+                mark_current_dungeon(conn, character_id_normal, quest_id).await?;
 
                 Ok(Json(EnterDungeonResponse {
                     dungeon_status: status,
@@ -1093,6 +1218,8 @@ pub async fn enter_quest_dungeon(
                         .execute(&mut conn)
                         .await?;
                 };
+                // Same transaction as the attempt it names (tracker #566).
+                mark_current_dungeon(conn, character_id_normal, quest_id).await?;
                 Ok(Json(EnterDungeonResponse {
                     dungeon_status: dungeon_state_actual.dungeon_status,
                 }))
@@ -3780,5 +3907,218 @@ mod event_run_lifecycle_db {
             "finished, as the game shows it"
         );
         assert_eq!(completions(&mut conn, &p).await as usize, tiers);
+    }
+
+    // ---- tracker #566: crash resume via `currentQuestDungeon` ----
+
+    async fn pointer(conn: &mut AsyncPgConnection, c: Uuid) -> Value {
+        json_of(
+            conn,
+            "SELECT character->'currentQuestDungeon' AS v FROM characters WHERE id = $1 AND $2 = $2",
+            c,
+            c,
+        )
+        .await
+        .unwrap_or(Value::Null)
+    }
+
+    async fn boot(conn: &mut AsyncPgConnection, p: &Player, now: i64) -> Value {
+        let stored = pointer(conn, p.character).await;
+        crate::quest::boot_current_dungeon(
+            conn,
+            &world().sd,
+            &world().gd,
+            p.character,
+            40,
+            &stored,
+            now,
+        )
+        .await
+    }
+
+    /// Retail: boot `GET character`/`/quests` named the instance while inside
+    /// (2026-06-03 Flappety: auth -> `update` on the same event, no `/enter`) and every
+    /// exit answered `null`. An event pointer is served only while its window is open:
+    /// a rolled-over window would send the client into a quest `/quests` no longer
+    /// advertises.
+    #[tokio::test]
+    async fn boot_names_an_open_event_run_until_exit_or_rollover() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        mark_current_dungeon(&mut conn, p.character, p.instance)
+            .await
+            .unwrap();
+        let id = Value::String(p.instance.to_string());
+        assert_eq!(
+            pointer(&mut conn, p.character).await,
+            id,
+            "enter stores the instance"
+        );
+        assert_eq!(
+            boot(&mut conn, &p, NOW).await,
+            id,
+            "served while the window is open"
+        );
+        assert_eq!(
+            boot(&mut conn, &p, NOW + 120 * 86_400).await,
+            Value::Null,
+            "a rolled-over window is never served"
+        );
+        let out = exit(&mut conn, &p, false).await;
+        assert_eq!(out["character"]["currentQuestDungeon"], Value::Null);
+        assert_eq!(
+            pointer(&mut conn, p.character).await,
+            Value::Null,
+            "exit clears it"
+        );
+    }
+
+    #[tokio::test]
+    async fn boot_never_names_a_missing_or_completed_quest() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        mark_current_dungeon(&mut conn, p.character, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(
+            boot(&mut conn, &p, NOW).await,
+            Value::Null,
+            "a quest it does not hold"
+        );
+
+        mark_current_dungeon(&mut conn, p.character, p.instance)
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "UPDATE quests SET info = jsonb_set(info, '{completed}', 'true') WHERE id = $1 AND character_id = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(p.instance)
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            boot(&mut conn, &p, NOW).await,
+            Value::Null,
+            "a completed quest"
+        );
+    }
+
+    /// Jobs carry the pointer too (retail capture 8874); they need only the row.
+    #[tokio::test]
+    async fn boot_names_an_open_job_run() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let job = Uuid::new_v4();
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data) \
+             SELECT $1, character_id, jsonb_set(info, '{type}', '\"JOB\"'), generated_data \
+             FROM quests WHERE id = $2 AND character_id = $3",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(job)
+        .bind::<diesel::sql_types::Uuid, _>(p.instance)
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        mark_current_dungeon(&mut conn, p.character, job)
+            .await
+            .unwrap();
+        assert_eq!(
+            boot(&mut conn, &p, NOW).await,
+            Value::String(job.to_string())
+        );
+    }
+
+    /// `GET /dungeons` must list an event attempt under the instance id the pointer
+    /// names (retail captures 49695, 11964), not the `event_dungeons` row's own id.
+    #[tokio::test]
+    async fn dungeons_lists_an_event_attempt_under_its_instance() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        let stored_under = json_of(
+            &mut conn,
+            "SELECT to_jsonb(dungeon_id::text) AS v FROM event_dungeons WHERE character_id = $1 AND $2 = $2",
+            p.character,
+            p.character,
+        )
+        .await
+        .unwrap();
+        let tpl: Uuid = stored_under.as_str().unwrap().parse().unwrap();
+        let map = event_instances_by_template(&mut conn, p.character)
+            .await
+            .unwrap();
+        assert_eq!(map.get(&tpl), Some(&p.instance));
+    }
+
+    /// A FIRST entry into a story quest or job sets the pointer too: the emulator run
+    /// of #658 showed a job not resuming because only the re-entry branch did. Drives
+    /// the real ordinary path ([`enter_ordinary_dungeon`]).
+    #[tokio::test]
+    async fn a_first_ordinary_entry_sets_the_pointer() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let quest_id = Uuid::new_v4();
+        let mut info = quest_info(&mut conn, &p).await;
+        info["type"] = json!("JOB");
+        info["completed"] = json!(false);
+        diesel::sql_query(
+            "INSERT INTO quests (id, character_id, info, generated_data) VALUES ($1, $2, $3, 'null'::jsonb)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(quest_id)
+        .bind::<diesel::sql_types::Uuid, _>(p.character)
+        .bind::<diesel::sql_types::Jsonb, _>(info)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(pointer(&mut conn, p.character).await, Value::Null);
+
+        enter_ordinary_dungeon(
+            &mut conn,
+            &world().gd,
+            p.character,
+            quest_id,
+            EnterDungeonRequest {
+                dungeon_instance: Some(b64("INSTANCE")),
+                current_state: b64("SAVE-AT-ENTRY"),
+            },
+        )
+        .await
+        .expect("first entry");
+        let id = Value::String(quest_id.to_string());
+        assert_eq!(
+            pointer(&mut conn, p.character).await,
+            id,
+            "first entry stores the quest"
+        );
+        assert_eq!(boot(&mut conn, &p, NOW).await, id, "and a boot serves it");
+    }
+
+    /// An exit whose row is already pruned (404) still clears a pointer to it, and
+    /// never one to another run.
+    #[tokio::test]
+    async fn a_pruned_exit_clears_only_its_own_pointer() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let (gone, other) = (Uuid::new_v4(), Uuid::new_v4());
+        mark_current_dungeon(&mut conn, p.character, other)
+            .await
+            .unwrap();
+        clear_current_dungeon_if(&mut conn, p.character, gone).await;
+        assert_eq!(
+            pointer(&mut conn, p.character).await,
+            Value::String(other.to_string())
+        );
+        mark_current_dungeon(&mut conn, p.character, gone)
+            .await
+            .unwrap();
+        clear_current_dungeon_if(&mut conn, p.character, gone).await;
+        assert_eq!(pointer(&mut conn, p.character).await, Value::Null);
     }
 }

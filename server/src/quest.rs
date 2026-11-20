@@ -1511,6 +1511,53 @@ async fn rotate_job_board_in_tx(
     Ok((jobs, job_pools, deleted_quest_ids))
 }
 
+/// The `currentQuestDungeon` every boot response serves (tracker #566): `GET
+/// /characters`, `GET character` and `/quests` all go through this, so one boot can
+/// never get two answers.
+///
+/// A relaunched client resumes straight into the instance this names, so it is
+/// served only while that quest row still exists for the character, is not
+/// completed and, for an event, is in a window that is open right now (the same
+/// `event_quests::mint` `/quests` advertises from; a pointer left by a rolled-over
+/// window is `null`). Story quests and jobs (retail sent job pointers too, capture
+/// 8874) need only the row. Anything else is `null`, which sends the client to town:
+/// today's behaviour.
+pub(crate) async fn boot_current_dungeon(
+    conn: &mut diesel_async::AsyncPgConnection,
+    static_data: &blades_lib::static_data::StaticData,
+    game_data: &blades_lib::game_data::GameData,
+    character_id: Uuid,
+    player_level: i64,
+    stored: &serde_json::Value,
+    now: i64,
+) -> serde_json::Value {
+    let Some(qid) = stored.as_str().and_then(|s| s.parse::<Uuid>().ok()) else {
+        return serde_json::Value::Null;
+    };
+    use crate::schema::quests::dsl as q;
+    use diesel::BoolExpressionMethods;
+    let info: Option<JsonDbWrapper<serde_json::Value>> = q::quests
+        .filter(q::id.eq(qid).and(q::character_id.eq(character_id)))
+        .select(q::info)
+        .first(conn)
+        .await
+        .ok();
+    let Some(info) = info else {
+        return serde_json::Value::Null;
+    };
+    if info.0["completed"].as_bool().unwrap_or(false) {
+        return serde_json::Value::Null;
+    }
+    if info.0["type"].as_str() == Some("GAME_EVENT")
+        && !event_quests::mint(static_data, game_data, character_id, player_level, now)
+            .iter()
+            .any(|m| m.quest_id == qid)
+    {
+        return serde_json::Value::Null;
+    }
+    stored.clone()
+}
+
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests")]
 pub async fn get_quests(
     session: SessionLookedUpMaybe,
@@ -1911,13 +1958,25 @@ pub async fn get_quests(
                 now as i64,
             );
 
+            let mut boot_character = character.character.0;
+            boot_character.current_quest_dungeon = boot_current_dungeon(
+                &mut conn,
+                &globals.static_data,
+                &globals.game_data,
+                character_id_var,
+                player_level,
+                &boot_character.current_quest_dungeon,
+                now as i64,
+            )
+            .await;
+
             Ok(Json(GetQuestsResponse {
                 deleted_quest_ids,
                 quests: result_quests,
                 dungeon_generated_data_list: result_generated_data,
                 character: CompleteCharacterWithIdWithoutData {
                     id: character_id_var,
-                    character: character.character.0,
+                    character: boot_character,
                 },
                 jobs,
                 game_event_quests,
