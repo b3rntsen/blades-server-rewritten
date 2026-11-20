@@ -574,6 +574,21 @@ fn send_to(
 ) {
     if let Some(&pid) = peer_at.get(addr) {
         if let Some(peer) = host.get_peer_mut(pid) {
+            if channel == 4 {
+                // Tracker #568: the profile's delivery time is roughly fragments x MTU
+                // over the link; log what ENet will have to deliver and the peer's RTT.
+                let mtu = usize::from(peer.mtu().max(1));
+                info!(
+                    "arena timing: queued channel=4 to={addr} bytes={} mtu={mtu} est_fragments={} rtt_ms={} at_ms={}",
+                    bytes.len(),
+                    bytes.len().div_ceil(mtu.saturating_sub(48).max(1)),
+                    peer.round_trip_time().as_millis(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0),
+                );
+            }
             if let Err(e) = peer.send(channel, &Packet::reliable(bytes)) {
                 warn!("arena-enet: send to {addr} failed: {e:?}");
             }

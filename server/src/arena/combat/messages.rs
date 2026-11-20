@@ -228,6 +228,50 @@ pub fn player_info_hide_helmet(user_data: &[u8]) -> Option<bool> {
         .map(|v| v != 0)
 }
 
+/// Which round-start frames the #568 timing log tracks: the opponent's op54 PROFILE
+/// (GMID 35, channel 4, fragmented) and the Avatar op50 SPAWN (carrier `0x32`,
+/// type 56, channel 0). Diagnostic only — tracker #568 (opponent wears the helmet in
+/// round 1 only): we want to see whether the avatar spawn reaches the client before
+/// the much larger profile that carries `HideHelmet` (p6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingFrame {
+    /// op54 PROFILE: player net object id (p0) and its HideHelmet flag (p6).
+    Profile {
+        player_obj: i32,
+        hide_helmet: Option<bool>,
+    },
+    /// op50 Avatar SPAWN: avatar net object id (p0) and role byte (p2).
+    AvatarSpawn { avatar_obj: i32, role: u8 },
+}
+
+/// Classify an s2c plaintext frame for the #568 timing log. `None` for every
+/// other frame. Never panics on short/garbage input.
+pub fn timing_frame(user_data: &[u8]) -> Option<TimingFrame> {
+    match user_data.get(1).copied()? {
+        MSGTYPE_USERMESSAGE => {
+            if user_message_gmid(user_data) != Some(35) {
+                return None;
+            }
+            let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+            Some(TimingFrame::Profile {
+                player_obj: nd.int(0).unwrap_or(-1) as i32,
+                hide_helmet: nd.int(6).map(|v| v != 0),
+            })
+        }
+        MSGTYPE_SPAWN => {
+            let nd = arena_proto::parse_netdata(user_data.get(2..)?);
+            if nd.int(1) != Some(NetObjectType::Avatar as u8 as i64) {
+                return None;
+            }
+            Some(TimingFrame::AvatarSpawn {
+                avatar_obj: nd.int(0).unwrap_or(-1) as i32,
+                role: nd.int(2).unwrap_or(-1) as u8,
+            })
+        }
+        _ => None,
+    }
+}
+
 /// True iff a carrier-`0x36` c2s frame is `SkipCurrentState` (op57) — the client's
 /// **"Ready"** press on a state it is done with (the loadout screen, the opponent
 /// showcase). `dump.cs` `SkipCurrentStateMessage`; capture-proven c2s-only (it is in
@@ -2354,6 +2398,37 @@ mod tests {
     /// The retail ENet channel map, locked to s506. A carrier-0x36 user-message
     /// with a small NetData body carrying propId3 = the GameMessageId; assert each
     /// GMID routes to the channel s506 used.
+    /// #568 timing log: the profile and the avatar spawn are recognised (with the
+    /// profile's HideHelmet flag), and nothing else is.
+    #[test]
+    fn timing_frame_classifies_profile_and_avatar_spawn_only() {
+        assert_eq!(
+            timing_frame(&player_profile(7, "{}", "{}", true)),
+            Some(TimingFrame::Profile {
+                player_obj: 7,
+                hide_helmet: Some(true)
+            })
+        );
+        assert_eq!(
+            timing_frame(&player_profile(9, "{}", "{}", false)),
+            Some(TimingFrame::Profile {
+                player_obj: 9,
+                hide_helmet: Some(false)
+            })
+        );
+        assert_eq!(
+            timing_frame(&spawn_avatar(116, NetRole::Simulated, "x")),
+            Some(TimingFrame::AvatarSpawn {
+                avatar_obj: 116,
+                role: NetRole::Simulated as u8
+            })
+        );
+        assert_eq!(timing_frame(&stat_update(88)), None);
+        assert_eq!(timing_frame(&player_welcome(120, 21)), None);
+        assert_eq!(timing_frame(&[]), None);
+        assert_eq!(timing_frame(&[0xBE]), None);
+    }
+
     #[test]
     fn retail_channel_matches_s506_map() {
         // Helper: build a carrier-0x36 frame whose propId3 (Byte) = `gmid`.
