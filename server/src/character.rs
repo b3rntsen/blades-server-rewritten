@@ -53,6 +53,16 @@ async fn list_characters(
     for character in query_result.iter() {
         let mut served_character = character.character.0.clone();
         character_ops::normalize_loadout_profiles_for_retail(&mut served_character);
+        served_character.current_quest_dungeon = crate::quest::boot_current_dungeon(
+            &mut conn,
+            &app_state.static_data,
+            &app_state.game_data,
+            character.id,
+            served_character.level as i64,
+            &served_character.current_quest_dungeon,
+            chrono::Utc::now().timestamp(),
+        )
+        .await;
         result.push(CompleteCharacterWithIdAndData {
             id: character.id,
             character: served_character,
@@ -95,10 +105,14 @@ async fn get_character(
             character: {
                 let mut served_character = character.character.0.clone();
                 character_ops::normalize_loadout_profiles_for_retail(&mut served_character);
-                served_character.current_quest_dungeon = crate::dungeon::live_current_dungeon(
+                served_character.current_quest_dungeon = crate::quest::boot_current_dungeon(
                     &mut conn,
+                    &app_state.static_data,
+                    &app_state.game_data,
                     character_id,
+                    served_character.level as i64,
                     &served_character.current_quest_dungeon,
+                    chrono::Utc::now().timestamp(),
                 )
                 .await;
                 served_character
