@@ -4305,10 +4305,16 @@ mod report_562_material_block_bonus {
             "BlockReductionFrostPropertyLogic",
             "BlockReductionBashingPropertyLogic",
         ] {
-            assert_eq!(item_property_xvalue_multiplier(logic, 1.0, 0.25, 2), 1.0, "{logic}");
+            assert_eq!(
+                item_property_xvalue_multiplier(logic, 1.0, 0.25, 2),
+                1.0,
+                "{logic}"
+            );
         }
         // Templar is `_propertyType` 4, not material: unchanged behaviour.
-        assert!(!enchant_logic_is_material("BlockReductionTemplarPropertyLogic"));
+        assert!(!enchant_logic_is_material(
+            "BlockReductionTemplarPropertyLogic"
+        ));
     }
 
     /// Control: a shield WITHOUT a matching bonus keeps the textbook cut. s572 ALF,
