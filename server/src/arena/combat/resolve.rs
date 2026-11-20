@@ -4166,7 +4166,12 @@ fn emit_damage_with_outcome(
         };
         dodge_absorbed =
             (raw_health(&resolved.raw_components) - raw_health(&raw_after_dodge)).max(0.0);
+        let pre_dodge_components = components.clone();
         scale_components_by_raw_dodge(&mut components, &resolved.raw_components, &raw_after_dodge);
+        // The dodge pool is a DamageAbsorption hook like Ward/Absorb (E1), so a
+        // Frost/Shock it ate must take its mirrored Stamina/Magicka drain with it —
+        // the drain only scales with the raw *element*, never with itself (#576).
+        remirror_drains_after_pools(&pre_dodge_components, &mut components);
         dodge
     } else {
         super::state::NegationResult {
@@ -17766,6 +17771,60 @@ mod report_31_high_block_stun {
         assert!(
             (964..=965).contains(&m),
             "Magicka follows the post-Ward Shock: {m}"
+        );
+    }
+
+    /// #576 (prod 11-20 23:05, Flappety 2 (AI) → Pogagoga): a Frostbite tick inside a
+    /// dodge window logged `[(Frost, 0.0), (Stamina, 34.1)] dodge_absorbed=41.4` — the
+    /// dodge ate the Frost but the mirrored Stamina drain still landed. Like Ward/Absorb
+    /// (#646), the dodge pool is an absorption hook that runs before retail derives the
+    /// mirror, so the drain follows the post-dodge Frost.
+    #[test]
+    fn report_576_a_dodged_frost_tick_takes_its_stamina_drain_with_it() {
+        use super::super::state::{DamageNegationSource, DamageSource, DamageType, NegationPool};
+        let now = Instant::now();
+        let dodge = |remaining: f32| NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining,
+            expires_at: now + Duration::from_secs(1),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+            breaks_into_stagger: false,
+        };
+        let run = |pool: Option<NegationPool>| {
+            let mut c = absorb_combat(now, vec![]);
+            c.fighters[1].max_stamina = 1_000;
+            c.fighters[1].stamina = 1_000;
+            if let Some(p) = pool {
+                c.fighters[1].negation_pools.push(p);
+            }
+            let tick = absorb_hit(
+                DamageSource::ContinuousSpell,
+                vec![(DamageType::Frost, 38.2), (DamageType::Stamina, 38.2)],
+            );
+            super::emit_damage(&mut c, 0, 1, &tick, now);
+            c.fighters[1].stamina
+        };
+        // Control: no dodge, the full mirror lands.
+        assert_eq!(run(None), 962);
+        // A fresh dodge eats the whole tick: no Stamina drain either.
+        assert_eq!(
+            run(Some(dodge(175.3))),
+            1_000,
+            "dodged Frost drains no Stamina"
+        );
+        // The last 9.5 of a pool: 28.7 Frost gets through, and so does 28.7 Stamina.
+        let s = run(Some(dodge(9.5)));
+        assert!(
+            (971..=972).contains(&s),
+            "drain follows the post-dodge Frost: {s}"
         );
     }
 
