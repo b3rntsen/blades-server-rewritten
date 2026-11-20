@@ -152,9 +152,13 @@ fn install_shield(lo: &mut Loadout, s: &'static gamedata::ShieldStats, tempering
 /// applied: PvP items do not degrade (`DegradeBlockingItem` is a `ret` stub on both
 /// PvP actors) and its value is not extracted.
 pub fn blocking_item_rating(uuid: &str, block_base: f32, tempering_level: u64) -> f32 {
-    super::block_temper::tempered_block_value(uuid, tempering_level)
-        .unwrap_or(block_base)
-        .ceil()
+    blocking_item_raw_rating(uuid, block_base, tempering_level).ceil()
+}
+
+/// The blocking item's rating before `CeilToInt`: what `GetRawXValue@0x24d0ae4`
+/// multiplies a material property by (tracker #562).
+pub fn blocking_item_raw_rating(uuid: &str, block_base: f32, tempering_level: u64) -> f32 {
+    super::block_temper::tempered_block_value(uuid, tempering_level).unwrap_or(block_base)
 }
 
 /// One armour piece's rating `P`: the temper-level `protection` value when the piece
@@ -296,7 +300,9 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             item_rating_for_material = Some(rating);
         } else if let Some(s) = gamedata::shield(&template) {
             install_shield(&mut lo, s, eq.item.tempering_level);
-            item_rating_for_material = Some(blocking_item_rating(
+            // Material properties scale by the UNROUNDED rating, as the armour path
+            // does; only the equipped block rating is ceiled.
+            item_rating_for_material = Some(blocking_item_raw_rating(
                 &template,
                 s.block_base,
                 eq.item.tempering_level,
@@ -899,35 +905,49 @@ fn apply_enchant_with_rating_and_multiplier(
         ),
 
         // ---- block rating -------------------------------------------------
-        // `magnitude`, not the raw `value`: the shared `_value` curve runs
-        // 268…7591, while an item's own `block_base` is ~50 to 330. Every sibling
-        // arm here scales the curve first; this one once did not.
+        // A typed "+Block Rating vs X" is a MATERIAL property (`_propertyType` 2 in
+        // `property_logic_static.json`, xValue 2.0 physical / 2.667 elemental), so
+        // `GetRawXValue@0x24d0ae4` multiplies it by the item's rating, exactly as the
+        // `Resist*Material` arms above do: a T10 (or untempered 360) Stasis gives
+        // 2.667 × 360 = 960 vs Frost, not 2.667 (tracker #562).
         //
-        // It is a flat ADDITIVE to `R`, applied after the optimal boost
-        // (`block_rating_bonus`), not part of the blocking item's own rating. The
-        // client adds it only for the enchant's own damage types; that split is
-        // 03-D11 and not modelled yet, so it still applies to every type.
-        "BlockReductionFirePropertyLogic" => {
-            lo.block_rating_bonuses.push((DamageType::Fire, magnitude))
-        }
-        "BlockReductionFrostPropertyLogic" => {
-            lo.block_rating_bonuses.push((DamageType::Frost, magnitude))
-        }
-        "BlockReductionShockPropertyLogic" => {
-            lo.block_rating_bonuses.push((DamageType::Shock, magnitude))
-        }
-        "BlockReductionPoisonPropertyLogic" => lo
+        // Retail proof (T1 corpus): a matching material shield takes the blocked
+        // element to the 5 % floor even on a LOW block — Stalhrim T10 vs 81.32 frost
+        // blocked to 4.07 = 5 % on both low and optimal blocks (s615), Dwarven Light
+        // and Stasis to 4.78 = 5 % of 95.68 — while a shield without the matching
+        // bonus shows the textbook cut (Dragonscale 95.68 → 27.0 = 0.082 × 837.5).
+        // A raw +2.667 cannot reach the floor on a low block (it leaves ~51 of 81).
+        //
+        // It is a flat ADDITIVE to `R`, applied after the optimal boost, and only for
+        // its own damage type ([`Fighter::block_rating_against`]).
+        "BlockReductionFirePropertyLogic" => lo
             .block_rating_bonuses
-            .push((DamageType::Poison, magnitude)),
-        "BlockReductionSlashingPropertyLogic" => lo
-            .block_rating_bonuses
-            .push((DamageType::Slashing, magnitude)),
-        "BlockReductionCleavingPropertyLogic" => lo
-            .block_rating_bonuses
-            .push((DamageType::Cleaving, magnitude)),
-        "BlockReductionBashingPropertyLogic" => lo
-            .block_rating_bonuses
-            .push((DamageType::Bashing, magnitude)),
+            .push((DamageType::Fire, material_magnitude(magnitude, item_rating))),
+        "BlockReductionFrostPropertyLogic" => lo.block_rating_bonuses.push((
+            DamageType::Frost,
+            material_magnitude(magnitude, item_rating),
+        )),
+        "BlockReductionShockPropertyLogic" => lo.block_rating_bonuses.push((
+            DamageType::Shock,
+            material_magnitude(magnitude, item_rating),
+        )),
+        "BlockReductionPoisonPropertyLogic" => lo.block_rating_bonuses.push((
+            DamageType::Poison,
+            material_magnitude(magnitude, item_rating),
+        )),
+        "BlockReductionSlashingPropertyLogic" => lo.block_rating_bonuses.push((
+            DamageType::Slashing,
+            material_magnitude(magnitude, item_rating),
+        )),
+        "BlockReductionCleavingPropertyLogic" => lo.block_rating_bonuses.push((
+            DamageType::Cleaving,
+            material_magnitude(magnitude, item_rating),
+        )),
+        "BlockReductionBashingPropertyLogic" => lo.block_rating_bonuses.push((
+            DamageType::Bashing,
+            material_magnitude(magnitude, item_rating),
+        )),
+        // Templar is `_propertyType` 4: flat, never scaled by the item.
         "BlockReductionTemplarPropertyLogic" => lo.block_rating_bonus += magnitude,
 
         // Powerful Block is NOT block rating. Its shipped tooltip is "Target stunned
@@ -1081,8 +1101,13 @@ fn enchant_logic_is_primary(logic: &str) -> bool {
     )
 }
 
+/// A material property (`_propertyType` 2): the client scales it by the item's
+/// rating and never by Synergy or the primary multiplier. Most carry "Material" in
+/// the logic name; the typed block bonuses do not (tracker #562), and Templar is
+/// `_propertyType` 4, so it is not one of them.
 fn enchant_logic_is_material(logic: &str) -> bool {
     logic.contains("MaterialPropertyLogic")
+        || (logic.starts_with("BlockReduction") && logic != "BlockReductionTemplarPropertyLogic")
 }
 
 fn item_property_xvalue_multiplier(
@@ -4113,5 +4138,198 @@ mod report542_weapon_ravage_tests {
     fn a_plain_weapon_ravages_nothing() {
         let lo = loadout_of(vec![item(gamedata::ids::DRAGONBONE_DAGGER, vec![])]);
         assert!(lo.ravage.is_empty(), "got {:?}", lo.ravage);
+    }
+}
+
+/// Tracker #562: a shield's typed "+Block Rating vs X" is a material property
+/// (`_propertyType` 2) and scales with the shield's rating, like `Resist*Material`.
+///
+/// Expected values are retail measurements (T1 corpus, decrypted retail arena
+/// captures) and the shipped xValues (2.0 physical, 2.667 elemental), not values
+/// computed by the code under test.
+#[cfg(test)]
+mod report_562_material_block_bonus {
+    use super::*;
+    use crate::arena::combat::damage::BlockOutcome;
+    use blades_lib::user_data::{Backpack, Item, ItemPropertiesAll, SingleEquippedItem, Treasury};
+
+    const SHIELD_OF_STASIS: &str = "d3851100-d3ee-4b24-b2b1-2d46a907bd56";
+    const STALHRIM_SHIELD: &str = "80af12db-32e9-47b5-aa04-14a3d610e426";
+    const DRAGONSCALE_SHIELD: &str = "6362ecf3-42d9-4d8d-af30-2b9fc2deb92a";
+    const ELEMENTAL_XVALUE: f32 = 2.667;
+    const PHYSICAL_XVALUE: f32 = 2.0;
+
+    fn loadout(template: &str, tempering_level: u64) -> Loadout {
+        let mut lo = blades_lib::user_data::Loadout::default();
+        let slot = Uuid::from_u128(0x5620);
+        lo.equipped_items.0.insert(
+            slot,
+            SingleEquippedItem {
+                id: Uuid::from_u128(0x5621),
+                slot,
+                item: Item {
+                    item_template_id: Uuid::parse_str(template).unwrap(),
+                    tempering_level,
+                    durability: 100.0,
+                    grade: None,
+                    arcane_tier: None,
+                    properties: ItemPropertiesAll::default(),
+                },
+            },
+        );
+        let inv = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: lo,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        from_character(
+            &CompleteCharacter {
+                level: 50,
+                ..Default::default()
+            },
+            &inv,
+        )
+    }
+
+    fn bonus(lo: &Loadout, ty: DamageType) -> f32 {
+        lo.block_rating_bonuses
+            .iter()
+            .filter(|(t, _)| *t == ty)
+            .map(|(_, v)| *v)
+            .sum()
+    }
+
+    /// The block a fighter with `lo` makes, `optimal` or low, with `elem_protection`.
+    fn block(lo: &Loadout, optimal: bool, elem_protection: f32) -> BlockOutcome {
+        let r = lo.block_rating * if optimal { 2.0 } else { 1.0 };
+        let typed = |ty: DamageType| (ty, bonus(lo, ty));
+        BlockOutcome {
+            optimal,
+            blocking: true,
+            rating: r,
+            typed_rating_bonus: [
+                typed(DamageType::Slashing),
+                typed(DamageType::Cleaving),
+                typed(DamageType::Bashing),
+                typed(DamageType::Fire),
+                typed(DamageType::Frost),
+                typed(DamageType::Shock),
+                typed(DamageType::Poison),
+            ],
+            block_piercing: 0.0,
+            elem_block_piercing: 0.0,
+            elem_rating_bonus: elem_protection,
+        }
+    }
+
+    fn blocked(b: &BlockOutcome, comps: &[(DamageType, f32)], ty: DamageType) -> f32 {
+        let mut c = comps.to_vec();
+        b.apply(&mut c, false);
+        c.iter().filter(|(t, _)| *t == ty).map(|(_, v)| *v).sum()
+    }
+
+    #[test]
+    fn the_bonus_scales_with_the_shields_rating() {
+        // Untempered Stasis: R0 = its blockBase 360 (T1 shows R0 = 360).
+        let stasis = loadout(SHIELD_OF_STASIS, 0);
+        assert_eq!(stasis.block_rating, 360.0);
+        let frost = bonus(&stasis, DamageType::Frost);
+        assert!(
+            (frost - ELEMENTAL_XVALUE * 360.0).abs() < 1.0,
+            "Stasis vs Frost {frost}"
+        );
+        let bash = bonus(&stasis, DamageType::Bashing);
+        assert!(
+            (bash - PHYSICAL_XVALUE * 360.0).abs() < 1.0,
+            "Stasis vs Bashing {bash}"
+        );
+        // Only its own types.
+        assert_eq!(bonus(&stasis, DamageType::Fire), 0.0);
+        assert_eq!(bonus(&stasis, DamageType::Slashing), 0.0);
+
+        // Tempered Stalhrim T10: R0 = 360 from the temper table, bonus scales with it.
+        let stalhrim = loadout(STALHRIM_SHIELD, 10);
+        assert_eq!(stalhrim.block_rating, 360.0);
+        let f = bonus(&stalhrim, DamageType::Frost);
+        assert!(
+            (f - ELEMENTAL_XVALUE * 360.0).abs() < 1.0,
+            "Stalhrim vs Frost {f}"
+        );
+    }
+
+    /// s615 Gğrrreeeeaat, Stalhrim T10, attacker 430: unblocked frost 81.32, blocked
+    /// 4.07 on BOTH a low and an optimal block (two low blocks, one optimal). 4.07 is
+    /// the 5 % floor of 81.32. A raw +2.667 left ~51.6 on the low block.
+    #[test]
+    fn stalhrim_takes_frost_to_the_floor_on_low_and_optimal_blocks() {
+        let lo = loadout(STALHRIM_SHIELD, 10);
+        let comps = [(DamageType::Slashing, 117.23), (DamageType::Frost, 81.32)];
+        for optimal in [false, true] {
+            let got = blocked(&block(&lo, optimal, 0.0), &comps, DamageType::Frost);
+            assert!(
+                (got - 4.07).abs() < 0.5,
+                "optimal={optimal}: frost {got}, retail 4.07"
+            );
+        }
+    }
+
+    /// Retail clip 410 ("Garfield Again"): a Daedric mace hit of 90 bashing + 87 frost
+    /// blocked with Shield of Stasis came out at 5 HP (5 frost, 0 bashing).
+    #[test]
+    fn stasis_blocks_the_daedric_mace_clip_to_about_five() {
+        let lo = loadout(SHIELD_OF_STASIS, 0);
+        let comps = [(DamageType::Bashing, 90.0), (DamageType::Frost, 87.0)];
+        for optimal in [false, true] {
+            let b = block(&lo, optimal, 0.0);
+            let frost = blocked(&b, &comps, DamageType::Frost);
+            let bash = blocked(&b, &comps, DamageType::Bashing);
+            assert!(
+                (frost - 4.35).abs() < 0.5,
+                "optimal={optimal}: frost {frost}"
+            );
+            assert!(
+                bash <= 4.5 + 1e-3,
+                "optimal={optimal}: bashing {bash} before armour"
+            );
+        }
+    }
+
+    /// A material block bonus is never multiplied by Enchantment Synergy, even when
+    /// the same property sits on two equipped items (`_propertyType` 2).
+    #[test]
+    fn synergy_never_multiplies_a_material_block_bonus() {
+        for logic in [
+            "BlockReductionFrostPropertyLogic",
+            "BlockReductionBashingPropertyLogic",
+        ] {
+            assert_eq!(
+                item_property_xvalue_multiplier(logic, 1.0, 0.25, 2),
+                1.0,
+                "{logic}"
+            );
+        }
+        // Templar is `_propertyType` 4, not material: unchanged behaviour.
+        assert!(!enchant_logic_is_material(
+            "BlockReductionTemplarPropertyLogic"
+        ));
+    }
+
+    /// Control: a shield WITHOUT a matching bonus keeps the textbook cut. s572 ALF,
+    /// Dragonscale T10 (bonuses vs Cleaving and Poison only), optimal block with
+    /// Elemental Protection 117.5: 95.68 frost → 27.0 (cut 68.68 = 0.082 × 837.5).
+    #[test]
+    fn a_shield_without_the_matching_bonus_is_unchanged() {
+        let lo = loadout(DRAGONSCALE_SHIELD, 10);
+        assert_eq!(lo.block_rating, 360.0);
+        assert_eq!(bonus(&lo, DamageType::Frost), 0.0);
+        let got = blocked(
+            &block(&lo, true, 117.5),
+            &[(DamageType::Frost, 95.68)],
+            DamageType::Frost,
+        );
+        assert!((got - 27.0).abs() < 0.5, "frost {got}, retail 27.0");
     }
 }
