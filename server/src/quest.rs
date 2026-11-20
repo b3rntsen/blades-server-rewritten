@@ -550,7 +550,9 @@ fn add_missing_enemy_key_loot(
     stored: &mut DungeonGeneratedData,
     fresh: &DungeonGeneratedData,
 ) -> bool {
-    use blades_lib::util::dungeon::enemy_table_is_unmodelled;
+    use blades_lib::util::dungeon::{
+        APK_KEY_TABLE_ENEMY_GROUPS, DOOR_KEY_TABLE_ID, enemy_table_is_unmodelled,
+    };
 
     if stored.version != 0 {
         return false;
@@ -583,11 +585,24 @@ fn add_missing_enemy_key_loot(
                     if fresh_loot.is_empty() || !enemy_table_is_unmodelled(table) {
                         continue;
                     }
-                    if let Some(stored_loot) = stored_enemy.loot_table_loot.get_mut(table) {
-                        if stored_loot.is_empty() {
-                            *stored_loot = fresh_loot.clone();
+                    match stored_enemy.loot_table_loot.get_mut(table) {
+                        Some(stored_loot) => {
+                            if stored_loot.is_empty() {
+                                *stored_loot = fresh_loot.clone();
+                                changed = true;
+                            }
+                        }
+                        // A row accepted before #573 has no DoorKey table at all
+                        // on an APK key holder retail was never captured on.
+                        None if table.as_u128() == DOOR_KEY_TABLE_ID
+                            && APK_KEY_TABLE_ENEMY_GROUPS.contains(&group.as_u128()) =>
+                        {
+                            stored_enemy
+                                .loot_table_loot
+                                .insert(*table, fresh_loot.clone());
                             changed = true;
                         }
+                        None => {}
                     }
                 }
             }
@@ -753,6 +768,50 @@ mod report236_key_holder_repair_tests {
             );
             assert_eq!(keys(&stored, holder), 1, "{quest}: still no key");
         }
+    }
+
+    /// Report #573: a row accepted before the fix has NO DoorKey table at all on
+    /// SQ202_C's key holder (the group was never captured, so it rolled gold
+    /// only). The heal must add the missing table, not just fill an empty one.
+    #[test]
+    fn report_573_a_row_without_the_key_table_gains_it() {
+        const SQ202_QUEST: &str = "30a53534-e8d2-43ef-82f7-d706b6ef8a97";
+        const SQ202C_KEY_HOLDER: &str = "692777ad-5627-4984-b45d-6d9f3d09e809";
+        let fresh_now = fresh(SQ202_QUEST, 30);
+        let mut stored = fresh_now.clone();
+        for enemy in stored
+            .enemy_generated_data
+            .get_mut(&uuid(SQ202C_KEY_HOLDER))
+            .expect("SQ202 covers stage C's key holder")
+            .iter_mut()
+            .flatten()
+        {
+            enemy.loot_table_loot.remove(&uuid(KEY_TABLE));
+        }
+        assert_eq!(keys(&stored, SQ202C_KEY_HOLDER), 0, "the precondition");
+        assert!(add_missing_enemy_key_loot(&mut stored, &fresh_now));
+        assert_eq!(keys(&stored, SQ202C_KEY_HOLDER), 1, "still no key");
+        // A second /quests changes nothing.
+        assert!(!add_missing_enemy_key_loot(&mut stored, &fresh_now));
+    }
+
+    /// CONTROL for #573: only the APK key holders gain a MISSING table. A
+    /// captured key holder (EQ13) whose stored row lacks the table is not grown.
+    #[test]
+    fn report_573_other_groups_never_gain_a_missing_table() {
+        let fresh_now = fresh(EQ13_QUEST, 73);
+        let mut stored = fresh_now.clone();
+        for enemy in stored
+            .enemy_generated_data
+            .get_mut(&uuid(EQ13_KEY_HOLDER))
+            .unwrap()
+            .iter_mut()
+            .flatten()
+        {
+            enemy.loot_table_loot.remove(&uuid(KEY_TABLE));
+        }
+        add_missing_enemy_key_loot(&mut stored, &fresh_now);
+        assert_eq!(keys(&stored, EQ13_KEY_HOLDER), 0);
     }
 
     /// CONTROL: nothing already rolled changes -- not the gold the player may
