@@ -6817,15 +6817,22 @@ mod tests {
         let gd = game_data();
         let mut run = run_from(&[(149, 100)], 84);
         run.character_level = 100;
+        // Walk dungeons and groups in a fixed order: both live in HashMaps, and
+        // picking whichever came first made this test flaky (it failed ~4% of
+        // runs, on the release build of 2026-11-20).
+        let mut dungeon_ids: Vec<Uuid> = gd.dungeons.keys().copied().collect();
+        dungeon_ids.sort();
         let mut fixture = None;
-        'dungeons: for dungeon_id in gd.dungeons.keys() {
+        'dungeons: for dungeon_id in &dungeon_ids {
             let mut slice = run.slices[0].clone();
             slice.dungeon_settings_id = *dungeon_id;
             let Some(generated) = floor_generated_data(&gd, &slice, run.seed, run.character_level)
             else {
                 continue;
             };
-            for (group, spawners) in &generated.enemy_generated_data {
+            let mut groups: Vec<_> = generated.enemy_generated_data.iter().collect();
+            groups.sort_by_key(|(group, _)| **group);
+            for (group, spawners) in groups {
                 for (spawner, enemies) in spawners.iter().enumerate() {
                     for index in 0..enemies.len() {
                         if let Some(bonus) = blades_lib::util::dungeon::abyss_bonus_material(
@@ -6836,6 +6843,14 @@ mod tests {
                             index,
                             100,
                         ) {
+                            // Seeds and Dye (town materials the draw can pick) are
+                            // removed at level 45+ by #438, so such a corpse rightly
+                            // pays no bonus: not a fixture for "the bonus is paid".
+                            if blades_lib::features::high_level_materials::SEEDS_DYE_PELT
+                                .contains(&bonus.0)
+                            {
+                                continue;
+                            }
                             fixture = Some((*dungeon_id, *group, spawner, index, bonus));
                             break 'dungeons;
                         }
