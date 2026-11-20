@@ -1163,6 +1163,7 @@ impl MatchRegistry {
             // carrier + GameMessageId — s506 map) BEFORE encrypting, then encrypt
             // under the TARGET's key (this is where the A→B relay happens).
             let channel = crate::arena::combat::messages::retail_channel(&user_data);
+            log_round_start_timing(&m.game_session_id, target, channel, &user_data, "c2s-reply");
             chacha20_legacy_xor(&mut user_data, &tp.crypto.key, &tp.crypto.nonce);
             replies.push((tp.addr, channel, user_data));
         }
@@ -1847,6 +1848,7 @@ impl MatchRegistry {
                 // Retail ENet channel from the PLAINTEXT (carrier + GMID, s506 map)
                 // before encrypting under the TARGET's key.
                 let channel = crate::arena::combat::messages::retail_channel(&user_data);
+                log_round_start_timing(&m.game_session_id, target, channel, &user_data, "tick");
                 let key = tp.crypto.key;
                 let nonce = tp.crypto.nonce;
                 let addr = tp.addr;
@@ -2122,6 +2124,44 @@ fn carries_player_session_id(plain: &[u8]) -> bool {
 /// Safety: we hold the registry lock while this runs, so it is synchronous and
 /// must be fast. The payload is at most a few hundred bytes — a linear scan is
 /// perfectly acceptable.
+/// Tracker #568 diagnostic: log when an opponent op54 PROFILE or an Avatar op50 SPAWN
+/// is handed to ENet, with a millisecond wall clock, so the next affected match shows
+/// whether the avatar (channel 0, one small frame) reaches the client before the
+/// profile (channel 4, tens of KB, fragmented) that carries `HideHelmet`. No
+/// behaviour change. (ENet acks of the last fragment are not observable through
+/// rusty_enet 0.4's public API; `enet_host::send_to` logs the fragment estimate.)
+fn log_round_start_timing(
+    gsid: &Uuid,
+    target_slot: usize,
+    channel: u8,
+    user_data: &[u8],
+    path: &str,
+) {
+    use crate::arena::combat::messages::{TimingFrame, timing_frame};
+    let Some(kind) = timing_frame(user_data) else {
+        return;
+    };
+    let at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    match kind {
+        TimingFrame::Profile {
+            player_obj,
+            hide_helmet,
+        } => info!(
+            "arena timing: gsid={gsid} to_slot={target_slot} frame=profile player_obj={player_obj} \
+             hide_helmet={hide_helmet:?} channel={channel} bytes={} path={path} at_ms={at_ms}",
+            user_data.len()
+        ),
+        TimingFrame::AvatarSpawn { avatar_obj, role } => info!(
+            "arena timing: gsid={gsid} to_slot={target_slot} frame=avatar_spawn avatar_obj={avatar_obj} \
+             role={role} channel={channel} bytes={} path={path} at_ms={at_ms}",
+            user_data.len()
+        ),
+    }
+}
+
 fn extract_fighter_slot_from_playerinfo(
     plain: &[u8],
     psid_to_slot: &HashMap<String, usize>,

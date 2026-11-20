@@ -843,6 +843,7 @@ impl MatchInstance {
         // wore their helmet in round 1 and lost it in round 2. Record it; if the
         // profile has already gone out (a reconnect re-sends op20), refresh it.
         if let Some(hide) = messages::player_info_hide_helmet(user_data) {
+            self.log_hide_helmet_report(sender, "op20", hide);
             if self.set_hide_helmet(sender, hide) && self.round_start_actors_sent {
                 self.broadcast_profile_of(&mut out, sender);
             }
@@ -862,8 +863,11 @@ impl MatchInstance {
             // avatar toggle, and the opponent's client only learns it from the op54
             // profile we build. Record it, and if it changed after that profile was
             // already broadcast, re-broadcast so the opponent's avatar matches.
-            let profile_changed = messages::loadout_backend_hide_helmet(user_data)
-                .is_some_and(|hide| self.set_hide_helmet(sender, hide));
+            let reported = messages::loadout_backend_hide_helmet(user_data);
+            if let Some(hide) = reported {
+                self.log_hide_helmet_report(sender, "op61", hide);
+            }
+            let profile_changed = reported.is_some_and(|hide| self.set_hide_helmet(sender, hide));
             if profile_changed {
                 debug!(
                     "combat c2s: slot {sender} op61 HideHelmet changed — re-broadcasting profile"
@@ -2329,11 +2333,7 @@ impl MatchInstance {
                     finished_fight: finish.is_finished(),
                     card_weapon: card_weapon.clone(),
                     trophy_delta: if void_result { 0 } else { trophy_delta },
-                    classic_trophy_delta: if void_result {
-                        0
-                    } else {
-                        classic_trophy_delta
-                    },
+                    classic_trophy_delta: if void_result { 0 } else { classic_trophy_delta },
                     rounds_won,
                     rounds_lost,
                     win: is_winner && !void_result,
@@ -2417,6 +2417,23 @@ impl MatchInstance {
         for actor_slot in 0..self.combat.fighters.len() {
             self.broadcast_interround_profile_once(out, actor_slot);
         }
+    }
+
+    /// Tracker #568 diagnostic: log a client's own HideHelmet report (op20 on connect,
+    /// op61 between rounds) with the value already held and whether the round-start
+    /// profile has gone out, so a round-1-only helmet can be traced. No behaviour change.
+    fn log_hide_helmet_report(&self, slot: usize, op: &str, hide: bool) {
+        let (actor, held) = self
+            .combat
+            .fighters
+            .get(slot)
+            .map(|f| (f.loadout.display_name.as_str(), f.loadout.hide_helmet))
+            .unwrap_or(("?", false));
+        info!(
+            "arena timing: gsid={} slot={slot} actor={actor} hide_helmet_report={op} value={hide} \
+             held={held} round_start_profile_sent={}",
+            self.combat.game_session_id, self.round_start_actors_sent
+        );
     }
 
     /// Record `slot`'s own HideHelmet toggle (op20 or op61). Returns whether it
