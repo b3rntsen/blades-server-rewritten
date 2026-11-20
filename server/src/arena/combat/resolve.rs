@@ -4147,6 +4147,10 @@ fn emit_damage_with_outcome(
     // then Ward/Absorb drain against the mitigated remainder. Work on a local copy so
     // the wire frame reflects the post-negation per-type damage.
     let mut components = resolved.components.clone();
+    // Raw health a dodge pool ate on this hit (pre-resistance, as the dodge drains).
+    // `pool_absorbed` below only counts Ward/Absorb, so without this a dodge that
+    // worked and one that did nothing look identical in the log (#576).
+    let mut dodge_absorbed = 0.0_f32;
     let mut neg = if super::state::is_dodgeable_source(resolved.source) {
         let mut raw_after_dodge = resolved.raw_components.clone();
         let dodge = combat.fighters[target_slot].apply_dodge_negation_pools_for_source(
@@ -4154,6 +4158,14 @@ fn emit_damage_with_outcome(
             &mut raw_after_dodge,
             now,
         );
+        let raw_health = |cs: &[(super::state::DamageType, f32)]| -> f32 {
+            cs.iter()
+                .filter(|(t, _)| super::damage::is_health_type(*t))
+                .map(|(_, v)| *v)
+                .sum()
+        };
+        dodge_absorbed =
+            (raw_health(&resolved.raw_components) - raw_health(&raw_after_dodge)).max(0.0);
         scale_components_by_raw_dodge(&mut components, &resolved.raw_components, &raw_after_dodge);
         dodge
     } else {
@@ -4186,6 +4198,12 @@ fn emit_damage_with_outcome(
         .negation_pools
         .iter()
         .filter(|p| p.source != super::state::DamageNegationSource::Dodge)
+        .map(|p| p.remaining.max(0.0))
+        .sum();
+    let dodge_left: f32 = combat.fighters[target_slot]
+        .negation_pools
+        .iter()
+        .filter(|p| p.source == super::state::DamageNegationSource::Dodge)
         .map(|p| p.remaining.max(0.0))
         .sum();
     neg.heal += non_dodge.heal;
@@ -4276,7 +4294,8 @@ fn emit_damage_with_outcome(
         info!(
             "combat damage: slot {attacker_slot} → slot {target_slot} | source {:?} side {:?} | \
              NEGATED by a pool (heal +{:.0}) → op66 DamageNegated, no HP loss \
-             pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1}",
+             pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} \
+             dodge_absorbed={dodge_absorbed:.1} dodge_left={dodge_left:.1}",
             resolved.source, resolved.active_side, neg.heal,
         );
         let frame = messages::damage_negated(defender_obj);
@@ -4401,7 +4420,7 @@ fn emit_damage_with_outcome(
     };
     let dealt = hp_before.saturating_sub(hp_after);
     info!(
-        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) absorbed=({},{},{}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
+        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} dodge_absorbed={dodge_absorbed:.1} dodge_left={dodge_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) absorbed=({},{},{}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
         combat.game_session_id,
         combat.fighters[attacker_slot].loadout.display_name,
         combat.fighters[target_slot].loadout.display_name,
@@ -14802,6 +14821,63 @@ mod shipped_effects_tests {
             c.fighters[0].negation_pools[0].remaining <= 0.01,
             "pool must spend the raw 100, not the resisted {}",
             resolved.components[0].1
+        );
+    }
+
+    /// #576: a channelled spell's ticks (Frostbite) are `ContinuousSpell`, which
+    /// retail's `Damage.IsDodgeable@0x1bd4cfc` counts as dodgeable (sources 1, 2, 3,
+    /// 8, 9, 10, 11). A tick inside the dodge window is eaten by the dodge pool; a
+    /// pool already spent by an earlier hit leaves the tick untouched — one pool per
+    /// dodge, shared by everything that lands in its window.
+    #[test]
+    fn report_576_a_frostbite_tick_inside_the_dodge_window_is_dodged() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        let pool = |remaining: f32| NegationPool {
+            source: DamageNegationSource::Dodge,
+            remaining,
+            expires_at: now + Duration::from_secs(1),
+            restoration_factor: 0.0,
+            absorb_fraction: 1.0,
+            elemental_only: false,
+            consumes_overflow: false,
+            on_absorb_restore: (0.0, 0.0, 0.0),
+            dodge_started_at: Some(now),
+            dodge_status_expires_at: Some(now + Duration::from_secs(1)),
+            dodge_effectiveness: 1.0,
+            bypass_types: &[],
+            breaks_into_stagger: false,
+        };
+        let tick = |c: &MatchCombat| {
+            RetailDamageModel.resolve_flat(
+                &c.fighters[1].loadout,
+                &c.fighters[0],
+                DamageSource::ContinuousSpell,
+                ActiveSide::Middle,
+                DamageType::Frost,
+                25.0,
+                now,
+            )
+        };
+        // A fresh dodge eats the tick.
+        c.fighters[0].negation_pools.push(pool(216.75));
+        let hp_before = c.fighters[0].health;
+        let resolved = tick(&c);
+        let _ = emit_damage(&mut c, 1, 0, &resolved, now);
+        assert_eq!(
+            c.fighters[0].health, hp_before,
+            "a Frostbite tick in the window is dodged"
+        );
+
+        // A pool an earlier hit already spent leaves the next tick alone.
+        c.fighters[0].negation_pools.clear();
+        c.fighters[0].negation_pools.push(pool(0.0));
+        let hp_before = c.fighters[0].health;
+        let resolved = tick(&c);
+        let _ = emit_damage(&mut c, 1, 0, &resolved, now);
+        assert!(
+            c.fighters[0].health < hp_before,
+            "a spent dodge pool stops nothing"
         );
     }
 
