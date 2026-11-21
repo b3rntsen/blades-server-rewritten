@@ -1950,8 +1950,10 @@ pub(super) fn resolve_ability_cast(
         f.charge_press_at = None;
         f.pending_manual_attack = None;
         f.bot_swing_at = None;
-        // A guard still held when this maneuver ends goes back up then (#530).
-        f.guard_resume_pending = true;
+        // A guard still held when this maneuver ends goes back up then (#530) —
+        // except after Reckless Fury, which forbids blocking: resuming the guard at
+        // the animation's end would raise it for one tick before Fury drops it (#586).
+        f.guard_resume_pending = ea.ability_uuid != uuid_reckless_fury();
         if f.actor_state() == ActorStateType::Blocking {
             f.blocking_until = None;
             f.reconcile_block(now);
@@ -8076,6 +8078,48 @@ mod tests {
             !combat.fighters[0].has_reckless_fury(later),
             "an interrupted Fury never opens its window"
         );
+    }
+
+    /// #586 review: a guard held through the Fury animation must not rise at the
+    /// animation's end — Fury forbids blocking, and the held-guard resume runs before
+    /// the Fury impact lands, so it raised the shield for one tick (op41 then op39).
+    #[test]
+    fn a_guard_held_through_the_fury_animation_never_rises() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let rf_uuid = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: rf_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        });
+        combat.fighters[0].max_stamina = 660;
+        combat.fighters[0].stamina = 660;
+        let cast_at = now + Duration::from_millis(100);
+        let out = on_c2s_input(&mut combat, 0, &make_ability_frame(120, rf_uuid), cast_at);
+        assert!(!out.is_empty(), "precondition: the cast was accepted");
+        let press = cast_at + Duration::from_millis(300);
+        let _ = on_c2s_input(
+            &mut combat,
+            0,
+            &super::phase4_tests::make_act_frame(true, 0.0, true),
+            press,
+        );
+        let mut t = cast_at;
+        let mut fury_seen = false;
+        for _ in 0..40 {
+            t += Duration::from_millis(50);
+            let _ = on_tick(&mut combat, t, false);
+            let _ = drain_state_changes(&mut combat, t);
+            let f = &combat.fighters[0];
+            fury_seen |= f.has_reckless_fury(t);
+            assert!(
+                f.actor_state() != ActorStateType::Blocking || !f.has_reckless_fury(t),
+                "guard up under Fury at +{}ms",
+                t.duration_since(cast_at).as_millis()
+            );
+        }
+        assert!(fury_seen, "precondition: Fury opened");
     }
 
     /// The control on the seeding itself: an ability that ships NO `_initialCooldown`
