@@ -130,6 +130,49 @@ fn judged_hold_secs(server_secs: f32, client_secs: Option<f32>) -> f32 {
     }
 }
 
+/// How far ahead of the server's DOWN->UP gap the client's charge clock is believed
+/// for the MinDamageTime pass/fail gate only (never for the crit plateau, which keeps
+/// [`CLIENT_CHARGE_MAX_AHEAD_SECS`]). #578: batched packets can squeeze the server gap
+/// to a single tick (17 ms) while the client really held 216 ms and already swung.
+const CLIENT_GATE_MAX_AHEAD_SECS: f32 = 0.25;
+
+/// The longest server DOWN->UP gap still treated as "squeezed": both inputs arrived
+/// in one client input batch (~50 ms on the wire; prod gaps quantise to 49.9 ms), so the
+/// server's gap says nothing about how long the finger was down.
+const SQUEEZED_GAP_MAX_SECS: f32 = 0.067;
+
+/// Whether the client's charge clock may decide that a release is a swing at all: only
+/// when the server's own gap was squeezed by batching (a gap of a real length is the
+/// opponent's view of the wind-up, and a claim far past it is not believed), and only
+/// within [`CLIENT_GATE_MAX_AHEAD_SECS`].
+fn client_clock_passes_gate(server_secs: f32, client_secs: f32) -> bool {
+    server_secs <= SQUEEZED_GAP_MAX_SECS
+        && client_secs.is_finite()
+        && client_secs > 0.0
+        && client_secs <= server_secs + CLIENT_GATE_MAX_AHEAD_SECS
+}
+
+/// The swing a release gets when the judged hold failed `MinDamageTime` but the client
+/// clock passes [`client_clock_passes_gate`] (#578): the weapon's off-plateau factor
+/// `1 + minDamageFactor` — never the crit, which stays on the judged hold. `None`
+/// without a recorded press (a lone UP is never a swing) or when the client clock
+/// itself is short of `MinDamageTime`.
+fn wide_gate_swing_factor(
+    fighter: &super::state::Fighter,
+    had_press: bool,
+    server_secs: f32,
+    client_secs: Option<f32>,
+    now: Instant,
+) -> Option<f32> {
+    let client = client_secs?;
+    if !had_press || !client_clock_passes_gate(server_secs, client) {
+        return None;
+    }
+    let params = fighter.loadout.charge_params();
+    (client >= params.min_damage_time(charge_speed_multiplier(fighter, now)))
+        .then_some(1.0 + params.min_damage_factor)
+}
+
 /// A release before `MinDamageTime`: `PlayerChargingState$$OnLateUpdate@0x1d73fe4`
 /// calls `PlayerActorState$$AttackFailed@0x1d5a710` and changes to Idle. No swing, no
 /// damage, and Idle's `OnEnter` resets the combo (02 R1, X2). Tracker #228: "a brief
@@ -1201,6 +1244,7 @@ pub fn on_c2s_input(
             );
             return Vec::new();
         }
+        let had_press = combat.fighters[sender].charge_press_at.is_some();
         let server_hold = combat.fighters[sender]
             .charge_press_at
             .map(|t| now.saturating_duration_since(t).as_secs_f32())
@@ -1214,8 +1258,26 @@ pub fn on_c2s_input(
         charge_cross_check(sender, server_hold, act.client_charge);
         // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
         let hold_secs = judged_hold_secs(server_hold, act.client_charge);
-        let Some(swing_factor) = charge_swing_factor(&combat.fighters[sender], hold_secs, now)
-        else {
+        let swing_factor = match charge_swing_factor(&combat.fighters[sender], hold_secs, now) {
+            Some(f) => Some(f),
+            None => wide_gate_swing_factor(
+                &combat.fighters[sender],
+                had_press,
+                server_hold,
+                act.client_charge,
+                now,
+            )
+            .inspect(|_| {
+                info!(
+                    "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=accepted_wide_gate band=wide server_ms={:.1} client_ms={:.1}",
+                    combat.game_session_id,
+                    combat.fighters[sender].loadout.display_name,
+                    server_hold * 1000.0,
+                    act.client_charge.unwrap_or(0.0) * 1000.0,
+                );
+            }),
+        };
+        let Some(swing_factor) = swing_factor else {
             fail_attack_with_clocks(
                 combat,
                 sender,
@@ -22159,17 +22221,66 @@ mod crit_charge_combo_tests {
         // server saw 0.30 s.
         assert_eq!(run(0.30, 0.33), 265, "client on the plateau → crit");
         // The clamp. A client claiming 0.34 s (a crit) when the server saw 0.20 s is
-        // 0.14 s ahead, past the 0.10 s band: ignored, judged on 0.20 s → no swing.
+        // 0.14 s ahead, past the 0.10 s crit band: no crit. It is inside the 0.25 s
+        // gate band (#578), so it is a NORMAL swing (200), never the 265 crit.
+        // 0.14 s ahead of a real (unsqueezed) 0.20 s gap: ignored, no swing.
         assert_eq!(
             run(0.20, 0.34),
             0,
-            "claim 0.14 s ahead of the server is ignored"
+            "claim 0.14 s ahead of a real gap is ignored"
         );
+        // Over a squeezed gap the gate band applies, as a plain swing (never 265).
+        assert_eq!(run(0.04, 0.24), 200, "squeezed gap: a plain swing");
+        assert_eq!(run(0.04, 0.34), 0, "claim 0.30 s ahead is ignored entirely");
         // …and one far BEHIND (0.25 s under) is ignored too: server 0.60 s, client
         // 0.34 s would be a crit, the server's 0.60 s is not.
         assert_eq!(run(0.60, 0.34), 200, "claim 0.26 s behind is ignored");
         // Inside the band on the ahead side it is believed: server 0.26, client 0.34.
         assert_eq!(run(0.26, 0.34), 265, "0.08 s ahead is within the band");
+    }
+
+    /// #578 (prod 2026-11-21, Pogagoga, Warlock's Ring Haste 0.76 → Light
+    /// MinDamageTime 0.1773 s): the app swung on its own 216 ms clock while batched
+    /// packets left the server a 17 ms DOWN->UP gap. The server refused it
+    /// (`attack_failed hold_ms=17.1 min_ms=177.3 client_ms=216.2`), cancelling a swing
+    /// the player saw. Now a plain swing. Controls from the same log: real taps the app
+    /// itself refused (client 83 ms / server 58 ms, client 50 ms / server 169 ms) still
+    /// fail.
+    #[test]
+    fn report_578_a_client_swing_over_a_squeezed_server_gap_is_a_swing() {
+        let run = |server: f32, client: f32| {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            c.fighters[0].loadout.haste = 0.24;
+            let release = now + Duration::from_secs_f32(server);
+            let before = c.fighters[1].health;
+            on_c2s_input(&mut c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(false, client, false), release);
+            land_due_hits(
+                &mut c,
+                release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1),
+            );
+            before - c.fighters[1].health
+        };
+        assert_eq!(run(0.0171, 0.2162), 200, "the prod row: a plain swing");
+        assert_eq!(run(0.0576, 0.0833), 0, "a real tap still fails");
+        assert_eq!(run(0.1692, 0.0499), 0, "a real tap still fails");
+        // Randel's rows (no Haste in prod, but the gate logic is the same): server
+        // 147 ms is a real gap, so 383 ms is 236 ms past it and refused; server 63 ms
+        // is squeezed but 417 ms is 354 ms ahead, past the 0.25 s band, refused too.
+        assert_eq!(run(0.1468, 0.3833), 0, "Randel 147/383: real gap, refused");
+        assert_eq!(run(0.0632, 0.4167), 0, "Randel 63/417: past the band, refused");
+        // A lone UP (no recorded press, state already Charging) never takes the gate
+        // band, whatever the client clock claims.
+        let now = Instant::now();
+        let mut c = fight(now, Weight::Light, 200.0);
+        c.fighters[0].set_actor_state(ActorStateType::Charging, now);
+        let before = c.fighters[1].health;
+        on_c2s_input(&mut c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), now);
+        on_c2s_input(&mut c, 0, &make_act_frame(false, 0.24, false), now);
+        land_due_hits(&mut c, now + FOLLOW_THROUGH_DELAY + Duration::from_millis(1));
+        assert_eq!(before - c.fighters[1].health, 0, "lone UP: no swing");
     }
 
     #[test]
