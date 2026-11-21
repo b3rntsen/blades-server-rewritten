@@ -43,7 +43,7 @@ use crate::{
         season_store,
     },
     models::CharacterDbEntryCharacterWalletInventory,
-    schema::{arena_ai_mimic_control, arena_ai_mimics, arena_seasons, characters},
+    schema::{arena_ai_mimic_control, arena_ai_mimics, arena_seasons, characters, sessions},
     session::{PendingMatch, Session, SessionLookedUpMaybe},
 };
 
@@ -1629,6 +1629,15 @@ async fn pick_bot_loadout(
     // the bracket and then be discarded, leaving a worse fight than the pool
     // could have given.
     rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
+    // ...AND NEVER THE ROW OF SOMEONE WHO IS LOGGED IN (tracker #577).
+    //
+    // `busy` only covers characters inside a live match. The roster also held rows
+    // whose owners play them every day (Shoyr, st1wkr, LagorPing, Huge Goober on
+    // 2026-11-21): the legacy `ARENA_BOT_USER_IDS` migration seeded original rows,
+    // not copies. A user with an unexpired game session is playing that row, so it
+    // is not a copy and must not be drawn. Their mimic copies stay eligible.
+    let logged_in = users_with_live_sessions(&mut conn).await;
+    drop_rows_of_logged_in_users(&mut rows, &logged_in);
     let ranking_config = ranking::load(db).await.config;
     apply_recent_bot_avoidance(
         &mut rows,
@@ -1665,6 +1674,7 @@ async fn pick_bot_loadout(
     if should_widen(source, human, draw) {
         let mut wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
         wide_rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
+        drop_rows_of_logged_in_users(&mut wide_rows, &logged_in);
         apply_recent_bot_avoidance(
             &mut wide_rows,
             human_char_uuid,
@@ -1797,6 +1807,30 @@ fn candidate_of_row(r: &CharacterDbEntryCharacterWalletInventory) -> BotCandidat
 
 /// Every OTHER character, capped. The pool used when no roster is configured, and
 /// the widening the roster path falls back to when the bracket cannot be met.
+/// Users holding an unexpired game session — i.e. people currently playing their
+/// own character. Fail open to an empty set: a transient read error must not
+/// empty the bot pool (the in-match `busy` filter still applies).
+async fn users_with_live_sessions(conn: &mut AsyncPgConnection) -> std::collections::HashSet<Uuid> {
+    sessions::table
+        .filter(sessions::expires_at.gt(chrono::Utc::now()))
+        .select(sessions::user_id)
+        .load::<Uuid>(conn)
+        .await
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_else(|error| {
+            warn!("matchmaker: live-session read failed; not filtering logged-in owners: {error}");
+            Default::default()
+        })
+}
+
+/// Drop every candidate row owned by a logged-in user (tracker #577).
+fn drop_rows_of_logged_in_users(
+    rows: &mut Vec<CharacterDbEntryCharacterWalletInventory>,
+    logged_in: &std::collections::HashSet<Uuid>,
+) {
+    rows.retain(|r| !logged_in.contains(&r.user_id));
+}
+
 async fn load_wide_pool(
     conn: &mut PooledConnection<'_, AsyncPgConnection>,
     human_char_uuid: &str,
@@ -7283,6 +7317,30 @@ mod a_bot_is_a_copy {
             "the widened fallback pool must be filtered too — it is the path that \
              reaches outside the roster, so it is the one most likely to reach a \
              character who is playing"
+        );
+    }
+
+    /// Tracker #577: the roster held original rows their owners play daily. A row
+    /// owned by a user with a live session is that user's own character, not a
+    /// copy, so both pools drop it before the draw.
+    #[test]
+    fn bot_selection_excludes_rows_of_logged_in_users() {
+        let src = include_str!("matchmaker.rs");
+        let pick = src
+            .split("async fn pick_bot_loadout(")
+            .nth(1)
+            .expect("the picker exists");
+        let body = &pick[..pick.find("\nasync fn ").unwrap_or(pick.len())];
+        let primary = body
+            .find("drop_rows_of_logged_in_users(&mut rows, &logged_in)")
+            .expect("the primary pool drops logged-in owners");
+        let draw = body
+            .find("pick_bot_index(&candidates")
+            .expect("the draw happens");
+        assert!(primary < draw, "the filter must run BEFORE the draw");
+        assert!(
+            body.contains("drop_rows_of_logged_in_users(&mut wide_rows, &logged_in)"),
+            "the widened pool must drop logged-in owners too"
         );
     }
 
