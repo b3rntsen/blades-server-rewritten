@@ -2283,19 +2283,31 @@ pub(super) fn resolve_ability_cast(
             );
             // A maneuver with no hit is a self-buff (Reckless Fury, `FURY.impacts`
             // is empty). Queuing zero impacts meant its effect never ran at all:
-            // 425 stamina for nothing, and no stun immunity (#467/#470). It takes
-            // effect at the cast, the moment the status goes up.
-            out.extend(apply_ability_impact(
-                combat,
+            // 425 stamina for nothing, and no stun immunity (#467/#470).
+            //
+            // It takes effect when the cast ANIMATION ends, not at the cast (#586).
+            // `RecklessFuryAbility$$GetExecutionSteps@0x1f41c28` runs
+            // `AbilityDoManeuver` (animation 24) first and `AbilityDoRecklessFury` —
+            // whose `BeginExecution@0x1e97cc8` adds status 11 — only after it, so the
+            // caster is still stunnable and killable for the battle cry (combat-spec
+            // 05 §3.9). Queued like an impact at `OnManeuverEnded`, a stagger inside
+            // the animation interrupts the execution and the buff never starts, as a
+            // retail interrupt of the maneuver step would.
+            let at = maneuver_timing
+                .map(|t| t.end)
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.0);
+            combat.pending_impacts.push(super::state::PendingImpact {
                 sender,
-                target_slot,
-                &ea.ability_uuid,
+                target: target_slot,
+                ability_uuid: ea.ability_uuid.clone(),
                 level,
                 tag,
                 magicka_full_at_cast,
-                now,
-                true,
-            ));
+                due: now + Duration::from_secs_f32(at) + bot_maneuver_latency_comp,
+                cast_at: now,
+                reset_maneuver_combo_after: true,
+            });
         }
         for idx in 0..impact_count {
             let authored = maneuver_timing
@@ -7979,10 +7991,10 @@ mod tests {
         let out = on_c2s_input(&mut combat, 0, &frame, cast_at);
         assert!(!out.is_empty(), "precondition: the cast was accepted");
         assert_eq!(combat.fighters[0].stamina, 660 - 425, "and paid for");
-        // Land anything the cast queued, as the engine tick would.
-        let _ = land_due_impacts(&mut combat, cast_at + Duration::from_millis(50));
-
+        // Land anything the cast queued, as the engine tick would. The buff is due
+        // at the end of the cast animation (#586), well before the stun.
         let at_stun = cast_at + Duration::from_millis(1600);
+        let _ = land_due_impacts(&mut combat, at_stun);
         assert!(
             combat.fighters[0].has_reckless_fury(at_stun),
             "a paid Reckless Fury must open its 5 s window"
@@ -7990,6 +8002,79 @@ mod tests {
         assert!(
             !combat.fighters[0].apply_stagger_for(at_stun, 2.5),
             "a high-block stun inside Fury must be refused"
+        );
+    }
+
+    /// Report #586: in retail a Reckless Fury caster could still be stunned (and
+    /// killed) during the battle-cry animation; the buff starts only when the
+    /// animation's maneuver step ends (`RecklessFuryAbility$$GetExecutionSteps
+    /// @0x1f41c28`: `AbilityDoManeuver` before `AbilityDoRecklessFury`). We opened
+    /// the window at the cast.
+    #[test]
+    fn reckless_fury_starts_only_after_its_cast_animation() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let rf_uuid = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: rf_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        });
+        combat.fighters[0].max_stamina = 660;
+        combat.fighters[0].stamina = 660;
+        let cast_at = now + Duration::from_millis(100);
+        let out = on_c2s_input(&mut combat, 0, &make_ability_frame(120, rf_uuid), cast_at);
+        assert!(!out.is_empty(), "precondition: the cast was accepted");
+
+        let anim_end = super::super::interrupts::maneuver_timing(rf_uuid, 1, None)
+            .expect("Fury has an authored animation")
+            .end;
+        let mid_cast = cast_at + Duration::from_secs_f32(anim_end * 0.5);
+        let _ = land_due_impacts(&mut combat, mid_cast);
+        assert!(
+            !combat.fighters[0].has_reckless_fury(mid_cast),
+            "Fury must not be up during its own cast animation"
+        );
+
+        let after = cast_at + Duration::from_secs_f32(anim_end + 0.05);
+        let _ = land_due_impacts(&mut combat, after);
+        assert!(
+            combat.fighters[0].has_reckless_fury(after),
+            "Fury is up once the animation has ended"
+        );
+        // ...and lasts its full 5 s from there, not from the cast.
+        let near_end = cast_at + Duration::from_secs_f32(anim_end + 4.9);
+        assert!(combat.fighters[0].has_reckless_fury(near_end));
+    }
+
+    /// #586, the interrupt: a stun landed inside the Fury animation interrupts the
+    /// maneuver, so the buff never starts (the stamina stays spent).
+    #[test]
+    fn a_stun_during_the_fury_animation_cancels_the_buff() {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let rf_uuid = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: rf_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        });
+        combat.fighters[0].max_stamina = 660;
+        combat.fighters[0].stamina = 660;
+        let cast_at = now + Duration::from_millis(100);
+        let out = on_c2s_input(&mut combat, 0, &make_ability_frame(120, rf_uuid), cast_at);
+        assert!(!out.is_empty(), "precondition: the cast was accepted");
+
+        let stun_at = cast_at + Duration::from_millis(300);
+        assert!(
+            combat.fighters[0].apply_stagger_for(stun_at, 1.0),
+            "the caster is stunnable while the battle cry plays"
+        );
+        let later = cast_at + Duration::from_secs(2);
+        let _ = land_due_impacts(&mut combat, later);
+        assert!(
+            !combat.fighters[0].has_reckless_fury(later),
+            "an interrupted Fury never opens its window"
         );
     }
 
