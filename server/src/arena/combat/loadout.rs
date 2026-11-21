@@ -3654,12 +3654,48 @@ mod report_259_material_regen_tests {
         use DamageType::*;
         // (template, name, block-bonus types, stamina regen?, magicka regen?)
         let cases: [(&str, &str, &[DamageType], bool, bool); 6] = [
-            ("80af12db-32e9-47b5-aa04-14a3d610e426", "Stalhrim", &[Bashing, Frost], false, false),
-            ("08a302c9-fc5b-4a03-bd6c-e7974a81009f", "Daedric Light", &[Slashing, Fire], false, false),
-            ("33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6", "Glass", &[Shock], true, false),
-            ("e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada", "Hide", &[], true, false),
-            ("616b64ef-4184-4efb-af55-1a3f122431dc", "Elven", &[], false, true),
-            ("0d491a77-762d-4c31-85ad-5baf39eb90a7", "Chitin", &[Poison], false, true),
+            (
+                "80af12db-32e9-47b5-aa04-14a3d610e426",
+                "Stalhrim",
+                &[Bashing, Frost],
+                false,
+                false,
+            ),
+            (
+                "08a302c9-fc5b-4a03-bd6c-e7974a81009f",
+                "Daedric Light",
+                &[Slashing, Fire],
+                false,
+                false,
+            ),
+            (
+                "33ffc2ba-10d7-4f2a-9c1c-1dd9667334d6",
+                "Glass",
+                &[Shock],
+                true,
+                false,
+            ),
+            (
+                "e5bf5f11-665a-4ca4-83c8-4bbaaebd6ada",
+                "Hide",
+                &[],
+                true,
+                false,
+            ),
+            (
+                "616b64ef-4184-4efb-af55-1a3f122431dc",
+                "Elven",
+                &[],
+                false,
+                true,
+            ),
+            (
+                "0d491a77-762d-4c31-85ad-5baf39eb90a7",
+                "Chitin",
+                &[Poison],
+                false,
+                true,
+            ),
         ];
         for (template, name, types, stamina, magicka) in cases {
             let lo = from_character(&character(), &inventory(vec![item(template, 0)]));
@@ -3768,8 +3804,18 @@ mod report_259_material_regen_tests {
                     "{name}: block vs {ty:?} = {bonus}"
                 );
             }
-            assert_eq!(lo.stamina_regen > 0.0, stamina, "{name}: stamina regen {}", lo.stamina_regen);
-            assert_eq!(lo.magicka_regen > 0.0, magicka, "{name}: magicka regen {}", lo.magicka_regen);
+            assert_eq!(
+                lo.stamina_regen > 0.0,
+                stamina,
+                "{name}: stamina regen {}",
+                lo.stamina_regen
+            );
+            assert_eq!(
+                lo.magicka_regen > 0.0,
+                magicka,
+                "{name}: magicka regen {}",
+                lo.magicka_regen
+            );
             assert_eq!(lo.health_regen, 0.0, "{name}: health regen");
             let mut ravage: Vec<DamageType> = lo
                 .shield_ravage
@@ -3970,7 +4016,10 @@ mod report_536_armor_tempering {
             assert!(t10 >= t1, "{}: level 10 {t10} < level 1 {t1}", a.name);
             checked += 1;
         }
-        assert_eq!(checked, 199, "armour templates with a non-zero temper table");
+        assert_eq!(
+            checked, 199,
+            "armour templates with a non-zero temper table"
+        );
     }
 
     /// Pogagoga's live loadout (prod, read-only SELECT 2026-11-16): four

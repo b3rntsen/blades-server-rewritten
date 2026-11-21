@@ -58,6 +58,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use actix_web::{
     get,
@@ -85,7 +86,7 @@ fn page_count(total: i64) -> i64 {
     }
 }
 
-#[derive(Serialize, Debug, Default)]
+#[derive(Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct LeaderboardEntry {
     pub user_id: Uuid,
@@ -323,57 +324,116 @@ pub async fn get_leaderboard(
     }
 }
 
+/// How long one computed board is served before it is ranked again.
+///
+/// The ranking query costs ~0.5 s on prod (it has to detoast every saved alt's
+/// character JSON), and `build` used to run it THREE times per request — count,
+/// page, player row — so every arena menu open waited 1.6 s at the median and up
+/// to 2.9 s (#588 side finding, 2026-11-21). The board is cosmetic; a few seconds
+/// of staleness after a match is invisible, a two-second spinner is not.
+const BOARD_TTL: Duration = Duration::from_secs(20);
+
+/// The whole ranked board, as of `at`.
+struct CachedBoard {
+    at: Instant,
+    board: Arc<Vec<LeaderboardEntry>>,
+}
+
+/// A single-flight TTL cache: concurrent misses wait on one load instead of each
+/// running the query (the lock is held across the load on purpose).
+struct BoardCache {
+    slot: tokio::sync::Mutex<Option<CachedBoard>>,
+    ttl: Duration,
+}
+
+impl BoardCache {
+    const fn new(ttl: Duration) -> Self {
+        Self {
+            slot: tokio::sync::Mutex::const_new(None),
+            ttl,
+        }
+    }
+
+    async fn get_or_load<F, Fut, E>(&self, load: F) -> Result<Arc<Vec<LeaderboardEntry>>, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<LeaderboardEntry>, E>>,
+    {
+        let mut slot = self.slot.lock().await;
+        if let Some(c) = slot.as_ref() {
+            if c.at.elapsed() < self.ttl {
+                return Ok(c.board.clone());
+            }
+        }
+        // A failed load leaves the previous board (if any) in place for the next
+        // caller to retry; the handler serves an empty board for this request.
+        let board = Arc::new(load().await?);
+        *slot = Some(CachedBoard {
+            at: Instant::now(),
+            board: board.clone(),
+        });
+        Ok(board)
+    }
+}
+
+static BOARD: BoardCache = BoardCache::new(BOARD_TTL);
+
 async fn build(
     app_state: &ServerGlobal,
     character_id: Uuid,
     page: i64,
     include_player: bool,
 ) -> Result<LeaderboardResult, anyhow::Error> {
-    let mut conn = app_state.db_pool.get().await?;
+    let board = BOARD
+        .get_or_load(|| async {
+            let mut conn = app_state.db_pool.get().await?;
+            // The whole board in one pass of the SAME function the website's top
+            // 100 reads; count, page and the player's row are all cut from it.
+            Ok::<_, anyhow::Error>(ranked_entries(&mut conn, i64::MAX, 0).await?)
+        })
+        .await?;
+    Ok(page_of(&board, character_id, page, include_player))
+}
 
-    let total = count_entries(&mut conn).await?;
-    let total_pages = page_count(total);
-
-    let entries = ranked_entries(&mut conn, PAGE_SIZE, (page - 1) * PAGE_SIZE).await?;
+/// Cut one page (and optionally the player's own row) out of the full board.
+fn page_of(
+    board: &[LeaderboardEntry],
+    character_id: Uuid,
+    page: i64,
+    include_player: bool,
+) -> LeaderboardResult {
+    let total = board.len() as i64;
+    let start = usize::try_from((page - 1).saturating_mul(PAGE_SIZE)).unwrap_or(usize::MAX);
+    let entries: Vec<LeaderboardEntry> = board
+        .iter()
+        .skip(start)
+        .take(PAGE_SIZE as usize)
+        .cloned()
+        .collect();
 
     // The player's own row may be on any page (retail's capture showed rank 92
-    // returned alongside page 1), so it is fetched separately.
-    let player_row: Option<RankedRow> = if include_player {
-        sql_query(format!(
-            "{RANKED_CTE} SELECT id, user_id, name, guild_name, score, streak, rank, wins \
-             FROM ranked WHERE id = $1"
-        ))
-        .bind::<SqlUuid, _>(character_id)
-        .get_results::<RankedRow>(&mut conn)
-        .await?
-        .into_iter()
-        .next()
-    } else {
-        None
-    };
-
-    let player_entry = if include_player {
-        Some(match player_row {
-            Some(r) => row_to_entry(r),
-            // No match in the active season — answer rank 0 / score 0.
-            None => LeaderboardEntry {
+    // returned alongside page 1), so it is looked up across the whole board.
+    // No row in the active season answers rank 0 / score 0.
+    let player_entry = include_player.then(|| {
+        board
+            .iter()
+            .find(|e| e.character_id == character_id)
+            .cloned()
+            .unwrap_or_else(|| LeaderboardEntry {
                 character_id,
                 ..Default::default()
-            },
-        })
-    } else {
-        None
-    };
+            })
+    });
 
-    Ok(LeaderboardResult {
+    LeaderboardResult {
         player_entry,
         leaderboard: InnerLeaderboardResult {
             total_entries: total,
             current_page: page,
-            total_pages,
+            total_pages: page_count(total),
             entries,
         },
-    })
+    }
 }
 
 /// How many characters are on the board. Same projection as [`ranked_entries`].
@@ -411,6 +471,112 @@ pub(crate) async fn ranked_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(rank: i64) -> LeaderboardEntry {
+        LeaderboardEntry {
+            character_id: Uuid::from_u128(rank as u128),
+            rank,
+            score: 1000 - rank,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn page_of_cuts_pages_and_finds_the_player_anywhere() {
+        let board: Vec<_> = (1..=250).map(entry).collect();
+        let r = page_of(&board, Uuid::from_u128(192), 1, true);
+        assert_eq!(r.leaderboard.total_entries, 250);
+        assert_eq!(r.leaderboard.total_pages, 3);
+        assert_eq!(r.leaderboard.entries.len(), 100);
+        assert_eq!(r.leaderboard.entries[0].rank, 1);
+        assert_eq!(
+            r.player_entry.as_ref().unwrap().rank,
+            192,
+            "player row from page 2"
+        );
+
+        let p3 = page_of(&board, Uuid::nil(), 3, false);
+        assert_eq!(p3.leaderboard.entries.len(), 50);
+        assert_eq!(p3.leaderboard.entries[0].rank, 201);
+        assert_eq!(p3.leaderboard.current_page, 3);
+        assert!(p3.player_entry.is_none());
+
+        // Past the end: empty page, not a panic. Unranked player: rank 0 row.
+        let far = page_of(&board, Uuid::from_u128(9999), i64::MAX, true);
+        assert!(far.leaderboard.entries.is_empty());
+        let me = far.player_entry.unwrap();
+        assert_eq!(
+            (me.character_id, me.rank, me.score),
+            (Uuid::from_u128(9999), 0, 0)
+        );
+    }
+
+    /// The latency fix itself: N menu opens inside the TTL pay for ONE ranking
+    /// query, not 3N. The loader sleeps like the prod query (~0.5 s measured);
+    /// the cached requests must come back without paying it again.
+    #[tokio::test]
+    async fn board_cache_runs_the_query_once_per_ttl() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = BoardCache::new(Duration::from_millis(400));
+        let loads = AtomicUsize::new(0);
+        let load = || async {
+            loads.fetch_add(1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok::<_, ()>(vec![entry(1)])
+        };
+
+        let cold = Instant::now();
+        cache.get_or_load(load).await.unwrap();
+        let cold = cold.elapsed();
+
+        let warm = Instant::now();
+        for _ in 0..50 {
+            assert_eq!(cache.get_or_load(load).await.unwrap()[0].rank, 1);
+        }
+        let warm = warm.elapsed();
+        assert_eq!(
+            AtomicUsize::load(&loads, Ordering::SeqCst),
+            1,
+            "50 warm requests ran no query"
+        );
+        assert!(
+            warm < cold,
+            "50 cached requests ({warm:?}) beat one cold load ({cold:?})"
+        );
+
+        // Concurrent misses share one load (single flight).
+        let fresh = BoardCache::new(Duration::from_secs(60));
+        let before = AtomicUsize::load(&loads, Ordering::SeqCst);
+        let (a, b, c) = tokio::join!(
+            fresh.get_or_load(load),
+            fresh.get_or_load(load),
+            fresh.get_or_load(load)
+        );
+        assert!(a.is_ok() && b.is_ok() && c.is_ok());
+        assert_eq!(AtomicUsize::load(&loads, Ordering::SeqCst) - before, 1);
+
+        // After the TTL the board is ranked again, so new cups do show up.
+        tokio::time::sleep(Duration::from_millis(450)).await;
+        cache.get_or_load(load).await.unwrap();
+        assert_eq!(AtomicUsize::load(&loads, Ordering::SeqCst), 3);
+    }
+
+    /// A failed load must not poison the cache: the next request retries.
+    #[tokio::test]
+    async fn board_cache_does_not_cache_a_failure() {
+        let cache = BoardCache::new(Duration::from_secs(60));
+        assert!(
+            cache
+                .get_or_load(|| async { Err::<Vec<LeaderboardEntry>, _>("db down") })
+                .await
+                .is_err()
+        );
+        let ok = cache
+            .get_or_load(|| async { Ok::<_, &str>(vec![entry(7)]) })
+            .await
+            .unwrap();
+        assert_eq!(ok[0].rank, 7);
+    }
 
     /// The board is cosmetic but its SHAPE is load-bearing — the client parses it
     /// strictly. Pin the camelCase keys against the retail capture (#1229).
