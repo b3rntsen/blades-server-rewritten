@@ -130,6 +130,20 @@ fn judged_hold_secs(server_secs: f32, client_secs: Option<f32>) -> f32 {
     }
 }
 
+/// How far ahead of the server's DOWN->UP gap the client's charge clock is believed
+/// for the MinDamageTime pass/fail gate only (never for the crit plateau, which keeps
+/// [`CLIENT_CHARGE_MAX_AHEAD_SECS`]). #578: batched packets can squeeze the server gap
+/// to a single tick (17 ms) while the client really held 216 ms and already swung.
+const CLIENT_GATE_MAX_AHEAD_SECS: f32 = 0.25;
+
+/// Whether the client's charge clock may decide that a release is a swing at all.
+fn client_clock_passes_gate(server_secs: f32, client_secs: f32) -> bool {
+    client_secs.is_finite()
+        && client_secs > 0.0
+        && client_secs >= server_secs - CLIENT_CHARGE_MAX_BEHIND_SECS
+        && client_secs <= server_secs + CLIENT_GATE_MAX_AHEAD_SECS
+}
+
 /// A release before `MinDamageTime`: `PlayerChargingState$$OnLateUpdate@0x1d73fe4`
 /// calls `PlayerActorState$$AttackFailed@0x1d5a710` and changes to Idle. No swing, no
 /// damage, and Idle's `OnEnter` resets the combo (02 R1, X2). Tracker #228: "a brief
@@ -1214,8 +1228,27 @@ pub fn on_c2s_input(
         charge_cross_check(sender, server_hold, act.client_charge);
         // The client's own charge clock, when it is plausible (see `judged_hold_secs`).
         let hold_secs = judged_hold_secs(server_hold, act.client_charge);
-        let Some(swing_factor) = charge_swing_factor(&combat.fighters[sender], hold_secs, now)
-        else {
+        let swing_factor = charge_swing_factor(&combat.fighters[sender], hold_secs, now).or_else(
+            || {
+                // The client already swung: its own clock passed `MinDamageTime`
+                // (`IsAttackPossible`), but it ran more than the crit band ahead of a
+                // server DOWN->UP gap squeezed by network batching (#578: server 17 ms,
+                // client 216 ms, Haste 0.76). Refusing desyncs the screens (the app
+                // plays a swing the server cancels). So the pass/fail gate believes the
+                // client within the wider gate band, but only as a NORMAL swing: the
+                // crit plateau stays on the judged hold above, so the wider band buys a
+                // modified client nothing but a plain hit its own app would have made.
+                let client = act.client_charge?;
+                if client_clock_passes_gate(server_hold, client)
+                    && charge_swing_factor(&combat.fighters[sender], client, now).is_some()
+                {
+                    Some(1.0)
+                } else {
+                    None
+                }
+            },
+        );
+        let Some(swing_factor) = swing_factor else {
             fail_attack_with_clocks(
                 combat,
                 sender,
@@ -22159,17 +22192,49 @@ mod crit_charge_combo_tests {
         // server saw 0.30 s.
         assert_eq!(run(0.30, 0.33), 265, "client on the plateau → crit");
         // The clamp. A client claiming 0.34 s (a crit) when the server saw 0.20 s is
-        // 0.14 s ahead, past the 0.10 s band: ignored, judged on 0.20 s → no swing.
+        // 0.14 s ahead, past the 0.10 s crit band: no crit. It is inside the 0.25 s
+        // gate band (#578), so it is a NORMAL swing (200), never the 265 crit.
         assert_eq!(
             run(0.20, 0.34),
-            0,
-            "claim 0.14 s ahead of the server is ignored"
+            200,
+            "claim 0.14 s ahead: a plain swing, the crit is ignored"
         );
+        // Far ahead of the gate band too (0.30 s): no swing at all.
+        assert_eq!(run(0.04, 0.34), 0, "claim 0.30 s ahead is ignored entirely");
         // …and one far BEHIND (0.25 s under) is ignored too: server 0.60 s, client
         // 0.34 s would be a crit, the server's 0.60 s is not.
         assert_eq!(run(0.60, 0.34), 200, "claim 0.26 s behind is ignored");
         // Inside the band on the ahead side it is believed: server 0.26, client 0.34.
         assert_eq!(run(0.26, 0.34), 265, "0.08 s ahead is within the band");
+    }
+
+    /// #578 (prod 2026-11-21, Pogagoga, Warlock's Ring Haste 0.76 → Light
+    /// MinDamageTime 0.1773 s): the app swung on its own 216 ms clock while batched
+    /// packets left the server a 17 ms DOWN->UP gap. The server refused it
+    /// (`attack_failed hold_ms=17.1 min_ms=177.3 client_ms=216.2`), cancelling a swing
+    /// the player saw. Now a plain swing. Controls from the same log: real taps the app
+    /// itself refused (client 83 ms / server 58 ms, client 50 ms / server 169 ms) still
+    /// fail.
+    #[test]
+    fn report_578_a_client_swing_over_a_squeezed_server_gap_is_a_swing() {
+        let run = |server: f32, client: f32| {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Light, 200.0);
+            c.fighters[0].loadout.haste = 0.24;
+            let release = now + Duration::from_secs_f32(server);
+            let before = c.fighters[1].health;
+            on_c2s_input(&mut c, 0, &make_pos_frame(RIGHT, 0.5, 0.0), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(true, 0.0, false), now);
+            on_c2s_input(&mut c, 0, &make_act_frame(false, client, false), release);
+            land_due_hits(
+                &mut c,
+                release + FOLLOW_THROUGH_DELAY + Duration::from_millis(1),
+            );
+            before - c.fighters[1].health
+        };
+        assert_eq!(run(0.0171, 0.2162), 200, "the prod row: a plain swing");
+        assert_eq!(run(0.0576, 0.0833), 0, "a real tap still fails");
+        assert_eq!(run(0.1692, 0.0499), 0, "a real tap still fails");
     }
 
     #[test]
