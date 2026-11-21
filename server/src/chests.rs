@@ -215,6 +215,36 @@ fn resolve_overflow(
     }
 }
 
+/// The resolve action, wherever the client put it.
+///
+/// `ResolveOverflowChestRequest` declares `action` as a request PARAMETER
+/// (`ACTION_PARAMETER_NAME = "action"`, dump.cs:462835), and BGS request parameters
+/// on a POST travel in the JSON body like every other `PARAMETER_*` (e.g.
+/// `UpdateAbilitiesRequest`). Prod 11-21 (tracker #583): the client POSTed
+/// `/treasuries/current/resolve` with NO query string, so a query-only read saw an
+/// empty action, answered 400, and the app rebooted at every start while its
+/// overflow chest stayed put — the player could not get into the game. Read the
+/// body first, then fall back to the query.
+fn resolve_action_from(query_action: &str, body: &[u8]) -> Option<ResolveAction> {
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(body) {
+        if let Some(a) = v.get("action").and_then(|a| a.as_str()) {
+            if let Some(parsed) = ResolveAction::parse(a) {
+                return Some(parsed);
+            }
+        }
+    }
+    if let Ok(text) = std::str::from_utf8(body) {
+        for pair in text.split('&') {
+            if let Some(("action", a)) = pair.split_once('=') {
+                if let Some(parsed) = ResolveAction::parse(a.trim()) {
+                    return Some(parsed);
+                }
+            }
+        }
+    }
+    ResolveAction::parse(query_action)
+}
+
 /// `POST /characters/{id}/treasuries/current/resolve?action=ACCEPT|DISCARD`.
 ///
 /// The client's main menu calls this (`ResolveOverflowChestRequest`) when it finds a
@@ -235,11 +265,12 @@ pub async fn resolve_overflow_chest(
     app_state: web::Data<Arc<ServerGlobal>>,
     path: web::Path<Uuid>,
     query: Query<ResolveQuery>,
+    body: web::Bytes,
 ) -> Result<Json<ResolveResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
     let user_id = session.session.user_id;
     let character_id = path.into_inner();
-    let action = ResolveAction::parse(&query.action)
+    let action = resolve_action_from(&query.action, &body)
         .ok_or_else(|| BladeApiError::new(StatusCode::BAD_REQUEST, CHEST_SERVICE_ID, 2))?;
     let mut conn = app_state.db_pool.get().await.unwrap();
 
@@ -343,6 +374,31 @@ mod overflow_tests {
             serde_json::json!([id])
         );
         assert!(wire["treasury"].get("removedChests").is_none());
+    }
+
+    /// Tracker #583: the client sends `action` in the JSON body with no query
+    /// string; a query-only read answered 400 and the app rebooted forever.
+    #[test]
+    fn report_583_the_action_is_read_from_the_body() {
+        assert_eq!(
+            resolve_action_from("", br#"{"action":"ACCEPT"}"#),
+            Some(ResolveAction::Accept)
+        );
+        assert_eq!(
+            resolve_action_from("", br#"{"action":"DISCARD"}"#),
+            Some(ResolveAction::Discard)
+        );
+        assert_eq!(
+            resolve_action_from("", b"action=ACCEPT"),
+            Some(ResolveAction::Accept)
+        );
+        // The query still works, and nothing at all is still refused.
+        assert_eq!(
+            resolve_action_from("DISCARD", b""),
+            Some(ResolveAction::Discard)
+        );
+        assert_eq!(resolve_action_from("", b""), None);
+        assert_eq!(resolve_action_from("", b"{}"), None);
     }
 
     #[test]
