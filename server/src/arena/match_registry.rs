@@ -2107,23 +2107,6 @@ fn carries_player_session_id(plain: &[u8]) -> bool {
     )
 }
 
-/// Fighter-slot resolution from a decrypted identity-bearing c2s payload.
-///
-/// The client sends a GMID-20 PlayerInfo early in the session (carrier 0x84,
-/// opcode byte = 20) that carries the playerSessionId as a string property.
-/// By scanning the plaintext for a UTF-8 string that matches one of the keys in
-/// `psid_to_slot` we can bind the peer's ENet admission slot → the correct
-/// fighter slot (allocated by the matchmaker, which owns the psid→slot mapping).
-///
-/// The encoding used by Blades is a Pascal-style varint-length-prefixed UTF-8
-/// string embedded in a serialised protobuf-like structure.  We do NOT have the
-/// full schema, so instead we scan the payload for any substring that matches a
-/// known psid exactly (they are 36-char UUIDs with dashes — unambiguous). If
-/// found, return the fighter slot for that psid; otherwise None.
-///
-/// Safety: we hold the registry lock while this runs, so it is synchronous and
-/// must be fast. The payload is at most a few hundred bytes — a linear scan is
-/// perfectly acceptable.
 /// Tracker #568 diagnostic: log when an opponent op54 PROFILE or an Avatar op50 SPAWN
 /// is handed to ENet, with a millisecond wall clock, so the next affected match shows
 /// whether the avatar (channel 0, one small frame) reaches the client before the
@@ -2162,6 +2145,23 @@ fn log_round_start_timing(
     }
 }
 
+/// Fighter-slot resolution from a decrypted identity-bearing c2s payload.
+///
+/// The client sends a GMID-20 PlayerInfo early in the session (carrier 0x84,
+/// opcode byte = 20) that carries the playerSessionId as a string property.
+/// By scanning the plaintext for a UTF-8 string that matches one of the keys in
+/// `psid_to_slot` we can bind the peer's ENet admission slot → the correct
+/// fighter slot (allocated by the matchmaker, which owns the psid→slot mapping).
+///
+/// The encoding used by Blades is a Pascal-style varint-length-prefixed UTF-8
+/// string embedded in a serialised protobuf-like structure.  We do NOT have the
+/// full schema, so instead we scan the payload for any substring that matches a
+/// known psid exactly (they are 36-char UUIDs with dashes — unambiguous). If
+/// found, return the fighter slot for that psid; otherwise None.
+///
+/// Safety: we hold the registry lock while this runs, so it is synchronous and
+/// must be fast. The payload is at most a few hundred bytes — a linear scan is
+/// perfectly acceptable.
 fn extract_fighter_slot_from_playerinfo(
     plain: &[u8],
     psid_to_slot: &HashMap<String, usize>,

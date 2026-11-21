@@ -220,12 +220,30 @@ pub fn loadout_backend_hide_helmet(user_data: &[u8]) -> Option<bool> {
 /// client/gld version, p18/p19 telemetry ids, **p20 = the ONLY Bool = HideHelmet**.
 /// Taheen's s616 PlayerInfos carry both `false` and `true`, so it is a live value.
 pub fn player_info_hide_helmet(user_data: &[u8]) -> Option<bool> {
-    if user_message_gmid(user_data) != Some(GameMessageId::PlayerInfo as u8) {
+    if !is_player_info(user_data) {
         return None;
     }
-    arena_proto::parse_netdata(user_data.get(2..)?)
-        .int(20)
-        .map(|v| v != 0)
+    // Only a genuine Bool at propId 20 counts: a different layout must read as
+    // "unknown" (None), never as a guessed `true`/`false`.
+    match arena_proto::parse_netdata(user_data.get(2..)?)
+        .props
+        .get(&20)
+    {
+        Some(arena_proto::NetDataValue::Bool(b)) => Some(*b),
+        _ => None,
+    }
+}
+
+/// True iff a c2s frame is the client's op20 `PlayerInfo`, in either shape:
+/// the retail carrier-`0x36` user message with GameMessageId 20 at propId 3, or the
+/// FLAT shape the live client actually sends (byte 1 = 20, the GMID as the carrier
+/// byte) — the one `match_registry::carries_player_session_id` already binds
+/// fighter slots from. Tracker #568: we only accepted the carrier-`0x36` shape, so
+/// the round-1 HideHelmet never arrived (0 op20 reports in prod since 2026-11-20,
+/// 619 op61) and every helmet-hider wore a helmet in round 1 only.
+pub fn is_player_info(user_data: &[u8]) -> bool {
+    user_data.get(1) == Some(&(GameMessageId::PlayerInfo as u8))
+        || user_message_gmid(user_data) == Some(GameMessageId::PlayerInfo as u8)
 }
 
 /// Which round-start frames the #568 timing log tracks: the opponent's op54 PROFILE
@@ -2427,6 +2445,57 @@ mod tests {
         assert_eq!(timing_frame(&player_welcome(120, 21)), None);
         assert_eq!(timing_frame(&[]), None);
         assert_eq!(timing_frame(&[0xBE]), None);
+    }
+
+    /// #568: op20 HideHelmet is read from both the carrier-0x36 and the flat shape,
+    /// only from a genuine Bool at propId 20, and never from other frames.
+    #[test]
+    fn player_info_hide_helmet_reads_both_shapes_and_only_a_bool() {
+        let op20 = |carrier: u8, p20: Option<bool>, p20_as_int: bool| {
+            let mut w = NetDataWriter::new();
+            w.int(0, 115)
+                .byte(1, 57)
+                .byte(2, 3)
+                .byte(3, 20)
+                .string(4, "Bob");
+            match (p20, p20_as_int) {
+                (Some(b), false) => {
+                    w.bool(20, b);
+                }
+                (Some(b), true) => {
+                    w.int(20, i32::from(b));
+                }
+                (None, _) => {}
+            }
+            frame(carrier, w.finish())
+        };
+        assert_eq!(
+            player_info_hide_helmet(&op20(MSGTYPE_USERMESSAGE, Some(true), false)),
+            Some(true)
+        );
+        assert_eq!(
+            player_info_hide_helmet(&op20(20, Some(true), false)),
+            Some(true),
+            "flat shape"
+        );
+        assert_eq!(
+            player_info_hide_helmet(&op20(20, Some(false), false)),
+            Some(false)
+        );
+        assert_eq!(
+            player_info_hide_helmet(&op20(20, None, false)),
+            None,
+            "no p20"
+        );
+        assert_eq!(
+            player_info_hide_helmet(&op20(20, Some(true), true)),
+            None,
+            "p20 not a Bool"
+        );
+        assert_eq!(player_info_hide_helmet(&stat_update(88)), None);
+        assert_eq!(player_info_hide_helmet(&[]), None);
+        assert!(is_player_info(&op20(20, None, false)));
+        assert!(!is_player_info(&stat_update(88)));
     }
 
     #[test]

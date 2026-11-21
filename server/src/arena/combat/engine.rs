@@ -849,6 +849,27 @@ impl MatchInstance {
             }
             // Fall through: op20 is otherwise a handshake frame (psid binding happens
             // in the registry before it reaches us).
+        } else if messages::is_player_info(user_data) {
+            // #568: an op20 we could not read a HideHelmet Bool from. Log its shape so
+            // a layout we don't understand is visible instead of silently ignored.
+            let parsed = user_data
+                .get(2..)
+                .map(arena_proto::parse_netdata)
+                .map(|nd| {
+                    nd.props
+                        .iter()
+                        .map(|(k, v)| format!("{k}:{}", netdata_kind(v)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
+            info!(
+                "arena timing: gsid={} slot={sender} op20 PlayerInfo without a Bool p20 \
+                 (carrier 0x{:02x}, {} B, props [{parsed}])",
+                self.combat.game_session_id,
+                user_data.get(1).copied().unwrap_or(0),
+                user_data.len(),
+            );
         }
 
         // op61 LoadoutClientBackendSynchronized (c2s) — the client reports its OWN
@@ -3129,6 +3150,48 @@ pub(in crate::arena::combat) mod tests {
     /// round-START profile always said "helmet on", and the op61 at the first round
     /// transition flipped it off for round 2. The op20 value must reach the round-1
     /// profile. Removing the op20 read turns this RED.
+    /// The same op20 in the FLAT shape the live client sends (byte 1 = 20, the GMID
+    /// as the carrier byte) — the shape `match_registry::carries_player_session_id`
+    /// binds slots from. Tracker #568: only the carrier-0x36 shape was read.
+    fn op20_player_info_flat(player_obj: i32, name: &str, hide_helmet: bool) -> Vec<u8> {
+        let mut f = op20_player_info(player_obj, name, hide_helmet);
+        f[1] = 20;
+        f
+    }
+
+    /// #568: prod logged 0 op20 HideHelmet reports and 619 op61 ones; a flat op20 must
+    /// put the flag into the ROUND-1 profile, so a helmet-hider is bare in round 1.
+    #[test]
+    fn flat_op20_puts_hide_helmet_into_the_round_one_profile() {
+        let now = Instant::now();
+        let mk = |name: &str| {
+            let mut l = crate::arena::combat::loadout::starter();
+            l.display_name = name.to_string();
+            l.profile_equipped_json = r#"{"equippedItems":{}}"#.to_string();
+            l.profile_character_json = format!(r#"{{"name":"{name}"}}"#);
+            l
+        };
+        let is_profile = |b: &[u8]| {
+            b.len() > 2 && b[1] == 0x36 && arena_proto::parse_netdata(&b[2..]).int(3) == Some(35)
+        };
+        let mut m = MatchInstance::new(2, 2, vec![mk("Alice"), mk("Bob")], now);
+        let bob_obj = m.combat.fighters[1].player_net_object_id;
+        let alice_obj = m.combat.fighters[0].player_net_object_id;
+        m.on_c2s(1, &op20_player_info_flat(bob_obj, "Bob", true), now);
+        m.on_c2s(0, &op20_player_info_flat(alice_obj, "Alice", false), now);
+        m.on_tick(2, now);
+        let setup = m.on_tick(2, now + MATCH_SETUP_STAGGER);
+        let to_alice = setup
+            .iter()
+            .find(|(v, b)| *v == 0 && is_profile(b))
+            .expect("round-start profile of Bob to Alice");
+        assert_eq!(
+            arena_proto::parse_netdata(&to_alice.1[2..]).int(6),
+            Some(1),
+            "round 1: Alice must see Bob WITHOUT a helmet (flat op20)"
+        );
+    }
+
     #[test]
     fn round_one_profile_carries_hide_helmet_from_player_info() {
         let now = Instant::now();
@@ -7112,3 +7175,21 @@ mod void_for_a_player_who_never_arrived {
 #[cfg(test)]
 #[path = "soak_tests.rs"]
 pub(crate) mod soak_tests;
+
+/// Short type tag of a NetData value, for the #568 op20 shape log.
+fn netdata_kind(v: &NetDataValue) -> &'static str {
+    match v {
+        NetDataValue::Int(_) => "Int",
+        NetDataValue::UInt(_) => "UInt",
+        NetDataValue::ULong(_) => "ULong",
+        NetDataValue::Long(_) => "Long",
+        NetDataValue::Double(_) => "Double",
+        NetDataValue::Float(_) => "Float",
+        NetDataValue::Bool(_) => "Bool",
+        NetDataValue::Byte(_) => "Byte",
+        NetDataValue::Int16(_) => "Int16",
+        NetDataValue::UInt16(_) => "UInt16",
+        NetDataValue::String(_) => "String",
+        _ => "Other",
+    }
+}
