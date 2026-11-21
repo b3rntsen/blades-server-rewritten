@@ -1994,6 +1994,13 @@ pub(super) fn resolve_ability_cast(
         // Recovery -> Maneuver keeps the chain only while Recovery is still running;
         // after `recoveryTime` the actor is Idle and the chain is gone (R1).
         combat.fighters[sender].expire_combo_chain(now);
+        // ...and from here the chain belongs to the maneuver, not to the swing's
+        // Recovery: the fighter has left Recovery, so its `recoveryTime` no longer
+        // runs, and only `ActorManeuverState$$OnExit@0x1d556b0` ends the chain (at the
+        // maneuver's last impact). Leaving `recovery_began_at` set let the tick's
+        // R1 expiry reset the combo mid-clip, so a swing into Dodging Strike (hit at
+        // 1.13 s) or Quick Strikes' second hit (0.70 s) lost it (#585).
+        combat.fighters[sender].recovery_began_at = None;
     } else {
         combat.fighters[sender].reset_combo();
     }
@@ -22114,6 +22121,55 @@ mod crit_charge_combo_tests {
         let before = idle.fighters[1].health;
         let _ = cast(&mut idle, "PowerAttack", now + Duration::from_secs(5));
         assert_eq!(before - idle.fighters[1].health, 137, "no chain after Idle");
+    }
+
+    /// Report #585: a basic swing, then a maneuver whose hit lands after the swing's
+    /// `recoveryTime` has run (Dodging Strike hits 1.13 s into its clip) lost the
+    /// combo. The tick expired the chain off the swing's old Recovery start while the
+    /// fighter was in `Maneuver`, though Recovery -> Maneuver keeps the chain
+    /// (`PlayerRecoveryState$$OnExit@0x1d75714`) and only the maneuver's own end
+    /// resets it (`ActorManeuverState$$OnExit@0x1d556b0`, 02 R5/R9). `cast` above
+    /// lands impacts without ticking, so it could not see this; this drives the tick.
+    #[test]
+    fn a_swing_into_a_dodging_strike_keeps_the_combo_for_its_hit() {
+        let run = |chain: bool| -> f32 {
+            let now = Instant::now();
+            let mut c = fight(now, Weight::Versatile, 100.0);
+            let cast_at = if chain {
+                swing(&mut c, RIGHT, RIGHT, now, 0.35);
+                assert_eq!(c.fighters[0].combo_count, 1, "precondition: a live chain");
+                now + Duration::from_secs_f32(0.45)
+            } else {
+                now
+            };
+            let uuid = uuid_of("DodgingStrike");
+            let tag = super::super::loadout::ability_tag_for_template(uuid);
+            c.fighters[0].loadout.abilities.push(EquippedAbility {
+                instance_uuid: uuid.to_string(),
+                level: 1,
+                tag,
+            });
+            let frame = messages::request_execute_ability(c.fighters[0].net_object_id, uuid);
+            let ea = input::parse_execute_ability(&frame).expect("synthesised op37 must parse");
+            let mut out = resolve_ability_cast(&mut c, 0, 1, &frame, &ea, cast_at);
+            // Tick at 20 Hz through the clip, as the engine does.
+            for step in 1..=40 {
+                out.extend(on_tick(&mut c, cast_at + Duration::from_millis(50 * step), false));
+            }
+            // The maneuver's own hit: source 3, WeaponManeuver.
+            op50s(&out)
+                .into_iter()
+                .filter(|(src, _)| *src == 3)
+                .flat_map(|(_, comps)| comps.into_iter().map(|(_, v)| v))
+                .sum()
+        };
+        let fresh = run(false);
+        let chained = run(true);
+        assert!(fresh > 0.0, "precondition: the dodge strike hit");
+        assert!(
+            (chained - fresh * 1.25).abs() < 0.5,
+            "the chained dodge strike takes x(1 + comboDF): fresh {fresh}, chained {chained}"
+        );
     }
 
     // -- M-bash-source ------------------------------------------------------------
