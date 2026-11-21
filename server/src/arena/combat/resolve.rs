@@ -135,6 +135,20 @@ fn judged_hold_secs(server_secs: f32, client_secs: Option<f32>) -> f32 {
 /// damage, and Idle's `OnEnter` resets the combo (02 R1, X2). Tracker #228: "a brief
 /// tap still gives a full swing".
 fn fail_attack(combat: &mut MatchCombat, sender: usize, hold_secs: f32, now: Instant) {
+    fail_attack_with_clocks(combat, sender, hold_secs, None, now);
+}
+
+/// [`fail_attack`] with the two charge clocks the judged hold was chosen from, so a
+/// release refused for being too short shows whether the server's DOWN->UP gap or
+/// the client's own charge clock decided it (tracker #578: Haste, quantised server
+/// gaps, `judged_hold_secs`' band).
+fn fail_attack_with_clocks(
+    combat: &mut MatchCombat,
+    sender: usize,
+    hold_secs: f32,
+    clocks: Option<(f32, Option<f32>)>,
+    now: Instant,
+) {
     let f = &mut combat.fighters[sender];
     f.charge_began_at = None;
     f.charge_side = None;
@@ -142,7 +156,7 @@ fn fail_attack(combat: &mut MatchCombat, sender: usize, hold_secs: f32, now: Ins
     f.reset_combo();
     f.set_actor_state(ActorStateType::Idle, now);
     info!(
-        "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=attack_failed hold_ms={:.1} min_ms={:.1}",
+        "combat attack_input: gsid={} input=player slot={sender} actor={} outcome=attack_failed hold_ms={:.1} min_ms={:.1} server_ms={} client_ms={} speed={:.3}",
         combat.game_session_id,
         combat.fighters[sender].loadout.display_name,
         hold_secs * 1000.0,
@@ -151,6 +165,11 @@ fn fail_attack(combat: &mut MatchCombat, sender: usize, hold_secs: f32, now: Ins
             .charge_params()
             .min_damage_time(charge_speed_multiplier(&combat.fighters[sender], now))
             * 1000.0,
+        clocks.map_or("-".to_string(), |(s, _)| format!("{:.1}", s * 1000.0)),
+        clocks
+            .and_then(|(_, c)| c)
+            .map_or("-".to_string(), |c| format!("{:.1}", c * 1000.0)),
+        charge_speed_multiplier(&combat.fighters[sender], now),
     );
 }
 
@@ -1197,7 +1216,13 @@ pub fn on_c2s_input(
         let hold_secs = judged_hold_secs(server_hold, act.client_charge);
         let Some(swing_factor) = charge_swing_factor(&combat.fighters[sender], hold_secs, now)
         else {
-            fail_attack(combat, sender, hold_secs, now);
+            fail_attack_with_clocks(
+                combat,
+                sender,
+                hold_secs,
+                Some((server_hold, act.client_charge)),
+                now,
+            );
             return Vec::new();
         };
         if combat.fighters[target_slot].is_dead() {
