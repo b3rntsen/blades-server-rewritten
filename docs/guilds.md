@@ -233,6 +233,36 @@ conditions hears the one retail's client would have pre-checked.
 
 ---
 
+### Co-guild masters (website only)
+
+Owner request, 2026-11-22. A co-guild master is a **website role, not a rank**:
+retail's rank table (`data/guild_data.json`) gives MASTER, ELDER and MEMBER no
+power, the client draws its kick/approve buttons from that asset, and no capture
+holds a member of either rank — so there is nothing in the game to map the role
+onto. `guild_members.rank` is untouched; the role is a row in `guild_co_masters`
+and only `server/src/guild_manage.rs` reads it.
+
+| who | may |
+| --- | --- |
+| Grand Master (website) | everything below, plus appoint / remove co-guild masters |
+| co-guild master (website) | approve / reject join requests; kick anyone except the Grand Master, another co-guild master, themselves |
+| site operator (web admin) | appoint / remove co-guild masters; kick |
+
+Rules: the role counts only while the account holds a **live** seat in the guild;
+kick, leave, ban and the guild's deletion remove it; a co-guild master who
+inherits the guild stops being one. Succession itself is unchanged (rank, then
+longest service). In the game a co-guild master has no extra power.
+
+Dev-token routes (the website is the only caller): `POST
+/api/dev/v1/guilds/{id}/applications/decide` and `POST
+/api/dev/v1/guilds/{id}/co-masters`; `…/kick` accepts a co-guild master as actor
+and `…/roster` carries `coMaster`, `applications` and `log`. A decision or kick
+made there runs the same code as the in-game action and leaves the same rows and
+the same captured board entries (`KICK`/`kickedUserId`, `APPROVE`/
+`approvedUserId`, `DENY`/`deniedUserId`), authored by the co-guild master.
+Appointing posts no board entry. Every write is recorded in `guild_manage_log`
+in its own transaction.
+
 ## 4. Tunables
 
 All four from `GuildData`, all cross-checked.

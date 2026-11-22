@@ -1,15 +1,19 @@
-//! Guild management for the website — a Grand Master's roster and the kick.
+//! Guild management for the website — the roster, the kick, join requests and
+//! co-guild masters.
 //!
-//! Owner request (2026-11-15): "let a guild master manage a guild on their
+//! Owner requests: (2026-11-15) "let a guild master manage a guild on their
 //! profile … see guild member activity current season and before … kick people
-//! from the admin page."
+//! from the admin page"; (2026-11-22) "assign a co-guild master who on the web
+//! has rights to kick and approve new members".
 //!
-//! Three dev-token routes, each with ONE intended web caller:
+//! Dev-token routes, each with ONE intended web caller:
 //!
 //! ```text
-//! GET  /api/dev/v1/guild-seats?userId=…        which guild seats a user's alts hold
-//! GET  /api/dev/v1/guilds/{guild_id}/roster    members + activity + season history
-//! POST /api/dev/v1/guilds/{guild_id}/kick      remove one seat (dry run by default)
+//! GET  /api/dev/v1/guild-seats?userId=…               which guild seats a user's alts hold
+//! GET  /api/dev/v1/guilds/{guild_id}/roster           members + activity + requests + log
+//! POST /api/dev/v1/guilds/{guild_id}/kick             remove one seat (dry run by default)
+//! POST /api/dev/v1/guilds/{guild_id}/applications/decide   approve or reject a join request
+//! POST /api/dev/v1/guilds/{guild_id}/co-masters       appoint or remove a co-guild master
 //! ```
 //!
 //! # Seats are per ALT, and an alt may be parked
@@ -33,6 +37,30 @@
 //! A site admin (the web gates that) kicks as an operator, like the
 //! Grand Master handover in `guild_admin`. [`plan_kick`] is the whole decision,
 //! pure, so it is tested against the negatives.
+//!
+//! # Co-guild masters are a WEBSITE role, not a rank
+//!
+//! Retail has no rank that could carry it. `GuildData._guildRanksData`
+//! (`data/guild_data.json`, see `guild_policy`) grants MASTER, ELDER and MEMBER
+//! nothing, the client draws its kick/approve buttons from that shipped asset,
+//! and no capture holds a member of either rank. So a co-guild master keeps the
+//! in-game rank they had; the role is a row in `guild_co_masters`, read only
+//! here, and it works only on the website:
+//!
+//! * approve or reject join requests, and kick — anyone but the Grand Master,
+//!   another co-guild master, or themselves;
+//! * nothing else: no appointing, no editing, no handover. Those stay with the
+//!   Grand Master (and, for appointing, a site operator).
+//!
+//! The role has power only while its account holds a LIVE seat in the guild —
+//! the same rule as the Grand Master's, and it keeps every board entry authored
+//! by a current member (#439: an entry by somebody the board does not know
+//! stalled the guild screen). What a co-guild master writes is exactly what the
+//! in-game action writes (`guild::remove_seat_for_website`,
+//! `guild::decide_application_for_website`): same rows, same board entries with
+//! the same captured keys, authored by the co-guild master.
+//!
+//! Every write lands in `guild_manage_log` in the transaction that performs it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,8 +84,8 @@ use crate::{
     BladeApiError, ServerGlobal,
     admin::check_import_token,
     arena::season_store,
-    guild::{SeatRemover, remove_seat_for_website},
-    guild_policy::{GuildRank, can_kick},
+    guild::{SeatRemover, decide_application_for_website, remove_seat_for_website},
+    guild_policy::{GuildRank, MAX_MEMBERS, can_approve_applications, can_kick},
 };
 
 /// The guild console's envelope id (`guild_admin`), codes 40+.
@@ -90,6 +118,8 @@ pub struct KickTarget {
     /// (`ALT_ROW_TABLES` restore).
     pub rank: GuildRank,
     pub parked: bool,
+    /// The target's account is a co-guild master of this guild.
+    pub co_master: bool,
 }
 
 /// Who is asking.
@@ -97,10 +127,54 @@ pub struct KickTarget {
 pub enum KickActor {
     /// A site admin. The web route gates the role; the arena sees only the token.
     Operator,
-    /// A player, from their profile, holding this LIVE seat in the guild.
-    Member { user_id: Uuid, rank: GuildRank },
+    /// A player, from the website, holding this LIVE seat in the guild.
+    Member {
+        user_id: Uuid,
+        rank: GuildRank,
+        /// Their account is a co-guild master of this guild.
+        co_master: bool,
+    },
     /// A player with no live seat in this guild.
     Outsider,
+}
+
+/// In what capacity a player acted — what the log records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorRole {
+    Grandmaster,
+    CoMaster,
+    Operator,
+}
+
+impl ActorRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ActorRole::Grandmaster => "GRANDMASTER",
+            ActorRole::CoMaster => "CO_MASTER",
+            ActorRole::Operator => "OPERATOR",
+        }
+    }
+}
+
+impl KickActor {
+    /// The managing capacity of this actor, if it has one.
+    pub fn role(self) -> Option<ActorRole> {
+        match self {
+            KickActor::Operator => Some(ActorRole::Operator),
+            KickActor::Member {
+                rank, co_master, ..
+            } => {
+                if rank == GuildRank::Grandmaster {
+                    Some(ActorRole::Grandmaster)
+                } else if co_master {
+                    Some(ActorRole::CoMaster)
+                } else {
+                    None
+                }
+            }
+            KickActor::Outsider => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -110,7 +184,7 @@ pub enum KickRefusal {
     ActorNotInGuild,
     /// Retail has no self-kick; leaving is its own action.
     Yourself,
-    /// `can_kick` says no: not a Grand Master, or the target is one.
+    /// Neither the Grand Master's rule nor the co-guild master's allows it.
     NotPermitted,
     /// An operator removing the guild's only live member would delete the
     /// guild (a leave's teardown). Refused: that is not what "kick" means.
@@ -125,20 +199,68 @@ pub fn plan_kick(
 ) -> Result<(), KickRefusal> {
     match actor {
         KickActor::Outsider => Err(KickRefusal::ActorNotInGuild),
-        KickActor::Member { user_id, rank } => {
+        KickActor::Member {
+            user_id,
+            rank,
+            co_master,
+        } => {
             if user_id == target.user_id {
                 return Err(KickRefusal::Yourself);
             }
-            if !can_kick(rank, target.rank) {
-                return Err(KickRefusal::NotPermitted);
+            // The game's own rule: a Grand Master removes anyone below them,
+            // co-guild masters included.
+            if can_kick(rank, target.rank) {
+                return Ok(());
             }
-            Ok(())
+            // The website's: a co-guild master removes anyone except the Grand
+            // Master and the other co-guild masters.
+            if co_master && target.rank != GuildRank::Grandmaster && !target.co_master {
+                return Ok(());
+            }
+            Err(KickRefusal::NotPermitted)
         }
         KickActor::Operator => {
             if !target.parked && live_members <= 1 {
                 return Err(KickRefusal::LastMember);
             }
             Ok(())
+        }
+    }
+}
+
+/// May `actor` approve or reject a join request? The Grand Master (the game's
+/// rule) or a co-guild master (the website's). Not an operator: the board
+/// entry needs an author who is a member, and nobody asked for it.
+pub fn plan_moderation(actor: KickActor) -> Result<ActorRole, KickRefusal> {
+    match actor {
+        KickActor::Outsider => Err(KickRefusal::ActorNotInGuild),
+        KickActor::Operator => Err(KickRefusal::NotPermitted),
+        KickActor::Member {
+            rank, co_master, ..
+        } => {
+            if can_approve_applications(rank) {
+                Ok(ActorRole::Grandmaster)
+            } else if co_master {
+                Ok(ActorRole::CoMaster)
+            } else {
+                Err(KickRefusal::NotPermitted)
+            }
+        }
+    }
+}
+
+/// May `actor` appoint or remove a co-guild master? The Grand Master and a
+/// site operator — never a co-guild master.
+pub fn plan_appointment(actor: KickActor) -> Result<ActorRole, KickRefusal> {
+    match actor {
+        KickActor::Outsider => Err(KickRefusal::ActorNotInGuild),
+        KickActor::Operator => Ok(ActorRole::Operator),
+        KickActor::Member { rank, .. } => {
+            if rank == GuildRank::Grandmaster {
+                Ok(ActorRole::Grandmaster)
+            } else {
+                Err(KickRefusal::NotPermitted)
+            }
         }
     }
 }
@@ -285,6 +407,115 @@ fn effective_rank(stored: &str, parked: bool, guild_has_live_gm: bool) -> String
     }
 }
 
+/// The accounts appointed co-guild master of `gid`. A row is a ROLE, not a
+/// power: the callers require a live seat before it counts.
+async fn co_masters_of_guild(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+) -> Result<Vec<Uuid>, diesel::result::Error> {
+    #[derive(QueryableByName)]
+    struct U {
+        #[diesel(sql_type = SqlUuid)]
+        user_id: Uuid,
+    }
+    Ok(
+        sql_query("SELECT user_id FROM guild_co_masters WHERE guild_id = $1")
+            .bind::<Text, _>(gid)
+            .get_results::<U>(conn)
+            .await?
+            .into_iter()
+            .map(|u| u.user_id)
+            .collect(),
+    )
+}
+
+/// Is this seat a co-guild master's? Never the Grand Master's: that rank
+/// already holds everything the role grants.
+fn is_co_master(co_masters: &[Uuid], user_id: Uuid, rank: &str) -> bool {
+    rank != GuildRank::Grandmaster.as_wire() && co_masters.contains(&user_id)
+}
+
+/// Who `actor_user_id` is to this guild. Absent = an operator.
+fn resolve_actor<'a>(
+    live: &'a [LiveSeatRow],
+    co_masters: &[Uuid],
+    actor_user_id: Option<Uuid>,
+) -> Result<(KickActor, Option<&'a LiveSeatRow>), BladeApiError> {
+    let Some(actor_user) = actor_user_id else {
+        return Ok((KickActor::Operator, None));
+    };
+    match live.iter().find(|s| s.user_id == actor_user) {
+        Some(s) => match GuildRank::from_wire(&s.rank) {
+            Some(rank) => Ok((
+                KickActor::Member {
+                    user_id: actor_user,
+                    rank,
+                    co_master: is_co_master(co_masters, actor_user, &s.rank),
+                },
+                Some(s),
+            )),
+            None => Err(err(StatusCode::CONFLICT, 48)),
+        },
+        None => Ok((KickActor::Outsider, None)),
+    }
+}
+
+/// One line of `guild_manage_log`.
+struct LogLine<'a> {
+    gid: &'a str,
+    action: &'a str,
+    role: ActorRole,
+    actor_user_id: Option<Uuid>,
+    actor_name: &'a str,
+    target_user_id: Uuid,
+    target_character_id: Option<Uuid>,
+    target_name: &'a str,
+    ts: i64,
+}
+
+/// Record a management write. Called INSIDE the transaction that performs it:
+/// an action with no record, or a record of an action that rolled back, is
+/// exactly what a log must not hold.
+async fn write_log(
+    conn: &mut AsyncPgConnection,
+    l: LogLine<'_>,
+) -> Result<(), diesel::result::Error> {
+    sql_query(
+        "INSERT INTO guild_manage_log (guild_id, at, action, actor_role, actor_user_id,
+             actor_name, target_user_id, target_character_id, target_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind::<Text, _>(l.gid)
+    .bind::<BigInt, _>(l.ts)
+    .bind::<Text, _>(l.action)
+    .bind::<Text, _>(l.role.as_str())
+    .bind::<Nullable<SqlUuid>, _>(l.actor_user_id)
+    .bind::<Text, _>(l.actor_name)
+    .bind::<SqlUuid, _>(l.target_user_id)
+    .bind::<Nullable<SqlUuid>, _>(l.target_character_id)
+    .bind::<Text, _>(l.target_name)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// An operator's label for the log (the web sends the admin's Discord name).
+/// Bounded and stripped of control characters: it is shown back in a page.
+fn operator_label(raw: Option<&str>) -> String {
+    let cleaned: String = raw
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(64)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "site operator".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GET /guild-seats?userId=
 // ---------------------------------------------------------------------------
@@ -307,6 +538,11 @@ pub struct SeatView {
     pub parked: bool,
     /// May this seat manage the guild on the website ([`seat_can_manage`]).
     pub can_manage: bool,
+    /// This account is a co-guild master of the guild (and not its Grand Master).
+    pub co_master: bool,
+    /// May this seat kick and decide join requests on the website right now: a
+    /// LIVE Grand Master or co-guild master seat.
+    pub can_moderate: bool,
 }
 
 /// `GET /…/api/dev/v1/guild-seats?userId=<public arena user id>` — the seats
@@ -381,11 +617,30 @@ pub(crate) async fn seats_of_user(
     .get_results(conn)
     .await?;
     let head = |gid: &str| heads.iter().find(|h| h.id == gid);
+    #[derive(QueryableByName)]
+    struct Co {
+        #[diesel(sql_type = Text)]
+        guild_id: String,
+    }
+    let co_guilds: Vec<String> =
+        sql_query("SELECT guild_id FROM guild_co_masters WHERE user_id = $1")
+            .bind::<SqlUuid, _>(user_id)
+            .get_results::<Co>(conn)
+            .await?
+            .into_iter()
+            .map(|c| c.guild_id)
+            .collect();
+    let co = |gid: &str, rank: &str| {
+        rank != GuildRank::Grandmaster.as_wire() && co_guilds.iter().any(|g| g == gid)
+    };
 
     let mut out = Vec::new();
     for s in live {
         let Some(h) = head(&s.guild_id) else { continue };
+        let co_master = co(&s.guild_id, &s.rank);
         out.push(SeatView {
+            co_master,
+            can_moderate: co_master || s.rank == GuildRank::Grandmaster.as_wire(),
             can_manage: seat_can_manage(&s.rank, false, h.has_gm),
             guild_id: s.guild_id,
             guild_name: h.name.clone(),
@@ -399,9 +654,13 @@ pub(crate) async fn seats_of_user(
     for s in parked {
         // A guild deleted while the alt was away: the restore skips it, so do we.
         let Some(h) = head(&s.guild_id) else { continue };
+        let rank = effective_rank(&s.rank, true, h.has_gm);
         out.push(SeatView {
+            // A parked seat keeps the role but holds no live power.
+            co_master: co(&s.guild_id, &rank),
+            can_moderate: false,
             can_manage: seat_can_manage(&s.rank, true, h.has_gm),
-            rank: effective_rank(&s.rank, true, h.has_gm),
+            rank,
             guild_id: s.guild_id,
             guild_name: h.name.clone(),
             character_id: s.character_id,
@@ -456,6 +715,8 @@ pub struct RosterMember {
     pub rank: String,
     pub join_date: i64,
     pub parked: bool,
+    /// A co-guild master (website role; the in-game rank is unchanged).
+    pub co_master: bool,
     /// Newest of: last arena match by this alt, last login of the account
     /// (live alt only), the moment a parked alt was switched out.
     pub last_active: Option<i64>,
@@ -493,6 +754,68 @@ pub struct RosterResponse {
     pub season: Option<SeasonHead>,
     pub members: Vec<RosterMember>,
     pub history: Vec<GuildSeason>,
+    /// `OPEN` / `APPLY_ONLY` / `CLOSED` — only an apply-only guild gets requests.
+    pub guild_type: String,
+    pub max_members: i64,
+    /// Pending join requests, oldest first.
+    pub applications: Vec<ApplicationView>,
+    /// The newest website management actions (`guild_manage_log`). The web
+    /// decides who is shown them.
+    pub log: Vec<LogEntry>,
+}
+
+/// A pending join request, with what a manager needs to decide it.
+#[derive(Serialize, Debug, QueryableByName, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplicationView {
+    #[diesel(sql_type = SqlUuid)]
+    pub character_id: Uuid,
+    /// PUBLIC arena user id; the website keeps it server-side.
+    #[diesel(sql_type = SqlUuid)]
+    pub user_id: Uuid,
+    #[diesel(sql_type = Text)]
+    pub name: String,
+    #[diesel(sql_type = Int4)]
+    pub level: i32,
+    #[diesel(sql_type = BigInt)]
+    pub creation_time: i64,
+}
+
+#[derive(Serialize, Debug, QueryableByName)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    #[diesel(sql_type = BigInt)]
+    pub at: i64,
+    #[diesel(sql_type = Text)]
+    pub action: String,
+    #[diesel(sql_type = Text)]
+    pub actor_role: String,
+    #[diesel(sql_type = Text)]
+    pub actor_name: String,
+    #[diesel(sql_type = Text)]
+    pub target_name: String,
+}
+
+/// How many log lines the roster carries.
+const LOG_LINES: i64 = 50;
+
+async fn applications_of_guild(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+) -> Result<Vec<ApplicationView>, diesel::result::Error> {
+    sql_query(
+        r#"SELECT a.character_id, a.user_id,
+                  COALESCE(c."character" ->> 'name', '') AS name,
+                  COALESCE((c."character" ->> 'level')::int, 0) AS level,
+                  a.creation_time
+             FROM guild_applications a
+             LEFT JOIN characters c ON c.id = a.character_id
+            WHERE a.guild_id = $1
+            ORDER BY a.creation_time ASC, a.user_id ASC"#,
+    )
+    .bind::<Text, _>(gid)
+    .get_results(conn)
+    .await
 }
 
 /// One member, before the activity is joined on.
@@ -571,12 +894,15 @@ pub(crate) async fn build_roster(
         tag_id: String,
         #[diesel(sql_type = BigInt)]
         trophies: i64,
+        #[diesel(sql_type = Text)]
+        guild_type: String,
     }
-    let Some(head) = sql_query("SELECT name, tag_id, trophies FROM guilds WHERE id = $1")
-        .bind::<Text, _>(gid)
-        .get_result::<Head>(conn)
-        .await
-        .optional()?
+    let Some(head) =
+        sql_query("SELECT name, tag_id, trophies, guild_type FROM guilds WHERE id = $1")
+            .bind::<Text, _>(gid)
+            .get_result::<Head>(conn)
+            .await
+            .optional()?
     else {
         return Ok(None);
     };
@@ -586,6 +912,16 @@ pub(crate) async fn build_roster(
         .iter()
         .any(|s| s.rank == GuildRank::Grandmaster.as_wire());
     let parked = parked_seats_of_guild(conn, gid).await?;
+    let co_masters = co_masters_of_guild(conn, gid).await?;
+    let applications = applications_of_guild(conn, gid).await?;
+    let log: Vec<LogEntry> = sql_query(
+        "SELECT at, action, actor_role, actor_name, target_name
+           FROM guild_manage_log WHERE guild_id = $1 ORDER BY id DESC LIMIT $2",
+    )
+    .bind::<Text, _>(gid)
+    .bind::<BigInt, _>(LOG_LINES)
+    .get_results(conn)
+    .await?;
     let mut seats: Vec<Seat> = live
         .into_iter()
         .map(|s| Seat {
@@ -772,6 +1108,7 @@ pub(crate) async fn build_roster(
                 })
                 .collect();
             RosterMember {
+                co_master: is_co_master(&co_masters, seat.user_id, &seat.rank),
                 character_id: seat.character_id,
                 alt_key: seat.alt_key,
                 user_id: seat.user_id,
@@ -812,6 +1149,10 @@ pub(crate) async fn build_roster(
                 members: g.members,
             })
             .collect(),
+        guild_type: head.guild_type,
+        max_members: MAX_MEMBERS,
+        applications,
+        log,
     }))
 }
 
@@ -858,10 +1199,13 @@ pub struct KickRequest {
     pub alt_key: Option<Uuid>,
     #[serde(default)]
     pub parked: bool,
-    /// The PUBLIC arena user id of a Grand Master kicking from their profile.
-    /// Absent = an operator (the web gates that to admins).
+    /// The PUBLIC arena user id of a Grand Master or co-guild master kicking
+    /// from the website. Absent = an operator (the web gates that to admins).
     #[serde(default)]
     pub actor_user_id: Option<Uuid>,
+    /// Who the operator is, for the log (the web sends the admin's name).
+    #[serde(default)]
+    pub operator: Option<String>,
     /// Write. Absent or false = report only, like the rest of the console.
     #[serde(default)]
     pub apply: bool,
@@ -920,7 +1264,7 @@ pub async fn kick_guild_member(
         },
         gid,
         body.actor_user_id
-            .map_or("operator".to_string(), |a| format!("grandmaster {a}")),
+            .map_or("operator".to_string(), |a| format!("member {a}")),
         if resp.applied { "APPLIED" } else { "dry run" },
     );
     Ok(Json(resp))
@@ -977,30 +1321,21 @@ pub(crate) async fn kick(
     let target_rank =
         GuildRank::from_wire(&target_rank_wire).ok_or_else(|| err(StatusCode::CONFLICT, 48))?;
 
-    // The actor.
-    let actor = match body.actor_user_id {
-        None => KickActor::Operator,
-        Some(actor_user) => match live.iter().find(|s| s.user_id == actor_user) {
-            Some(s) => match GuildRank::from_wire(&s.rank) {
-                Some(rank) => KickActor::Member {
-                    user_id: actor_user,
-                    rank,
-                },
-                None => return Err(err(StatusCode::CONFLICT, 48)),
-            },
-            None => KickActor::Outsider,
-        },
-    };
+    let co_masters = co_masters_of_guild(conn, gid).await?;
+    let (actor, actor_seat) = resolve_actor(&live, &co_masters, body.actor_user_id)?;
     plan_kick(
         actor,
         KickTarget {
             user_id: target_user,
             rank: target_rank,
             parked: body.parked,
+            co_master: is_co_master(&co_masters, target_user, &target_rank_wire),
         },
         live.len(),
     )
     .map_err(refusal_error)?;
+    // `plan_kick` passed, so the actor has a managing capacity.
+    let role = actor.role().ok_or_else(|| err(StatusCode::FORBIDDEN, 46))?;
 
     let mut resp = KickResponse {
         applied: false,
@@ -1017,27 +1352,28 @@ pub(crate) async fn kick(
         return Ok(resp);
     }
 
-    let remover = match (actor, body.actor_user_id) {
-        (KickActor::Member { user_id, .. }, Some(_)) => {
-            let character_id = live
-                .iter()
-                .find(|s| s.user_id == user_id)
-                .map(|s| s.character_id)
-                .unwrap_or(user_id);
-            SeatRemover::GrandMaster {
+    let (remover, actor_name) = match (actor, actor_seat) {
+        (KickActor::Member { user_id, .. }, Some(seat)) => (
+            SeatRemover::Manager {
                 user_id,
-                character_id,
-            }
-        }
-        _ => SeatRemover::Operator,
+                character_id: seat.character_id,
+            },
+            seat.name.clone(),
+        ),
+        _ => (
+            SeatRemover::Operator,
+            operator_label(body.operator.as_deref()),
+        ),
     };
     let ts = now_unix();
     let gid_owned = gid.to_string();
     let character_id = body.character_id;
+    let actor_user_id = body.actor_user_id;
+    let log_target_name = resp.name.clone();
     let successor = conn
         .transaction::<_, BladeApiError, _>(move |conn| {
             async move {
-                match (live_target, parked_alt) {
+                let heir = match (live_target, parked_alt) {
                     (Some(seat), _) => {
                         remove_seat_for_website(
                             conn,
@@ -1049,14 +1385,39 @@ pub(crate) async fn kick(
                             remover,
                             ts,
                         )
-                        .await
+                        .await?
                     }
                     (None, Some(alt)) => {
                         remove_parked_seat(conn, &gid_owned, character_id, alt, ts).await?;
-                        Ok(None)
+                        // The role goes with the seat, as it does for a live one
+                        // (`guild::remove_member_and_succeed`).
+                        sql_query(
+                            "DELETE FROM guild_co_masters WHERE guild_id = $1 AND user_id = $2",
+                        )
+                        .bind::<Text, _>(&gid_owned)
+                        .bind::<SqlUuid, _>(target_user)
+                        .execute(conn)
+                        .await?;
+                        None
                     }
-                    (None, None) => Err(err(StatusCode::NOT_FOUND, 43)),
-                }
+                    (None, None) => return Err(err(StatusCode::NOT_FOUND, 43)),
+                };
+                write_log(
+                    conn,
+                    LogLine {
+                        gid: &gid_owned,
+                        action: "KICK",
+                        role,
+                        actor_user_id,
+                        actor_name: &actor_name,
+                        target_user_id: target_user,
+                        target_character_id: Some(character_id),
+                        target_name: &log_target_name,
+                        ts,
+                    },
+                )
+                .await?;
+                Ok(heir)
             }
             .scope_boxed()
         })
@@ -1066,6 +1427,301 @@ pub(crate) async fn kick(
 
     // The guild score loses this member now, not after the next match.
     resp.guild_trophies = recompute_and_read(conn, gid).await;
+    Ok(resp)
+}
+
+// ---------------------------------------------------------------------------
+// POST /guilds/{guild_id}/applications/decide
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DecideRequest {
+    /// The applicant's character (what the roster's `applications` lists).
+    pub character_id: Uuid,
+    /// The PUBLIC arena user id of the Grand Master or co-guild master deciding.
+    /// Required: a join request is decided by a member, never by an operator.
+    pub actor_user_id: Uuid,
+    pub approve: bool,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DecideResponse {
+    pub guild_id: String,
+    pub character_id: Uuid,
+    pub name: String,
+    pub approved: bool,
+    /// Live members after the decision.
+    pub member_count: i64,
+    pub guild_trophies: Option<i64>,
+}
+
+/// `POST /…/api/dev/v1/guilds/{guild_id}/applications/decide`.
+#[post("/blades.bgs.services/api/dev/v1/guilds/{guild_id}/applications/decide")]
+pub async fn decide_guild_application(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<String>,
+    body: web::Json<DecideRequest>,
+) -> Result<Json<DecideResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let gid = path.into_inner();
+    let body = body.into_inner();
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::SERVICE_UNAVAILABLE, 40))?;
+    let resp = decide_application(&mut conn, &gid, &body).await?;
+    info!(
+        "guild manage: {} of {} ({}) to {} by member {}",
+        if resp.approved { "APPROVE" } else { "DENY" },
+        resp.character_id,
+        resp.name,
+        gid,
+        body.actor_user_id,
+    );
+    Ok(Json(resp))
+}
+
+pub(crate) async fn decide_application(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    body: &DecideRequest,
+) -> Result<DecideResponse, BladeApiError> {
+    let live = live_seats_of_guild(conn, gid).await?;
+    if live.is_empty() {
+        // No guild, or one with nobody live in it: nobody can decide for it.
+        return Err(err(StatusCode::NOT_FOUND, 41));
+    }
+    let co_masters = co_masters_of_guild(conn, gid).await?;
+    let (actor, actor_seat) = resolve_actor(&live, &co_masters, Some(body.actor_user_id))?;
+    let role = plan_moderation(actor).map_err(refusal_error)?;
+    let actor_seat = actor_seat.ok_or_else(|| err(StatusCode::FORBIDDEN, 44))?;
+
+    let application = applications_of_guild(conn, gid)
+        .await?
+        .into_iter()
+        .find(|a| a.character_id == body.character_id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, 49))?;
+
+    let ts = now_unix();
+    let gid_owned = gid.to_string();
+    let (actor_user, actor_character, actor_name) = (
+        body.actor_user_id,
+        actor_seat.character_id,
+        actor_seat.name.clone(),
+    );
+    let approve = body.approve;
+    let (applicant_user, applicant_character, applicant_name) = (
+        application.user_id,
+        application.character_id,
+        application.name.clone(),
+    );
+    conn.transaction::<_, BladeApiError, _>(move |conn| {
+        async move {
+            decide_application_for_website(
+                conn,
+                &gid_owned,
+                actor_user,
+                actor_character,
+                applicant_user,
+                approve,
+            )
+            .await?;
+            write_log(
+                conn,
+                LogLine {
+                    gid: &gid_owned,
+                    action: if approve { "APPROVE" } else { "DENY" },
+                    role,
+                    actor_user_id: Some(actor_user),
+                    actor_name: &actor_name,
+                    target_user_id: applicant_user,
+                    target_character_id: Some(applicant_character),
+                    target_name: &applicant_name,
+                    ts,
+                },
+            )
+            .await?;
+            Ok(())
+        }
+        .scope_boxed()
+    })
+    .await?;
+
+    // A new member's cups count towards the guild now, not after the next match.
+    let guild_trophies = if approve {
+        recompute_and_read(conn, gid).await
+    } else {
+        None
+    };
+    Ok(DecideResponse {
+        guild_id: gid.to_string(),
+        character_id: application.character_id,
+        name: application.name,
+        approved: approve,
+        member_count: live.len() as i64 + i64::from(approve),
+        guild_trophies,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// POST /guilds/{guild_id}/co-masters
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CoMasterRequest {
+    /// The member's character, as the roster lists it.
+    pub character_id: Uuid,
+    /// `true` appoints, `false` removes the role.
+    pub appoint: bool,
+    /// The PUBLIC arena user id of the Grand Master. Absent = an operator (the
+    /// web gates that to admins).
+    #[serde(default)]
+    pub actor_user_id: Option<Uuid>,
+    /// Who the operator is, for the log.
+    #[serde(default)]
+    pub operator: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CoMasterResponse {
+    pub guild_id: String,
+    pub character_id: Uuid,
+    pub name: String,
+    pub co_master: bool,
+    /// `false` when the member already was (or already was not) one.
+    pub changed: bool,
+}
+
+/// `POST /…/api/dev/v1/guilds/{guild_id}/co-masters`.
+#[post("/blades.bgs.services/api/dev/v1/guilds/{guild_id}/co-masters")]
+pub async fn set_guild_co_master(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    path: web::Path<String>,
+    body: web::Json<CoMasterRequest>,
+) -> Result<Json<CoMasterResponse>, BladeApiError> {
+    check_import_token(&app_state, &req)?;
+    let gid = path.into_inner();
+    let body = body.into_inner();
+    let mut conn = app_state
+        .db_pool
+        .get()
+        .await
+        .map_err(|_| err(StatusCode::SERVICE_UNAVAILABLE, 40))?;
+    let resp = set_co_master(&mut conn, &gid, &body).await?;
+    info!(
+        "guild manage: co-master {} for {} ({}) in {} by {} — {}",
+        if body.appoint { "APPOINT" } else { "REMOVE" },
+        resp.character_id,
+        resp.name,
+        gid,
+        body.actor_user_id
+            .map_or("operator".to_string(), |a| format!("grandmaster {a}")),
+        if resp.changed { "changed" } else { "no change" },
+    );
+    Ok(Json(resp))
+}
+
+pub(crate) async fn set_co_master(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    body: &CoMasterRequest,
+) -> Result<CoMasterResponse, BladeApiError> {
+    let live = live_seats_of_guild(conn, gid).await?;
+    if live.is_empty() {
+        return Err(err(StatusCode::NOT_FOUND, 41));
+    }
+    let co_masters = co_masters_of_guild(conn, gid).await?;
+    let (actor, actor_seat) = resolve_actor(&live, &co_masters, body.actor_user_id)?;
+    let role = plan_appointment(actor).map_err(refusal_error)?;
+
+    // The role is given to a member who is here: a LIVE seat. (Removing it
+    // works on the same seat; a co-guild master who left has no row to remove —
+    // the departure deleted it.)
+    let target = live
+        .iter()
+        .find(|s| s.character_id == body.character_id)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, 43))?;
+    if target.rank == GuildRank::Grandmaster.as_wire() {
+        // The Grand Master already holds everything the role grants.
+        return Err(err(StatusCode::CONFLICT, 50));
+    }
+    let was = co_masters.contains(&target.user_id);
+    let mut resp = CoMasterResponse {
+        guild_id: gid.to_string(),
+        character_id: target.character_id,
+        name: target.name.clone(),
+        co_master: body.appoint,
+        changed: was != body.appoint,
+    };
+    if !resp.changed {
+        return Ok(resp);
+    }
+
+    let ts = now_unix();
+    let gid_owned = gid.to_string();
+    let appoint = body.appoint;
+    let actor_user_id = body.actor_user_id;
+    let actor_name = match actor_seat {
+        Some(seat) => seat.name.clone(),
+        None => operator_label(body.operator.as_deref()),
+    };
+    let (target_user, target_character, target_name) =
+        (target.user_id, target.character_id, target.name.clone());
+    let changed = conn
+        .transaction::<_, BladeApiError, _>(move |conn| {
+            async move {
+                let n = if appoint {
+                    sql_query(
+                        "INSERT INTO guild_co_masters (guild_id, user_id, appointed_by, appointed_at)
+                         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                    )
+                    .bind::<Text, _>(&gid_owned)
+                    .bind::<SqlUuid, _>(target_user)
+                    .bind::<Nullable<SqlUuid>, _>(actor_user_id)
+                    .bind::<BigInt, _>(ts)
+                    .execute(conn)
+                    .await?
+                } else {
+                    sql_query("DELETE FROM guild_co_masters WHERE guild_id = $1 AND user_id = $2")
+                        .bind::<Text, _>(&gid_owned)
+                        .bind::<SqlUuid, _>(target_user)
+                        .execute(conn)
+                        .await?
+                };
+                if n > 0 {
+                    write_log(
+                        conn,
+                        LogLine {
+                            gid: &gid_owned,
+                            action: if appoint {
+                                "APPOINT_CO_MASTER"
+                            } else {
+                                "REMOVE_CO_MASTER"
+                            },
+                            role,
+                            actor_user_id,
+                            actor_name: &actor_name,
+                            target_user_id: target_user,
+                            target_character_id: Some(target_character),
+                            target_name: &target_name,
+                            ts,
+                        },
+                    )
+                    .await?;
+                }
+                Ok(n > 0)
+            }
+            .scope_boxed()
+        })
+        .await?;
+    resp.changed = changed;
     Ok(resp)
 }
 
@@ -1158,6 +1814,7 @@ mod tests {
             user_id: OTHER,
             rank,
             parked,
+            co_master: false,
         }
     }
 
@@ -1167,6 +1824,7 @@ mod tests {
             let actor = KickActor::Member {
                 user_id: GM,
                 rank: GuildRank::Grandmaster,
+                co_master: false,
             };
             assert_eq!(plan_kick(actor, target(rank, false), 5), Ok(()));
             assert_eq!(plan_kick(actor, target(rank, true), 5), Ok(()));
@@ -1178,11 +1836,13 @@ mod tests {
         let actor = KickActor::Member {
             user_id: GM,
             rank: GuildRank::Grandmaster,
+            co_master: false,
         };
         let me = KickTarget {
             user_id: GM,
             rank: GuildRank::Member,
             parked: true,
+            co_master: false,
         };
         assert_eq!(plan_kick(actor, me, 5), Err(KickRefusal::Yourself));
         assert_eq!(
@@ -1194,7 +1854,11 @@ mod tests {
     #[test]
     fn ranks_below_grandmaster_cannot_kick_at_all() {
         for rank in [GuildRank::Master, GuildRank::Elder, GuildRank::Member] {
-            let actor = KickActor::Member { user_id: GM, rank };
+            let actor = KickActor::Member {
+                user_id: GM,
+                rank,
+                co_master: false,
+            };
             assert_eq!(
                 plan_kick(actor, target(GuildRank::Member, false), 5),
                 Err(KickRefusal::NotPermitted),
@@ -1243,6 +1907,145 @@ mod tests {
         );
         assert!(seat_can_manage("GRANDMASTER", true, false));
         assert!(!seat_can_manage("GRANDMASTER", true, true));
+    }
+
+    // ---- co-guild masters: the pure rules ---------------------------------
+
+    const CO: Uuid = Uuid::from_u128(3);
+
+    fn co_actor() -> KickActor {
+        KickActor::Member {
+            user_id: CO,
+            rank: GuildRank::Member,
+            co_master: true,
+        }
+    }
+
+    #[test]
+    fn a_co_master_kicks_members_of_every_rank_below_grandmaster() {
+        for rank in [GuildRank::Master, GuildRank::Elder, GuildRank::Member] {
+            assert_eq!(plan_kick(co_actor(), target(rank, false), 5), Ok(()));
+            assert_eq!(plan_kick(co_actor(), target(rank, true), 5), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_co_master_cannot_kick_the_grandmaster_another_co_master_or_themselves() {
+        assert_eq!(
+            plan_kick(co_actor(), target(GuildRank::Grandmaster, false), 5),
+            Err(KickRefusal::NotPermitted)
+        );
+        let other_co = KickTarget {
+            co_master: true,
+            ..target(GuildRank::Member, false)
+        };
+        assert_eq!(
+            plan_kick(co_actor(), other_co, 5),
+            Err(KickRefusal::NotPermitted)
+        );
+        let me = KickTarget {
+            user_id: CO,
+            rank: GuildRank::Member,
+            parked: false,
+            co_master: true,
+        };
+        assert_eq!(plan_kick(co_actor(), me, 5), Err(KickRefusal::Yourself));
+    }
+
+    #[test]
+    fn a_grandmaster_may_kick_a_co_master() {
+        let actor = KickActor::Member {
+            user_id: GM,
+            rank: GuildRank::Grandmaster,
+            co_master: false,
+        };
+        let co = KickTarget {
+            co_master: true,
+            ..target(GuildRank::Member, false)
+        };
+        assert_eq!(plan_kick(actor, co, 5), Ok(()));
+    }
+
+    #[test]
+    fn join_requests_are_decided_by_the_grandmaster_and_co_masters_only() {
+        let gm = KickActor::Member {
+            user_id: GM,
+            rank: GuildRank::Grandmaster,
+            co_master: false,
+        };
+        assert_eq!(plan_moderation(gm), Ok(ActorRole::Grandmaster));
+        assert_eq!(plan_moderation(co_actor()), Ok(ActorRole::CoMaster));
+        for rank in [GuildRank::Master, GuildRank::Elder, GuildRank::Member] {
+            let plain = KickActor::Member {
+                user_id: OTHER,
+                rank,
+                co_master: false,
+            };
+            assert_eq!(
+                plan_moderation(plain),
+                Err(KickRefusal::NotPermitted),
+                "{rank:?}"
+            );
+        }
+        assert_eq!(
+            plan_moderation(KickActor::Outsider),
+            Err(KickRefusal::ActorNotInGuild)
+        );
+        assert_eq!(
+            plan_moderation(KickActor::Operator),
+            Err(KickRefusal::NotPermitted)
+        );
+    }
+
+    #[test]
+    fn only_the_grandmaster_and_an_operator_appoint() {
+        let gm = KickActor::Member {
+            user_id: GM,
+            rank: GuildRank::Grandmaster,
+            co_master: false,
+        };
+        assert_eq!(plan_appointment(gm), Ok(ActorRole::Grandmaster));
+        assert_eq!(
+            plan_appointment(KickActor::Operator),
+            Ok(ActorRole::Operator)
+        );
+        assert_eq!(
+            plan_appointment(co_actor()),
+            Err(KickRefusal::NotPermitted),
+            "a co-guild master never appoints"
+        );
+        assert_eq!(
+            plan_appointment(KickActor::Outsider),
+            Err(KickRefusal::ActorNotInGuild)
+        );
+    }
+
+    #[test]
+    fn the_role_of_an_actor_is_what_the_log_records() {
+        assert_eq!(co_actor().role(), Some(ActorRole::CoMaster));
+        assert_eq!(KickActor::Operator.role(), Some(ActorRole::Operator));
+        assert_eq!(KickActor::Outsider.role(), None);
+        let plain = KickActor::Member {
+            user_id: OTHER,
+            rank: GuildRank::Member,
+            co_master: false,
+        };
+        assert_eq!(plain.role(), None);
+        // A Grand Master with a stale co-master row is still the Grand Master.
+        let both = KickActor::Member {
+            user_id: GM,
+            rank: GuildRank::Grandmaster,
+            co_master: true,
+        };
+        assert_eq!(both.role(), Some(ActorRole::Grandmaster));
+    }
+
+    #[test]
+    fn an_operator_label_is_bounded_and_printable() {
+        assert_eq!(operator_label(None), "site operator");
+        assert_eq!(operator_label(Some("  \n ")), "site operator");
+        assert_eq!(operator_label(Some("Flappety\u{7}Flap")), "FlappetyFlap");
+        assert_eq!(operator_label(Some(&"x".repeat(200))).len(), 64);
     }
 
     #[test]
@@ -1327,6 +2130,8 @@ mod tests {
             gm_char: Uuid,
             a_user: Uuid,
             a_char: Uuid,
+            b_user: Uuid,
+            b_char: Uuid,
             p_user: Uuid,
             p_char: Uuid,
             pa_alt: Uuid,
@@ -1338,11 +2143,13 @@ mod tests {
                 gm_char: Uuid::new_v4(),
                 a_user: Uuid::new_v4(),
                 a_char: Uuid::new_v4(),
+                b_user: Uuid::new_v4(),
+                b_char: Uuid::new_v4(),
                 p_user: Uuid::new_v4(),
                 p_char: Uuid::new_v4(),
                 pa_alt: Uuid::new_v4(),
             };
-            let (b_user, b_char) = (Uuid::new_v4(), Uuid::new_v4());
+            let (b_user, b_char) = (w.b_user, w.b_char);
             let (gm_alt, a_alt, b_alt, pb_alt) = (
                 Uuid::new_v4(),
                 Uuid::new_v4(),
@@ -1412,6 +2219,7 @@ mod tests {
                 alt_key: None,
                 parked: false,
                 actor_user_id: None,
+                operator: None,
                 apply: true,
             }
         }
@@ -1597,6 +2405,576 @@ mod tests {
                     .all(|m| !m.parked)
             );
             assert!(seats_of_user(&mut c, w.p_user).await.unwrap().is_empty());
+        }
+
+        // ---- co-guild masters ------------------------------------------------
+
+        #[derive(QueryableByName)]
+        struct Count {
+            #[diesel(sql_type = BigInt)]
+            n: i64,
+        }
+
+        async fn count(c: &mut AsyncPgConnection, sql: &str) -> i64 {
+            sql_query(sql).get_result::<Count>(c).await.unwrap().n
+        }
+
+        fn co_req(character_id: Uuid, appoint: bool, actor: Option<Uuid>) -> CoMasterRequest {
+            CoMasterRequest {
+                character_id,
+                appoint,
+                actor_user_id: actor,
+                operator: None,
+            }
+        }
+
+        /// Appoint A co-guild master, as the Grand Master.
+        async fn appoint_a(c: &mut AsyncPgConnection, w: &World) {
+            let r = set_co_master(c, G, &co_req(w.a_char, true, Some(w.gm_user)))
+                .await
+                .unwrap();
+            assert!(r.changed && r.co_master);
+        }
+
+        /// A pending join request by a fresh level-12 character "Quill", who was
+        /// kicked from this guild before (the approval must clear that).
+        async fn applicant(c: &mut AsyncPgConnection) -> (Uuid, Uuid) {
+            let (user, character) = (Uuid::new_v4(), Uuid::new_v4());
+            c.batch_execute(&format!(
+                "INSERT INTO users (id, secret_id, data) VALUES ('{user}', gen_random_uuid(), '{{}}');
+                 INSERT INTO characters (id, user_id, source_alt_uuid, character, data, inventory, wallet) VALUES
+                   ('{character}', '{user}', gen_random_uuid(), '{{\"name\":\"Quill\",\"level\":12}}', '{{}}', '{{}}', '{{}}');
+                 INSERT INTO guild_applications (guild_id, user_id, character_id, state, creation_time)
+                   VALUES ('{G}', '{user}', '{character}', 'APPLIED', 77);
+                 INSERT INTO guild_removals (guild_id, user_id, removed_at, banned)
+                   VALUES ('{G}', '{user}', 5, false);"
+            ))
+            .await
+            .unwrap();
+            (user, character)
+        }
+
+        fn decide(character_id: Uuid, actor: Uuid, approve: bool) -> DecideRequest {
+            DecideRequest {
+                character_id,
+                actor_user_id: actor,
+                approve,
+            }
+        }
+
+        #[tokio::test]
+        async fn the_grandmaster_and_an_operator_appoint_and_remove_and_it_is_logged() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+
+            // The seat lookup the website gates on, and the roster flag.
+            let a = seats_of_user(&mut c, w.a_user).await.unwrap();
+            assert!(a[0].co_master && a[0].can_moderate && !a[0].can_manage);
+            assert_eq!(a[0].rank, "MEMBER", "the in-game rank is untouched");
+            let roster = build_roster(&mut c, G).await.unwrap().unwrap();
+            let flagged: Vec<Uuid> = roster
+                .members
+                .iter()
+                .filter(|m| m.co_master)
+                .map(|m| m.character_id)
+                .collect();
+            assert_eq!(flagged, vec![w.a_char]);
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_members WHERE rank <> 'MEMBER' AND rank <> 'GRANDMASTER'").await,
+                0
+            );
+            // No board entry: the game has no such event to show.
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_messages").await,
+                0
+            );
+
+            // Appointing twice changes nothing and logs nothing.
+            let again = set_co_master(&mut c, G, &co_req(w.a_char, true, Some(w.gm_user)))
+                .await
+                .unwrap();
+            assert!(!again.changed);
+
+            // An operator (site admin) appoints B and removes A.
+            let mut by_op = co_req(w.b_char, true, None);
+            by_op.operator = Some("FlappetyFlap".into());
+            assert!(set_co_master(&mut c, G, &by_op).await.unwrap().changed);
+            let removed = set_co_master(&mut c, G, &co_req(w.a_char, false, None))
+                .await
+                .unwrap();
+            assert!(removed.changed && !removed.co_master);
+            let a = seats_of_user(&mut c, w.a_user).await.unwrap();
+            assert!(!a[0].co_master && !a[0].can_moderate);
+
+            let log = build_roster(&mut c, G).await.unwrap().unwrap().log;
+            let lines: Vec<String> = log
+                .iter()
+                .rev()
+                .map(|l| {
+                    format!(
+                        "{} {} {} -> {}",
+                        l.action, l.actor_role, l.actor_name, l.target_name
+                    )
+                })
+                .collect();
+            assert_eq!(
+                lines,
+                [
+                    "APPOINT_CO_MASTER GRANDMASTER Master -> Alpha",
+                    "APPOINT_CO_MASTER OPERATOR FlappetyFlap -> Beta",
+                    "REMOVE_CO_MASTER OPERATOR site operator -> Alpha",
+                ]
+            );
+        }
+
+        #[tokio::test]
+        async fn nobody_but_the_grandmaster_or_an_operator_appoints() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            // A co-guild master cannot appoint, nor remove a peer or themselves.
+            assert!(
+                set_co_master(&mut c, G, &co_req(w.b_char, true, Some(w.a_user)))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                set_co_master(&mut c, G, &co_req(w.a_char, false, Some(w.a_user)))
+                    .await
+                    .is_err()
+            );
+            // An ordinary member cannot; an outsider (a parked seat holds no live power) cannot.
+            assert!(
+                set_co_master(&mut c, G, &co_req(w.a_char, true, Some(w.b_user)))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                set_co_master(&mut c, G, &co_req(w.b_char, true, Some(w.p_user)))
+                    .await
+                    .is_err()
+            );
+            // The Grand Master is never a co-guild master; a non-member cannot be one.
+            assert!(
+                set_co_master(&mut c, G, &co_req(w.gm_char, true, None))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                set_co_master(&mut c, G, &co_req(w.p_char, true, None))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                set_co_master(
+                    &mut c,
+                    "bbbbbbbbbbbbbbbbbbbbbbbb",
+                    &co_req(w.a_char, true, None)
+                )
+                .await
+                .is_err()
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_co_masters").await,
+                1
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_manage_log").await,
+                1
+            );
+        }
+
+        #[tokio::test]
+        async fn a_co_master_kick_is_the_in_game_kick_authored_by_them() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            crate::guild::recompute_guild_trophies_for_tests(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let mut r = req(w.b_char);
+            r.actor_user_id = Some(w.a_user);
+            let resp = kick(&mut c, G, &r).await.unwrap();
+            assert!(resp.applied);
+            assert_eq!(resp.guild_trophies, Some(27), "40/30/20 at 30% = 27");
+
+            #[derive(QueryableByName)]
+            struct M {
+                #[diesel(sql_type = SqlUuid)]
+                user_id: Uuid,
+                #[diesel(sql_type = SqlUuid)]
+                character_id: Uuid,
+                #[diesel(sql_type = diesel::sql_types::Jsonb)]
+                data: serde_json::Value,
+            }
+            let m: Vec<M> = sql_query(
+                "SELECT user_id, character_id, type_specific_data AS data
+                   FROM guild_messages WHERE guild_id = $1",
+            )
+            .bind::<Text, _>(G)
+            .get_results(&mut c)
+            .await
+            .unwrap();
+            assert_eq!(m.len(), 1, "one board entry, the KICK");
+            assert_eq!((m[0].user_id, m[0].character_id), (w.a_user, w.a_char));
+            assert_eq!(
+                m[0].data,
+                serde_json::json!({ "type": "KICK", "kickedUserId": w.b_user }),
+                "exactly the captured retail shape"
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_members WHERE user_id = '{}'",
+                        w.b_user
+                    )
+                )
+                .await,
+                0
+            );
+            assert_eq!(
+                count(&mut c, &format!("SELECT COUNT(*) AS n FROM guild_removals WHERE user_id = '{}' AND NOT banned", w.b_user)).await,
+                1,
+                "the re-join cooldown is armed"
+            );
+            let log = build_roster(&mut c, G).await.unwrap().unwrap().log;
+            assert_eq!(
+                (
+                    log[0].action.as_str(),
+                    log[0].actor_role.as_str(),
+                    log[0].actor_name.as_str(),
+                    log[0].target_name.as_str()
+                ),
+                ("KICK", "CO_MASTER", "Alpha", "Beta")
+            );
+        }
+
+        #[tokio::test]
+        async fn a_co_master_cannot_kick_the_grandmaster_a_peer_or_themselves() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            set_co_master(&mut c, G, &co_req(w.b_char, true, Some(w.gm_user)))
+                .await
+                .unwrap();
+            for victim in [w.gm_char, w.b_char, w.a_char] {
+                let mut r = req(victim);
+                r.actor_user_id = Some(w.a_user);
+                assert!(kick(&mut c, G, &r).await.is_err(), "{victim}");
+            }
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_members").await,
+                3
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_messages").await,
+                0
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    "SELECT COUNT(*) AS n FROM guild_manage_log WHERE action = 'KICK'"
+                )
+                .await,
+                0,
+                "a refused kick is not logged as one"
+            );
+            // The Grand Master, though, may remove a co-guild master — and the
+            // role goes with the seat.
+            let mut r = req(w.b_char);
+            r.actor_user_id = Some(w.gm_user);
+            assert!(kick(&mut c, G, &r).await.unwrap().applied);
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_co_masters WHERE user_id = '{}'",
+                        w.b_user
+                    )
+                )
+                .await,
+                0
+            );
+        }
+
+        #[tokio::test]
+        async fn a_co_master_has_no_power_in_another_guild() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            // X is the co-guild master of a different guild.
+            let (x_user, x_char, y_user, y_char) = (
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+            );
+            const G2: &str = "cccccccccccccccccccccccc";
+            c.batch_execute(&format!(
+                "INSERT INTO users (id, secret_id, data) VALUES
+                   ('{x_user}', gen_random_uuid(), '{{}}'), ('{y_user}', gen_random_uuid(), '{{}}');
+                 INSERT INTO guilds (id, name, tag_id, trophies) VALUES ('{G2}', 'Elsewhere', '0002', 0);
+                 INSERT INTO characters (id, user_id, source_alt_uuid, character, data, inventory, wallet) VALUES
+                   ('{x_char}', '{x_user}', gen_random_uuid(), '{{\"name\":\"Xan\",\"level\":9}}', '{{}}', '{{}}', '{{}}'),
+                   ('{y_char}', '{y_user}', gen_random_uuid(), '{{\"name\":\"Yor\",\"level\":9}}', '{{}}', '{{}}', '{{}}');
+                 INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES
+                   ('{G2}', '{y_user}', '{y_char}', 'GRANDMASTER', 1),
+                   ('{G2}', '{x_user}', '{x_char}', 'MEMBER', 2);"
+            ))
+            .await
+            .unwrap();
+            assert!(
+                set_co_master(&mut c, G2, &co_req(x_char, true, Some(y_user)))
+                    .await
+                    .unwrap()
+                    .changed
+            );
+            let (_, q_char) = applicant(&mut c).await;
+
+            let mut r = req(w.a_char);
+            r.actor_user_id = Some(x_user);
+            assert!(kick(&mut c, G, &r).await.is_err(), "kick in another guild");
+            assert!(
+                decide_application(&mut c, G, &decide(q_char, x_user, true))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                decide_application(&mut c, G, &decide(q_char, x_user, false))
+                    .await
+                    .is_err()
+            );
+            // Nor may they reach a member of the other guild through their own.
+            let mut r = req(w.a_char);
+            r.actor_user_id = Some(x_user);
+            assert!(
+                kick(&mut c, G2, &r).await.is_err(),
+                "target is not in the actor's guild"
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_applications").await,
+                1
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!("SELECT COUNT(*) AS n FROM guild_members WHERE guild_id = '{G}'")
+                )
+                .await,
+                3
+            );
+        }
+
+        #[tokio::test]
+        async fn a_removed_co_master_loses_the_rights_at_once() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let (_, q_char) = applicant(&mut c).await;
+            set_co_master(&mut c, G, &co_req(w.a_char, false, Some(w.gm_user)))
+                .await
+                .unwrap();
+            let mut r = req(w.b_char);
+            r.actor_user_id = Some(w.a_user);
+            assert!(kick(&mut c, G, &r).await.is_err());
+            assert!(
+                decide_application(&mut c, G, &decide(q_char, w.a_user, true))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                decide_application(&mut c, G, &decide(q_char, w.a_user, false))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_applications").await,
+                1
+            );
+        }
+
+        #[tokio::test]
+        async fn a_co_master_approval_seats_the_applicant_as_the_game_does() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let (q_user, q_char) = applicant(&mut c).await;
+
+            // The roster lists the request with what a manager needs.
+            let roster = build_roster(&mut c, G).await.unwrap().unwrap();
+            assert_eq!(roster.applications.len(), 1);
+            assert_eq!(
+                (
+                    roster.applications[0].name.as_str(),
+                    roster.applications[0].level,
+                    roster.applications[0].character_id
+                ),
+                ("Quill", 12, q_char)
+            );
+
+            // An ordinary member is refused; so is an unknown request.
+            assert!(
+                decide_application(&mut c, G, &decide(q_char, w.b_user, true))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                decide_application(&mut c, G, &decide(Uuid::new_v4(), w.a_user, true))
+                    .await
+                    .is_err()
+            );
+
+            let r = decide_application(&mut c, G, &decide(q_char, w.a_user, true))
+                .await
+                .unwrap();
+            assert!(r.approved);
+            assert_eq!(r.member_count, 4);
+
+            #[derive(QueryableByName)]
+            struct Seat {
+                #[diesel(sql_type = SqlUuid)]
+                character_id: Uuid,
+                #[diesel(sql_type = Text)]
+                rank: String,
+            }
+            let seat: Seat = sql_query(
+                "SELECT character_id, rank FROM guild_members WHERE guild_id = $1 AND user_id = $2",
+            )
+            .bind::<Text, _>(G)
+            .bind::<SqlUuid, _>(q_user)
+            .get_result(&mut c)
+            .await
+            .unwrap();
+            assert_eq!((seat.character_id, seat.rank.as_str()), (q_char, "MEMBER"));
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_applications").await,
+                0
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!("SELECT COUNT(*) AS n FROM guild_removals WHERE user_id = '{q_user}'")
+                )
+                .await,
+                0,
+                "an approval clears the earlier removal, as in the game"
+            );
+            #[derive(QueryableByName)]
+            struct M {
+                #[diesel(sql_type = SqlUuid)]
+                user_id: Uuid,
+                #[diesel(sql_type = Text)]
+                message_type: String,
+                #[diesel(sql_type = diesel::sql_types::Jsonb)]
+                data: serde_json::Value,
+            }
+            let m: Vec<M> = sql_query(
+                "SELECT user_id, message_type, type_specific_data AS data FROM guild_messages WHERE guild_id = $1",
+            )
+            .bind::<Text, _>(G)
+            .get_results(&mut c)
+            .await
+            .unwrap();
+            assert_eq!(m.len(), 1);
+            assert_eq!(
+                (m[0].user_id, m[0].message_type.as_str()),
+                (w.a_user, "APPROVE")
+            );
+            assert_eq!(
+                m[0].data,
+                serde_json::json!({ "type": "APPROVE", "approvedUserId": q_user })
+            );
+            let log = build_roster(&mut c, G).await.unwrap().unwrap().log;
+            assert_eq!(
+                (
+                    log[0].action.as_str(),
+                    log[0].actor_role.as_str(),
+                    log[0].actor_name.as_str(),
+                    log[0].target_name.as_str()
+                ),
+                ("APPROVE", "CO_MASTER", "Alpha", "Quill")
+            );
+        }
+
+        #[tokio::test]
+        async fn a_co_master_rejection_drops_the_request_and_posts_deny() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let (q_user, q_char) = applicant(&mut c).await;
+            let r = decide_application(&mut c, G, &decide(q_char, w.a_user, false))
+                .await
+                .unwrap();
+            assert!(!r.approved);
+            assert_eq!(r.member_count, 3);
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_applications").await,
+                0
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_members").await,
+                3
+            );
+            #[derive(QueryableByName)]
+            struct M {
+                #[diesel(sql_type = SqlUuid)]
+                user_id: Uuid,
+                #[diesel(sql_type = diesel::sql_types::Jsonb)]
+                data: serde_json::Value,
+            }
+            let m: M = sql_query(
+                "SELECT user_id, type_specific_data AS data FROM guild_messages WHERE message_type = 'DENY'",
+            )
+            .get_result(&mut c)
+            .await
+            .unwrap();
+            assert_eq!(m.user_id, w.a_user);
+            assert_eq!(
+                m.data,
+                serde_json::json!({ "type": "DENY", "deniedUserId": q_user })
+            );
+            // The Grand Master decides on the website too.
+            let (_, q2) = applicant(&mut c).await;
+            assert!(
+                decide_application(&mut c, G, &decide(q2, w.gm_user, true))
+                    .await
+                    .unwrap()
+                    .approved
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    "SELECT COUNT(*) AS n FROM guild_manage_log WHERE action IN ('DENY','APPROVE')"
+                )
+                .await,
+                2
+            );
+        }
+
+        #[tokio::test]
+        async fn a_full_guild_refuses_an_approval_and_keeps_the_request() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let (_, q_char) = applicant(&mut c).await;
+            c.batch_execute(&format!(
+                "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+                 SELECT '{G}', gen_random_uuid(), gen_random_uuid(), 'MEMBER', 99 FROM generate_series(1, 17);"
+            ))
+            .await
+            .unwrap();
+            assert!(
+                decide_application(&mut c, G, &decide(q_char, w.a_user, true))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_applications").await,
+                1
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_messages").await,
+                0
+            );
         }
     }
 }
