@@ -146,6 +146,16 @@ fn live_counts_sql() -> String {
     )
 }
 
+/// Human-vs-human MATCHES, all time (tracker #580).
+///
+/// `arena_matches` holds one row per matchmaking ticket, so a paired match is TWO
+/// rows (one per player) sharing a `game_session_id`. Counting rows showed every
+/// match twice: the homepage read 2048 on 2026-11-21 while prod held 1024 paired
+/// sessions, each with exactly two rows. Counting distinct sessions is the match
+/// count, and stays right if a pair ever left only one row behind.
+const HUMAN_VS_HUMAN_SQL: &str = "SELECT COUNT(DISTINCT game_session_id)::bigint AS n FROM arena_matches \
+     WHERE paired AND game_session_id IS NOT NULL";
+
 #[derive(QueryableByName)]
 struct CountRow {
     #[diesel(sql_type = BigInt)]
@@ -198,7 +208,7 @@ async fn build(
         .await?
         .n;
 
-    let human_vs_human_all_time = sql_query("SELECT COUNT(*) AS n FROM arena_matches WHERE paired")
+    let human_vs_human_all_time = sql_query(HUMAN_VS_HUMAN_SQL)
         .get_result::<CountRow>(&mut conn)
         .await?
         .n;
@@ -357,6 +367,37 @@ mod tests {
             ticket(&mut conn, a, 60, true).await;
             ticket(&mut conn, b, 10, false).await;
             assert_eq!(counts(&mut conn).await, (1, 1));
+        }
+
+        /// #580: a human-vs-human match is two ticket rows; it counts once.
+        #[tokio::test]
+        async fn a_paired_match_counts_once_not_per_ticket() {
+            let Some(mut conn) = fixture().await else {
+                return;
+            };
+            let paired = |session: Uuid| {
+                format!(
+                    "INSERT INTO arena_matches (ticket_id, user_id, status, game_session_id, paired) \
+                     VALUES ('{}', '{}', 'matched', '{session}', true)",
+                    Uuid::new_v4(),
+                    Uuid::new_v4()
+                )
+            };
+            let (m1, m2, lone) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+            for sql in [paired(m1), paired(m1), paired(m2), paired(m2), paired(lone)] {
+                sql_query(sql).execute(&mut conn).await.unwrap();
+            }
+            // A solo (bot) match is never counted.
+            ticket(&mut conn, Uuid::new_v4(), 60, true).await;
+            let n = sql_query(HUMAN_VS_HUMAN_SQL)
+                .get_result::<CountRow>(&mut conn)
+                .await
+                .unwrap()
+                .n;
+            assert_eq!(
+                n, 3,
+                "two full pairs plus one leftover row = 3 matches, not 5"
+            );
         }
 
         /// Outside the windows nobody is "now".
