@@ -1772,11 +1772,42 @@ pub async fn approve_application(
     let count = member_count(&mut conn, &me.guild_id).await?;
     evaluate_approval(my_rank, count).map_err(approval_refused)?;
 
-    let application = find_application(&mut conn, &me.guild_id, applicant_user_id)
+    let member = seat_applicant(
+        &mut conn,
+        &me.guild_id,
+        user_id,
+        character_id,
+        applicant_user_id,
+    )
+    .await?;
+    Ok(Json(MemberResponse {
+        member: MemberWire::from_row(&member),
+    }))
+}
+
+/// Seat a pending applicant: the whole write of an approval, shared by the
+/// in-game route above and the website (`guild_manage::decide_application`) so
+/// both leave exactly the same rows. Authorisation is the caller's job; the
+/// fullness check is repeated here because the guild can fill between the
+/// caller's read and this write.
+///
+/// One transaction: an approval that inserted the member but failed to clear
+/// the application would leave the applicant both seated and still queued.
+async fn seat_applicant(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    approver_user: Uuid,
+    approver_character: Uuid,
+    applicant_user_id: Uuid,
+) -> Result<GuildMemberRow, BladeApiError> {
+    if member_count(conn, gid).await? >= crate::guild_policy::MAX_MEMBERS {
+        return Err(approval_refused(ApprovalRefusal::GuildIsAtMaxMembers));
+    }
+    let application = find_application(conn, gid, applicant_user_id)
         .await?
         .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 32))?;
 
-    let gid = me.guild_id.clone();
+    let gid = gid.to_string();
     let ts = now_secs();
     let member = GuildMemberRow {
         guild_id: gid.clone(),
@@ -1785,7 +1816,7 @@ pub async fn approve_application(
         rank: GuildRank::Member.as_wire().to_string(),
         join_date: ts,
     };
-    let member_out = MemberWire::from_row(&member);
+    let inserted = member.clone();
 
     conn.transaction(move |conn| {
         async move {
@@ -1824,10 +1855,10 @@ pub async fn approve_application(
             append_message(
                 conn,
                 &gid,
-                user_id,
-                character_id,
+                approver_user,
+                approver_character,
                 "APPROVE",
-                json!({ "type": "APPROVE", "approvedUserId": applicant_user_id }),
+                approve_type_specific_data(applicant_user_id),
             )
             .await?;
             Ok::<_, BladeApiError>(())
@@ -1835,8 +1866,82 @@ pub async fn approve_application(
         .scope_boxed()
     })
     .await?;
+    Ok(inserted)
+}
 
-    Ok(Json(MemberResponse { member: member_out }))
+/// The `typeSpecificData` of an `APPROVE` entry (captured, 4 examples).
+fn approve_type_specific_data(approved: Uuid) -> Value {
+    json!({ "type": "APPROVE", "approvedUserId": approved })
+}
+
+/// The `typeSpecificData` of a `DENY` entry (captured).
+fn deny_type_specific_data(denied: Uuid) -> Value {
+    json!({ "type": "DENY", "deniedUserId": denied })
+}
+
+/// The `typeSpecificData` of a `KICK` entry (captured, 9 examples).
+fn kick_type_specific_data(kicked: Uuid) -> Value {
+    json!({ "type": "KICK", "kickedUserId": kicked })
+}
+
+/// Reject a pending applicant: the whole write of a denial, shared by the
+/// in-game route and the website. Authorisation is the caller's job.
+async fn reject_applicant(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    denier_user: Uuid,
+    denier_character: Uuid,
+    applicant_user_id: Uuid,
+) -> Result<(), BladeApiError> {
+    if find_application(conn, gid, applicant_user_id)
+        .await?
+        .is_none()
+    {
+        return Err(BladeApiError::new(
+            StatusCode::NOT_FOUND,
+            GUILD_SERVICE_ID,
+            32,
+        ));
+    }
+    {
+        use crate::schema::guild_applications::dsl as ga;
+        diesel::delete(
+            ga::guild_applications
+                .filter(ga::guild_id.eq(gid))
+                .filter(ga::user_id.eq(applicant_user_id)),
+        )
+        .execute(conn)
+        .await?;
+    }
+    append_message(
+        conn,
+        gid,
+        denier_user,
+        denier_character,
+        "DENY",
+        deny_type_specific_data(applicant_user_id),
+    )
+    .await?;
+    Ok(())
+}
+
+/// A pending application's decision made on the website. Runs inside the
+/// caller's transaction; authorisation is the caller's job
+/// (`guild_manage::plan_moderation`).
+pub(crate) async fn decide_application_for_website(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    actor_user: Uuid,
+    actor_character: Uuid,
+    applicant_user_id: Uuid,
+    approve: bool,
+) -> Result<(), BladeApiError> {
+    if approve {
+        seat_applicant(conn, gid, actor_user, actor_character, applicant_user_id).await?;
+    } else {
+        reject_applicant(conn, gid, actor_user, actor_character, applicant_user_id).await?;
+    }
+    Ok(())
 }
 
 /// `POST /guilds/current/deny/{applicantUserId}` — reject a join request.
@@ -1859,34 +1964,12 @@ pub async fn deny_application(
     if !can_approve_applications(me.parsed_rank()?) {
         return Err(BladeApiError::unauthorized());
     }
-    if find_application(&mut conn, &me.guild_id, applicant_user_id)
-        .await?
-        .is_none()
-    {
-        return Err(BladeApiError::new(
-            StatusCode::NOT_FOUND,
-            GUILD_SERVICE_ID,
-            32,
-        ));
-    }
-    {
-        use crate::schema::guild_applications::dsl as ga;
-        diesel::delete(
-            ga::guild_applications
-                .filter(ga::guild_id.eq(&me.guild_id))
-                .filter(ga::user_id.eq(applicant_user_id)),
-        )
-        .execute(&mut conn)
-        .await?;
-    }
-    // Captured shape: {"type":"DENY","deniedUserId":"..."}.
-    append_message(
+    reject_applicant(
         &mut conn,
         &me.guild_id,
         user_id,
         character_id,
-        "DENY",
-        json!({ "type": "DENY", "deniedUserId": applicant_user_id }),
+        applicant_user_id,
     )
     .await?;
     Ok(Json(json!({})))
@@ -1906,6 +1989,19 @@ async fn remove_member_and_succeed(
     departing_rank: GuildRank,
     ts: i64,
 ) -> Result<Option<Uuid>, BladeApiError> {
+    // A co-guild master's website role (`guild_co_masters`) ends with the seat,
+    // however the seat ended. Before the member row goes: the role is keyed by
+    // the character's CURRENT owner, which only that row can still name.
+    diesel::sql_query(
+        "DELETE FROM guild_co_masters cm
+          USING guild_members gm LEFT JOIN characters c ON c.id = gm.character_id
+          WHERE gm.guild_id = $1 AND gm.user_id = $2
+            AND cm.guild_id = gm.guild_id AND cm.user_id IN (gm.user_id, c.user_id)",
+    )
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .bind::<diesel::sql_types::Uuid, _>(departing_stored_user_id)
+    .execute(conn)
+    .await?;
     {
         use crate::schema::guild_members::dsl as gm;
         diesel::delete(
@@ -1952,10 +2048,20 @@ async fn remove_member_and_succeed(
                     .execute(conn)
                     .await?;
             }
+            // A co-guild master who inherits is the Grand Master now.
+            diesel::sql_query("DELETE FROM guild_co_masters WHERE guild_id = $1 AND user_id = $2")
+                .bind::<diesel::sql_types::Text, _>(gid)
+                .bind::<diesel::sql_types::Uuid, _>(heir)
+                .execute(conn)
+                .await?;
             Ok(Some(heir))
         }
         None => {
             // Nobody left. Tear the guild down rather than leave a husk.
+            diesel::sql_query("DELETE FROM guild_co_masters WHERE guild_id = $1")
+                .bind::<diesel::sql_types::Text, _>(gid)
+                .execute(conn)
+                .await?;
             {
                 use crate::schema::guild_applications::dsl as ga;
                 diesel::delete(ga::guild_applications.filter(ga::guild_id.eq(gid)))
@@ -2377,9 +2483,10 @@ async fn remove_other_member(
 /// (`guild_manage.rs`) — it decides what the board says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SeatRemover {
-    /// The guild's own Grand Master, from their profile. Exactly the in-game
-    /// kick: a `KICK` entry authored by the Grand Master.
-    GrandMaster { user_id: Uuid, character_id: Uuid },
+    /// A member with the power to remove: the guild's Grand Master or one of
+    /// its co-guild masters, from the website. Exactly the in-game kick: a
+    /// `KICK` entry authored by whoever removed.
+    Manager { user_id: Uuid, character_id: Uuid },
     /// A site operator (admin). Posts the `LEAVE` an alt departure posts,
     /// authored by the member themselves: a `KICK` needs an author the client
     /// can name, and naming the guild's Grand Master would say they did
@@ -2406,7 +2513,7 @@ pub(crate) async fn remove_seat_for_website(
     ts: i64,
 ) -> Result<Option<Uuid>, BladeApiError> {
     match remover {
-        SeatRemover::GrandMaster {
+        SeatRemover::Manager {
             user_id,
             character_id,
         } => {
@@ -2416,7 +2523,7 @@ pub(crate) async fn remove_seat_for_website(
                 user_id,
                 character_id,
                 "KICK",
-                json!({ "type": "KICK", "kickedUserId": target_user_id }),
+                kick_type_specific_data(target_user_id),
             )
             .await?;
         }
@@ -4298,6 +4405,28 @@ mod create_wire {
         }
     }
 
+    /// The entries the website's co-guild masters post — KICK, APPROVE, DENY —
+    /// carry exactly the keys retail's own entries carried (captured: 9 KICK,
+    /// 4 APPROVE, and DENY). #594 was one wrong key name on a board entry.
+    #[test]
+    fn kick_approve_and_deny_entries_use_the_captured_keys() {
+        let who = Uuid::new_v4();
+        for (value, kind, key) in [
+            (kick_type_specific_data(who), "KICK", "kickedUserId"),
+            (approve_type_specific_data(who), "APPROVE", "approvedUserId"),
+            (deny_type_specific_data(who), "DENY", "deniedUserId"),
+        ] {
+            let obj = value.as_object().expect("typeSpecificData object");
+            let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            let mut want = [key, "type"];
+            want.sort_unstable();
+            assert_eq!(keys, want, "{kind}");
+            assert_eq!(obj["type"], kind);
+            assert_eq!(obj[key], who.to_string());
+        }
+    }
+
     /// CREATE carries a wallet; GET current must not.
     ///
     /// Both captured creations return one, and the client waits for it because
@@ -4829,6 +4958,10 @@ mod rejoin_after_leaving {
                  removed_at BIGINT NOT NULL, banned BOOLEAN NOT NULL DEFAULT FALSE,
                  PRIMARY KEY (guild_id, user_id))"
                 .into(),
+            "CREATE TABLE guild_co_masters (guild_id TEXT NOT NULL, user_id UUID NOT NULL,
+                 appointed_by UUID, appointed_at BIGINT NOT NULL,
+                 PRIMARY KEY (guild_id, user_id))"
+                .into(),
         ] {
             diesel::sql_query(sql).execute(&mut conn).await.unwrap();
         }
@@ -4871,6 +5004,117 @@ mod rejoin_after_leaving {
             now: now_secs(),
         });
         (removal, verdict)
+    }
+
+    /// Everything a kick leaves behind, without the parts that differ by
+    /// construction (message ids, timestamps).
+    async fn kick_footprint(conn: &mut AsyncPgConnection) -> Vec<String> {
+        #[derive(QueryableByName)]
+        struct Line {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            line: String,
+        }
+        diesel::sql_query(
+            "SELECT 'member ' || guild_id || ' ' || user_id || ' ' || character_id || ' ' || rank AS line
+               FROM guild_members
+             UNION ALL
+             SELECT 'removal ' || guild_id || ' ' || user_id || ' ' || banned FROM guild_removals
+             UNION ALL
+             SELECT 'board ' || guild_id || ' ' || user_id || ' ' || character_id || ' '
+                    || message_type || ' ' || type_specific_data::text FROM guild_messages
+             UNION ALL
+             SELECT 'co ' || guild_id || ' ' || user_id FROM guild_co_masters
+             ORDER BY 1",
+        )
+        .load::<Line>(conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|l| l.line)
+        .collect()
+    }
+
+    /// A kick made on the website (by the Grand Master or a co-guild master)
+    /// leaves exactly the rows the in-game kick leaves: the member gone, the
+    /// re-join cooldown armed, one KICK board entry by the remover.
+    #[tokio::test]
+    async fn a_website_kick_leaves_what_the_in_game_kick_leaves() {
+        let Some(mut conn) = fixture().await else {
+            return;
+        };
+        seat(&mut conn, GM_USER, GM_CHAR, GuildRank::Grandmaster).await;
+        seat(&mut conn, USER, CHAR, GuildRank::Member).await;
+        // The kicked member was a co-guild master: both paths end the role.
+        diesel::sql_query(
+            "INSERT INTO guild_co_masters (guild_id, user_id, appointed_at) VALUES ($1, $2, 1)",
+        )
+        .bind::<diesel::sql_types::Text, _>(GUILD)
+        .bind::<diesel::sql_types::Uuid, _>(USER)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        // The game's own route body, in a savepoint that is rolled back so the
+        // website path starts from the same rows.
+        enum Probe {
+            Seen(Vec<String>),
+            Failed(String),
+        }
+        impl From<diesel::result::Error> for Probe {
+            fn from(e: diesel::result::Error) -> Self {
+                Probe::Failed(e.to_string())
+            }
+        }
+        let probe = conn
+            .transaction::<(), Probe, _>(|conn| {
+                async move {
+                    remove_other_member(conn, GM_USER, GM_CHAR, USER, false)
+                        .await
+                        .map_err(|e| Probe::Failed(format!("{e:?}")))?;
+                    Err(Probe::Seen(kick_footprint(conn).await))
+                }
+                .scope_boxed()
+            })
+            .await;
+        let in_game = match probe {
+            Err(Probe::Seen(lines)) => lines,
+            Err(Probe::Failed(e)) => panic!("in-game kick failed: {e}"),
+            Ok(()) => unreachable!(),
+        };
+        assert!(
+            find_membership(&mut conn, USER).await.unwrap().is_some(),
+            "rolled back: the member is seated again"
+        );
+
+        remove_seat_for_website(
+            &mut conn,
+            GUILD,
+            USER,
+            USER,
+            CHAR,
+            GuildRank::Member,
+            SeatRemover::Manager {
+                user_id: GM_USER,
+                character_id: GM_CHAR,
+            },
+            now_secs(),
+        )
+        .await
+        .unwrap();
+        let website = kick_footprint(&mut conn).await;
+
+        assert_eq!(website, in_game);
+        assert_eq!(
+            website.len(),
+            3,
+            "GM seat, removal, KICK entry: {website:?}"
+        );
+        assert!(
+            website
+                .iter()
+                .any(|l| l.starts_with("board ") && l.contains("\"kickedUserId\"")),
+            "{website:?}"
+        );
     }
 
     #[tokio::test]
