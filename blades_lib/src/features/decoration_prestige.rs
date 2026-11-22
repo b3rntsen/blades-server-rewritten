@@ -8,12 +8,16 @@
 //!
 //! A bought decoration's prestige rides on its offer's `townXp`. A CRAFTED one
 //! has no reward of its own to carry it: the APK's `Recipe` has no prestige
-//! field. The number is on the `ItemBundleGenerationData` that sells that one
-//! decoration — the Workshop's, or for a decoration the gem store sold, its
-//! `IAP_Deco_` bundle (report #538) — which is what this table maps each recipe
-//! to (`script/extract_decoration_craft_prestige.py`). Retail capture 17253 is
-//! the proof: collecting an Ancient Tree craft paid +91, and the Workshop bundle
-//! for the Ancient Tree carries `town_xp` 91.
+//! field. The number is the decoration's own `PropData._txpReward`
+//! (`PropDataList`), which is what the client's Workshop screen prints as the
+//! craft's prestige reward (`CraftingMenuCraftDetailsPanel.SetItem`). All 141
+//! craftable decorations have one (report #597). The APK states it a second
+//! time on the `ItemBundleGenerationData` that sells that one decoration — the
+//! Workshop's, or the gem store's `IAP_Deco_` bundle (report #538) — and the
+//! two agree on 72 of the 74 that have both; the table keeps the larger
+//! (`script/extract_decoration_craft_prestige.py`). Retail capture 17253 is the
+//! proof: collecting an Ancient Tree craft paid +91, the Ancient Tree's
+//! `_txpReward` and its Workshop bundle's `town_xp`.
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -77,20 +81,65 @@ mod tests {
         );
     }
 
-    /// No APK bundle carries The King's Sentry, so it still pays nothing rather
-    /// than an invented number.
-    #[test]
-    fn a_decoration_with_no_apk_prestige_still_pays_nothing() {
-        let kings_sentry = Uuid::parse_str("a05ce92d-e6e4-4535-94c4-c32602bc0eb2").unwrap();
-        assert_eq!(craft_prestige(&kings_sentry), None);
+    fn pays(recipe: &str) -> Option<u64> {
+        craft_prestige(&Uuid::parse_str(recipe).unwrap()).map(|(_, xp)| xp)
     }
 
+    /// Report #597 (and the rest of #538): a decoration no bundle sells on its
+    /// own paid nothing, although the Workshop screen promised the player its
+    /// `PropData._txpReward`. These are the APK's numbers.
     #[test]
-    fn every_entry_pays_something_and_agrees_with_the_recipe_output() {
+    fn a_decoration_without_a_bundle_pays_its_prop_prestige() {
+        for (recipe, name, apk) in [
+            (
+                "a05ce92d-e6e4-4535-94c4-c32602bc0eb2",
+                "The King's Sentry",
+                150,
+            ),
+            ("63dba2e6-def3-49eb-b9f0-11e6453a0103", "Potted Trees", 6),
+            (
+                "02680656-48db-4192-84fe-f5141c317729",
+                "Blades Memorial",
+                140,
+            ),
+            (
+                "62f2dad0-ccc8-4020-a702-b1380ba6de24",
+                "The Lich's Defeat",
+                159,
+            ),
+            (
+                "d5fbd96c-d82d-4a00-a411-2537929822c1",
+                "Stalwart Lightkeeper",
+                100,
+            ),
+            (
+                "8ff994a3-a075-4119-b79a-3bb3c0d0f531",
+                "Whiterun Banner",
+                12,
+            ),
+        ] {
+            assert_eq!(pays(recipe), Some(apk), "{name}");
+        }
+    }
+
+    /// Where the APK's two numbers differ the larger one stays, so nothing paid
+    /// before #597 went down: Hircine's Prize (prop 127, store bundle 142) and
+    /// the Imperial Bath (prop 24, store bundle 89).
+    #[test]
+    fn a_decoration_priced_twice_keeps_the_larger_number() {
+        assert_eq!(pays("3f2eecee-d295-4060-a0ea-867b27761408"), Some(142));
+        assert_eq!(pays("fa6407a0-599b-4d31-a1d8-39bd46b096c2"), Some(89));
+    }
+
+    /// Every DecorationCrafting recipe the APK ships pays prestige, and only
+    /// those are in the table.
+    #[test]
+    fn every_decoration_recipe_pays_and_agrees_with_the_recipe_output() {
+        assert_eq!(corpus().recipes.len(), 141);
         assert_eq!(
-            corpus().recipes.len(),
-            39 + 35,
-            "the 39 Workshop decorations and the 35 sold on their own store bundle"
+            corpus().recipes.values().map(|e| e.town_xp).sum::<u64>(),
+            2527 + 3875,
+            "the 67 added by #597 and the 74 paid before it"
         );
         for (recipe, e) in &corpus().recipes {
             assert!(e.town_xp > 0, "{recipe} pays nothing");
@@ -100,7 +149,24 @@ mod tests {
                 out.output_item_template_id, e.output_item_template_id,
                 "{recipe}"
             );
+            assert_eq!(
+                out.crafting_type.as_deref(),
+                Some("DecorationCrafting"),
+                "{recipe}"
+            );
         }
+        let outputs: serde_json::Value =
+            serde_json::from_str(include_str!("../recipe_outputs.json")).unwrap();
+        let decorations = outputs["recipes"]
+            .as_object()
+            .unwrap()
+            .values()
+            .filter(|out| out["craftingType"] == "DecorationCrafting")
+            .count();
+        assert_eq!(
+            decorations, 141,
+            "a decoration recipe is missing from the table"
+        );
     }
 
     #[test]
