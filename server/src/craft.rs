@@ -776,9 +776,9 @@ struct FinishCraftResponse {
     town_xp: u64,
 }
 
-/// The town prestige collecting `job` pays: the decoration's Workshop `townXp`
-/// per unit actually collected, 0 for anything that is not a prestige-paying
-/// decoration craft (#353).
+/// The town prestige collecting `job` pays: the decoration's own prestige (the
+/// APK's `PropData._txpReward`, #597) per unit actually collected, 0 for
+/// anything that is not a decoration craft (#353).
 fn craft_town_xp(job: &CraftJob, reward: &RewardGrant) -> u64 {
     let Some((decoration, per_unit)) =
         blades_lib::features::decoration_prestige::craft_prestige(&job.recipe_id)

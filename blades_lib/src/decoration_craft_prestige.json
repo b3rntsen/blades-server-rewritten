@@ -1,15 +1,40 @@
 {
  "_meta": {
   "description": "DecorationCrafting recipe id -> the town prestige (townXp) collecting that craft pays.",
-  "source": "APK ItemBundleGenerationDataList (reference/game-defs/shop_bundles.json in the capture repo): the single-item, quantity-1 bundle selling the recipe's output -- a Workshop bundle, else the gem store's IAP_Deco_ bundle -- carries `town_xp`; recipe -> output is recipe_outputs.json. Regenerate with script/extract_decoration_craft_prestige.py.",
-  "evidence": "Retail capture 17253 (2026-05-15): collecting DecorationCrafting recipe 6d164b3d (Ancient Tree) moved town.levelInfo.experiencePoints 87565 -> 87656, +91 = its Workshop bundle's town_xp; the response carried `town`. The IAP_Deco_ values are what the retail store paid for buying the same decoration (report #538); no retail capture crafts one.",
-  "not_here": "The other 67 DecorationCrafting recipes' outputs have no single-decoration bundle and no prestige value anywhere in the APK data we hold, so they pay nothing rather than an invented number."
+  "source": "APK PropDataList (bundle common): each decoration's PropData._txpReward, the number the client's Workshop screen shows as the craft's prestige reward (propTxpReward). Also APK ItemBundleGenerationDataList (reference/game-defs/shop_bundles.json in the capture repo): the single-item, quantity-1 bundle selling the recipe's output -- a Workshop bundle, else the gem store's IAP_Deco_ bundle -- carries `town_xp` (bundleTownXp). townXp is the larger of the two; recipe -> output is recipe_outputs.json. Regenerate with script/extract_decoration_craft_prestige.py.",
+  "evidence": "Retail capture 17253 (2026-05-15): collecting DecorationCrafting recipe 6d164b3d (Ancient Tree) moved town.levelInfo.experiencePoints 87565 -> 87656, +91 = its PropData._txpReward = its Workshop bundle's town_xp; the response carried `town`. No other retail capture collects a decoration craft.",
+  "agreement": "72 of the 74 decorations with both a PropData and a single-decoration bundle carry the same number in each; the rest keep the larger.",
+  "not_here": "0 of the 141 DecorationCrafting recipes pay nothing."
  },
  "recipes": {
+  "02680656-48db-4192-84fe-f5141c317729": {
+   "outputItemTemplateId": "bac2ea83-5cf9-496e-9653-aebfec544c21",
+   "name": "Blades Memorial",
+   "townXp": 140,
+   "prop": "Large_BladesMemorial",
+   "propTxpReward": 140
+  },
+  "0326bdb4-f6a5-4eb1-901d-9cd1700e1daf": {
+   "outputItemTemplateId": "f37ca35b-ba3c-43d6-afd8-9700b44278f2",
+   "name": "Imperial Banner",
+   "townXp": 12,
+   "prop": "Small_ImperialBanner",
+   "propTxpReward": 12
+  },
+  "04cf30a6-1a40-436a-977b-1e1c9d54b99f": {
+   "outputItemTemplateId": "72dddde0-69c0-488f-a153-30cfa27aeb30",
+   "name": "Memorial - Green & Gold",
+   "townXp": 25,
+   "prop": "Small_Town_UrnBushes01",
+   "propTxpReward": 25
+  },
   "0ba4a489-d9d9-4768-9c46-a319c852a02e": {
    "outputItemTemplateId": "ad7b7fac-7fb3-494a-8771-6db6cb060fe4",
    "name": "Gallows",
    "townXp": 57,
+   "prop": "Large_Gallows",
+   "propTxpReward": 57,
+   "bundleTownXp": 57,
    "bundleId": "c3380941-d2e6-4031-a2a5-ce4aa06e28a7",
    "bundle": "Workshop - L Decoration - Gallows"
   },
@@ -17,6 +42,9 @@
    "outputItemTemplateId": "add0fef4-b7cb-436e-a537-d4f41174d1af",
    "name": "Black & Gold Stele",
    "townXp": 44,
+   "prop": "Medium_Stele3",
+   "propTxpReward": 44,
+   "bundleTownXp": 44,
    "bundleId": "488af51f-b63b-47ab-ae7c-c89568f3f5f3",
    "bundle": "IAP_Deco_S_Stele3"
   },
@@ -24,6 +52,9 @@
    "outputItemTemplateId": "e9f2c268-f3b7-4c0a-8038-3073e34e3d13",
    "name": "New Life Banner",
    "townXp": 12,
+   "prop": "Small_NewLifeBanner",
+   "propTxpReward": 12,
+   "bundleTownXp": 12,
    "bundleId": "9c6a97e6-4d4d-4b68-b3d7-d9574a2b76f7",
    "bundle": "IAP_Deco_S_NewLifeBanner"
   },
@@ -31,6 +62,9 @@
    "outputItemTemplateId": "c2ea9e2a-5662-4184-a104-4a510821d7b6",
    "name": "A Fool's Respite",
    "townXp": 50,
+   "prop": "Small_AFoolsRespite ",
+   "propTxpReward": 50,
+   "bundleTownXp": 50,
    "bundleId": "4be8fe21-f548-4eab-9308-9135fad8b6d7",
    "bundle": "IAP_Deco_S_AFoolsRespite"
   },
@@ -38,20 +72,43 @@
    "outputItemTemplateId": "e75f1379-27c2-4bff-be71-79b38b45270d",
    "name": "Scarecrow",
    "townXp": 10,
+   "prop": "Small_Scarecrow",
+   "propTxpReward": 10,
+   "bundleTownXp": 10,
    "bundleId": "eb4d84f5-ab0e-4fbc-bab4-b0b9b09608fa",
    "bundle": "IAP_Deco_S_Scarecrow"
+  },
+  "16f3e006-388e-4f36-a483-24351452230b": {
+   "outputItemTemplateId": "52318091-d387-493c-a588-0e5bbd4c1f72",
+   "name": "Apple Pies",
+   "townXp": 19,
+   "prop": "Small_ApplePie",
+   "propTxpReward": 19
   },
   "174e762c-3154-4541-8e0d-e49b82ecb26c": {
    "outputItemTemplateId": "703fe90f-e8be-4f11-8029-fc87295b8895",
    "name": "Small Cedar Tree",
    "townXp": 9,
+   "prop": "Small_Tree2",
+   "propTxpReward": 9,
+   "bundleTownXp": 9,
    "bundleId": "83070358-f432-4041-a8da-b5714528be5a",
    "bundle": "Workshop - S Decoration - Small Tree #2"
+  },
+  "17bebe6f-07bc-450b-b0e7-37accccf7b6c": {
+   "outputItemTemplateId": "58c608b1-a8d0-431c-b047-e226b4df9f44",
+   "name": "Tall Pine Tree",
+   "townXp": 40,
+   "prop": "Medium_PineTree02",
+   "propTxpReward": 40
   },
   "18307326-3422-4393-937c-26c040fb55e2": {
    "outputItemTemplateId": "88a6343f-12dd-4b01-a936-34fd7b73df95",
    "name": "Large Cedar Tree",
    "townXp": 59,
+   "prop": "Large_Tree2",
+   "propTxpReward": 59,
+   "bundleTownXp": 59,
    "bundleId": "3d8e3f51-ce5b-4d68-aa3d-f3d36d46cdd7",
    "bundle": "Workshop - L Decoration - Large Tree #2"
   },
@@ -59,6 +116,9 @@
    "outputItemTemplateId": "eded85b4-554f-4746-a27a-d624bc1da7cf",
    "name": "Grand Saturalia Tree",
    "townXp": 80,
+   "prop": "Large_SnowTree_01",
+   "propTxpReward": 80,
+   "bundleTownXp": 80,
    "bundleId": "3f4ad011-6c3c-48eb-b31b-b6eed3f1c6f7",
    "bundle": "IAP_Deco_L_SnowTree_01"
   },
@@ -66,48 +126,125 @@
    "outputItemTemplateId": "ea5b4d2c-61cc-49e6-acaa-e41d6dd4adc9",
    "name": "Large Elm Tree",
    "townXp": 59,
+   "prop": "Large_Tree1",
+   "propTxpReward": 59,
+   "bundleTownXp": 59,
    "bundleId": "ff7cab34-8cdf-409c-ab28-2d24210700cd",
    "bundle": "Workshop - L Decoration - Large Tree #1"
+  },
+  "1cd4d08d-d434-4860-89ef-ec17e713c0cc": {
+   "outputItemTemplateId": "ec12f867-d88b-4d62-9e44-722975970dd2",
+   "name": "Imperial Banner - Red",
+   "townXp": 12,
+   "prop": "Small_ImperialBanner_02",
+   "propTxpReward": 12
   },
   "1cf5fe07-20d5-4ab3-af47-446aec9d7457": {
    "outputItemTemplateId": "8d17990c-e9ca-49c0-8c46-1742bbfc4316",
    "name": "Short Shrub",
    "townXp": 8,
+   "prop": "Small_Flower2",
+   "propTxpReward": 8,
+   "bundleTownXp": 8,
    "bundleId": "42f859b4-3a9f-42dd-ae33-1606fa2c0dda",
    "bundle": "Workshop - S Decoration - Flowers #2"
+  },
+  "1d1ba655-9c22-43e2-8f66-14607d0da0d4": {
+   "outputItemTemplateId": "c9f339ea-0dd7-46d0-9641-31fd4da1ef9a",
+   "name": "River Snake Banner",
+   "townXp": 8,
+   "prop": "Small_RiverSnakeBanner",
+   "propTxpReward": 8
+  },
+  "236eb7fa-582f-4172-a5af-971442d35683": {
+   "outputItemTemplateId": "5a1088b9-b1a1-4ce3-8c05-638110d980bd",
+   "name": "Imperial Banner - Yellow",
+   "townXp": 12,
+   "prop": "Small_ImperialBanner_04",
+   "propTxpReward": 12
   },
   "2417cc28-dd7b-430a-a813-7cd4437545c0": {
    "outputItemTemplateId": "052459c3-e349-492a-a2c4-71f366780fbf",
    "name": "Cedar Tree",
    "townXp": 38,
+   "prop": "Medium_Tree3",
+   "propTxpReward": 38,
+   "bundleTownXp": 38,
    "bundleId": "81be0d03-38dc-4398-ba1a-77a906ba2432",
    "bundle": "Workshop - M Decoration - Tree #3"
+  },
+  "24f69d4b-670d-4fae-915e-3f5b69cfa36b": {
+   "outputItemTemplateId": "6c7f6c3d-17e0-4e0e-b57d-87c35adf163d",
+   "name": "Love's Triumph",
+   "townXp": 80,
+   "prop": "Medium_LoveStatue_01",
+   "propTxpReward": 80
   },
   "2ac9016d-79fc-4bea-88e2-10b2799a954c": {
    "outputItemTemplateId": "5b6ec37e-e969-4832-a1c4-9bb84a4227a7",
    "name": "Peridot Beacon",
    "townXp": 61,
+   "prop": "Small_Beacon_02",
+   "propTxpReward": 61,
+   "bundleTownXp": 61,
    "bundleId": "6a2b9bb5-051d-4c3a-83cc-5ef5853005e8",
    "bundle": "IAP_Deco_S_PeridotBeacon"
+  },
+  "2b5595e3-f1dc-4757-8a61-199ba61ec2ed": {
+   "outputItemTemplateId": "83a5205e-ee0a-4807-8320-53dbcc231a2b",
+   "name": "Emblem",
+   "townXp": 80,
+   "prop": "Large_EarlyAccessReward",
+   "propTxpReward": 80
   },
   "2c87ca37-71ea-4b61-9b5f-52577a45cd60": {
    "outputItemTemplateId": "57b2a90b-c963-4c80-88e3-fd94d774c27c",
    "name": "Mulberry Tree",
    "townXp": 9,
+   "prop": "Small_Tree1",
+   "propTxpReward": 9,
+   "bundleTownXp": 9,
    "bundleId": "0f840160-10fd-439f-b831-e96633c32eef",
    "bundle": "Workshop - S Decoration - Small Tree #1"
+  },
+  "33bc0fa6-c2e5-42ff-82af-53494140277e": {
+   "outputItemTemplateId": "3c37db95-8f34-43df-ab75-2865e6af21a2",
+   "name": "Wizard's Rings",
+   "townXp": 8,
+   "prop": "Small_WizardsRings_00",
+   "propTxpReward": 8
   },
   "34a4c2a2-1347-4823-9da7-a6a5a280948a": {
    "outputItemTemplateId": "b53d6051-48a4-410a-a4f6-e9edc3e624f6",
    "name": "Ice Unicorn",
    "townXp": 27,
+   "prop": "Small_Ice_UniCorn",
+   "propTxpReward": 27,
+   "bundleTownXp": 27,
    "bundleId": "e656d4de-b991-4c9e-8b07-73556cfc7ab1",
    "bundle": "IAP_Deco_S_IceUnicorn"
+  },
+  "381c738f-f42e-4955-af0d-77f380ef7240": {
+   "outputItemTemplateId": "c064e1c9-69da-4235-80c4-7771f2d8e8bc",
+   "name": "Sylvan Fountain",
+   "townXp": 80,
+   "prop": "Large_Pine_Fountain",
+   "propTxpReward": 80
+  },
+  "3980947d-b1c4-4ad2-aa30-dd81e3db666c": {
+   "outputItemTemplateId": "3f59559d-35d0-464e-9e1e-f870a77b5c90",
+   "name": "Ayleid Light",
+   "townXp": 20,
+   "prop": "Small_Spire",
+   "propTxpReward": 20
   },
   "3a2be530-5cc0-4295-8567-dabc8cd9c83c": {
    "outputItemTemplateId": "023ee5a7-ea62-4214-8749-84da4de5793b",
    "name": "Ayleid Arch",
    "townXp": 17,
+   "prop": "Medium_Stele1",
+   "propTxpReward": 17,
+   "bundleTownXp": 17,
    "bundleId": "e0befe41-7409-47a3-8d1f-9926b4900a08",
    "bundle": "Workshop - M Decoration - Stele #1"
   },
@@ -115,6 +252,9 @@
    "outputItemTemplateId": "3bedef8a-2a4b-4953-81fa-0d38a8b97634",
    "name": "Beacon",
    "townXp": 56,
+   "prop": "Small_Beacon",
+   "propTxpReward": 56,
+   "bundleTownXp": 56,
    "bundleId": "7bbc2711-7ecc-4120-ba42-72811b513fac",
    "bundle": "Workshop - S Decoration - Beacon"
   },
@@ -122,20 +262,57 @@
    "outputItemTemplateId": "9fa4b89e-f738-425e-9fae-4af65ccb0604",
    "name": "Hircine's Prize",
    "townXp": 142,
+   "prop": "Large_UnicornFountain",
+   "propTxpReward": 127,
+   "bundleTownXp": 142,
    "bundleId": "ed877797-34c9-49b2-b80c-3ca5452183bf",
    "bundle": "IAP_Deco_L_UnicornFountain"
+  },
+  "3f4ef339-5d5f-455f-8df3-927014af646f": {
+   "outputItemTemplateId": "7164071f-6300-41f1-9125-0f1b30983629",
+   "name": "Winterhold Banner",
+   "townXp": 12,
+   "prop": "Small_WinterHoldBanner",
+   "propTxpReward": 12
+  },
+  "44300ad7-9a48-4f56-b9ef-942501488f9e": {
+   "outputItemTemplateId": "cb59c218-0fe0-4b80-8ac2-98c7b20a5cda",
+   "name": "Bonfire",
+   "townXp": 5,
+   "prop": "Small_Bonfire",
+   "propTxpReward": 5
+  },
+  "48a49929-320d-4fa4-8a43-4a584cad0544": {
+   "outputItemTemplateId": "1fdcc8bf-8aff-4636-9037-637d9ec9278c",
+   "name": "Bloodfall Banner - Black",
+   "townXp": 13,
+   "prop": "Small_BloodqueenBanner_02",
+   "propTxpReward": 13
   },
   "4d8a031f-a97b-4df9-a632-5ffca0f58a16": {
    "outputItemTemplateId": "49ab6268-3eb0-4546-a417-f4107ac327fb",
    "name": "Ice Dragon Bust",
    "townXp": 27,
+   "prop": "Small_Ice_DragonHead",
+   "propTxpReward": 27,
+   "bundleTownXp": 27,
    "bundleId": "a031c8e0-d642-401f-a236-d1a1660a3e38",
    "bundle": "IAP_Deco_S_IceDragonBust"
+  },
+  "4e2756b4-045f-448f-856d-c9517532b27f": {
+   "outputItemTemplateId": "bcbbcf70-765d-4246-a3db-4c5c7cb743c3",
+   "name": "Morthal Banner",
+   "townXp": 12,
+   "prop": "Small_MorthalBanner",
+   "propTxpReward": 12
   },
   "4fc8c681-382d-4507-a384-92e95eaeccc2": {
    "outputItemTemplateId": "04d05817-08f3-4368-8f95-64d617699b19",
    "name": "Garnet Beacon",
    "townXp": 61,
+   "prop": "Small_Beacon_01",
+   "propTxpReward": 61,
+   "bundleTownXp": 61,
    "bundleId": "7e559e23-3843-4990-93c6-47c729dbd92f",
    "bundle": "IAP_Deco_S_GarnetBeacon"
   },
@@ -143,6 +320,9 @@
    "outputItemTemplateId": "bebb7325-98f3-452d-b830-d406a6105580",
    "name": "Wine and Music",
    "townXp": 32,
+   "prop": "Small_Candelabra",
+   "propTxpReward": 32,
+   "bundleTownXp": 32,
    "bundleId": "e70c9898-a897-473d-bb77-a7b9fa0402d3",
    "bundle": "Workshop - S Decoration - Candelabra"
   },
@@ -150,48 +330,146 @@
    "outputItemTemplateId": "ddbfda14-263b-46cd-8baa-866addf222d8",
    "name": "Gazebo",
    "townXp": 86,
+   "prop": "Large_Gazebo",
+   "propTxpReward": 86,
+   "bundleTownXp": 86,
    "bundleId": "e5bee57b-6707-4f02-a3ed-73a6d9967f61",
    "bundle": "Workshop - L Decoration - Gazebo"
+  },
+  "53ce3b7f-8b96-434c-aba2-582d89b9f91c": {
+   "outputItemTemplateId": "a91a14d4-26c8-4ccd-9ba6-94a3db26d65e",
+   "name": "Fountain Planter",
+   "townXp": 11,
+   "prop": "Small_FountainBushes",
+   "propTxpReward": 11
+  },
+  "5443d064-d16b-4521-9f4a-581a75051e29": {
+   "outputItemTemplateId": "8048ef79-2d40-43e0-830d-6d8a4f2ba4ec",
+   "name": "Markarth Banner",
+   "townXp": 12,
+   "prop": "Small_MarkathBanner",
+   "propTxpReward": 12
   },
   "5893c7ba-034d-45c3-83ed-69dc005c05dd": {
    "outputItemTemplateId": "3e87402f-68ad-4272-8aed-55fe255fe4d9",
    "name": "Shrubs and Flags",
    "townXp": 9,
+   "prop": "Small_Flower4",
+   "propTxpReward": 9,
+   "bundleTownXp": 9,
    "bundleId": "3a2c9f8a-01dd-462d-8c9e-a5098dd99104",
    "bundle": "Workshop - S Decoration - Flowers #4"
+  },
+  "58d73e10-40fc-4304-9e3d-f7077701860a": {
+   "outputItemTemplateId": "362d22fd-f2f6-44fd-9d91-010c2a706789",
+   "name": "Silken Eggs",
+   "townXp": 10,
+   "prop": "Small_SilkenEggs",
+   "propTxpReward": 10
   },
   "5b8299f4-85c3-48c3-b4db-0b5a656ec0a2": {
    "outputItemTemplateId": "3ac8e1a6-3104-488a-93d5-c618ae541fcb",
    "name": "Keg of Ale",
    "townXp": 45,
+   "prop": "Medium_KegOfAle",
+   "propTxpReward": 45,
+   "bundleTownXp": 45,
    "bundleId": "87bc3704-fa15-499a-8fbb-439be8186ac8",
    "bundle": "Workshop - M Decoration - Keg of Ale"
+  },
+  "5c5a277a-35c3-4c9f-809d-552d1ff9e17f": {
+   "outputItemTemplateId": "f4a5d2d8-35c8-411a-9ed3-3f4a2a8ce19a",
+   "name": "Founder's Statue",
+   "townXp": 184,
+   "prop": "ElderStatueRebuilt",
+   "propTxpReward": 184
+  },
+  "5e8087d2-773d-4b93-8ca7-ed7bedd8088a": {
+   "outputItemTemplateId": "a53e20cb-16e4-4fd5-b2e9-0e33a0a43fde",
+   "name": "Frozen Heart Fountain",
+   "townXp": 80,
+   "prop": "Medium_IceHeart_Fountain_01",
+   "propTxpReward": 80
+  },
+  "608966e6-2358-4a87-b5fe-972edfc6ef4e": {
+   "outputItemTemplateId": "6b251e0e-316f-4424-977c-c1e5372e6858",
+   "name": "Bloodfall Banner",
+   "townXp": 12,
+   "prop": "Small_BloodQueenBanner",
+   "propTxpReward": 12
+  },
+  "62f2dad0-ccc8-4020-a702-b1380ba6de24": {
+   "outputItemTemplateId": "4e9ad4aa-45c4-4363-9b57-6920ee7091ba",
+   "name": "The Lich's Defeat",
+   "townXp": 159,
+   "prop": "Large_LichsDefeat",
+   "propTxpReward": 159
   },
   "6317398f-f283-4c54-8ae0-0ca909f84fa8": {
    "outputItemTemplateId": "b74639cf-8df4-45ec-9055-a37f88b7e321",
    "name": "Abyssal Hourglass",
    "townXp": 91,
+   "prop": "Medium_AbyssReward2",
+   "propTxpReward": 91,
+   "bundleTownXp": 91,
    "bundleId": "f22cebbc-9fbc-49c6-aed4-42b95dbe2b9a",
    "bundle": "IAP_Deco_M_Abyss1"
+  },
+  "63262384-8751-420e-8556-05bea151336f": {
+   "outputItemTemplateId": "19d3ce9a-c740-4c20-bc11-b2ed876d9e0b",
+   "name": "Bloodfall Arena Banner",
+   "townXp": 12,
+   "prop": "Small_BloodfallArenaBanner",
+   "propTxpReward": 12
+  },
+  "63dba2e6-def3-49eb-b9f0-11e6453a0103": {
+   "outputItemTemplateId": "ecb89216-a1f5-4b7c-ae3c-af45d8fbd44c",
+   "name": "Potted Trees",
+   "townXp": 6,
+   "prop": "Small_PlantedBushes",
+   "propTxpReward": 6
   },
   "664548cc-ab6e-4b8e-8e99-9d4df5b94f14": {
    "outputItemTemplateId": "0594db3b-8fe3-4ae2-9a3e-8856acc06ccf",
    "name": "Tall Shrub",
    "townXp": 9,
+   "prop": "Small_Flower3",
+   "propTxpReward": 9,
+   "bundleTownXp": 9,
    "bundleId": "bbe35800-9ae8-4ddc-aa8a-8333b41c51c4",
    "bundle": "Workshop - S Decoration - Flowers #3"
+  },
+  "677f57f7-2ca7-4890-9ce1-c49294811e38": {
+   "outputItemTemplateId": "09325442-3fc8-4666-aee0-6ad4c317bf17",
+   "name": "Warrior's Field Banner",
+   "townXp": 12,
+   "prop": "Small_WarriorsFieldBanner",
+   "propTxpReward": 12
   },
   "67bac256-4539-487e-bce7-b6cf51643ae8": {
    "outputItemTemplateId": "1a692f65-abc2-403c-ae30-baef4ce75592",
    "name": "The Painful Lesson",
    "townXp": 40,
+   "prop": "Small_ThePainfulLesson ",
+   "propTxpReward": 40,
+   "bundleTownXp": 40,
    "bundleId": "cf7d54b3-207e-4a70-81a7-6bd39515c447",
    "bundle": "IAP_Deco_S_ThePainfulLesson"
+  },
+  "691e0e9c-bd62-4c0b-8441-2415f473ec5f": {
+   "outputItemTemplateId": "cf98a282-9558-4110-a290-66e47fc95981",
+   "name": "Burning Love",
+   "townXp": 80,
+   "prop": "Large_FireHeart_Fountain_01",
+   "propTxpReward": 80
   },
   "6b650e68-b544-45c2-b40f-8a3ee59008d4": {
    "outputItemTemplateId": "0bb2b12e-49f6-4f7d-bcd1-c8b4fd548786",
    "name": "Tall Aspen Tree",
    "townXp": 54,
+   "prop": "Medium_Tree4",
+   "propTxpReward": 54,
+   "bundleTownXp": 54,
    "bundleId": "7df7c157-3fdf-4193-8308-9246a6cf6bc0",
    "bundle": "Workshop - M Decoration - Tree #4"
   },
@@ -199,6 +477,9 @@
    "outputItemTemplateId": "f075e3ea-df65-4a65-afb4-9776ba0e35cf",
    "name": "Emerald Beacon",
    "townXp": 61,
+   "prop": "Small_Beacon_04",
+   "propTxpReward": 61,
+   "bundleTownXp": 61,
    "bundleId": "569b7458-ac11-493d-b1a3-b3c40c485316",
    "bundle": "IAP_Deco_S_EmeraldBeacon"
   },
@@ -206,20 +487,50 @@
    "outputItemTemplateId": "d25c8faa-5943-4ab1-99d2-aab025ecb581",
    "name": "Ancient Tree",
    "townXp": 91,
+   "prop": "Large_CreepyTree",
+   "propTxpReward": 91,
+   "bundleTownXp": 91,
    "bundleId": "8dcc79c4-1bae-4f7e-81fd-5f08ecb70074",
    "bundle": "Workshop - L Decoration - Large Creepy Tree"
+  },
+  "6f333c1a-50df-4bec-8318-9769a3d3e9c3": {
+   "outputItemTemplateId": "44474f40-259b-46c5-bb69-615dcd5f5a6e",
+   "name": "Solitude Banner",
+   "townXp": 12,
+   "prop": "Small_SolitudeBanner",
+   "propTxpReward": 12
   },
   "7114e097-0b20-45c5-9222-b9d44ac384ad": {
    "outputItemTemplateId": "606494ef-e0e2-4ec3-bcbb-0c12b79fe7cb",
    "name": "Torture Cage",
    "townXp": 168,
+   "prop": "Medium_TortureCage",
+   "propTxpReward": 168,
+   "bundleTownXp": 168,
    "bundleId": "9f980fdc-d48a-40ed-b26c-9961fe8c4d67",
    "bundle": "Workshop - M Decoration - Torture Cage"
+  },
+  "71a22378-aaee-421b-a27e-ff70809b95b6": {
+   "outputItemTemplateId": "8c2001d7-8e93-45d8-b527-da8436b52df1",
+   "name": "Riften Banner",
+   "townXp": 12,
+   "prop": "Small_RiftenBanner",
+   "propTxpReward": 12
+  },
+  "72183355-017e-41ec-bb29-2f188bc9e6f1": {
+   "outputItemTemplateId": "407f37a0-d5d8-4e97-b769-63c0d9fd5009",
+   "name": "Heroes Hall Banner",
+   "townXp": 12,
+   "prop": "Small_HeroesHallBanner",
+   "propTxpReward": 12
   },
   "7247c4ed-41b2-4710-8dad-57e7028c3a76": {
    "outputItemTemplateId": "b3c128e2-d811-4f85-a9b9-62aefdde092d",
    "name": "Ice Elk",
    "townXp": 27,
+   "prop": "Small_Ice_Elk",
+   "propTxpReward": 27,
+   "bundleTownXp": 27,
    "bundleId": "72717644-7aaa-42c0-b729-9af3d45d6c5e",
    "bundle": "IAP_Deco_S_IceElk"
   },
@@ -227,6 +538,9 @@
    "outputItemTemplateId": "48fad7a1-3f32-4dad-811a-c33312717176",
    "name": "Golden Stallion",
    "townXp": 133,
+   "prop": "Medium_GoldenHorse",
+   "propTxpReward": 133,
+   "bundleTownXp": 133,
    "bundleId": "75ae96d6-badf-40f3-b752-1a5e239862f0",
    "bundle": "IAP_Deco_M_GoldenHorse"
   },
@@ -234,6 +548,9 @@
    "outputItemTemplateId": "2cf13c38-bfb1-4668-93a2-1199478854b6",
    "name": "Ayleid Stele",
    "townXp": 84,
+   "prop": "Medium_Stele2",
+   "propTxpReward": 84,
+   "bundleTownXp": 84,
    "bundleId": "6ecdb3f0-bbf3-4ec6-ac93-bb6fa8e437a0",
    "bundle": "Workshop - M Decoration - Stele #2"
   },
@@ -241,13 +558,40 @@
    "outputItemTemplateId": "ac56f30d-5037-4aab-af9e-081b0886bbcb",
    "name": "Vegetable Patch",
    "townXp": 8,
+   "prop": "Small_Flower1",
+   "propTxpReward": 8,
+   "bundleTownXp": 8,
    "bundleId": "82af7d0e-752f-4242-bcdd-231bcacf3cf1",
    "bundle": "Workshop - S Decoration - Flowers #1"
+  },
+  "7e20f76e-1260-4893-b1d2-0137cd131b19": {
+   "outputItemTemplateId": "bdcfd649-9d08-4cd5-8126-29f63b89a8a9",
+   "name": "Golden Flame",
+   "townXp": 8,
+   "prop": "Small_GoldenFlame",
+   "propTxpReward": 8
+  },
+  "7fdaa627-ba08-4893-bdb3-0698a0296d99": {
+   "outputItemTemplateId": "86283131-c819-404e-97cb-3e30a96e57c0",
+   "name": "Tall Mulberry Tree",
+   "townXp": 12,
+   "prop": "Small_Tree0",
+   "propTxpReward": 12
+  },
+  "83e71505-e6ef-467e-97f6-77853a7d5c07": {
+   "outputItemTemplateId": "e04b1594-4ac3-4ae8-8684-c2837ef68292",
+   "name": "Warrior's Fire",
+   "townXp": 5,
+   "prop": "Small_WarriorFire",
+   "propTxpReward": 5
   },
   "8688c58b-eef2-40d3-952a-9b152fcac5ba": {
    "outputItemTemplateId": "eba7fa4c-680f-419f-9327-c029eaece391",
    "name": "Outhouse",
    "townXp": 21,
+   "prop": "Medium_Outhouse",
+   "propTxpReward": 21,
+   "bundleTownXp": 21,
    "bundleId": "839d1afb-5adc-4439-9a9d-61cc99c8b91e",
    "bundle": "Workshop - M Decoration - Outhouse"
   },
@@ -255,6 +599,9 @@
    "outputItemTemplateId": "56a1ce35-e3c7-47e7-993f-b63ff14e05b1",
    "name": "Dragon Snow Globe",
    "townXp": 187,
+   "prop": "Large_DragonSnowGlobe",
+   "propTxpReward": 187,
+   "bundleTownXp": 187,
    "bundleId": "e4e080ea-5af9-40b6-a998-20474d5c6269",
    "bundle": "IAP_Deco_L_DragonSnowGlobe"
   },
@@ -262,13 +609,33 @@
    "outputItemTemplateId": "939df0a7-d349-4601-943c-29c834bc2280",
    "name": "Blue Banner",
    "townXp": 22,
+   "prop": "Small_BlueBanner",
+   "propTxpReward": 22,
+   "bundleTownXp": 22,
    "bundleId": "4b8870b5-719b-4bd8-a4a9-a4203dcc50e1",
    "bundle": "Workshop - S Decoration - Blue Banner"
+  },
+  "884ccede-e63e-4b04-8e0c-9ed23a205aa2": {
+   "outputItemTemplateId": "b0b73d40-03b1-465c-a285-30d64fb55ced",
+   "name": "Memorial - Yellow & Red",
+   "townXp": 25,
+   "prop": "Small_Town_UrnBushes00",
+   "propTxpReward": 25
+  },
+  "8abade1b-812d-4e76-af29-da03f2a5c6b1": {
+   "outputItemTemplateId": "2701991a-9596-4244-8b4b-28b41f747687",
+   "name": "Pumpkin Patch",
+   "townXp": 5,
+   "prop": "Small_PumpkinPatch",
+   "propTxpReward": 5
   },
   "8b8e5199-c54a-4f02-9a66-2c31bc4def63": {
    "outputItemTemplateId": "885f9882-ac5f-44bb-9f0f-6a3c72f375bb",
    "name": "Stone Cairn",
    "townXp": 72,
+   "prop": "Medium_StoneCairn",
+   "propTxpReward": 72,
+   "bundleTownXp": 72,
    "bundleId": "767604e5-fb72-4d71-8323-6451ae22194f",
    "bundle": "Workshop - M Decoration - Stone cairn"
   },
@@ -276,13 +643,26 @@
    "outputItemTemplateId": "85164324-f536-40b6-ad86-559932529ae8",
    "name": "Saturalia Tree",
    "townXp": 40,
+   "prop": "Medium_LifeTree_01",
+   "propTxpReward": 40,
+   "bundleTownXp": 40,
    "bundleId": "1e8355ac-594d-45a4-ba1e-3ebac4e12bf2",
    "bundle": "IAP_Deco_M_LifeTree_01"
+  },
+  "8ff994a3-a075-4119-b79a-3bb3c0d0f531": {
+   "outputItemTemplateId": "c982e65f-5013-4924-acef-7b33cb30de48",
+   "name": "Whiterun Banner",
+   "townXp": 12,
+   "prop": "Small_WhiterunBanner",
+   "propTxpReward": 12
   },
   "92461bd2-179e-434d-a472-a42f88d5e793": {
    "outputItemTemplateId": "7cdd7354-e9f7-4ef8-a5bb-f4af711a62bb",
    "name": "Trophy Hunter",
    "townXp": 110,
+   "prop": "Small_TrophyHunter",
+   "propTxpReward": 110,
+   "bundleTownXp": 110,
    "bundleId": "5fe32e5f-050a-42c1-8d3e-3381fbfede4d",
    "bundle": "IAP_Deco_S_TrophyHunter"
   },
@@ -290,6 +670,9 @@
    "outputItemTemplateId": "2e4dff56-d3f8-4e9f-a0c9-ae2dc712f419",
    "name": "Crystal Shrine",
    "townXp": 11,
+   "prop": "Small_CrystalShrine",
+   "propTxpReward": 11,
+   "bundleTownXp": 11,
    "bundleId": "c5cbdaee-125c-468f-9adf-61713f441130",
    "bundle": "IAP_Deco_S_Crystal_Shrine"
   },
@@ -297,13 +680,54 @@
    "outputItemTemplateId": "c8e8e85c-2f1c-46f8-a047-9c328de69d20",
    "name": "Ice Mammoth",
    "townXp": 27,
+   "prop": "Small_Ice_Mammoth",
+   "propTxpReward": 27,
+   "bundleTownXp": 27,
    "bundleId": "2e23c77d-a988-46db-98ac-3187cf9e403f",
    "bundle": "IAP_Deco_S_IceMammoth"
+  },
+  "99032879-5f79-4315-8491-faf44fe9b7a0": {
+   "outputItemTemplateId": "a0d41fd5-b0f7-4872-aabb-64028fc781f9",
+   "name": "Ayleid Warrior Statue",
+   "townXp": 46,
+   "prop": "Medium_AyelidWarriorStatue",
+   "propTxpReward": 46
+  },
+  "9e38cf53-7b0d-4684-a277-841dc8794eb4": {
+   "outputItemTemplateId": "6adc8eef-6fda-493a-9be4-320ceea6ec40",
+   "name": "Imperial Banner - Black",
+   "townXp": 12,
+   "prop": "Small_ImperialBanner_03",
+   "propTxpReward": 12
+  },
+  "9fdf7571-faec-4277-bbd4-27851189de09": {
+   "outputItemTemplateId": "f559c966-62a0-4b01-9a65-645b86fb078d",
+   "name": "Dragonwood Arena Banner",
+   "townXp": 12,
+   "prop": "Small_DragonwoodArenaBanner",
+   "propTxpReward": 12
+  },
+  "a05ce92d-e6e4-4535-94c4-c32602bc0eb2": {
+   "outputItemTemplateId": "05400974-33fc-46f9-96b3-b4ee747a028c",
+   "name": "The King's Sentry",
+   "townXp": 150,
+   "prop": "Medium_TheKingsSentry",
+   "propTxpReward": 150
+  },
+  "a1d2fb78-50cb-41e5-bccb-a84b47b192b2": {
+   "outputItemTemplateId": "ad52b071-32ae-487c-8ffe-f5c75a32144b",
+   "name": "Thalmor Banner",
+   "townXp": 12,
+   "prop": "Small_AltmerBanner",
+   "propTxpReward": 12
   },
   "a27a5124-3d25-423c-8be8-ab088c6d9212": {
    "outputItemTemplateId": "d092b411-aaa6-46f8-b935-dd5e41d90de1",
    "name": "White Banner",
    "townXp": 22,
+   "prop": "Small_WhiteBanner",
+   "propTxpReward": 22,
+   "bundleTownXp": 22,
    "bundleId": "45b2150e-d005-4fe9-b925-d310a2eba09d",
    "bundle": "Workshop - S Decoration - White Banner"
   },
@@ -311,13 +735,26 @@
    "outputItemTemplateId": "94424df9-f602-433d-bb20-253239ef1a11",
    "name": "Aspen Tree",
    "townXp": 28,
+   "prop": "Medium_Tree1",
+   "propTxpReward": 28,
+   "bundleTownXp": 28,
    "bundleId": "9e9bc089-db9a-489e-a3e5-0d141c31faa4",
    "bundle": "Workshop - M Decoration - Tree #1"
+  },
+  "a3515cc9-3e56-49da-aa79-e98d71ede74b": {
+   "outputItemTemplateId": "4f819d2f-535e-4101-a8b6-1481096a2178",
+   "name": "Memorial - Purple & Silver",
+   "townXp": 25,
+   "prop": "Small_Town_UrnBushes02",
+   "propTxpReward": 25
   },
   "a4e3e262-ea88-457f-8672-62b20d7f7791": {
    "outputItemTemplateId": "8c574365-9693-4815-a573-70c1e8b3063e",
    "name": "Small Torch",
    "townXp": 5,
+   "prop": "Small_Torch",
+   "propTxpReward": 5,
+   "bundleTownXp": 5,
    "bundleId": "fa3f5d6f-8982-4193-b968-3fed2b18e147",
    "bundle": "Workshop - S Decoration - Torch"
   },
@@ -325,13 +762,26 @@
    "outputItemTemplateId": "3852a530-c661-4ecc-b3b3-30ae7932efdf",
    "name": "Red Banner",
    "townXp": 19,
+   "prop": "Small_RedBanner",
+   "propTxpReward": 19,
+   "bundleTownXp": 19,
    "bundleId": "deb1eee9-840b-433e-b76c-b7fc1c0c4e8f",
    "bundle": "Workshop - S Decoration - Red Banner"
+  },
+  "a7a4c08c-cf6b-4fc8-a2ac-4ae13ea003f3": {
+   "outputItemTemplateId": "39c7a5a4-6753-4571-99c8-31a37598a3f5",
+   "name": "Imperial Banner - Purple",
+   "townXp": 12,
+   "prop": "Small_ImperialBanner_01",
+   "propTxpReward": 12
   },
   "a9db0fbb-e2f8-478e-ad18-02b85a1558aa": {
    "outputItemTemplateId": "fa792ef4-4ef2-4f7b-80a9-8e6b6e205374",
    "name": "Fighters' Trophy",
    "townXp": 80,
+   "prop": "Medium_FightersTrophy",
+   "propTxpReward": 80,
+   "bundleTownXp": 80,
    "bundleId": "27c2fee5-75e5-43c1-b0f1-54ea722c0ced",
    "bundle": "IAP_Deco_M_FighterTrophy"
   },
@@ -339,6 +789,9 @@
    "outputItemTemplateId": "46d4de4d-2a4b-43c4-8623-14b305376d56",
    "name": "Ice Khajiit",
    "townXp": 22,
+   "prop": "Small_Ice_Kajit",
+   "propTxpReward": 22,
+   "bundleTownXp": 22,
    "bundleId": "315780c6-732d-480e-9290-82356e5ffd0a",
    "bundle": "IAP_Deco_S_IceKhajiit"
   },
@@ -346,6 +799,9 @@
    "outputItemTemplateId": "d13183d0-56e4-4ea6-9514-6270b4097dea",
    "name": "Fire Pit",
    "townXp": 15,
+   "prop": "Small_FirePit",
+   "propTxpReward": 15,
+   "bundleTownXp": 15,
    "bundleId": "94b2b398-bac1-4086-9497-ddcbdab919c2",
    "bundle": "Workshop - M Decoration - Fire pit"
   },
@@ -353,6 +809,9 @@
    "outputItemTemplateId": "96972107-278d-4eb0-98bb-25a262602178",
    "name": "Lamp Post",
    "townXp": 11,
+   "prop": "Small_LampPost",
+   "propTxpReward": 11,
+   "bundleTownXp": 11,
    "bundleId": "ef7e10c4-3890-45d2-add8-f798fc471376",
    "bundle": "Workshop - S Decoration - Lamp post"
   },
@@ -360,6 +819,9 @@
    "outputItemTemplateId": "020a4cb8-7ffc-473c-87b6-cfc1fe5215f8",
    "name": "Tall Cedar Tree",
    "townXp": 32,
+   "prop": "Medium_Tree2",
+   "propTxpReward": 32,
+   "bundleTownXp": 32,
    "bundleId": "cb3c5974-a02e-48a6-9de2-028e0bfbd446",
    "bundle": "Workshop - M Decoration - Tree #2"
   },
@@ -367,13 +829,47 @@
    "outputItemTemplateId": "c8a95980-4afb-474b-a323-37eef8aa0011",
    "name": "Fount of the Victor",
    "townXp": 230,
+   "prop": "Medium_FountOfTheVictor",
+   "propTxpReward": 230,
+   "bundleTownXp": 230,
    "bundleId": "4c0fa05c-c7cb-463e-a3ac-0ef6fcaed6d9",
    "bundle": "IAP_Deco_M_FountOfTheVictor"
+  },
+  "b218b780-4d81-4046-b5ab-c07cf8bf5a37": {
+   "outputItemTemplateId": "6245c808-6b5b-4db0-ac35-1d0f91961c85",
+   "name": "Unicorn Fountain",
+   "townXp": 37,
+   "prop": "Small_HorseFountain",
+   "propTxpReward": 37
+  },
+  "b35534e7-8dd3-487b-98e0-b25425cb4f80": {
+   "outputItemTemplateId": "eab22999-9694-44b2-a426-1673fe1360b0",
+   "name": "Barrels & Bushes",
+   "townXp": 6,
+   "prop": "Small_BarrelBush",
+   "propTxpReward": 6
+  },
+  "b538e252-ca55-4587-97e2-a7f6c1d5fc0b": {
+   "outputItemTemplateId": "90f39014-b6b7-4621-b796-2ad51c327fd0",
+   "name": "Eternal Rest",
+   "townXp": 40,
+   "prop": "Small_EternalRest",
+   "propTxpReward": 40
+  },
+  "b876382b-0b01-4d66-9937-fb3605ff03ae": {
+   "outputItemTemplateId": "254ca10e-6b49-4ecb-85e0-7612982e2b7b",
+   "name": "Sweet Rolls",
+   "townXp": 19,
+   "prop": "Small_SweetRolls",
+   "propTxpReward": 19
   },
   "bcd151c7-7341-4c88-8793-f32258dc553b": {
    "outputItemTemplateId": "aade0180-4604-45ce-b80e-10887c76ea8e",
    "name": "Pillories",
    "townXp": 27,
+   "prop": "Medium_Pillories",
+   "propTxpReward": 27,
+   "bundleTownXp": 27,
    "bundleId": "3403bc36-9497-4655-99b8-d8f8908b6ad3",
    "bundle": "Workshop - M Decoration - Pillories"
   },
@@ -381,6 +877,9 @@
    "outputItemTemplateId": "32e687ba-bcda-4233-ab59-b168137e0e90",
    "name": "Archery Range",
    "townXp": 36,
+   "prop": "Medium_ArcheryTarget",
+   "propTxpReward": 36,
+   "bundleTownXp": 36,
    "bundleId": "2a2a60a5-7077-45eb-8510-82438c2e93d1",
    "bundle": "Workshop - M Decoration - Archery Target"
   },
@@ -388,20 +887,50 @@
    "outputItemTemplateId": "285326c5-f9d2-4f74-b93e-528ae618d1f2",
    "name": "Imperial Stall",
    "townXp": 143,
+   "prop": "Medium_Lectern",
+   "propTxpReward": 143,
+   "bundleTownXp": 143,
    "bundleId": "ab0debc1-e4b4-44ab-ab01-00705dfdea99",
    "bundle": "Workshop - M Decoration - Lectern"
+  },
+  "bf319379-33cf-4f77-9d5d-bda182656b60": {
+   "outputItemTemplateId": "069f342c-6486-4de0-b0e2-36c9418d1713",
+   "name": "Pumpkin King",
+   "townXp": 80,
+   "prop": "Small_PumpkinKing",
+   "propTxpReward": 80
+  },
+  "bfea6067-1e43-405a-8e14-9f39c36305c2": {
+   "outputItemTemplateId": "1a466dc4-5c0a-4076-a0e3-cb0f26e2889d",
+   "name": "Ayleid Urn",
+   "townXp": 29,
+   "prop": "Small_UrnBushes",
+   "propTxpReward": 29
   },
   "c29c55cd-5c08-47ac-a6b0-c5b6b071cbb3": {
    "outputItemTemplateId": "f8c3e8e6-6914-45f5-a872-601f82dcabee",
    "name": "Potted Plants",
    "townXp": 17,
+   "prop": "Small_PottedPlant1",
+   "propTxpReward": 17,
+   "bundleTownXp": 17,
    "bundleId": "f30a903c-0887-4605-910f-fe5ce1b454c3",
    "bundle": "Workshop - S Decoration - Potted Plant #1"
+  },
+  "c5691386-fd3d-4d08-bae7-5c95119e46a4": {
+   "outputItemTemplateId": "e60a12c6-e543-4c4e-b6c7-44976598bb2a",
+   "name": "Old Well",
+   "townXp": 5,
+   "prop": "Small_OldWell",
+   "propTxpReward": 5
   },
   "c6debb02-11a9-4d74-8ed6-f6263ee93f39": {
    "outputItemTemplateId": "fa47b31f-3782-4562-800f-b4fe81116ce7",
    "name": "Black Banner",
    "townXp": 19,
+   "prop": "Small_BlackBanner",
+   "propTxpReward": 19,
+   "bundleTownXp": 19,
    "bundleId": "3cfdb71e-4df1-4648-bdec-076ab0968d2b",
    "bundle": "Workshop - S Decoration - Black Banner"
   },
@@ -409,6 +938,9 @@
    "outputItemTemplateId": "294c2d84-207e-4df1-9286-f38cc299bb13",
    "name": "Macabre Decoration",
    "townXp": 20,
+   "prop": "Small_Harrada",
+   "propTxpReward": 20,
+   "bundleTownXp": 20,
    "bundleId": "e13aa35f-53c9-411f-9712-ef49ccca742f",
    "bundle": "IAP_Deco_M_Bones"
   },
@@ -416,6 +948,9 @@
    "outputItemTemplateId": "86ba8b31-4d72-49a6-a104-35f775bfe4df",
    "name": "Full Spire",
    "townXp": 31,
+   "prop": "Medium_FullSpire",
+   "propTxpReward": 31,
+   "bundleTownXp": 31,
    "bundleId": "13e4849e-2736-4508-b6e5-da8e111becf8",
    "bundle": "IAP_Deco_M_FullSpire"
   },
@@ -423,6 +958,9 @@
    "outputItemTemplateId": "9a239d75-a7be-4c34-8ab0-874101aff147",
    "name": "Abyssal Altar",
    "townXp": 64,
+   "prop": "Medium_AbyssReward3",
+   "propTxpReward": 64,
+   "bundleTownXp": 64,
    "bundleId": "90d7e7c5-7a1c-4efc-89f8-38cc57a6ae0b",
    "bundle": "IAP_Deco_M_Abyss3"
   },
@@ -430,20 +968,43 @@
    "outputItemTemplateId": "9dc28430-d12a-4288-b808-e7f6292cc80f",
    "name": "Costly Throne",
    "townXp": 50,
+   "prop": "Small_CostlyThrone ",
+   "propTxpReward": 50,
+   "bundleTownXp": 50,
    "bundleId": "e7ce0eec-9dc6-4162-8e37-96f9c04389c0",
    "bundle": "IAP_Deco_S_CostlyThrone"
+  },
+  "d3ad398b-8b95-40d7-8919-3138c0a5d148": {
+   "outputItemTemplateId": "8c8c1e22-c08f-48bf-a817-180e3143e345",
+   "name": "Birdsong Tree",
+   "townXp": 80,
+   "prop": "Large_PineTree",
+   "propTxpReward": 80
   },
   "d5ec9df6-ef75-4b47-9e69-c810154869ff": {
    "outputItemTemplateId": "44fe0579-c6bb-48f9-b01c-ceef3bd9007f",
    "name": "Spider Tree",
    "townXp": 85,
+   "prop": "Large_ScaryTree",
+   "propTxpReward": 85,
+   "bundleTownXp": 85,
    "bundleId": "b0f76e4f-355a-4d79-b38f-ac1759a8286b",
    "bundle": "IAP_Deco_L_ScaryTree"
+  },
+  "d5fbd96c-d82d-4a00-a411-2537929822c1": {
+   "outputItemTemplateId": "7666963f-5769-4c41-aa2d-474c05bd717e",
+   "name": "Stalwart Lightkeeper",
+   "townXp": 100,
+   "prop": "Small_StalwartLightkeeper",
+   "propTxpReward": 100
   },
   "d6f24685-f5a6-4f3a-ad20-428e5cc5c437": {
    "outputItemTemplateId": "8841cbbd-c404-4713-9f98-73b6c9730f13",
    "name": "Amethyst Beacon",
    "townXp": 61,
+   "prop": "Small_Beacon_03",
+   "propTxpReward": 61,
+   "bundleTownXp": 61,
    "bundleId": "36024808-316e-4d59-a8f3-cab9df90ab44",
    "bundle": "IAP_Deco_S_AmethystBeacon"
   },
@@ -451,13 +1012,26 @@
    "outputItemTemplateId": "aee0edba-39e2-417d-bbb2-9cb7b9fc1ea5",
    "name": "Stonetooth Bash Chicken",
    "townXp": 16,
+   "prop": "Small_Ice_RotisserieChicken",
+   "propTxpReward": 16,
+   "bundleTownXp": 16,
    "bundleId": "33bc6dab-37db-49e2-89f6-400d08c13b0b",
    "bundle": "IAP_Deco_S_StonetoothBashChicken"
+  },
+  "dbd8ba63-67c5-426c-b510-c9a74849763b": {
+   "outputItemTemplateId": "74c425d1-108d-4235-953a-c66d92024d4a",
+   "name": "Falkreath Banner",
+   "townXp": 12,
+   "prop": "Small_FalkreathBanner",
+   "propTxpReward": 12
   },
   "df7b5f09-e240-421c-a5a7-ea6e03be3b42": {
    "outputItemTemplateId": "708e0da9-d609-4b86-8ecb-4569961946ee",
    "name": "Saturalia Grove",
    "townXp": 68,
+   "prop": "Large_SnowTree_02",
+   "propTxpReward": 68,
+   "bundleTownXp": 68,
    "bundleId": "2fe4c441-94fc-4a66-9479-ff399d30bfe3",
    "bundle": "IAP_Deco_L_SaturaliaGrove"
   },
@@ -465,6 +1039,9 @@
    "outputItemTemplateId": "c75d1c08-2857-4ebc-9b60-97acc67d8c19",
    "name": "Training Dummy",
    "townXp": 10,
+   "prop": "Small_TrainingDummy",
+   "propTxpReward": 10,
+   "bundleTownXp": 10,
    "bundleId": "923a552b-c857-499e-b4a3-e5093f6e42b4",
    "bundle": "Workshop - S Decoration - Training dummy"
   },
@@ -472,20 +1049,64 @@
    "outputItemTemplateId": "4ab53f57-d948-42aa-8e34-67fb76e920f8",
    "name": "Decorative Planters",
    "townXp": 17,
+   "prop": "Small_PottedPlant2",
+   "propTxpReward": 17,
+   "bundleTownXp": 17,
    "bundleId": "4303443d-50d7-40b2-8514-338f6683ac24",
    "bundle": "Workshop - S Decoration - Potted Plant #2"
+  },
+  "e1277a96-c368-48a4-ab19-4d63de5afcb3": {
+   "outputItemTemplateId": "fb98ab30-5590-4077-9800-31b57245ebb6",
+   "name": "Abyssal Mound",
+   "townXp": 91,
+   "prop": "Medium_AbyssReward1",
+   "propTxpReward": 91
   },
   "e493dd3a-b6c6-4a10-9124-94adf3aa128b": {
    "outputItemTemplateId": "ccf16487-e58c-44d5-91e4-d4b33029e1fa",
    "name": "Ice Goat",
    "townXp": 22,
+   "prop": "Small_Ice_Goat",
+   "propTxpReward": 22,
+   "bundleTownXp": 22,
    "bundleId": "bf11b6c4-1387-4c71-ad85-a1e99d51ae6c",
    "bundle": "IAP_Deco_S_IceGoat"
+  },
+  "e5218578-c2e6-41bd-a962-8c49fec70231": {
+   "outputItemTemplateId": "2e9d4cc5-0c8d-4e71-9ed7-2d708504c764",
+   "name": "College of Winterhold Banner",
+   "townXp": 40,
+   "prop": "Small_CollegeOfWinterholdBanner_01",
+   "propTxpReward": 40
+  },
+  "e57a49df-4881-4c16-b0d2-41f0b9d75251": {
+   "outputItemTemplateId": "92defd71-3690-48c8-b464-a53007026e55",
+   "name": "Pot of Stew",
+   "townXp": 10,
+   "prop": "Small_PotOfStew",
+   "propTxpReward": 10
+  },
+  "e6bf0dcd-b6fd-4ef2-b825-00dd80ecaf03": {
+   "outputItemTemplateId": "105f5732-9c45-499d-a694-b97451d48181",
+   "name": "Brazier",
+   "townXp": 4,
+   "prop": "Small_TorchBushes",
+   "propTxpReward": 4
+  },
+  "e857ec0a-5a7b-4dd7-b198-6d51fa809cb5": {
+   "outputItemTemplateId": "8ffa5294-330e-4288-9fac-169caab0ce15",
+   "name": "Haeliaran's Tomb",
+   "townXp": 80,
+   "prop": "Medium_HaeliaransTomb",
+   "propTxpReward": 80
   },
   "ed78da46-1428-4d7f-95e9-c90f8b550d97": {
    "outputItemTemplateId": "7c5bad75-0a94-4193-b4f1-f21e0b7a4b96",
    "name": "Witches' Cauldron",
    "townXp": 30,
+   "prop": "Small_WitchesCauldron",
+   "propTxpReward": 30,
+   "bundleTownXp": 30,
    "bundleId": "996fc36f-4f98-471c-8312-b77e18f77e90",
    "bundle": "IAP_Deco_S_WitchesCauldron"
   },
@@ -493,6 +1114,9 @@
    "outputItemTemplateId": "65a04415-2a40-49cc-9dd3-a42cf864a2ba",
    "name": "Necromancer's Pool",
    "townXp": 30,
+   "prop": "Small_NecromancersPool",
+   "propTxpReward": 30,
+   "bundleTownXp": 30,
    "bundleId": "a2a46b65-3ebe-4bb3-aa86-266d7af7c200",
    "bundle": "IAP_Deco_S_NecromancersPool"
   },
@@ -500,29 +1124,97 @@
    "outputItemTemplateId": "3fc190cd-c244-43b9-9a78-fcecb0d6860c",
    "name": "Fancy Water Fountain",
    "townXp": 132,
+   "prop": "Medium_FancyFountain",
+   "propTxpReward": 132,
+   "bundleTownXp": 132,
    "bundleId": "abbdfae7-e94f-4455-afd7-8cf15520307d",
    "bundle": "Workshop - M Decoration - Fancy water fountain"
+  },
+  "f12e6ab9-a4c8-41b6-9a9b-70248ddaf71c": {
+   "outputItemTemplateId": "9f5be6e1-5f22-45f1-9234-90f89b25d384",
+   "name": "Frozen Battleground Banner",
+   "townXp": 12,
+   "prop": "Small_FrozenArenaBanner",
+   "propTxpReward": 12
+  },
+  "f1782c55-e0be-454a-b093-dd3628e9b63e": {
+   "outputItemTemplateId": "5bdea759-6b30-467f-bdd3-3d529c8230a5",
+   "name": "Solstheim Pine Tree",
+   "townXp": 40,
+   "prop": "Medium_PineTree01",
+   "propTxpReward": 40
+  },
+  "f40c639a-b889-4b23-9d2b-490bd8dca334": {
+   "outputItemTemplateId": "f5f37c72-c21f-41bd-a333-bdf7ec2b3dce",
+   "name": "Bloodfall Banner - White",
+   "townXp": 13,
+   "prop": "Small_BloodqueenBanner_01",
+   "propTxpReward": 13
+  },
+  "f7a18bec-2cfb-404e-9cb2-af75e7912025": {
+   "outputItemTemplateId": "be2bc90b-00e1-4772-b062-bb8f5d323641",
+   "name": "Apprentice's Orrery",
+   "townXp": 8,
+   "prop": "Small_WizardsRings_01",
+   "propTxpReward": 8
   },
   "f87610e3-7e49-4cab-ab6e-0fcbe0c8c058": {
    "outputItemTemplateId": "f3d4bf0d-4776-4d2a-8e1c-2030bde1e16d",
    "name": "Nirnroot",
    "townXp": 69,
+   "prop": "Small_Nirnroot",
+   "propTxpReward": 69,
+   "bundleTownXp": 69,
    "bundleId": "070cba2c-39ab-4306-be51-4274551b335d",
    "bundle": "Workshop - S Decoration - Nirnroot"
+  },
+  "fa03a7e8-588c-46eb-921e-9c9be5361496": {
+   "outputItemTemplateId": "a7bc8efd-ced4-4535-b343-0b1f359a5ca5",
+   "name": "Imperial Arena Banner",
+   "townXp": 12,
+   "prop": "Small_ImperialArenaBanner",
+   "propTxpReward": 12
+  },
+  "fa3f09c5-20b9-4c6b-9b40-8c2764bec1a9": {
+   "outputItemTemplateId": "20d2232a-4d86-4f52-be53-fb84179b53bc",
+   "name": "Small Fountain",
+   "townXp": 15,
+   "prop": "Small_CuteFountain",
+   "propTxpReward": 15
   },
   "fa6407a0-599b-4d31-a1d8-39bd46b096c2": {
    "outputItemTemplateId": "53bc8b17-4024-49bd-b9b5-2fab7aeaae1e",
    "name": "Imperial Bath",
    "townXp": 89,
+   "prop": "Medium_ImperialBath",
+   "propTxpReward": 24,
+   "bundleTownXp": 89,
    "bundleId": "c4e42aca-4534-41fa-8eb2-d0b94a74901a",
    "bundle": "IAP_Deco_S_Old_Well"
+  },
+  "fbc2f046-c376-49d4-89cb-339dea991798": {
+   "outputItemTemplateId": "490dc5bd-396f-4ffa-846e-178c7afd2171",
+   "name": "King's Sepulcher",
+   "townXp": 121,
+   "prop": "Large_HerosSepulcher",
+   "propTxpReward": 121
   },
   "fc776f95-d6ad-4537-a1cd-325406366743": {
    "outputItemTemplateId": "158e2a7f-7687-4f82-86e2-0dc78a09d7c8",
    "name": "Apiary",
    "townXp": 121,
+   "prop": "Medium_Apiary",
+   "propTxpReward": 121,
+   "bundleTownXp": 121,
    "bundleId": "ac8e97ce-786a-4cbc-9514-f6e1951b568d",
    "bundle": "Workshop - M Decoration - Apiary"
+  },
+  "fe6ec353-debe-4008-a5fe-4d4e0e4a86b7": {
+   "outputItemTemplateId": "04baa3de-3b2a-48b7-97fb-c95e8c3c3257",
+   "name": "Fountain of Mara",
+   "townXp": 145,
+   "prop": "Large_StatueMaraFountain",
+   "propTxpReward": 145
   }
  }
 }
