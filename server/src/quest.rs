@@ -1576,7 +1576,8 @@ async fn rotate_job_board_in_tx(
 ///
 /// A relaunched client resumes straight into the instance this names, so it is
 /// served only while that quest row still exists for the character, is not
-/// completed and, for an event, is in a window that is open right now (the same
+/// completed (unless it is an event whose completed attempt is still live — see
+/// below) and, for an event, is in a window that is open right now (the same
 /// `event_quests::mint` `/quests` advertises from; a pointer left by a rolled-over
 /// window is `null`). Story quests and jobs (retail sent job pointers too, capture
 /// 8874) need only the row. Anything else is `null`, which sends the client to town:
@@ -1604,10 +1605,21 @@ pub(crate) async fn boot_current_dungeon(
     let Some(info) = info else {
         return serde_json::Value::Null;
     };
-    if info.0["completed"].as_bool().unwrap_or(false) {
+    let is_event = info.0["type"].as_str() == Some("GAME_EVENT");
+    // A completed event run that was never exited is still served (#590). Retail
+    // did: instance 7ea38e1a (2026-06-03) was `/complete`d at 00:57:57, the app
+    // relaunched, and the 00:58:14 boot named it with `completed: true`; the client
+    // then sent its `/exit`, which handed over the next tier with a fresh seed (also
+    // 949dece0, 2026-05-13). Answering `null` sent the client to town with the
+    // finished attempt still live, and its next enter resumed that run: every
+    // container and chest spent, the objective done, nothing to complete. Any other
+    // completed quest, or an event whose attempt has ended, is not served.
+    if info.0["completed"].as_bool().unwrap_or(false)
+        && !(is_event && event_attempt_is_live(conn, character_id, &info.0).await)
+    {
         return serde_json::Value::Null;
     }
-    if info.0["type"].as_str() == Some("GAME_EVENT")
+    if is_event
         && !event_quests::mint(static_data, game_data, character_id, player_level, now)
             .iter()
             .any(|m| m.quest_id == qid)
@@ -1615,6 +1627,31 @@ pub(crate) async fn boot_current_dungeon(
         return serde_json::Value::Null;
     }
     stored.clone()
+}
+
+/// Whether the character still holds a live attempt (`dungeon_state` set) of the
+/// event behind this instance row. Attempts are keyed by the template id, the row's
+/// `gldQuestId`.
+async fn event_attempt_is_live(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    info: &serde_json::Value,
+) -> bool {
+    let Some(template) = info["gldQuestId"]
+        .as_str()
+        .and_then(|s| s.parse::<Uuid>().ok())
+    else {
+        return false;
+    };
+    use crate::schema::event_dungeons::dsl as ed;
+    ed::event_dungeons
+        .filter(ed::character_id.eq(character_id))
+        .filter(ed::dungeon_id.eq(template))
+        .filter(ed::dungeon_state.is_not_null())
+        .select(ed::id)
+        .first::<Uuid>(conn)
+        .await
+        .is_ok()
 }
 
 #[post("/blades.bgs.services/api/game/v1/public/characters/{character_id}/quests")]
@@ -7236,9 +7273,17 @@ mod event_quest_tests {
         assert!(!a.is_empty());
         for (x, y) in a.iter().zip(&again) {
             assert_eq!(x.quest.seed, y.quest.seed, "stable across re-mints");
-            assert_ne!(x.quest.seed, serde_json::Number::from(1234), "not the fixed seed");
+            assert_ne!(
+                x.quest.seed,
+                serde_json::Number::from(1234),
+                "not the fixed seed"
+            );
         }
-        let differ = a.iter().zip(&b).filter(|(x, y)| x.quest.seed != y.quest.seed).count();
+        let differ = a
+            .iter()
+            .zip(&b)
+            .filter(|(x, y)| x.quest.seed != y.quest.seed)
+            .count();
         assert_eq!(differ, a.len(), "two characters never share a layout seed");
     }
 

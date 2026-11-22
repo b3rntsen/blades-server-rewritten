@@ -2310,7 +2310,7 @@ async fn handle_event_dungeon_entry(
             // A stored attempt that no longer parses is not a live one: it is treated
             // as finished and a fresh attempt starts below, rather than refusing the
             // player an event they can see (#334).
-            let mut live_attempt = existing_entry.as_ref().and_then(|e| {
+            let live_attempt = existing_entry.as_ref().and_then(|e| {
                 let parsed = e
                     .dungeon_state
                     .clone()
@@ -2327,34 +2327,6 @@ async fn handle_event_dungeon_entry(
                     }
                 }
             });
-            // A live attempt whose run was already `/complete`d is over. When the
-            // client then starts afresh (it sends a `dungeonInstance`, which a resume
-            // never does: retail's 8/8 resumes after a restart carried none, 115/115
-            // fresh enters one), the attempt is ended here as its `/exit` would have
-            // ended it, and a new run starts below. Resuming it instead handed the next
-            // tier the finished run: every container and chest already collected, the
-            // objective already done, so nothing to loot and no completion (#590 — the
-            // app closed between `/complete` and `/exit`). A restart after
-            // `/complete` still resumes, as does anything on a finished event, which
-            // could not start a new attempt.
-            if live_attempt.is_some() && body.dungeon_instance.is_some() && !event_finished {
-                use crate::schema::quests::dsl as q;
-                let run_completed = q::quests
-                    .filter(q::id.eq(instance_quest_id).and(q::character_id.eq(owner_id)))
-                    .select(q::info)
-                    .first::<JsonDbWrapper<serde_json::Value>>(&mut conn)
-                    .await
-                    .optional()?
-                    .is_some_and(|info| info.0["completed"].as_bool().unwrap_or(false));
-                if run_completed {
-                    log::info!(
-                        "[event_dungeon] character {owner_id}: fresh enter of event quest \
-                         {dungeon_id_clone} over a completed run that was never exited — \
-                         ending it and starting the next run"
-                    );
-                    live_attempt = None;
-                }
-            }
             //
             // Existing row but no live dungeon_state — the player finished that
             // attempt and is starting the next run. Runs are unlimited by design:
@@ -3263,61 +3235,6 @@ mod event_run_lifecycle_db {
         assert_eq!(resumed.revive_count, 0);
     }
 
-    /// Report #590: tier 1 `/complete`d, then the app closed before `/exit`. The
-    /// player's next enter from town (a fresh one, with a `dungeonInstance`) was
-    /// answered with the finished run — its kills, chests and loot already spent and
-    /// its objective already done — so the "second level" had no containers, no chest
-    /// and no completion, and paid nothing.
-    #[tokio::test]
-    async fn a_fresh_enter_over_a_completed_unexited_run_starts_the_next_tier() {
-        let mut conn = db!();
-        let p = seed(&mut conn).await;
-        let first = enter(&mut conn, &p, Some("INSTANCE"))
-            .await
-            .expect("fresh enter");
-        mid_run(&mut conn, &p, 1, ENEMY).await;
-        complete(&mut conn, &p).await;
-        assert_eq!(completions(&mut conn, &p).await, 1);
-        // No `/exit`: the app dies here.
-
-        let second = enter(&mut conn, &p, Some("INSTANCE"))
-            .await
-            .expect("the tier-2 enter");
-        assert!(
-            second.enemy_status.is_empty(),
-            "a new run, not the finished one: {:?}",
-            second.enemy_status
-        );
-        assert_eq!(second.revive_count, 0);
-        assert_ne!(second.seed, first.seed, "a new run gets its own dungeon seed");
-        assert_eq!(
-            quest_info(&mut conn, &p).await["completed"],
-            json!(false),
-            "the instance is set up for its next run"
-        );
-        let out = complete(&mut conn, &p).await;
-        let reward: blades_lib::economy::RewardGrant =
-            serde_json::from_value(out["reward"].clone()).unwrap();
-        assert!(!reward.is_empty(), "the tier-2 run pays tier 2");
-        assert_eq!(completions(&mut conn, &p).await, 2);
-    }
-
-    /// The control: a restart after `/complete` still resumes the same run — its
-    /// resume `enter` carries no `dungeonInstance`.
-    #[tokio::test]
-    async fn a_restart_after_complete_still_resumes_the_same_run() {
-        let mut conn = db!();
-        let p = seed(&mut conn).await;
-        let entered = enter(&mut conn, &p, Some("INSTANCE"))
-            .await
-            .expect("fresh enter");
-        complete(&mut conn, &p).await;
-        exit(&mut conn, &p, true).await;
-        let resumed = enter(&mut conn, &p, None).await.expect("the resume");
-        assert_eq!(resumed.seed, entered.seed, "it is the same run");
-        assert_eq!(completions(&mut conn, &p).await, 1);
-    }
-
     /// A resume that finds NO live attempt — rows the old exit stranded — starts the
     /// run again from the stored dungeon instead of 400ing. (With no row at all it
     /// starts fresh too since #334 — `missing_or_unreadable_event_state_starts_a_fresh_run`;
@@ -4092,6 +4009,58 @@ mod event_run_lifecycle_db {
             Value::Null,
             "exit clears it"
         );
+    }
+
+    /// Report #590: tier 1 `/complete`d, then the app closed before `/exit`. Retail's
+    /// next boot still named the instance (7ea38e1a, 2026-06-03: `completed: true`,
+    /// old seed) and the client's `/exit` on it handed over the next tier. We
+    /// answered `null`, so the client went to town and its next enter resumed the
+    /// finished run: no containers, no chest, no completion.
+    #[tokio::test]
+    async fn boot_names_a_completed_unexited_event_run_and_its_exit_hands_over_the_next_tier() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let quest: Quest = serde_json::from_value(quest_info(&mut conn, &p).await).unwrap();
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        mark_current_dungeon(&mut conn, p.character, p.instance)
+            .await
+            .unwrap();
+        complete(&mut conn, &p).await;
+        assert_eq!(completions(&mut conn, &p).await, 1);
+        let old_seed = quest_info(&mut conn, &p).await["seed"].clone();
+        // No `/exit`: the app dies here, and relaunches.
+
+        assert_eq!(
+            boot(&mut conn, &p, NOW).await,
+            Value::String(p.instance.to_string()),
+            "the relaunch is pointed at the finished run, as retail did"
+        );
+
+        let out = exit(&mut conn, &p, false).await;
+        let next = &out["gameEventQuest"];
+        assert_eq!(next["completed"], json!(false), "the next run: {out}");
+        assert_ne!(next["seed"], old_seed, "with a fresh seed");
+        assert_eq!(out["character"]["currentQuestDungeon"], Value::Null);
+        assert!(
+            attempt(&mut conn, &p).await.is_none(),
+            "the finished attempt ended"
+        );
+        assert_eq!(boot(&mut conn, &p, NOW).await, Value::Null);
+
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("the tier-2 enter");
+        let paid = complete(&mut conn, &p).await;
+        let want = crate::quest::event_milestone_reward(&world().sd, p.instance, &quest, 1)
+            .expect("a second tier");
+        assert_eq!(
+            paid["reward"],
+            serde_json::to_value(&want).unwrap(),
+            "the next run pays tier 2"
+        );
+        assert_eq!(completions(&mut conn, &p).await, 2);
     }
 
     #[tokio::test]
