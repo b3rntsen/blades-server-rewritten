@@ -232,11 +232,36 @@ pub struct ServerState {
     /// naturally or forced. Server-only, like the rest of this struct.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub enchant_pity_misses: BTreeMap<String, u32>,
+    /// The player's own arena hide-helmet toggle, as their client last reported it in
+    /// a match (c2s op61, tracker #568). The setting itself is a client-local
+    /// PlayerPref; retail's client also sent it on connect in op20 `PlayerInfo`, but
+    /// only once the server had spawned its Control net object, which this server
+    /// cannot yet do (tracker #35). Without this, nothing tells the server the value
+    /// before the round-1 profile goes out. Rows written before the field load `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arena_hide_helmet: Option<bool>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #568: the remembered arena hide-helmet survives a round trip, and rows
+    /// written before the field load as "never reported".
+    #[test]
+    fn arena_hide_helmet_round_trips_and_defaults_to_none() {
+        let old: ServerState = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.arena_hide_helmet, None);
+        assert!(
+            !serde_json::to_string(&old)
+                .unwrap()
+                .contains("arenaHideHelmet")
+        );
+        let mut st = ServerState::default();
+        st.arena_hide_helmet = Some(true);
+        let back: ServerState = serde_json::from_str(&serde_json::to_string(&st).unwrap()).unwrap();
+        assert_eq!(back.arena_hide_helmet, Some(true));
+    }
 
     #[test]
     fn an_in_flight_abyss_run_defaults_the_new_loot_ledger() {

@@ -96,6 +96,10 @@ pub struct MatchEconomyOutcome {
     /// True only for paired human-vs-human matches. AI fights never touch the
     /// human-only public rating board.
     pub h2h: bool,
+    /// The hide-helmet toggle this player's client reported during the match (op20 /
+    /// op61), or `None` if it reported none. Remembered on the character so the next
+    /// match's round-1 profile carries it (tracker #568).
+    pub hide_helmet: Option<bool>,
 }
 
 /// The queue endpoint. `None` until [`install`] runs — which is the normal state
@@ -451,6 +455,9 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     !items_on_card && promotion_items > 0,
                 );
                 entry.inventory.0.backpack_version += durable_bump;
+                if let Some(hide) = o.hide_helmet {
+                    entry.server_state.0.arena_hide_helmet = Some(hide);
+                }
                 if promotion_needs_loot_marker(&promo) {
                     entry
                         .server_state
@@ -1066,6 +1073,7 @@ mod tests {
             completed_at_secs: 1_700_000_000,
             opponent_character_id: None,
             h2h: false,
+            hide_helmet: None,
         });
     }
 
@@ -1308,6 +1316,7 @@ mod tests {
             completed_at_secs: 1_700_000_000,
             opponent_character_id: None,
             h2h: false,
+            hide_helmet: None,
         }
     }
 
@@ -1455,6 +1464,7 @@ mod tests {
             completed_at_secs: 1_700_000_100,
             opponent_character_id: Some(opponent_id),
             h2h: true,
+            hide_helmet: None,
         }
     }
 

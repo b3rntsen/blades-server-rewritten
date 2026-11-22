@@ -421,6 +421,10 @@ pub struct MatchInstance {
     /// Ivan's client froze on the setup screen twice on 2026-10-01; the bot
     /// beat a player who never saw the round and he kept both losses.
     saw_in_round_c2s: [bool; 2],
+    /// Whether each slot's client reported its own HideHelmet (op20/op61) this match.
+    /// Only a reported value is remembered on the character for the next match's
+    /// round-1 profile (tracker #568); a seeded one is not echoed back.
+    hide_helmet_reported: [bool; 2],
     /// Whether the round-start Avatar + op54 PROFILE burst has gone out. A HideHelmet
     /// learned before it (op20 on connect) just rides that burst; one learned after it
     /// needs a profile re-broadcast.
@@ -550,6 +554,7 @@ impl MatchInstance {
         let debug_hold_window = super::debug_hold_window();
         MatchInstance {
             saw_in_round_c2s: [false; 2],
+            hide_helmet_reported: [false; 2],
             round_start_actors_sent: false,
             combat,
             ranking,
@@ -842,6 +847,10 @@ impl MatchInstance {
         // sent only between rounds. Reading op61 alone is report #508 — helmet-hiders
         // wore their helmet in round 1 and lost it in round 2. Record it; if the
         // profile has already gone out (a reconnect re-sends op20), refresh it.
+        // #568: the client sends op20 from `PvpControl`, i.e. only once the server
+        // has spawned its Control net object — which this server does not (#35), so
+        // in prod op20 never arrives; round 1 relies on the value remembered on the
+        // character from the last match's op61 (`ServerState::arena_hide_helmet`).
         if let Some(hide) = messages::player_info_hide_helmet(user_data) {
             self.log_hide_helmet_report(sender, "op20", hide);
             if self.set_hide_helmet(sender, hide) && self.round_start_actors_sent {
@@ -2363,6 +2372,7 @@ impl MatchInstance {
                         uuid::Uuid::parse_str(&self.combat.fighters[o].loadout.character_uuid).ok()
                     }),
                     h2h: h2h_match,
+                    hide_helmet: self.reported_hide_helmet(slot),
                 });
             }
         }
@@ -2457,9 +2467,24 @@ impl MatchInstance {
         );
     }
 
+    /// `slot`'s HideHelmet as its client reported it this match, or `None` if it sent
+    /// no op20/op61. What the economy writer remembers on the character (#568).
+    fn reported_hide_helmet(&self, slot: usize) -> Option<bool> {
+        let reported = self
+            .hide_helmet_reported
+            .get(slot)
+            .copied()
+            .unwrap_or(false);
+        let f = self.combat.fighters.get(slot)?;
+        reported.then_some(f.loadout.hide_helmet)
+    }
+
     /// Record `slot`'s own HideHelmet toggle (op20 or op61). Returns whether it
     /// changed, i.e. whether a profile already sent to the opponent is now stale.
     fn set_hide_helmet(&mut self, slot: usize, hide: bool) -> bool {
+        if let Some(reported) = self.hide_helmet_reported.get_mut(slot) {
+            *reported = true;
+        }
         match self.combat.fighters.get_mut(slot) {
             Some(f) if f.loadout.hide_helmet != hide => {
                 f.loadout.hide_helmet = hide;
@@ -3190,6 +3215,40 @@ pub(in crate::arena::combat) mod tests {
             Some(1),
             "round 1: Alice must see Bob WITHOUT a helmet (flat op20)"
         );
+    }
+
+    /// #568: the live client never sends op20 (it rides the Control object we do not
+    /// spawn, tracker #35), so the op61 value is what gets remembered for the next
+    /// match. A slot that reported nothing must stay `None`: echoing the seeded value
+    /// back would be harmless, but echoing a default `false` would erase a real one.
+    #[test]
+    fn only_a_reported_hide_helmet_is_remembered_for_the_next_match() {
+        let (mut m, t) = profiled_live_inst();
+        m.combat.fighters[1].loadout.hide_helmet = true; // seeded from the character row
+        assert_eq!(m.reported_hide_helmet(0), None);
+        assert_eq!(
+            m.reported_hide_helmet(1),
+            None,
+            "a seeded value is not a report"
+        );
+        let obj = m.combat.fighters[0].player_net_object_id;
+        m.on_c2s(
+            0,
+            &messages::loadout_client_backend_synchronized(obj, NetRole::Autonomous, true),
+            t,
+        );
+        assert_eq!(m.reported_hide_helmet(0), Some(true));
+        m.on_c2s(
+            0,
+            &messages::loadout_client_backend_synchronized(obj, NetRole::Autonomous, false),
+            t,
+        );
+        assert_eq!(
+            m.reported_hide_helmet(0),
+            Some(false),
+            "the latest report wins"
+        );
+        assert_eq!(m.reported_hide_helmet(1), None);
     }
 
     #[test]
