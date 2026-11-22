@@ -4011,6 +4011,58 @@ mod event_run_lifecycle_db {
         );
     }
 
+    /// Report #590: tier 1 `/complete`d, then the app closed before `/exit`. Retail's
+    /// next boot still named the instance (7ea38e1a, 2026-06-03: `completed: true`,
+    /// old seed) and the client's `/exit` on it handed over the next tier. We
+    /// answered `null`, so the client went to town and its next enter resumed the
+    /// finished run: no containers, no chest, no completion.
+    #[tokio::test]
+    async fn boot_names_a_completed_unexited_event_run_and_its_exit_hands_over_the_next_tier() {
+        let mut conn = db!();
+        let p = seed(&mut conn).await;
+        let quest: Quest = serde_json::from_value(quest_info(&mut conn, &p).await).unwrap();
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("fresh enter");
+        mark_current_dungeon(&mut conn, p.character, p.instance)
+            .await
+            .unwrap();
+        complete(&mut conn, &p).await;
+        assert_eq!(completions(&mut conn, &p).await, 1);
+        let old_seed = quest_info(&mut conn, &p).await["seed"].clone();
+        // No `/exit`: the app dies here, and relaunches.
+
+        assert_eq!(
+            boot(&mut conn, &p, NOW).await,
+            Value::String(p.instance.to_string()),
+            "the relaunch is pointed at the finished run, as retail did"
+        );
+
+        let out = exit(&mut conn, &p, false).await;
+        let next = &out["gameEventQuest"];
+        assert_eq!(next["completed"], json!(false), "the next run: {out}");
+        assert_ne!(next["seed"], old_seed, "with a fresh seed");
+        assert_eq!(out["character"]["currentQuestDungeon"], Value::Null);
+        assert!(
+            attempt(&mut conn, &p).await.is_none(),
+            "the finished attempt ended"
+        );
+        assert_eq!(boot(&mut conn, &p, NOW).await, Value::Null);
+
+        enter(&mut conn, &p, Some("INSTANCE"))
+            .await
+            .expect("the tier-2 enter");
+        let paid = complete(&mut conn, &p).await;
+        let want = crate::quest::event_milestone_reward(&world().sd, p.instance, &quest, 1)
+            .expect("a second tier");
+        assert_eq!(
+            paid["reward"],
+            serde_json::to_value(&want).unwrap(),
+            "the next run pays tier 2"
+        );
+        assert_eq!(completions(&mut conn, &p).await, 2);
+    }
+
     #[tokio::test]
     async fn boot_never_names_a_missing_or_completed_quest() {
         let mut conn = db!();
