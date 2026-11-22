@@ -1071,6 +1071,51 @@ async fn anon_log_in(
     app_state: web::Data<Arc<ServerGlobal>>,
     info: web::Json<AnonLoginInfo>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    anon_login_inner(req, app_state, info).await
+}
+
+/// Retail iOS signs in with Game Center: `{deviceId, platform: "IPhonePlayer",
+/// create, gameCenter{…}}`, answered with the same `session` object as
+/// `auth/anon` (48 of 48 captured bodies). Apple's signature cannot be verified
+/// by us, so identity comes from the same device / WG-peer path as `auth/anon`
+/// and the `gameCenter` block is ignored.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GcLoginInfo {
+    device_id: Option<String>,
+    #[serde(default = "ios_platform")]
+    platform: String,
+}
+
+const IOS_PLATFORM: &str = "IPhonePlayer";
+
+fn ios_platform() -> String {
+    IOS_PLATFORM.to_string()
+}
+
+fn gc_as_anon(info: GcLoginInfo) -> AnonLoginInfo {
+    AnonLoginInfo {
+        user_id: None,
+        device_id: info.device_id,
+        platform: info.platform,
+    }
+}
+
+#[post("/blades.bgs.services/api/authentication/v1/public/auth/gc")]
+async fn gc_log_in(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    info: web::Json<GcLoginInfo>,
+) -> Result<web::Json<SessionResponse>, BladeApiError> {
+    log::info!("gc login: Game Center sign-in handled as an anonymous device login");
+    anon_login_inner(req, app_state, web::Json(gc_as_anon(info.into_inner()))).await
+}
+
+async fn anon_login_inner(
+    req: HttpRequest,
+    app_state: web::Data<Arc<ServerGlobal>>,
+    info: web::Json<AnonLoginInfo>,
+) -> Result<web::Json<SessionResponse>, BladeApiError> {
     use schema::users::dsl::*;
 
     // Per-player claim link. Record this device's anon login (so the web claim UI
@@ -1360,7 +1405,7 @@ async fn anon_log_in(
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
     } else {
-        if info.0.platform != "gp" {
+        if info.0.platform != "gp" && info.0.platform != IOS_PLATFORM {
             return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
         }
         // A MISSING device id must NOT be fatal. This was
@@ -2879,6 +2924,39 @@ mod token_refresh {
             main_rs.contains(".service(authentification::refresh_token)"),
             "POST /auth/refresh must be served, or long-open clients hit a \
              Communication Error ~14.5 h after logging in"
+        );
+    }
+
+    /// Retail iOS signs in with Game Center; with no handler the 404 shows as
+    /// "network not reachable" before the title screen.
+    #[test]
+    fn the_game_center_route_is_registered() {
+        let main_rs = include_str!("main.rs");
+        assert!(main_rs.contains(".service(authentification::gc_log_in)"));
+    }
+
+    #[test]
+    fn a_retail_shaped_gc_body_becomes_an_accepted_anon_login() {
+        // Field names and types from captured retail bodies; values synthetic.
+        let body = r#"{"deviceId":"00000000-0000-0000-0000-000000000000",
+            "platform":"IPhonePlayer","create":true,
+            "gameCenter":{"playerId":"G:0000000000","bundleId":"com.example.app",
+            "publicKeyURL":"https://example.invalid/key.cer",
+            "base64EncodedSignature":"AAAA","base64EncodedSalt":"AAAA",
+            "timestamp":1}}"#;
+        let gc: GcLoginInfo = serde_json::from_str(body).expect("retail gc body must parse");
+        let anon = gc_as_anon(gc);
+        assert_eq!(anon.device_id.as_deref(), Some("00000000-0000-0000-0000-000000000000"));
+        assert_eq!(anon.platform, IOS_PLATFORM);
+        assert!(anon.user_id.is_none(), "a gc login never presents a secret user id");
+
+        let bare: GcLoginInfo = serde_json::from_str(r#"{"deviceId":null}"#).unwrap();
+        assert_eq!(gc_as_anon(bare).platform, IOS_PLATFORM);
+
+        let src = include_str!("authentification.rs");
+        assert!(
+            src.contains(r#"info.0.platform != "gp" && info.0.platform != IOS_PLATFORM"#),
+            "the new-user path must accept iOS, or a first gc login is a 400"
         );
     }
 

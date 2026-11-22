@@ -632,6 +632,7 @@ async fn main() -> Result<()> {
                     .service(status::check_status)
                     .service(session::sync)
                     .service(authentification::anon_log_in)
+                    .service(authentification::gc_log_in)
                     .service(authentification::refresh_token)
                     .service(authentification::bnet_log_in)
                     .service(authentification::bnet_link)
