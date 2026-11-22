@@ -1923,6 +1923,15 @@ pub struct Fighter {
     /// AFTER block (the same insertion point as loadout resistances). Duration is read
     /// per rank from `ResistElementsAbility._resistanceDuration` (10 s at rank 1).
     pub transient_resistances: Vec<(DamageType, f32, Instant)>, // (type, flat_amount, expires_at)
+    /// A cast Ward's `_wardArmor`, as (armor_rating, ward_expires_at).
+    ///
+    /// It is ARMOR RATING, not a resistance: `AbilityDoWard$$Register@0x1e9adb0`
+    /// registers `GetArmorBonus@0x1e9b05c` in the handler's `+0x100` list
+    /// (`ActorBonusHandler$$get_ArmorRatingAdditiveSources@0x1e86544`), which
+    /// `Actor$$GetEquippedProtectionRating@0x1c55da4` sums into the rating the armor
+    /// stage cuts at 0.1 per point, shared across the physical components. Read by
+    /// [`Fighter::armor_rating_at`], and only while the Ward itself still stands.
+    pub ward_armor: Vec<(f32, Instant)>,
     /// Resistance against EVERY damage type, as (flat_amount, expires_at).
     /// Willpower grants this for the duration of a spell cast (and Indomitable
     /// Smash's `_bonusResistance` rides it); unlike `transient_resistances` it is
@@ -2431,6 +2440,7 @@ impl Fighter {
             can_be_paralyzed: true, // players can be paralysed (vs boss innate immunity)
             negation_pools: Vec::new(),
             transient_resistances: Vec::new(),
+            ward_armor: Vec::new(),
             transient_all_resistance: Vec::new(),
             staggered_until: None,
             announced_statuses: Vec::new(),
@@ -3299,16 +3309,43 @@ impl Fighter {
             .filter(|(t, _, exp)| *t == ty && now < *exp)
             .map(|(_, v, _)| *v)
             .sum();
-        // Spellbreaker's ward raises the Armor Rating by its `_wardArmor` while the
-        // ward stands (`AbilityDoWard$$GetArmorBonus`), the same physical term a
-        // cast Ward pushes as transient resistances.
+        all + per_type
+    }
+
+    /// The Armor Rating the armor stage cuts with at `now`: equipped rating plus
+    /// every additive source, then the innate multiplier — the order
+    /// `Actor$$GetEquippedProtectionRating@0x1c55da4` uses (sum the `+0x100`
+    /// additive list, then `fmul` by 1 + the `+0x108` multiplier list).
+    ///
+    /// The additive sources are a Ward's `_wardArmor`, cast or Spellbreaker's, for
+    /// as long as that Ward stands. `AbilityDoWard$$Update@0x1e9aea0` ends the step
+    /// when `_duration` or `_health` reaches 0 and `Cleanup@0x1e9b064` unregisters
+    /// the armor with the absorption, so a broken Ward stops protecting at once.
+    pub fn armor_rating_at(&self, now: Instant) -> f32 {
+        let cast_ward_up = self.negation_pools.iter().any(|p| {
+            // Storm armors share `DamageNegationSource::Ward`; only the cast Ward is
+            // `elemental_only`, and only it carries `_wardArmor`.
+            p.source == DamageNegationSource::Ward
+                && p.elemental_only
+                && !p.breaks_into_stagger
+                && p.remaining > 0.0
+                && now < p.expires_at
+        });
+        let cast_ward: f32 = if cast_ward_up {
+            self.ward_armor
+                .iter()
+                .filter(|(_, exp)| now < *exp)
+                .map(|(v, _)| *v)
+                .sum()
+        } else {
+            0.0
+        };
         let spellbreaker = match self.loadout.spellbreaker_ward {
-            Some((_, armor)) if super::damage::is_physical(ty) && self.spellbreaker_ward_up() => {
-                armor
-            }
+            Some((_, armor)) if self.spellbreaker_ward_up() => armor,
             _ => 0.0,
         };
-        all + per_type + spellbreaker
+        (self.loadout.armor_rating + cast_ward + spellbreaker)
+            * (1.0 + self.loadout.innate_armor_multiplier.max(0.0))
     }
 
     /// Does this fighter hold a live Spellbreaker ward (guard up, not yet broken)?
@@ -3321,6 +3358,7 @@ impl Fighter {
     /// Prune expired transient resistances.
     pub fn prune_transient_resistances(&mut self, now: Instant) {
         self.transient_resistances.retain(|(_, _, exp)| now < *exp);
+        self.ward_armor.retain(|(_, exp)| now < *exp);
         self.transient_all_resistance.retain(|(_, exp)| now < *exp);
     }
 
@@ -4585,6 +4623,7 @@ impl MatchCombat {
             f.damage_history.clear(); // ClearDamageHistory on round reset (§5.5)
             f.negation_pools.clear();
             f.transient_resistances.clear();
+            f.ward_armor.clear();
             f.transient_all_resistance.clear();
             f.maneuver_state_until = None;
             f.staggered_until = None;

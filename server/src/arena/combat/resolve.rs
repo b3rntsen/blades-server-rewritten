@@ -5821,18 +5821,14 @@ pub(super) fn apply_ward(
         bypass_types: &[],
         breaks_into_stagger: false,
     });
-    // Add transient flat physical armor (subtracted from incoming physical as a
-    // transient resistance on the caster — `DamageType::Health` is NOT physical;
-    // Slashing/Cleaving/Bashing are. We model ward armor as flat resist on physical
-    // types using the transient_resistances mechanism).
-    use super::state::DamageType;
-    for ty in [
-        DamageType::Slashing,
-        DamageType::Cleaving,
-        DamageType::Bashing,
-    ] {
-        f.transient_resistances.push((ty, ward_armor, ward_expires));
-    }
+    // `_wardArmor` raises the ARMOR RATING while the Ward stands
+    // (`AbilityDoWard$$GetArmorBonus@0x1e9b05c`, registered as a FortifyArmor
+    // additive source). It used to be pushed as a flat resistance on each physical
+    // type, which took the whole 67.2-165.6 off every component instead of a tenth
+    // of it shared across them. A Ward cannot be recast while one is up, so this
+    // replaces rather than stacks.
+    f.ward_armor.clear();
+    f.ward_armor.push((ward_armor, ward_expires));
     let target_obj = f.net_object_id;
     info!(
         "combat: slot {caster_slot} WARD r{rank} applied (pool {ward_health:.2}, armor {ward_armor:.2}, duration {ward_duration}s)"
@@ -6206,6 +6202,7 @@ fn on_round_ended(
         fighter.effects.clear();
         fighter.status_timers.clear();
         fighter.transient_resistances.clear();
+        fighter.ward_armor.clear();
         fighter.health_damage_carry = 0.0;
         // A round TIMEOUT has no killing swing to finish: the survivors go to the
         // round-end Emote now. After a DEATH the killer keeps playing its swing and
@@ -20773,6 +20770,78 @@ mod status_removals_tests {
         );
     }
 
+    /// A Ward's `_wardArmor` is ARMOR RATING, cut at 0.1 per point and shared across
+    /// the physical components (`AbilityDoWard$$Register@0x1e9adb0` puts
+    /// `GetArmorBonus@0x1e9b05c` in the FortifyArmor additive list that
+    /// `Actor$$GetEquippedProtectionRating@0x1c55da4` sums). It was pushed as a flat
+    /// resistance on each physical type, so a rank-1 Ward took 67.2 off every
+    /// physical component of a swing or a shield bash instead of 6.72 off the hit.
+    /// It ends with the Ward: `Cleanup@0x1e9b064` unregisters it when the pool breaks.
+    #[test]
+    fn ward_armor_is_armor_rating_and_ends_with_the_ward() {
+        use super::super::state::{ActiveSide, DamageSource, Loadout, WeaponProfile};
+        use super::super::tables::Weight;
+        let now = Instant::now();
+        let attacker = Loadout {
+            weapon: WeaponProfile {
+                primary_type: Some(DamageType::Slashing),
+                base_by_type: vec![(DamageType::Slashing, 100.0), (DamageType::Bashing, 300.0)],
+                weight: Some(Weight::Heavy),
+            },
+            ..Default::default()
+        };
+        let swing = |c: &MatchCombat, at: Instant| {
+            let rd = RetailDamageModel.resolve_attack(
+                &attacker,
+                &c.fighters[0],
+                DamageSource::Attack,
+                ActiveSide::Right,
+                1.0,
+                0,
+                at,
+            );
+            let of = |ty: DamageType| -> f32 {
+                rd.components
+                    .iter()
+                    .filter(|(t, _)| *t == ty)
+                    .map(|(_, v)| *v)
+                    .sum()
+            };
+            (of(DamageType::Slashing), of(DamageType::Bashing))
+        };
+
+        let mut c = combat2(now);
+        c.fighters[0].loadout.armor_rating = 0.0;
+        c.fighters[0].loadout.resistances.clear();
+        let (slash0, bash0) = swing(&c, now);
+        assert!(
+            slash0 > 0.0 && bash0 > 0.0,
+            "control: the swing lands unwarded"
+        );
+
+        // Rank 1: `_wardArmor` 67.2 -> 6.72 off the whole hit, split 1:3 by share.
+        apply_ward(&mut c, 0, 1, now);
+        let (slash1, bash1) = swing(&c, at(now, 0.1));
+        let cut = (slash0 - slash1) + (bash0 - bash1);
+        assert!(
+            (cut - 6.72).abs() < 0.01,
+            "67.2 armor rating cuts 6.72 off the hit, got {cut}"
+        );
+        assert!(
+            ((bash0 - bash1) - 3.0 * (slash0 - slash1)).abs() < 0.01,
+            "the cut is shared by each component's share of the physical total"
+        );
+
+        // The Ward breaks on an elemental hit; its armor goes with it.
+        let mut fire = vec![(DamageType::Fire, 10_000.0)];
+        c.fighters[0].apply_negation_pools(&mut fire);
+        let (slash2, bash2) = swing(&c, at(now, 0.2));
+        assert!(
+            (slash2 - slash0).abs() < 0.01 && (bash2 - bash0).abs() < 0.01,
+            "a broken Ward no longer adds armor"
+        );
+    }
+
     /// Absorb rank 1: `_duration` 1.5 s (ch06 §4.2). Retail: 26 applies, 21 removes.
     #[test]
     fn absorb_is_removed_when_its_duration_ends() {
@@ -20990,12 +21059,15 @@ mod status_removals_tests {
         let up = raise(&mut c, now);
         assert_eq!(op51(&up, StatusEffectType::Ward, true), 2, "Ward announced");
         assert!(c.fighters[0].spellbreaker_ward_up());
-        let armor = c.fighters[0].transient_resistance_against(DamageType::Slashing, now);
-        assert!((armor - 111.43).abs() < 1e-2, "ward armor {armor}");
-        assert_eq!(
-            c.fighters[0].transient_resistance_against(DamageType::Fire, now),
-            0.0
-        );
+        // `_wardArmor` is Armor Rating (an additive FortifyArmor source), scaled by
+        // the innate armor multiplier like the rest of the rating — not a resistance.
+        let f = &c.fighters[0];
+        let armor = f.armor_rating_at(now) - f.loadout.armor_rating_with_innates();
+        let want = 111.43 * (1.0 + f.loadout.innate_armor_multiplier.max(0.0));
+        assert!((armor - want).abs() < 1e-2, "ward armor {armor}");
+        for ty in [DamageType::Slashing, DamageType::Fire] {
+            assert_eq!(f.transient_resistance_against(ty, now), 0.0);
+        }
 
         // Guard down: the ward ends with it, no stun.
         c.fighters[0].blocking_until = None;
