@@ -147,7 +147,7 @@ Message ids are `{creationTime}::{uuid}`, e.g.
 | `KICK` | `{type, kickedUserId}` | 9 |
 | `APPROVE` | `{type, approvedUserId}` | 4 |
 | `DENY` | `{type, deniedUserId}` | 1 |
-| `BAN`, `PROMOTE` | — never captured, see §5 | 0 |
+| `BAN`, `PROMOTE` | — never captured; keys from the client, see §5 | 0 |
 
 In every case the **actor** is the message's own `userId`/`characterId`, and the
 target (if any) is inside `typeSpecificData`.
@@ -270,9 +270,12 @@ changing it is deliberate.
 3. **A removal blocks applying as well as joining.** The UI string does not
    distinguish the two paths, and a cooldown walkable-around by applying instead
    would not be a cooldown.
-4. **`BAN` and `PROMOTE` payload key names.** Never captured. `bannedUserId` and
-   `promotedUserId` follow the `kickedUserId` / `approvedUserId` / `deniedUserId`
-   convention, which holds for all three observed cases.
+4. **`BAN` and `PROMOTE` payload key names.** Never captured, so read from the
+   client instead: `GuildChatMessageConstants`' string literals give
+   `bannedUserId`, `promotedUserId` and, for the PROMOTE rank, `promotedToRank`
+   (`RANK_JSON_NAME`). PROMOTE is `{type, promotedUserId, promotedToRank}`.
+   Tracker #594: we sent the rank as `guildRank`, and the first guild whose
+   Grand Master left could not be opened by its successor.
 5. **Application response key names** — `guildApplication`, `guildApplications`,
    and the `applicationState` field. From il2cpp property names
    (`ResponseGuildApplicationsData._guildApplications`, `GuildApplication._userId`
