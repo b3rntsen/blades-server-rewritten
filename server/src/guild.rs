@@ -1981,12 +1981,16 @@ async fn remove_member_and_succeed(
 
 /// Post the `PROMOTE` board entry for a succession.
 ///
-/// MODELLED payload. il2cpp has `GuildMessageType.PROMOTE = 7` and
-/// `GuildChatMessagePromote` carrying `_userIdOtherPlayer` and `_guildRank`
-/// (dump.cs:539223), and the UI string is `UI.Guild.Chat.Message.Promote =
-/// "{0} Has been promoted to {1} by {2}"` — but no PROMOTE message appears in any
-/// capture (retail shipped no way to promote), so the JSON key names below follow
-/// the `KICK`/`APPROVE`/`DENY` convention rather than an observed example.
+/// No PROMOTE message appears in any capture (retail shipped no way to promote),
+/// so the payload is taken from the client: il2cpp has `GuildMessageType.PROMOTE
+/// = 7` and `GuildChatMessagePromote` carrying `_userIdOtherPlayer` and
+/// `_guildRank` (dump.cs:539223), read through `GuildChatMessageConstants`
+/// `USER_ID_PROMOTE_JSON_NAME = "promotedUserId"` and `RANK_JSON_NAME =
+/// "promotedToRank"` (string literals in global-metadata.dat). The UI string is
+/// `UI.Guild.Chat.Message.Promote = "{0} Has been promoted to {1} by {2}"`.
+///
+/// Tracker #594: the rank key was `guildRank`, a name the client never reads, and
+/// the new Grand Master of the first guild to change hands could not open it.
 async fn append_promote_message(
     conn: &mut AsyncPgConnection,
     gid: &str,
@@ -2000,14 +2004,19 @@ async fn append_promote_message(
         actor_user,
         actor_character,
         "PROMOTE",
-        json!({
-            "type": "PROMOTE",
-            "promotedUserId": promoted,
-            "guildRank": GuildRank::Grandmaster.as_wire(),
-        }),
+        promote_type_specific_data(promoted),
     )
     .await?;
     Ok(())
+}
+
+/// The `typeSpecificData` of a `PROMOTE` entry.
+fn promote_type_specific_data(promoted: Uuid) -> Value {
+    json!({
+        "type": "PROMOTE",
+        "promotedUserId": promoted,
+        "promotedToRank": GuildRank::Grandmaster.as_wire(),
+    })
 }
 
 /// `POST /guilds/current/leave`.
@@ -2250,11 +2259,7 @@ pub(crate) async fn record_alt_departures(
             user_id,
             character_id,
             "PROMOTE",
-            json!({
-                "type": "PROMOTE",
-                "promotedUserId": heir,
-                "guildRank": GuildRank::Grandmaster.as_wire(),
-            }),
+            promote_type_specific_data(heir),
             ts,
         )
         .await?;
@@ -4241,6 +4246,54 @@ mod create_wire {
                 obj.contains_key(key),
                 "guild object is missing {key}; got {:?}",
                 obj.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// Tracker #594: the PROMOTE entry's rank key is `promotedToRank`.
+    ///
+    /// The client reads a PROMOTE entry through `GuildChatMessageConstants`, whose
+    /// string literals in global-metadata.dat run `bannedUserId kickedUserId
+    /// deniedUserId approvedUserId promotedUserId guildType text UnfilteredText
+    /// unfilteredText Rank promotedToRank ItemTemplateId ...` -- i.e.
+    /// `RANK_PERSISTENCE_NAME = "Rank"`, `RANK_JSON_NAME = "promotedToRank"`.
+    /// `guildRank` is not a string literal anywhere in the client. We sent
+    /// `guildRank`, so the first succession on prod (Shadowblades, 2026-11-22)
+    /// left a board entry the client could not read and the new Grand Master's
+    /// guild screen would not open.
+    #[test]
+    fn a_promote_entry_names_its_rank_the_way_the_client_reads_it() {
+        let heir = Uuid::new_v4();
+        let v = promote_type_specific_data(heir);
+        let obj = v.as_object().expect("typeSpecificData object");
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["promotedToRank", "promotedUserId", "type"]);
+        assert_eq!(obj["type"], "PROMOTE");
+        assert_eq!(obj["promotedUserId"], heir.to_string());
+        assert_eq!(obj["promotedToRank"], "GRANDMASTER");
+    }
+
+    /// Both succession paths (a leave, and an alt switch) build the entry
+    /// through the one helper, so they cannot drift apart again.
+    #[test]
+    fn every_promote_entry_is_built_by_the_one_helper() {
+        let src = include_str!("guild.rs");
+        assert!(
+            !src.contains(concat!("\"guild", "Rank\"")),
+            "a PROMOTE payload still uses a key the client never reads"
+        );
+        let lines: Vec<&str> = src.lines().map(str::trim).collect();
+        let sites: Vec<&str> = lines
+            .windows(2)
+            .filter(|w| w[0] == concat!("\"PRO", "MOTE\","))
+            .map(|w| w[1])
+            .collect();
+        assert_eq!(sites.len(), 2, "a leave and an alt switch each post one");
+        for next in sites {
+            assert!(
+                next.starts_with("promote_type_specific_data("),
+                "a PROMOTE insert builds its own payload: {next}"
             );
         }
     }
