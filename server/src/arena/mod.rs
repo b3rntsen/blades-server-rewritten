@@ -13,6 +13,7 @@ pub mod cups_rule;
 pub mod debug_inject;
 pub mod enet_host;
 pub mod fight_ai;
+pub mod gear_calc;
 pub mod key_submit;
 pub mod leaderboards;
 pub mod match_registry;

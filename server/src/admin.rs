@@ -329,8 +329,18 @@ pub(crate) fn check_import_token(
     app_state: &ServerGlobal,
     req: &HttpRequest,
 ) -> Result<(), BladeApiError> {
+    check_dev_token(app_state.arena_import_token.as_deref(), req)
+}
+
+/// [`check_import_token`] against an explicit expected token, for a handler that
+/// needs nothing else from [`ServerGlobal`] (and can therefore be tested over
+/// HTTP without a database).
+pub(crate) fn check_dev_token(
+    expected: Option<&str>,
+    req: &HttpRequest,
+) -> Result<(), BladeApiError> {
     // No token configured -> endpoint disabled.
-    let expected = match app_state.arena_import_token.as_deref() {
+    let expected = match expected {
         Some(token) if !token.is_empty() => token,
         _ => {
             return Err(BladeApiError::new(

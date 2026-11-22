@@ -44120,22 +44120,22 @@ fn parse_alchemy_f32(s: &str) -> Option<f32> {
 /// What non-restoration alchemy effect `item_uuid` applies, or `None` for
 /// restoration potions and non-consumables.
 pub fn alchemy_consumable(item_uuid: &str) -> Option<AlchemyConsumable> {
-    for line in ALCHEMY_CONSUMABLE_ROWS.lines() {
+    alchemy_consumables().find(|c| c.uuid == item_uuid)
+}
+
+/// Every non-restoration alchemy consumable, in table order.
+pub fn alchemy_consumables() -> impl Iterator<Item = AlchemyConsumable> {
+    ALCHEMY_CONSUMABLE_ROWS.lines().filter_map(|line| {
         let mut f = line.split(',');
-        let uuid = f.next()?;
-        if uuid != item_uuid {
-            continue;
-        }
-        return Some(AlchemyConsumable {
-            uuid,
+        Some(AlchemyConsumable {
+            uuid: f.next()?,
             effect_type: f.next()?.parse().ok()?,
             affected_damage_type: f.next()?.parse().ok()?,
             value: parse_alchemy_f32(f.next()?)?,
             duration: parse_alchemy_f32(f.next()?)?,
             charge_count: f.next()?.parse().ok()?,
-        });
-    }
-    None
+        })
+    })
 }
 
 /// Enchantment family for a family UUID.
