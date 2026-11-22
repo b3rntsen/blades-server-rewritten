@@ -1166,8 +1166,9 @@ mod tests {
         let lb = include_str!("leaderboards.rs");
         let build = &lb[lb.find("async fn build(").unwrap()..];
         assert!(
-            build[..build.find("\n}\n").unwrap()].contains("ranked_entries(&mut conn, PAGE_SIZE"),
-            "the in-game player board must page through the same function"
+            build[..build.find("\n}\n").unwrap()]
+                .contains("ranked_entries(&mut conn, i64::MAX, 0)"),
+            "the in-game player board must be cut from the same function"
         );
         let guild = include_str!("../guild.rs");
         let handler = &guild[guild.find("pub async fn guild_leaderboard(").unwrap()..];

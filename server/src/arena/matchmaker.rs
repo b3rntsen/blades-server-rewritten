@@ -4492,9 +4492,7 @@ async fn matchmaker_loop(
                     if let Some(user) = oldest_user {
                         active_tickets.remove_queued(user, tid);
                     }
-                    info!(
-                        "matchmaker: Fight-AI-off ticket {tid} abandoned (RMS gone) — dropped"
-                    );
+                    info!("matchmaker: Fight-AI-off ticket {tid} abandoned (RMS gone) — dropped");
                     continue;
                 }
             }
@@ -8737,7 +8735,10 @@ mod fight_ai_off_tests {
         false
     }
 
-    fn spawn(config: ArenaConfig, registry: Arc<MatchRegistry>) -> UnboundedSender<MatchmakerCommand> {
+    fn spawn(
+        config: ArenaConfig,
+        registry: Arc<MatchRegistry>,
+    ) -> UnboundedSender<MatchmakerCommand> {
         let (tx, rx) = unbounded_channel::<MatchmakerCommand>();
         tokio::spawn(matchmaker_loop(
             rx,
@@ -8754,8 +8755,16 @@ mod fight_ai_off_tests {
         let now = Instant::now();
         let due = now - StdDuration::from_secs(600);
         assert!(no_ai_deadline(false, 0, due, now) > now, "alone: never due");
-        assert_eq!(no_ai_deadline(false, 1, due, now), due, "a human waiting: last call as usual");
-        assert_eq!(no_ai_deadline(true, 0, due, now), due, "Fight AI on: unchanged");
+        assert_eq!(
+            no_ai_deadline(false, 1, due, now),
+            due,
+            "a human waiting: last call as usual"
+        );
+        assert_eq!(
+            no_ai_deadline(true, 0, due, now),
+            due,
+            "Fight AI on: unchanged"
+        );
     }
 
     /// The control for the tests below: the same config hands a default player an AI
@@ -8793,11 +8802,20 @@ mod fight_ai_off_tests {
         let tx = spawn(config(0, 0), MatchRegistry::new(8));
         let (a, mut rx_a) = ticket(false, 10, 0);
         tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
-        assert!(!resolved(&mut rx_a, StdDuration::from_millis(2500)).await, "A got an AI");
+        assert!(
+            !resolved(&mut rx_a, StdDuration::from_millis(2500)).await,
+            "A got an AI"
+        );
         let (b, mut rx_b) = ticket(false, 90, 5000);
         tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
-        assert!(resolved(&mut rx_b, StdDuration::from_millis(3000)).await, "B not paired");
-        assert!(resolved(&mut rx_a, StdDuration::from_millis(500)).await, "A not paired");
+        assert!(
+            resolved(&mut rx_b, StdDuration::from_millis(3000)).await,
+            "B not paired"
+        );
+        assert!(
+            resolved(&mut rx_a, StdDuration::from_millis(500)).await,
+            "A not paired"
+        );
     }
 
     /// "If anyone pops in, they get human fights": a default player arriving while a
@@ -8807,10 +8825,16 @@ mod fight_ai_off_tests {
         let tx = spawn(config(0, 0), MatchRegistry::new(8));
         let (a, mut rx_a) = ticket(false, 50, 400);
         tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
-        assert!(!resolved(&mut rx_a, StdDuration::from_millis(2500)).await, "A got an AI");
+        assert!(
+            !resolved(&mut rx_a, StdDuration::from_millis(2500)).await,
+            "A got an AI"
+        );
         let (b, mut rx_b) = ticket(true, 50, 420);
         tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
-        assert!(resolved(&mut rx_b, StdDuration::from_millis(3000)).await, "B not resolved");
+        assert!(
+            resolved(&mut rx_b, StdDuration::from_millis(3000)).await,
+            "B not resolved"
+        );
         assert!(
             resolved(&mut rx_a, StdDuration::from_millis(500)).await,
             "B was given something other than the waiting human"
