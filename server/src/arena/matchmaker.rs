@@ -913,6 +913,9 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
     lo.next_treasury_chest_id = r.inventory.0.next_chest_id();
     lo.stackable_counts = r.inventory.0.backpack.stackable_items.counts().collect();
     lo.arena_chests_earned = r.server_state.0.arena_chests_earned;
+    // #568: the client only reports its hide-helmet toggle between rounds (op61), so
+    // start from the value it reported in its last match; op61 still overrides it.
+    lo.hide_helmet = r.server_state.0.arena_hide_helmet.unwrap_or(false);
     lo.arena_last_elder_one_chest_at_secs = r.server_state.0.arena_last_elder_one_chest_at_secs;
     lo.arena_last_elder_two_chest_at_secs = r.server_state.0.arena_last_elder_two_chest_at_secs;
     lo.arena_last_legendary_chest_at_secs = r.server_state.0.arena_last_legendary_chest_at_secs;
@@ -2602,6 +2605,24 @@ mod bot_pick_tests {
             }),
             server_state: JsonDbWrapper(Default::default()),
         }
+    }
+
+    /// Tracker #568: the round-1 profile is built from the loadout BEFORE the client
+    /// can report its hide-helmet toggle (op61 arrives between rounds only), so the
+    /// loadout must start from the value remembered on the character.
+    #[test]
+    fn the_loadout_starts_with_the_remembered_hide_helmet() {
+        let mut hider = renderable_row(Uuid::new_v4());
+        hider.server_state.0.arena_hide_helmet = Some(true);
+        assert!(loadout_from_row(&hider).hide_helmet);
+
+        let mut shower = renderable_row(Uuid::new_v4());
+        shower.server_state.0.arena_hide_helmet = Some(false);
+        assert!(!loadout_from_row(&shower).hide_helmet);
+        assert!(
+            !loadout_from_row(&renderable_row(Uuid::new_v4())).hide_helmet,
+            "never reported: helmet shown, as before"
+        );
     }
 
     /// Tracker #409: an unequipped character is never drawn as a bot, even when
