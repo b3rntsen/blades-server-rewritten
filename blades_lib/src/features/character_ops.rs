@@ -186,6 +186,9 @@ pub fn normalize_loadout_profile(mut profile: Value) -> Value {
 /// `""` or `null`. We stored the client's `""` verbatim and served it; the Loadouts
 /// screen of a player whose build had four empty slots then shuddered and froze
 /// (tracker #274/#278). Filled slots and every other field are untouched.
+///
+/// An ability slot with no ability is dropped from `equippedAbilities` altogether
+/// (tracker #598, see [`is_empty_ability_entry`]).
 fn normalize_profile_object(profile: &mut Value) {
     let Some(obj) = profile.as_object_mut() else {
         return;
@@ -205,11 +208,76 @@ fn normalize_profile_object(profile: &mut Value) {
             }
         }
     }
+    if let Some(abilities) = obj
+        .get_mut("equippedAbilities")
+        .and_then(Value::as_array_mut)
+    {
+        abilities.retain(|entry| !is_empty_ability_entry(entry));
+    }
+}
+
+/// A saved ability slot that holds no ability: `itemId` is `""`, `null` or absent.
+///
+/// Tracker #598: applying one saved build froze the game every time. The build had
+/// five abilities; the client had saved the sixth slot as
+/// `{"slot": "abilitySlot5", "itemId": ""}`, and we stored and served that verbatim.
+///
+/// What the client does with it (libil2cpp, RVAs from `reference/il2cpp/dump.cs`):
+///
+/// * `PlayerLoadoutPreset.<RetrievePersistent>b__44_1` (0x1DD4FA4) stores `null` for
+///   a slot only when the entry has NO `itemId` member; any member, `""` included,
+///   becomes `new Uid("")`, which is not null.
+/// * `PlayerLoadoutPresetController.EquipPresetToGivenLoadout` (0x1DD780C) skips a
+///   null id, but looks every other id up with `AbilityManager.GetAbilityByID`
+///   (0x1C4A9A4). `""` is not an ability, so that returns null, and the null is
+///   handed to `PlayerLoadout.EquipAbilityInSlot` (0x1DD2248) ->
+///   `PlayerLoadout.EquipAbility` (0x1DD2368), which dereferences it:
+///   NullReferenceException.
+/// * `LoadoutController.EquipLoadoutPreset` (0x188F43C) calls that BEFORE it queues
+///   the two `POST /loadouts/current` requests, so nothing reaches the server and
+///   the completion callback never runs: the screen stays locked until a restart.
+///   That is why the arena log shows no failed request for it.
+///
+/// Retail never served the `""` form: 9,480 ability entries in 2,205 served
+/// profiles of the capture snapshot (and 360 more in `/loadouts/current` responses)
+/// all carry a uuid. Its empty ability slot was `{"slot": ...}` with no `itemId`
+/// (a retail-imported character on production carries five of them), and 476 of
+/// those served profiles list only three ability entries, so the client is used to
+/// builds that do not name all six slots.
+///
+/// The entry is REMOVED rather than stripped of its `itemId`, because stripping
+/// does not repair a phone that already holds the bad value: `ObjectArrayParser.Parse`
+/// (0x24DE9B0) merges the served array into the saved one index by index, and
+/// `PrimitiveParser<string>.Parse` (0x26BCF98) returns without touching the saved
+/// member when the key is absent, so a saved `""` (or another character's ability,
+/// after an alt switch on the same device) would survive. A shorter array does
+/// reach the phone: the parser first drops the saved elements beyond the served
+/// length, and every remaining entry overwrites both of its members.
+fn is_empty_ability_entry(entry: &Value) -> bool {
+    let Some(e) = entry.as_object() else {
+        return false;
+    };
+    match e.get("itemId") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(s)) => s.trim().is_empty(),
+        Some(_) => false,
+    }
 }
 
 /// Normalize every saved loadout profile on a character before serving or rewriting it.
 pub fn normalize_loadout_profiles_for_retail(ch: &mut CompleteCharacter) {
-    let Some(profiles) = ch.loadout_profiles.as_array_mut() else {
+    normalize_loadout_profiles_value(&mut ch.loadout_profiles);
+}
+
+/// The same, on the bare `loadoutProfiles` value. `CompleteCharacter` runs this as it
+/// is deserialized, so every handler that loads a character serves the normalized
+/// form, not only the ones that remember to call
+/// [`normalize_loadout_profiles_for_retail`]. Most responses that carry a
+/// `character` (craft, salvage, shop, quest...) are parsed by the client into the
+/// same saved profiles, and one of them serving the raw form is enough to put the
+/// bad entry back on the phone.
+pub fn normalize_loadout_profiles_value(profiles: &mut Value) {
+    let Some(profiles) = profiles.as_array_mut() else {
         return;
     };
     for profile in profiles {
@@ -1143,6 +1211,153 @@ mod tests {
             "leave unknown profile fields alone"
         );
         assert!(ch.loadout_profiles[2].get("equippedConsumables").is_none());
+    }
+
+    /// Tracker #598: the reporter's build, exactly as production held it (item and
+    /// ability ids replaced by placeholders, slot ids and order kept). Nine item
+    /// slots with the off-hand empty, six ability slots with the last one saved by
+    /// the client as `"itemId": ""`.
+    fn report_598_profile() -> Value {
+        let item = |n: u128| Uuid::from_u128(0x5980_0000 + n).to_string();
+        let ability = |n: u128| Uuid::from_u128(0xab11_0000 + n).to_string();
+        json!({
+            "name": "2H build",
+            "iconIndex": 1,
+            "colorIndex": 9,
+            "keepShield": true,
+            "equippedItems": [
+                { "slot": "897a600c-91d6-4449-af09-173da88a907e", "itemId": item(1) },
+                { "slot": "e273a4d7-fb87-4f7e-8f1e-398be59afbcb", "itemId": item(2) },
+                { "slot": "58b6d121-2e23-4fa4-b892-c92ae2e2c4c5", "itemId": item(3) },
+                { "slot": "48021ab1-a1a6-487b-80a4-ca472a4d0c77", "itemId": item(4) },
+                { "slot": "417e79de-c810-42f8-8273-f9759df6ae25", "itemId": item(5) },
+                { "slot": "862605de-c67f-4bce-b527-4e5fb6f25162" },
+                { "slot": "36d141e4-7783-466c-9565-6f90f09de428", "itemId": item(6) },
+                { "slot": "0d8f2023-4701-41e8-8bd5-92381d787456", "itemId": item(7) },
+                { "slot": "959c1931-bf85-4587-92ec-8ecaa58b06d5", "itemId": item(8) }
+            ],
+            "equippedAbilities": [
+                { "slot": "abilitySlot2", "itemId": ability(1) },
+                { "slot": "abilitySlot0", "itemId": ability(2) },
+                { "slot": "abilitySlot1", "itemId": ability(3) },
+                { "slot": "abilitySlot3", "itemId": ability(4) },
+                { "slot": "abilitySlot4", "itemId": ability(5) },
+                { "slot": "abilitySlot5", "itemId": "" }
+            ]
+        })
+    }
+
+    /// The invariant every retail-served ability entry satisfies (9,480 of 9,480 in
+    /// the capture snapshot's `GET /characters/{id}` responses): `itemId` is a uuid.
+    /// The client crashes on anything else that is not an absent key.
+    fn every_ability_entry_names_an_ability(profile: &Value) -> bool {
+        profile["equippedAbilities"]
+            .as_array()
+            .map(|entries| {
+                entries.iter().all(|e| {
+                    e["itemId"]
+                        .as_str()
+                        .is_some_and(|id| Uuid::parse_str(id).is_ok())
+                })
+            })
+            .unwrap_or(true)
+    }
+
+    #[test]
+    fn report_598_an_empty_ability_slot_is_not_saved_into_the_build() {
+        let mut ch = CompleteCharacter::default();
+        set_loadout_profile(&mut ch, 0, report_598_profile());
+
+        let profile = &ch.loadout_profiles[0];
+        let slots: Vec<&str> = profile["equippedAbilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["slot"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            slots,
+            [
+                "abilitySlot2",
+                "abilitySlot0",
+                "abilitySlot1",
+                "abilitySlot3",
+                "abilitySlot4"
+            ],
+            "the five real abilities stay, in order; the empty sixth slot is gone"
+        );
+        assert!(every_ability_entry_names_an_ability(profile));
+        assert_eq!(
+            profile["equippedItems"],
+            report_598_profile()["equippedItems"],
+            "the gear half of the build is untouched"
+        );
+    }
+
+    /// The build was already stored before the fix, and most handlers load the
+    /// character without calling the normalizer. Reading the stored row must be
+    /// enough.
+    #[test]
+    fn report_598_a_stored_build_is_normalized_as_the_character_is_read() {
+        let mut stored = serde_json::to_value(CompleteCharacter::default()).unwrap();
+        stored["loadoutProfiles"] = json!([report_598_profile(), null]);
+        assert_eq!(
+            stored["loadoutProfiles"][0]["equippedAbilities"][5]["itemId"], "",
+            "the row on disk carries the empty-string slot"
+        );
+
+        let ch: CompleteCharacter = serde_json::from_value(stored).unwrap();
+        let served = serde_json::to_value(&ch).unwrap();
+
+        let profile = &served["loadoutProfiles"][0];
+        assert_eq!(profile["equippedAbilities"].as_array().unwrap().len(), 5);
+        assert!(every_ability_entry_names_an_ability(profile));
+        assert_eq!(profile["name"], "2H build");
+        assert!(
+            served["loadoutProfiles"][1].is_null(),
+            "null profile gaps are retail"
+        );
+    }
+
+    /// Retail shapes, from the capture snapshot: a full six-ability build, an older
+    /// three-ability build (476 of 2,205 served profiles), a build with no
+    /// `equippedAbilities` at all (387), and retail's own empty ability slot,
+    /// `{"slot": ...}` without `itemId`. The first three pass through unchanged.
+    /// The last is dropped too: the client reads an absent `itemId` as "nothing",
+    /// but it also keeps whatever it had saved for that entry before, so the only
+    /// form that cannot leave a stale ability behind is no entry.
+    #[test]
+    fn report_598_retail_ability_shapes_survive_and_keyless_slots_are_dropped() {
+        let a = |n: u128| Uuid::from_u128(0xab11_0000 + n).to_string();
+        let six: Vec<Value> = (0..6)
+            .map(|i| json!({ "slot": format!("abilitySlot{i}"), "itemId": a(i) }))
+            .collect();
+        let three: Vec<Value> = six[..3].to_vec();
+        let mut ch = CompleteCharacter::default();
+        ch.loadout_profiles = json!([
+            { "name": "six", "equippedItems": [], "equippedAbilities": six },
+            { "name": "three", "equippedItems": [], "equippedAbilities": three },
+            { "name": "none", "equippedItems": [] },
+            { "name": "retail empty", "equippedItems": [], "equippedAbilities": [
+                { "slot": "abilitySlot0", "itemId": a(0) },
+                { "slot": "abilitySlot1" },
+                { "slot": "abilitySlot2", "itemId": null }
+            ]}
+        ]);
+        let before = ch.loadout_profiles.clone();
+
+        normalize_loadout_profiles_for_retail(&mut ch);
+
+        for i in 0..3 {
+            assert_eq!(ch.loadout_profiles[i], before[i], "retail profile {i}");
+        }
+        assert_eq!(
+            ch.loadout_profiles[3]["equippedAbilities"],
+            json!([{ "slot": "abilitySlot0", "itemId": a(0) }])
+        );
+        for profile in ch.loadout_profiles.as_array().unwrap() {
+            assert!(every_ability_entry_names_an_ability(profile));
+        }
     }
 
     #[test]
