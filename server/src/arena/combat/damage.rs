@@ -1410,8 +1410,7 @@ pub fn mitigate_components(
         .filter(|(t, v)| is_physical(*t) && *v > 0.0)
         .map(|(_, v)| *v)
         .sum();
-    let armor_rating =
-        (target.loadout.armor_rating_with_innates() - attacker.armor_piercing_rating).max(0.0);
+    let armor_rating = (target.armor_rating_at(now) - attacker.armor_piercing_rating).max(0.0);
     if phys_total > 0.0 && armor_rating > 0.0 {
         for (ty, v) in components.iter_mut() {
             if is_physical(*ty) && *v > 0.0 {
