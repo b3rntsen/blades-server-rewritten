@@ -528,6 +528,34 @@ const HIGH_ELF_VARIANT_RACE_CATEGORY: &str = "468f591f-5f01-4b41-9d98-cda62918f8
 const KHAJIIT_RACE_CATEGORY: &str = "127a8438-5903-4f91-9587-a4142ed12866";
 const ARGONIAN_RACE_CATEGORY: &str = "8accc37f-1a14-453a-b30a-7d4163de2a11";
 
+/// The playable races as `(CharacterUID category, name)`, for callers that let a
+/// person pick one (the gear calculator). The innates themselves stay in
+/// [`apply_racial_innates_from_customization`].
+pub(crate) const RACE_CATEGORIES: [(&str, &str); 11] = [
+    (ARGONIAN_RACE_CATEGORY, "Argonian"),
+    (BRETON_RACE_CATEGORY, "Breton"),
+    (DARK_ELF_RACE_CATEGORY, "Dark Elf"),
+    (DREMORA_RACE_CATEGORY, "Dremora"),
+    (HIGH_ELF_RACE_CATEGORY, "High Elf"),
+    (IMPERIAL_RACE_CATEGORY, "Imperial"),
+    (KHAJIIT_RACE_CATEGORY, "Khajiit"),
+    (NORD_RACE_CATEGORY, "Nord"),
+    (ORC_RACE_CATEGORY, "Orc"),
+    (REDGUARD_RACE_CATEGORY, "Redguard"),
+    (WOOD_ELF_RACE_CATEGORY, "Wood Elf"),
+];
+
+/// The race category a profile's `CharacterUID` belongs to, if it is a known one.
+pub(crate) fn race_category(customization: &Value) -> Option<&'static str> {
+    let category =
+        racial_innate_category_for_character_uid(customization_character_uid(customization)?)?;
+    RACE_CATEGORIES
+        .iter()
+        .map(|(id, _)| *id)
+        .find(|id| *id == category)
+        .or((category == HIGH_ELF_VARIANT_RACE_CATEGORY).then_some(HIGH_ELF_RACE_CATEGORY))
+}
+
 /// Resolve the live profile `CharacterUID` (a CharacterVisual/player-preset id)
 /// to the `CharacterVisualCategory` id whose `_innateBonuses` retail applies.
 ///
@@ -594,7 +622,7 @@ fn racial_innate_category_for_character_uid(uid: &str) -> Option<&str> {
     }
 }
 
-fn customization_character_uid(customization: &Value) -> Option<&str> {
+pub(crate) fn customization_character_uid(customization: &Value) -> Option<&str> {
     let uid = customization.get("CharacterUID")?;
     uid.as_str()
         .or_else(|| {

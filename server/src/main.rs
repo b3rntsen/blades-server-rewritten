@@ -245,7 +245,9 @@ fn log_rejected_json_body(
 
 #[main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    // `env_logger::init()`, plus the scope that keeps the gear calculator's
+    // simulated hits out of the combat log.
+    arena::gear_calc::init_logger();
     debug!("logger initialised");
 
     let cli = Cli::parse();
@@ -532,6 +534,9 @@ async fn main() -> Result<()> {
                         "arena-http remote=%a status=%s duration_ms=%D request=\"%r\"",
                     ))
                     .app_data(Data::new(server_global.clone()))
+                    .app_data(Data::new(arena::gear_calc::DevToken(
+                        server_global.arena_import_token.clone(),
+                    )))
                     // A character transfer POSTs the whole CompleteCharacter, and
                     // actix's default JSON limit is 2 MiB — which is smaller than a
                     // real progressed character. A level-28 import was rejected with
@@ -759,6 +764,9 @@ async fn main() -> Result<()> {
                     .service(admin::switch_alt)
                     .service(arena::fight_ai::get_fight_ai)
                     .service(arena::fight_ai::set_fight_ai_route)
+                    .service(arena::gear_calc::gear_calc_catalogue)
+                    .service(arena::gear_calc::gear_calc_calculate)
+                    .service(arena::gear_calc::gear_calc_loadouts)
                     .service(admin::new_alt)
                     .service(testchar::mark_test_character)
                     .service(testchar::set_test_character_level)

@@ -47,6 +47,7 @@ pub mod ability_tags;
 pub mod armor_temper;
 pub mod artifact_properties;
 pub mod block_temper;
+pub mod calc;
 pub mod cast_refusal_log;
 pub mod damage;
 pub mod engine;

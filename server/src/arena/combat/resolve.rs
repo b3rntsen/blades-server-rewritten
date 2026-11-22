@@ -2376,7 +2376,7 @@ pub(super) fn resolve_ability_cast(
 
 /// Thunderstorm's bolt schedule: `(numberOfBolts, duration / numberOfBolts)`, or
 /// `None` for any ability that does not ship a multi-bolt `_numberOfBolts`.
-fn thunderstorm_bolts(ability_uuid: &str, level: u8) -> Option<(u32, f32)> {
+pub(super) fn thunderstorm_bolts(ability_uuid: &str, level: u8) -> Option<(u32, f32)> {
     let r = super::gamedata::ability_rank_clamped(ability_uuid, level as u16)?;
     let n = r.get(super::gamedata::AbilityField::NumberOfBolts)?;
     let span = r.duration()?;
@@ -2472,7 +2472,7 @@ fn uuid_reckless_fury() -> &'static str {
         .unwrap_or("")
 }
 
-fn is_firewall_ability(ability_uuid: &str) -> bool {
+pub(super) fn is_firewall_ability(ability_uuid: &str) -> bool {
     super::gamedata::ability(ability_uuid).is_some_and(|a| a.editor_name == "Firewall")
 }
 
@@ -2542,7 +2542,7 @@ fn maneuver_uses_two_handed_grip(loadout: &super::state::Loadout) -> bool {
     }
 }
 
-fn apply_ability_impact(
+pub(super) fn apply_ability_impact(
     combat: &mut MatchCombat,
     sender: usize,
     target_slot: usize,
@@ -5280,7 +5280,7 @@ fn resume_held_attack(f: &mut super::state::Fighter, now: Instant) -> Option<Ins
 /// A channel ends early when its target dies or leaves, or when its caster is
 /// staggered or paralysed (`interrupts::process_interrupts`, 06-D1). There is no
 /// separate "release" input modelled.
-fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+pub(super) fn apply_channel_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     if combat.channels.is_empty() {
         return out;
@@ -5622,7 +5622,7 @@ fn emit_status_removals(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, V
 
 /// Does this ability rank put up storm-armor ice (`_shieldHealth`)? Blizzard /
 /// Firestorm / Tempest Armor — `StormArmorAbility`.
-fn is_storm_armor(ability_uuid: &str, level: u8) -> bool {
+pub(super) fn is_storm_armor(ability_uuid: &str, level: u8) -> bool {
     super::gamedata::ability_rank_clamped(ability_uuid, u16::from(level.max(1)))
         .and_then(|r| r.shield_health())
         .is_some_and(|h| h > 0.0)
@@ -5788,7 +5788,7 @@ fn apply_dot_ticks(combat: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8
 /// both players. The pool drains on incoming elemental hits (existing
 /// `apply_negation_pools` infrastructure); when fully drained, op66 DamageNegated
 /// is emitted by the normal `emit_damage` path. [arena-status-resistance-spec §4.2]
-fn apply_ward(
+pub(super) fn apply_ward(
     combat: &mut MatchCombat,
     caster_slot: usize,
     rank: u8,
@@ -5906,7 +5906,7 @@ fn apply_absorb(
 /// `ChangeCombatStatusEffect` events (FireResistance=60 … PoisonResistance=63).
 /// The flat subtraction is applied AFTER block by `total_resistance_against` in the
 /// damage pipeline. [docs/arena-combat-fidelity-iteration.md §Mechanic-3]
-fn apply_resist_elements(
+pub(super) fn apply_resist_elements(
     combat: &mut MatchCombat,
     caster_slot: usize,
     rank: u8,
@@ -5946,7 +5946,7 @@ fn apply_resist_elements(
     out
 }
 
-fn alchemy_status(raw: u16) -> Option<super::state::StatusEffectType> {
+pub(super) fn alchemy_status(raw: u16) -> Option<super::state::StatusEffectType> {
     use super::state::StatusEffectType;
     Some(match raw {
         60 => StatusEffectType::FireResistance,
@@ -6025,7 +6025,7 @@ fn broadcast_alchemy_status_apply(
 /// statuses near them are the four-at-once Resist Elements SPELL applies, at
 /// unrelated times. We used to announce an AlchemyInfo op51 (and, through
 /// `status_timers`, its remove) to both clients — traffic retail never sent.
-fn apply_alchemy_resistance(
+pub(super) fn apply_alchemy_resistance(
     combat: &mut MatchCombat,
     slot: usize,
     alchemy: &super::gamedata::AlchemyConsumable,
