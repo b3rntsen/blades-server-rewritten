@@ -1648,6 +1648,8 @@ async fn event_attempt_is_live(
         .filter(ed::character_id.eq(character_id))
         .filter(ed::dungeon_id.eq(template))
         .filter(ed::dungeon_state.is_not_null())
+        // GET /dungeons lists an attempt only with its initial state too (dungeon.rs).
+        .filter(ed::initial_state.is_not_null())
         .select(ed::id)
         .first::<Uuid>(conn)
         .await
