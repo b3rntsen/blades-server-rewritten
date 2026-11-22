@@ -625,6 +625,52 @@ fn humans_matching_until(
     Some(valve.map_or(until, |v| until.min(v)))
 }
 
+/// **HauDrauf's rule (tracker #592, 2026-11-22) — not retail.** *"When only two people
+/// are in the arena, the next match should come immediately when one of them leaves the
+/// arena. Then you know you're alone and can leave too."*
+///
+/// A held ticket waits for a human only while another human is plausibly about to be
+/// free: in a live match, or queued. Once neither is true, the other human gets this
+/// long, from their last activity (the end of their match, or their last queue), to
+/// queue again; then the held ticket gets its AI instead of sitting out the recent tier
+/// (30 s) or the humans-first cooldown (60 s / 180 s) for someone who has gone.
+///
+/// 10 s is the shoulder of the measured requeue distribution: prod 2026-11-16..22,
+/// 1263 requeues within 10 min of the player's own match leaving the registry peak at
+/// 5 s and thin out after ~12 s; 49 % came within 10 s (32 % within 5 s). Huge Goober's
+/// immediate requeue on 2026-11-22 (match finished 06:15:24, queued 06:15:34) is 10 s.
+/// The loop re-checks every [`FALLBACK_REEVALUATE`], so the AI lands 10–12 s after.
+const LAST_HUMAN_REQUEUE_GRACE: Duration = Duration::from_secs(10);
+
+/// When a waiting ticket may stop holding out for other humans ([`LAST_HUMAN_REQUEUE_GRACE`],
+/// #592): `None` while one of them is plausibly about to be free — in a live match
+/// (`others_live`) or queued (`others_queued`, cooldown-held tickets included) — or
+/// when no other human has been seen at all (the ordinary solo tier already applies).
+/// Otherwise the instant the grace after their last activity runs out.
+fn last_human_gone_at(
+    others_live: bool,
+    others_queued: usize,
+    last_other_activity: Option<Instant>,
+) -> Option<Instant> {
+    if others_live || others_queued > 0 {
+        return None;
+    }
+    last_other_activity.map(|t| t + LAST_HUMAN_REQUEUE_GRACE)
+}
+
+/// The deadline of a ticket nobody is queued with, after #592: the ordinary one
+/// (`held`: tier floor, bot floor and humans-first gate), cut back to the end of the
+/// last human's requeue grace once nobody else is plausibly coming. Never earlier than
+/// `earliest` (the #496 bot floor and the solo tier), so the release is exactly the
+/// solo fallback, started no sooner than the grace ends. The busy hold is untouched:
+/// while anyone is in a live match, `gone_at` is `None`.
+fn release_held_deadline(held: Instant, gone_at: Option<Instant>, earliest: Instant) -> Instant {
+    match gone_at {
+        Some(g) => held.min(g.max(earliest)),
+        None => held,
+    }
+}
+
 /// **Fight AI off** (per alt, [`crate::arena::fight_ai`]): the queue's next deadline
 /// when its oldest ticket refuses an AI.
 ///
@@ -4369,6 +4415,8 @@ async fn matchmaker_loop(
         std::collections::HashMap::new();
     // Tickets currently held by the humans-first gate, so its log line fires on change.
     let mut gated: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    // Tickets the #592 rule released from that hold, so its log line fires once.
+    let mut gone: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
     // The HTTP admission flag prevents normal arrivals during a deploy, while this
     // actor-owned flag closes the smaller race where a handler passed that check just
     // before the drain started and sends Enqueue just after the drain command.
@@ -4412,6 +4460,7 @@ async fn matchmaker_loop(
         floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
         bot_floors.retain(|tid, _| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
         gated.retain(|tid| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
+        gone.retain(|tid| waiting.iter().any(|(t, _)| t.ticket_id == *tid));
 
         let oldest_ticket = waiting.iter().min_by_key(|(_, s)| *s);
         let oldest = oldest_ticket.map(|(_, s)| *s);
@@ -4494,8 +4543,31 @@ async fn matchmaker_loop(
                     );
                 }
             }
+            // #592: is anybody else still plausibly coming? Queued includes a ticket
+            // held by a #496 cooldown, which `waiting_others` leaves out.
+            let others_queued = waiting
+                .iter()
+                .filter(|(t, _)| t.ticket_id != tid && Some(t.user_id) != oldest_user)
+                .count();
+            let gone_at = last_human_gone_at(
+                others_fighting || others_live > 0,
+                others_queued,
+                others_seen,
+            );
+            let released = gone_at.is_some_and(|g| now >= g);
+            if released && gate.is_some() && gone.insert(tid) {
+                info!(
+                    "matchmaker: ticket {tid} — no other human in a match or queued, none \
+                     re-queued within {LAST_HUMAN_REQUEUE_GRACE:?} of their last activity \
+                     (#592) — AI allowed"
+                );
+            }
             let deadline = if waiting_others == 0 {
-                floor.max(bot_at).max(gate.unwrap_or(floor))
+                release_held_deadline(
+                    floor.max(bot_at).max(gate.unwrap_or(floor)),
+                    gone_at,
+                    bot_at.max(since + Duration::from_secs(config.solo_fallback_secs)),
+                )
             } else {
                 floor
             };
@@ -4603,15 +4675,26 @@ async fn matchmaker_loop(
                 // partner last call expected may have vanished while others still fight.
                 let (fighting_now, seen_last) =
                     others_activity(&arrivals, &match_users, &registry, lone.user_id);
-                if humans_matching_until(
-                    &config,
-                    lone.active,
-                    fighting_now,
+                // #592: the gate does not hold a ticket for a human who has gone.
+                let gone_now = last_human_gone_at(
+                    fighting_now || registry.live_human_count() > 0,
+                    waiting
+                        .iter()
+                        .filter(|(t, _)| t.user_id != lone.user_id)
+                        .count(),
                     seen_last,
-                    since,
-                    Instant::now(),
                 )
-                .is_some()
+                .is_some_and(|g| Instant::now() >= g);
+                if !gone_now
+                    && humans_matching_until(
+                        &config,
+                        lone.active,
+                        fighting_now,
+                        seen_last,
+                        since,
+                        Instant::now(),
+                    )
+                    .is_some()
                 {
                     // No spin: with the stale partner dropped, the next pass sees
                     // nobody waiting and folds the gate into the deadline.
@@ -8536,6 +8619,126 @@ mod humans_first_tests {
             !resolved(&mut rx, StdDuration::from_millis(3500)).await,
             "handed an AI while two humans were fighting each other"
         );
+    }
+
+    // ---- #592: HauDrauf's rule — the last other human leaves, the AI comes ----------
+
+    /// Prod's real holds, so a pass here cannot be a short test tier: busy 230 s,
+    /// recent 30 s, and the active player's 180 s humans-first cooldown.
+    fn prod_holds() -> ArenaConfig {
+        let mut c = config(60, 300);
+        c.busy_fallback_secs = 230;
+        c.recent_fallback_secs = 30;
+        c.humans_first_active_cooldown_secs = 180;
+        c.humans_first_active_max_wait_secs = 600;
+        c
+    }
+
+    fn active_ticket(
+        trophies: i64,
+    ) -> (
+        TicketRequest,
+        tokio::sync::mpsc::UnboundedReceiver<MatchmakingMessage>,
+    ) {
+        let (mut t, rx) = ticket(Uuid::new_v4(), trophies);
+        t.active = true;
+        (t, rx)
+    }
+
+    /// 2026-11-22 06:26: HauDrauf queued while the other human fought; that match ended
+    /// and nobody queued again, yet he waited 181 s (the 180 s active cooldown counted
+    /// from the end). Now the AI comes once the requeue grace runs out.
+    #[tokio::test]
+    async fn the_last_human_leaving_releases_the_held_ticket_after_the_grace() {
+        let registry = MatchRegistry::new(8);
+        let fight = start_pvp(&registry, 5920);
+        let tx = spawn(prod_holds(), registry.clone());
+        let (h, mut rx) = active_ticket(15000);
+        tx.send(MatchmakerCommand::Enqueue(h)).unwrap();
+        assert!(
+            !resolved(&mut rx, StdDuration::from_millis(1500)).await,
+            "control: held while the other human is mid-match"
+        );
+        end_pvp(&registry, fight);
+        let ended = tokio::time::Instant::now();
+        assert!(
+            !resolved(
+                &mut rx,
+                LAST_HUMAN_REQUEUE_GRACE - StdDuration::from_millis(1000)
+            )
+            .await,
+            "handed an AI inside the requeue grace"
+        );
+        assert!(
+            resolved(&mut rx, StdDuration::from_millis(4500)).await,
+            "still held {:?} after the last other human's match ended with nobody queued",
+            ended.elapsed()
+        );
+    }
+
+    /// The other human comes straight back: inside the grace they are paired, not two AIs.
+    #[tokio::test]
+    async fn the_other_human_requeuing_within_the_grace_is_paired() {
+        let registry = MatchRegistry::new(8);
+        let fight = start_pvp(&registry, 5921);
+        let tx = spawn(prod_holds(), registry.clone());
+        let (h, mut rx_h) = active_ticket(15000);
+        tx.send(MatchmakerCommand::Enqueue(h)).unwrap();
+        assert!(!resolved(&mut rx_h, StdDuration::from_millis(1500)).await);
+        end_pvp(&registry, fight);
+        tokio::time::sleep(LAST_HUMAN_REQUEUE_GRACE / 2).await;
+        assert!(
+            !resolved(&mut rx_h, StdDuration::from_millis(100)).await,
+            "control: no AI before the other human is back"
+        );
+        // Far out of bracket on purpose (the prod pair was 14 000 trophies apart).
+        let (g, mut rx_g) = active_ticket(1300);
+        tx.send(MatchmakerCommand::Enqueue(g)).unwrap();
+        assert!(
+            resolved(&mut rx_g, StdDuration::from_millis(3000)).await,
+            "requeuer not resolved"
+        );
+        assert!(
+            resolved(&mut rx_h, StdDuration::from_millis(500)).await,
+            "held ticket not resolved with the requeuer"
+        );
+    }
+
+    /// The busy hold is unchanged: while the other human is mid-match, no grace runs.
+    #[tokio::test]
+    async fn a_ticket_stays_held_while_the_other_human_is_mid_match() {
+        let registry = MatchRegistry::new(8);
+        let _fight = start_pvp(&registry, 5922);
+        let tx = spawn(prod_holds(), registry.clone());
+        let (h, mut rx) = active_ticket(15000);
+        tx.send(MatchmakerCommand::Enqueue(h)).unwrap();
+        assert!(
+            !resolved(
+                &mut rx,
+                LAST_HUMAN_REQUEUE_GRACE + StdDuration::from_millis(3000)
+            )
+            .await,
+            "handed an AI while another human was still mid-match"
+        );
+    }
+
+    #[test]
+    fn the_grace_runs_only_once_nobody_else_is_playing_or_queued() {
+        let t = Instant::now();
+        let g = LAST_HUMAN_REQUEUE_GRACE;
+        assert_eq!(last_human_gone_at(true, 0, Some(t)), None, "mid-match");
+        assert_eq!(last_human_gone_at(false, 1, Some(t)), None, "queued");
+        assert_eq!(last_human_gone_at(false, 0, None), None, "never seen");
+        assert_eq!(last_human_gone_at(false, 0, Some(t)), Some(t + g));
+        // The release cuts a long hold back to the grace, but never below the floor
+        // (the #496 bot floor / solo tier) and never lengthens a shorter deadline.
+        let held = t + StdDuration::from_secs(180);
+        assert_eq!(release_held_deadline(held, Some(t + g), t), t + g);
+        assert_eq!(release_held_deadline(held, None, t), held, "busy hold kept");
+        let floor = t + StdDuration::from_secs(30);
+        assert_eq!(release_held_deadline(held, Some(t + g), floor), floor);
+        let short = t + StdDuration::from_secs(4);
+        assert_eq!(release_held_deadline(short, Some(t + g), t), short);
     }
 
     #[tokio::test]
