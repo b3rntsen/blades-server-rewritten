@@ -3323,7 +3323,10 @@ impl Fighter {
     /// the armor with the absorption, so a broken Ward stops protecting at once.
     pub fn armor_rating_at(&self, now: Instant) -> f32 {
         let cast_ward_up = self.negation_pools.iter().any(|p| {
+            // Storm armors share `DamageNegationSource::Ward`; only the cast Ward is
+            // `elemental_only`, and only it carries `_wardArmor`.
             p.source == DamageNegationSource::Ward
+                && p.elemental_only
                 && !p.breaks_into_stagger
                 && p.remaining > 0.0
                 && now < p.expires_at
