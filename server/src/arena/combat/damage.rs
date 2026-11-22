@@ -1437,18 +1437,30 @@ pub fn mitigate_components(
         if before <= 0.0 {
             continue;
         }
-        let rating = target.resistance_rating_against_source(
-            *ty,
-            source,
-            attacker.elem_resist_piercing,
-            attacker.elem_resist_piercing_rating,
-        ) + target.transient_resistance_against(*ty, now);
-        let weakness = target.weakness_rating_against(*ty, now);
         let piercing = if is_elemental(*ty) {
             attacker.elem_resist_piercing_rating
         } else {
             0.0
         };
+        // Piercing comes off the defender's WHOLE resistance, once.
+        // `DisplayClass328_0.<ResolveResistanceReduction>b__0@0x1fd1944` takes
+        // `Actor$$GetResistance@0x1c56784` (innate + every `ResistanceSourceMethod`
+        // in the handler's +0x80 list) and then does `max(0, resistance - Σpiercing)`
+        // (0x1fd1f34-0x1fd1f40). Typed Resist enchants, Resist Spells
+        // (`ResistBonusInstance$$Register@0x1d5154c`), Resist Elements
+        // (`CombatStatusResistanceEffect$$Register@0x1a5ce30`) and resist potions
+        // (`AbilityApplyResistanceToCaster$$Register@0x1e8ed8c`) all register in that
+        // one list. Piercing used to come off the typed gear rating alone, so it did
+        // nothing against a defender whose resistance was a spell, a potion or
+        // Resist Spells.
+        let unpierced = target.resistance_rating_against_source(
+            *ty,
+            source,
+            attacker.elem_resist_piercing,
+            0.0,
+        ) + target.transient_resistance_against(*ty, now);
+        let rating = (unpierced - piercing).max(0.0);
+        let weakness = target.weakness_rating_against(*ty, now);
         let effectiveness_scale = if continuous {
             combat_params::CONTINUOUS_DAMAGE_RESISTANCE_EFFECTIVENESS * resistance_scale
         } else {
@@ -3283,6 +3295,78 @@ mod tests {
             now,
         );
         assert!((comp(&rd3, DamageType::Poison) - 2.8625).abs() < 0.5);
+    }
+
+    /// Elemental Resistance Piercing nets against the defender's TOTAL resistance:
+    /// `max(0, GetResistance - Σpiercing)` in
+    /// `DisplayClass328_0.<ResolveResistanceReduction>b__0@0x1fd1944`, where
+    /// `GetResistance@0x1c56784` already holds Resist Spells, Resist Elements and
+    /// resist potions. It used to come off the typed gear rating only, so 25 points
+    /// of piercing did nothing against a defender protected by a spell.
+    #[test]
+    fn resistance_piercing_nets_against_the_whole_resistance() {
+        let now = Instant::now();
+        let hit = |attacker: &Loadout, tgt: &Fighter| {
+            let mut comps = vec![(DamageType::Poison, 200.0)];
+            let rd = resolve_generic_components(
+                attacker,
+                tgt,
+                DamageSource::Spell,
+                ActiveSide::Middle,
+                &mut comps,
+                now,
+            );
+            comp(&rd, DamageType::Poison)
+        };
+        let plain = Loadout::default();
+        let piercer = Loadout {
+            elem_resist_piercing_rating: 25.0,
+            ..Default::default()
+        };
+
+        // Resist Elements (a transient rating): 96.65 - 25 = 71.65 comes off.
+        let mut warded = target();
+        warded.transient_resistances.push((
+            DamageType::Poison,
+            96.65,
+            now + Duration::from_secs(10),
+        ));
+        assert!((hit(&plain, &warded) - 103.35).abs() < 0.01);
+        assert!(
+            (hit(&piercer, &warded) - 128.35).abs() < 0.01,
+            "piercing must come off Resist Elements, got {}",
+            hit(&piercer, &warded)
+        );
+
+        // Resist Spells (the source-keyed `None` rating): 63 - 25 = 38 comes off.
+        let mut spell_resist = target();
+        spell_resist.loadout.resistances = vec![(DamageType::None, 63.0)];
+        assert!((hit(&plain, &spell_resist) - 137.0).abs() < 0.01);
+        assert!(
+            (hit(&piercer, &spell_resist) - 162.0).abs() < 0.01,
+            "piercing must come off Resist Spells, got {}",
+            hit(&piercer, &spell_resist)
+        );
+
+        // One subtraction for the sum, not one per source: 10 typed + 63 Spells
+        // + 96.65 Resist Elements = 169.65, minus 25.
+        let mut stacked = target();
+        stacked.loadout.resistances = vec![(DamageType::Poison, 10.0), (DamageType::None, 63.0)];
+        stacked.transient_resistances.push((
+            DamageType::Poison,
+            96.65,
+            now + Duration::from_secs(10),
+        ));
+        assert!((hit(&piercer, &stacked) - 55.35).abs() < 0.01);
+
+        // Control: a typed-only defender is unchanged (40 - 25 = 15), and the
+        // piercing floor still holds when the resistance is far larger.
+        let mut typed = target();
+        typed.loadout.resistances = vec![(DamageType::Poison, 40.0)];
+        assert!((hit(&piercer, &typed) - 185.0).abs() < 0.01);
+        let mut wall = target();
+        wall.loadout.resistances = vec![(DamageType::Poison, 100_000.0)];
+        assert!((hit(&piercer, &wall) - 25.0).abs() < 0.01);
     }
 
     #[test]
