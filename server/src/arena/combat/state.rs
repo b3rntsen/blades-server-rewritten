@@ -2111,6 +2111,20 @@ pub struct Fighter {
     /// interrupted. Set at the single state seam ([`Self::force_actor_state`]) and by
     /// a re-stagger, so no stagger or paralysis path can forget it.
     pub interrupt_pending: Option<Instant>,
+    /// Statuses a RE-stagger has just replaced, as `(status, remaining_secs)`, until
+    /// [`super::resolve::drain_state_changes_for`] has sent their op51 removes.
+    ///
+    /// A stagger landing on an already Staggered actor is not a refresh on the wire.
+    /// `Actor$$AddStatusEffectInternal@0x1c5700c` removes the timed instance it finds
+    /// (vslot 116 `RemoveStatusEffect`) before adding the new one, and the retail
+    /// server announced exactly that: 21 of 21 captured re-staggers are
+    /// `op51 remove Staggered` → `op39 Staggered` → `op51 apply Staggered` in the same
+    /// millisecond, and none of 689 applies arrives while the status is still held.
+    /// The PvP client cannot do the replace itself (`PvpPlayerActor$$RemoveStatusEffect
+    /// @0x1a32aa8` only removes on `force`), so an apply without the remove leaves it
+    /// holding two instances, of which the single remove at expiry clears one
+    /// (report #600).
+    pub restagger_removals: Vec<(StatusEffectType, f32)>,
     /// When this fighter last entered `Charging` or `Blocking`, until
     /// [`super::interrupts::process_interrupts`] has self-interrupted the spell
     /// wind-up or channel it left. `ChannelingState$$EndChanneling@0x1a52578` sends
@@ -2457,6 +2471,7 @@ impl Fighter {
             active_poison: None,
             paralyze_secs: paralyze_duration_secs(1),
             interrupt_pending: None,
+            restagger_removals: Vec::new(),
             self_interrupt_pending: None,
             executions: Vec::new(),
         }
@@ -2837,20 +2852,54 @@ impl Fighter {
         if self.has_reckless_fury(now) || self.is_paralyzed() || self.is_dead() {
             return false;
         }
-        // A FRESH stagger starts without a weakness. `StaggeredWeakness` lives exactly
-        // as long as the Staggered that produced it (`Actor$$ReactToStatusRemoved
-        // @0x1c57850`), so a rating left over from an earlier stagger must not ride
-        // this one.
-        if !self.is_staggered(now) {
-            self.weakness_rating = 0.0;
+        // A stagger on an already Staggered actor REPLACES the old one: the client
+        // removes the timed instance it holds and adds the new one, whose duration
+        // counts from now even when that is shorter than what was left
+        // (`Actor$$AddStatusEffectInternal@0x1c5700c`). Queue the removes the retail
+        // server sent for it — see [`Self::restagger_removals`].
+        //
+        // "Already Staggered" is what the CLIENTS hold: a stagger still running, or one
+        // that lapsed since the last tick and whose remove has therefore not gone out.
+        let replaces = self.is_staggered(now)
+            || self
+                .announced_statuses
+                .contains(&StatusEffectType::Staggered);
+        if replaces {
+            // The weakness goes first, as captured (s417: op51 remove 10, then 3).
+            if self.has_staggered_weakness(now)
+                || self
+                    .announced_statuses
+                    .contains(&StatusEffectType::StaggeredWeakness)
+            {
+                self.restagger_removals
+                    .push((StatusEffectType::StaggeredWeakness, 0.0));
+                self.acknowledge_status_removed(StatusEffectType::StaggeredWeakness);
+            }
+            // Retail's remove carries the time the replaced stagger had left.
+            let remaining = self.staggered_until.map_or(0.0, |until| {
+                until.saturating_duration_since(now).as_secs_f32()
+            });
+            self.restagger_removals
+                .push((StatusEffectType::Staggered, remaining));
         }
+        // Every stagger starts without a weakness. `StaggeredWeakness` lives exactly
+        // as long as the Staggered that produced it (`Actor$$ReactToStatusRemoved
+        // @0x1c57850`), so neither a rating left over from an earlier stagger nor the
+        // one held by the stagger being replaced rides this one. Powerful Block adds
+        // its own again after a high block (`stun_the_blocked_attacker`).
+        self.weakness_rating = 0.0;
         let duration = self.shortened_stagger_secs(secs);
         self.staggered_until = Some(now + std::time::Duration::from_secs_f32(duration.max(0.05)));
-        // A re-stagger does not change the state, so the seam in `force_actor_state`
-        // does not see it; it still interrupts a maneuver started from the first
-        // stagger (Recovery Strikes, a dodge).
+        // A re-stagger interrupts a maneuver started from the first stagger (Recovery
+        // Strikes, a dodge) even where the state does not change.
         self.interrupt_pending.get_or_insert(now);
-        self.set_actor_state(ActorStateType::Staggered, now);
+        if replaces {
+            // Retail re-sends the state frame between the remove and the apply (op39
+            // Staggered, 21 of 21), so the unchanged state is queued explicitly.
+            self.force_actor_state(ActorStateType::Staggered, now);
+        } else {
+            self.set_actor_state(ActorStateType::Staggered, now);
+        }
         // A stagger overrides whatever swing was in flight: drop its queued
         // follow-through/recovery/idle, which would otherwise fire mid-stagger and
         // return the actor to Idle early.
@@ -4627,6 +4676,7 @@ impl MatchCombat {
             f.transient_all_resistance.clear();
             f.maneuver_state_until = None;
             f.staggered_until = None;
+            f.restagger_removals.clear();
             f.interrupt_pending = None;
             f.self_interrupt_pending = None;
             f.executions.clear();
@@ -4790,7 +4840,7 @@ mod tests {
         );
     }
 
-    /// Re-staggering before the first one lapses must not report a removal — the
+    /// Re-staggering before the first one lapses must not report a LAPSE — the
     /// effect never stopped being active.
     #[test]
     fn a_refreshed_stagger_reports_nothing() {
@@ -4800,6 +4850,10 @@ mod tests {
         assert!(f.drain_lapsed_statuses(t0).is_empty());
 
         f.apply_stagger_for(t0 + Duration::from_millis(800), 1.0);
+        // The replace is announced explicitly (report #600), with what was left.
+        assert_eq!(f.restagger_removals.len(), 1);
+        assert_eq!(f.restagger_removals[0].0, StatusEffectType::Staggered);
+        assert!((f.restagger_removals[0].1 - 0.2).abs() < 1e-3);
         assert!(
             f.drain_lapsed_statuses(t0 + Duration::from_millis(1100))
                 .is_empty(),
