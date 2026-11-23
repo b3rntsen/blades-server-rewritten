@@ -1093,6 +1093,13 @@ fn ios_platform() -> String {
     IOS_PLATFORM.to_string()
 }
 
+/// Platforms whose anonymous login may mint a new account. iOS appears twice:
+/// a Game Center login is mapped to `IPhonePlayer`, while the client's own
+/// anonymous path (the no-VPN iOS build) sends `gc`.
+fn platform_may_create_account(platform: &str) -> bool {
+    matches!(platform, "gp" | "gc" | IOS_PLATFORM)
+}
+
 fn gc_as_anon(info: GcLoginInfo) -> AnonLoginInfo {
     AnonLoginInfo {
         user_id: None,
@@ -1405,7 +1412,7 @@ async fn anon_login_inner(
             session: SessionResponseInner::from_session(session_id, session.as_ref()),
         }));
     } else {
-        if info.0.platform != "gp" && info.0.platform != IOS_PLATFORM {
+        if !platform_may_create_account(&info.0.platform) {
             return Err(BladeApiError::new(StatusCode::BAD_REQUEST, 3, 3)); //INVALID_REQUEST_DEVICE_ID
         }
         // A MISSING device id must NOT be fatal. This was
@@ -2955,9 +2962,21 @@ mod token_refresh {
 
         let src = include_str!("authentification.rs");
         assert!(
-            src.contains(r#"info.0.platform != "gp" && info.0.platform != IOS_PLATFORM"#),
+            src.contains("if !platform_may_create_account(&info.0.platform) {"),
             "the new-user path must accept iOS, or a first gc login is a 400"
         );
+    }
+
+    #[test]
+    fn ios_anon_login_platform_may_create_an_account() {
+        // The no-VPN iOS build's auth/anon body is {"deviceId":null,"platform":"gc"};
+        // refusing "gc" answered every first launch with a 400.
+        for p in ["gp", "gc", "IPhonePlayer"] {
+            assert!(platform_may_create_account(p), "{p} must be allowed");
+        }
+        for p in ["", "android", "GC", "ios"] {
+            assert!(!platform_may_create_account(p), "{p} must stay refused");
+        }
     }
 
     #[test]
