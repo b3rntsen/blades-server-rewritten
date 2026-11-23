@@ -2933,7 +2933,8 @@ pub(crate) async fn alt_member_id(
     };
     diesel::sql_query(
         "INSERT INTO alt_member_ids (member_id, user_id, alt_key, character_id)
-         VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, alt_key) DO NOTHING",
+         VALUES ($1, $2, $3, COALESCE($4, (SELECT id FROM characters WHERE user_id = $2)))
+         ON CONFLICT (user_id, alt_key) DO NOTHING",
     )
     .bind::<diesel::sql_types::Uuid, _>(minted)
     .bind::<diesel::sql_types::Uuid, _>(account)

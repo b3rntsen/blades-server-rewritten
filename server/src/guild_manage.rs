@@ -767,6 +767,10 @@ pub struct RosterResponse {
     /// `OPEN` / `APPLY_ONLY` / `CLOSED` — only an apply-only guild gets requests.
     pub guild_type: String,
     pub max_members: i64,
+    /// Whether seats of alts that are not played count towards `max_members`
+    /// (`guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP`), so the website's "full"
+    /// follows the same switch as the game.
+    pub alt_seats_count_towards_cap: bool,
     /// Pending join requests, oldest first.
     pub applications: Vec<ApplicationView>,
     /// The newest website management actions (`guild_manage_log`). The web
@@ -1158,6 +1162,7 @@ pub(crate) async fn build_roster(
             .collect(),
         guild_type: head.guild_type,
         max_members: MAX_MEMBERS,
+        alt_seats_count_towards_cap: crate::guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP,
         applications,
         log,
     }))
@@ -1586,6 +1591,10 @@ pub(crate) async fn decide_application(
 pub struct CoMasterRequest {
     /// The member's character, as the roster lists it.
     pub character_id: Uuid,
+    /// The seat's alt, as the roster lists it — tells apart the seats one
+    /// account's alts hold in the guild. Optional: absent matches any.
+    #[serde(default)]
+    pub alt_key: Option<Uuid>,
     /// `true` appoints, `false` removes the role.
     pub appoint: bool,
     /// The PUBLIC arena user id of the Grand Master. Absent = an operator (the
@@ -1652,14 +1661,47 @@ pub(crate) async fn set_co_master(
     let (actor, actor_seat) = resolve_actor(&live, &parked, &co_masters, body.actor_user_id)?;
     let role = plan_appointment(actor).map_err(refusal_error)?;
 
-    // The role is given to a member who is here: a LIVE seat. (Removing it
-    // works on the same seat; a co-guild master who left has no row to remove —
-    // the departure deleted it.)
+    // The role is given to a member who is here — any seat of theirs, played
+    // alt or not (2026-11-23): a co-guild master who switched alts can still
+    // be stripped, and an alt that is not played can be appointed. The role
+    // belongs to the ACCOUNT. A seat whose alt is not played is matched by its
+    // character AND label (labels are shared with numbered copies).
+    struct Target {
+        user_id: Uuid,
+        character_id: Uuid,
+        name: String,
+        rank: String,
+    }
     let target = live
         .iter()
-        .find(|s| s.character_id == body.character_id)
+        .find(|s| {
+            s.character_id == body.character_id && body.alt_key.is_none_or(|a| s.alt_key == Some(a))
+        })
+        .map(|s| Target {
+            user_id: s.user_id,
+            character_id: s.character_id,
+            name: s.name.clone(),
+            rank: s.rank.clone(),
+        })
+        .or_else(|| {
+            parked
+                .iter()
+                .filter(|s| s.character_id == body.character_id)
+                .filter(|s| body.alt_key.is_none_or(|a| s.alt_key == Some(a)))
+                .min_by_key(|s| {
+                    GuildRank::from_wire(&s.rank)
+                        .map(|r| r as u8)
+                        .unwrap_or(u8::MAX)
+                })
+                .map(|s| Target {
+                    user_id: s.user_id,
+                    character_id: s.character_id,
+                    name: s.name.clone(),
+                    rank: s.rank.clone(),
+                })
+        })
         .ok_or_else(|| err(StatusCode::NOT_FOUND, 43))?;
-    if target.rank == GuildRank::Grandmaster.as_wire() {
+    if body.appoint && target.rank == GuildRank::Grandmaster.as_wire() {
         // The Grand Master already holds everything the role grants.
         return Err(err(StatusCode::CONFLICT, 50));
     }
@@ -2508,10 +2550,37 @@ mod tests {
         fn co_req(character_id: Uuid, appoint: bool, actor: Option<Uuid>) -> CoMasterRequest {
             CoMasterRequest {
                 character_id,
+                alt_key: None,
                 appoint,
                 actor_user_id: actor,
                 operator: None,
             }
+        }
+
+        /// Re-review item 1: the role belongs to the account, so it is given to
+        /// and taken from a seat whose alt is not being played (P plays PB, its
+        /// alt PA holds the seat) — by the Grand Master and by an operator.
+        #[tokio::test]
+        async fn a_co_master_role_works_on_a_seat_whose_alt_is_not_played() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            let r = set_co_master(&mut c, G, &co_req(w.p_char, true, Some(w.gm_user)))
+                .await
+                .unwrap();
+            assert!(r.changed && r.co_master);
+            let seats = seats_of_user(&mut c, w.p_user).await.unwrap();
+            assert!(seats[0].parked && seats[0].co_master && seats[0].can_moderate);
+            let r = set_co_master(&mut c, G, &co_req(w.p_char, false, None))
+                .await
+                .unwrap();
+            assert!(
+                r.changed && !r.co_master,
+                "an operator strips it without a switch back"
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_co_masters").await,
+                0
+            );
         }
 
         /// Appoint A co-guild master, as the Grand Master.
@@ -2641,14 +2710,15 @@ mod tests {
                     .await
                     .is_err()
             );
-            // The Grand Master is never a co-guild master; a non-member cannot be one.
+            // The Grand Master is never a co-guild master; a non-member cannot be
+            // one. (P's alt PA IS a member — its seat is just not played.)
             assert!(
                 set_co_master(&mut c, G, &co_req(w.gm_char, true, None))
                     .await
                     .is_err()
             );
             assert!(
-                set_co_master(&mut c, G, &co_req(w.p_char, true, None))
+                set_co_master(&mut c, G, &co_req(Uuid::new_v4(), true, None))
                     .await
                     .is_err()
             );

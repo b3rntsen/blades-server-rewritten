@@ -328,7 +328,7 @@ pub async fn get_guild_detail(
                LEFT JOIN characters c ON c.id = gm.character_id
               WHERE gm.guild_id = $1
              UNION ALL
-             SELECT s.alt_key, s.user_id, s.rank, s.join_date
+             SELECT s.member_id, s.user_id, s.rank, s.join_date
                FROM guild_alt_seats s WHERE s.guild_id = $1) seats
           ORDER BY CASE rank WHEN 'GRANDMASTER' THEN 0 WHEN 'MASTER' THEN 1
                              WHEN 'ELDER' THEN 2 ELSE 3 END, join_date ASC",
@@ -373,14 +373,15 @@ pub async fn set_grandmaster(
     let mut conn = db(&app_state).await?;
 
     let rows: Vec<MemberRow> = sql_query(
-        // A seat of an alt that is not being played is listed under its alt
-        // key (its `character_id` is the account's row, shared by its alts).
+        // A seat of an alt that is not being played is listed under its member
+        // id: unique, where its label is shared with numbered copies and its
+        // `character_id` with the account's other alts.
         "SELECT gm.character_id, COALESCE(c.user_id, gm.user_id) AS user_id, gm.rank, gm.join_date
                FROM guild_members gm
                LEFT JOIN characters c ON c.id = gm.character_id
               WHERE gm.guild_id = $1
          UNION ALL
-         SELECT s.alt_key, s.user_id, s.rank, s.join_date
+         SELECT s.member_id, s.user_id, s.rank, s.join_date
            FROM guild_alt_seats s WHERE s.guild_id = $1",
     )
     .bind::<Text, _>(&guild_id)
@@ -430,7 +431,7 @@ pub async fn set_grandmaster(
         if let Some(outgoing) = change.demote {
             sql_query(
                 "WITH a AS (UPDATE guild_alt_seats SET rank = 'MASTER'
-                             WHERE guild_id = $1 AND alt_key = $2)
+                             WHERE guild_id = $1 AND member_id = $2)
                  UPDATE guild_members SET rank = 'MASTER' WHERE guild_id = $1 AND character_id = $2",
             )
             .bind::<Text, _>(&guild_id)
@@ -444,7 +445,7 @@ pub async fn set_grandmaster(
         }
         sql_query(
             "WITH a AS (UPDATE guild_alt_seats SET rank = 'GRANDMASTER'
-                         WHERE guild_id = $1 AND alt_key = $2)
+                         WHERE guild_id = $1 AND member_id = $2)
              UPDATE guild_members SET rank = 'GRANDMASTER' WHERE guild_id = $1 AND character_id = $2",
         )
         .bind::<Text, _>(&guild_id)
@@ -656,11 +657,22 @@ async fn character_names(
         return Vec::new();
     }
     let ids: Vec<Uuid> = members.iter().map(|m| m.character_id).collect();
-    let rows: Result<Vec<NameRow>, _> =
-        sql_query("SELECT id, character->>'name' AS name FROM characters WHERE id = ANY($1)")
-            .bind::<diesel::sql_types::Array<SqlUuid>, _>(ids)
-            .get_results(conn)
-            .await;
+    // A played seat is named by its character row; a seat whose alt is not
+    // played by that alt's newest version, scoped by account (alt labels are
+    // shared with numbered copies).
+    let rows: Result<Vec<NameRow>, _> = sql_query(
+        r#"SELECT id, character->>'name' AS name FROM characters WHERE id = ANY($1)
+           UNION ALL
+           SELECT s.member_id, (SELECT COALESCE(NULLIF(v.name, ''), v."character"->>'name')
+                                  FROM character_versions v
+                                 WHERE v.user_id = s.user_id
+                                   AND (v.source_alt_uuid = s.alt_key OR v.id = s.alt_key)
+                                 ORDER BY v.saved_at DESC, v.id DESC LIMIT 1)
+             FROM guild_alt_seats s WHERE s.member_id = ANY($1)"#,
+    )
+    .bind::<diesel::sql_types::Array<SqlUuid>, _>(ids)
+    .get_results(conn)
+    .await;
     match rows {
         Ok(rows) => rows.into_iter().map(|r| (r.id, r.name)).collect(),
         Err(e) => {
