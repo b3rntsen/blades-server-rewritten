@@ -312,7 +312,7 @@ pub(crate) const FREEZE_STANDINGS_SQL: &str = "\
      JOIN characters c ON c.id = m.character_id \
      LEFT JOIN guild_members gm ON gm.character_id = c.id \
      LEFT JOIN LATERAL ( \
-         SELECT v.server_state -> 'parkedGuildMembers' -> 0 ->> 'guild_id' AS guild_id \
+         SELECT (SELECT s.guild_id FROM guild_alt_seats s WHERE s.alt_key = v.source_alt_uuid) AS guild_id \
          FROM character_versions v \
          WHERE v.character_id = m.character_id AND v.source_alt_uuid = m.alt \
          ORDER BY v.saved_at DESC \

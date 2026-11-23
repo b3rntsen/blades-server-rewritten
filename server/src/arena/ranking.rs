@@ -1375,7 +1375,7 @@ pub(crate) const H2H_BOARD_ENTRIES_SQL: &str = "\
          LEFT JOIN LATERAL ( \
              SELECT v.character ->> 'name' AS name, \
                     (v.character ->> 'level')::bigint AS level, \
-                    v.server_state -> 'parkedGuildMembers' -> 0 ->> 'guild_id' AS parked_guild_id \
+                    (SELECT s.guild_id FROM guild_alt_seats s WHERE s.alt_key = v.source_alt_uuid) AS parked_guild_id \
              FROM character_versions v \
              WHERE v.character_id = r.character_id \
                AND v.source_alt_uuid = r.alt_key \
@@ -2228,7 +2228,7 @@ mod tests {
         const H2H_PER_ALT_MIGRATION_UP: &str =
             include_str!("../../../migrations/2026-10-11-000000-0000_h2h_ratings_per_alt/up.sql");
 
-        const SCHEMA: [&str; 9] = [
+        const SCHEMA: [&str; 10] = [
             "CREATE TABLE arena_seasons ( \
                  id UUID PRIMARY KEY, number INTEGER NOT NULL, name TEXT NOT NULL, \
                  starts_at BIGINT NOT NULL, ends_at BIGINT NOT NULL, status TEXT NOT NULL DEFAULT 'scheduled', \
@@ -2263,6 +2263,7 @@ mod tests {
                  saved_at BIGINT NOT NULL)",
             "CREATE TABLE guilds (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
             "CREATE TABLE guild_members (guild_id TEXT NOT NULL, character_id UUID PRIMARY KEY)",
+            "CREATE TABLE guild_alt_seats (alt_key UUID PRIMARY KEY, guild_id TEXT NOT NULL)",
         ];
 
         #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
@@ -3330,6 +3331,13 @@ mod tests {
             .unwrap();
             diesel::sql_query("INSERT INTO guild_members VALUES ('g-live', $1)")
                 .bind::<diesel::sql_types::Uuid, _>(row)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            // The parked alt's seat stays in its guild (2026-11-23), as an alt
+            // seat; the legacy `parkedGuildMembers` key above is read by nothing.
+            diesel::sql_query("INSERT INTO guild_alt_seats VALUES ($1, 'g-parked')")
+                .bind::<diesel::sql_types::Uuid, _>(parked)
                 .execute(&mut conn)
                 .await
                 .unwrap();

@@ -247,7 +247,7 @@ pub(crate) const RANKED_CTE: &str = "
                        v.user_id,
                        v.source_alt_uuid,
                        COALESCE(v.character ->> 'name', '') AS name,
-                       v.server_state -> 'parkedGuildMembers' -> 0 ->> 'guild_id' AS parked_guild_id,
+                       (SELECT s.guild_id FROM guild_alt_seats s WHERE s.alt_key = v.source_alt_uuid) AS parked_guild_id,
                        COALESCE((v.character ->> 'pvpTrophies')::bigint, 0) AS score,
                        COALESCE((v.character ->> 'pvpWinningStreak')::bigint, 0) AS streak
                 FROM character_versions v

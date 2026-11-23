@@ -253,7 +253,10 @@ const GUILD_LIST_SQL: &str = "
           SELECT guild_id,
                  COUNT(*)                                            AS cnt,
                  COUNT(*) FILTER (WHERE rank = 'GRANDMASTER')        AS gms
-            FROM guild_members
+            FROM (SELECT guild_id, rank FROM guild_members
+                  UNION ALL
+                  -- Alts that are not being played keep their seats (2026-11-23).
+                  SELECT guild_id, rank FROM guild_alt_seats) seats
            GROUP BY guild_id
       ) m ON m.guild_id = g.id
      ORDER BY g.trophies DESC, g.name ASC
@@ -319,10 +322,14 @@ pub async fn get_guild_detail(
     let guild = to_summary(guilds.remove(0));
 
     let members: Vec<MemberRow> = sql_query(
-        "SELECT gm.character_id, COALESCE(c.user_id, gm.user_id) AS user_id, gm.rank, gm.join_date
-           FROM guild_members gm
-           LEFT JOIN characters c ON c.id = gm.character_id
-          WHERE gm.guild_id = $1
+        "SELECT * FROM (
+             SELECT gm.character_id, COALESCE(c.user_id, gm.user_id) AS user_id, gm.rank, gm.join_date
+               FROM guild_members gm
+               LEFT JOIN characters c ON c.id = gm.character_id
+              WHERE gm.guild_id = $1
+             UNION ALL
+             SELECT s.alt_key, s.user_id, s.rank, s.join_date
+               FROM guild_alt_seats s WHERE s.guild_id = $1) seats
           ORDER BY CASE rank WHEN 'GRANDMASTER' THEN 0 WHEN 'MASTER' THEN 1
                              WHEN 'ELDER' THEN 2 ELSE 3 END, join_date ASC",
     )
@@ -366,10 +373,15 @@ pub async fn set_grandmaster(
     let mut conn = db(&app_state).await?;
 
     let rows: Vec<MemberRow> = sql_query(
+        // A seat of an alt that is not being played is listed under its alt
+        // key (its `character_id` is the account's row, shared by its alts).
         "SELECT gm.character_id, COALESCE(c.user_id, gm.user_id) AS user_id, gm.rank, gm.join_date
                FROM guild_members gm
                LEFT JOIN characters c ON c.id = gm.character_id
-              WHERE gm.guild_id = $1",
+              WHERE gm.guild_id = $1
+         UNION ALL
+         SELECT s.alt_key, s.user_id, s.rank, s.join_date
+           FROM guild_alt_seats s WHERE s.guild_id = $1",
     )
     .bind::<Text, _>(&guild_id)
     .get_results(&mut conn)
@@ -417,7 +429,9 @@ pub async fn set_grandmaster(
         let now = now_unix();
         if let Some(outgoing) = change.demote {
             sql_query(
-                "UPDATE guild_members SET rank = 'MASTER' WHERE guild_id = $1 AND character_id = $2",
+                "WITH a AS (UPDATE guild_alt_seats SET rank = 'MASTER'
+                             WHERE guild_id = $1 AND alt_key = $2)
+                 UPDATE guild_members SET rank = 'MASTER' WHERE guild_id = $1 AND character_id = $2",
             )
             .bind::<Text, _>(&guild_id)
             .bind::<SqlUuid, _>(outgoing)
@@ -429,7 +443,9 @@ pub async fn set_grandmaster(
             })?;
         }
         sql_query(
-            "UPDATE guild_members SET rank = 'GRANDMASTER' WHERE guild_id = $1 AND character_id = $2",
+            "WITH a AS (UPDATE guild_alt_seats SET rank = 'GRANDMASTER'
+                         WHERE guild_id = $1 AND alt_key = $2)
+             UPDATE guild_members SET rank = 'GRANDMASTER' WHERE guild_id = $1 AND character_id = $2",
         )
         .bind::<Text, _>(&guild_id)
         .bind::<SqlUuid, _>(change.promote)

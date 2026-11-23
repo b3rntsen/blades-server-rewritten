@@ -300,7 +300,7 @@ pub async fn get_social_characters(
 
     let now_ms = crate::arena::arena_season::now_unix() * 1000;
 
-    let characters = rows
+    let mut characters: Vec<SocialCharacterWire> = rows
         .iter()
         .map(|row| {
             SocialCharacterWire::build(
@@ -316,9 +316,76 @@ pub async fn get_social_characters(
         })
         .collect();
 
+    // An id that is no account is an alt key: a guild lists an alt that is not
+    // being played under it (guild.rs `load_members`). Its card is its newest
+    // version, offline, with the alt key as both ids — the character id the
+    // town and loadout routes below resolve the same way.
+    let unresolved: Vec<Uuid> = wanted
+        .iter()
+        .copied()
+        .filter(|w| !rows.iter().any(|r| r.user_id == *w))
+        .collect();
+    for alt in versions_of_alts(&mut conn, &unresolved).await? {
+        let (Ok(c), Ok(d)) = (
+            serde_json::from_value::<blades_lib::user_data::CompleteCharacter>(alt.character),
+            serde_json::from_value::<blades_lib::user_data::CompleteCharacterData>(alt.data),
+        ) else {
+            log::warn!(
+                "[social] alt {} has a version this build cannot read; no card",
+                alt.alt_key
+            );
+            continue;
+        };
+        characters.push(SocialCharacterWire::build(
+            alt.alt_key,
+            alt.alt_key,
+            &c,
+            &d,
+            false,
+            now_ms,
+            full,
+            &data_keys,
+        ));
+    }
+
     Ok(Json(SocialResponse {
         social: SocialCharacters { characters },
     }))
+}
+
+/// The newest version of each alt in `alt_keys` (an alt is known by its
+/// `source_alt_uuid`, or by a version id when it never had one).
+#[derive(diesel::QueryableByName)]
+pub(crate) struct AltVersion {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    pub(crate) alt_key: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    pub(crate) character: Value,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    data: Value,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+    town: Option<Value>,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    inventory: Value,
+}
+
+pub(crate) async fn versions_of_alts(
+    conn: &mut diesel_async::AsyncPgConnection,
+    alt_keys: &[Uuid],
+) -> Result<Vec<AltVersion>, BladeApiError> {
+    if alt_keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(diesel::sql_query(
+        r#"SELECT DISTINCT ON (k.alt_key)
+                  k.alt_key, v."character", v.data, v.town, v.inventory
+             FROM unnest($1::uuid[]) AS k(alt_key)
+             JOIN character_versions v ON v.source_alt_uuid = k.alt_key OR v.id = k.alt_key
+            ORDER BY k.alt_key, v.saved_at DESC, v.id DESC"#,
+    )
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(alt_keys)
+    .load(conn)
+    .await?)
 }
 
 #[derive(Deserialize)]
@@ -368,12 +435,29 @@ pub async fn get_social_town(
             .load(&mut conn)
             .await?
     };
-    let row = rows
-        .get(0)
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 11))?;
-    let town = social_town_body(row.town.as_ref().map(|v| &v.0), full, || {
-        crate::town::load_default_town(&app_state)
-    })?;
+    // A guildmate's alt that is not being played visits as its newest version.
+    let alt_town: Option<Option<Value>> =
+        if rows.is_empty() && wanted_user_id == wanted_character_id {
+            versions_of_alts(&mut conn, &[wanted_user_id])
+                .await?
+                .into_iter()
+                .next()
+                .map(|v| v.town)
+        } else {
+            None
+        };
+    let stored: Option<&Value> = match (rows.get(0), alt_town.as_ref()) {
+        (Some(row), _) => row.town.as_ref().map(|v| &v.0),
+        (None, Some(town)) => town.as_ref(),
+        (None, None) => {
+            return Err(BladeApiError::new(
+                StatusCode::NOT_FOUND,
+                SOCIAL_SERVICE_ID,
+                11,
+            ));
+        }
+    };
+    let town = social_town_body(stored, full, || crate::town::load_default_town(&app_state))?;
 
     Ok(Json(SocialTownResponse {
         social: SocialTownInner { town },
@@ -407,15 +491,33 @@ pub async fn get_social_loadout(
             .load(&mut conn)
             .await?
     };
-    let row = rows
-        .get(0)
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 12))?;
+    let equipped_items = match rows.get(0) {
+        Some(row) => row.inventory.0.loadout.equipped_items.clone(),
+        // A guildmate's alt that is not being played: its newest version.
+        None if wanted_user_id == wanted_character_id => {
+            versions_of_alts(&mut conn, &[wanted_user_id])
+                .await?
+                .into_iter()
+                .next()
+                .and_then(|v| {
+                    serde_json::from_value::<blades_lib::user_data::CompleteInventory>(v.inventory)
+                        .ok()
+                })
+                .map(|inv| inv.loadout.equipped_items)
+                .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, SOCIAL_SERVICE_ID, 12))?
+        }
+        None => {
+            return Err(BladeApiError::new(
+                StatusCode::NOT_FOUND,
+                SOCIAL_SERVICE_ID,
+                12,
+            ));
+        }
+    };
 
     Ok(Json(SocialLoadoutResponse {
         social: SocialLoadoutInner {
-            loadout: SocialLoadoutWire {
-                equipped_items: row.inventory.0.loadout.equipped_items.clone(),
-            },
+            loadout: SocialLoadoutWire { equipped_items },
         },
     }))
 }
