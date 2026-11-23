@@ -199,6 +199,11 @@ services:
       # normal empty-starter bot (no opponent profile). Does NOT affect a real PvP pair.
       # Recreate the container to apply (no rebuild needed). See matchmaker.rs / config.rs.
       ARENA_DEBUG_GHOST: ${ARENA_DEBUG_GHOST:-}
+      # Rehearsal of the December 2026 Sigil-per-fight (tracker #499): "1" pays
+      # marked TEST characters the fight Sigil outside the December window, so the
+      # result card can be checked on a device beforehand. Empty/unset = off, and
+      # nobody else is ever affected. Recreate to apply; unset it afterwards.
+      ARENA_FIGHT_SIGIL_REHEARSAL: ${ARENA_FIGHT_SIGIL_REHEARSAL:-}
       # Match-end card switches (#401, #319). Empty/unset = off. Each puts items in
       # the op49 result card's backpack change set, which retail never did; both were
       # checked on a real client against a local server on 2026-10-23 (card renders,
