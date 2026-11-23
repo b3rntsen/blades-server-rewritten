@@ -67,6 +67,7 @@ mod jewelry_grade;
 mod jewelry_roll;
 mod json_db;
 mod log_redact;
+mod login_guard;
 pub mod models;
 mod quest;
 mod repair;
@@ -282,7 +283,12 @@ async fn main() -> Result<()> {
             //
             // Handlers acquire one connection and pass `&mut conn` down, so a
             // request never holds two; 10 is concurrency, not a per-request
-            // cost.
+            // cost. The password sign-in returns its connection before it
+            // verifies the hash (`login_guard`), so slow logins cannot hold it.
+            //
+            // Read the login limits now, so a bad value is reported at start
+            // and the effective limits are in the log before the first login.
+            login_guard::global();
             let db_pool = Pool::builder()
                 .max_size(DB_POOL_MAX)
                 .build(AsyncDieselConnectionManager::<AsyncPgConnection>::new(

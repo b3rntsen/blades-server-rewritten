@@ -240,51 +240,18 @@ pub async fn find_by_username(
         .optional()
 }
 
-/// Check a username and password, and name the account they open.
-///
-/// The one place the login and link endpoints decide whether a credential is
-/// good, so they cannot drift apart:
-///
-/// - Out-of-bounds input is refused before any work, and reads to the caller
-///   exactly like a wrong password.
-/// - "No such user" and "wrong password" do the same PBKDF2 work, against
-///   [`ENUMERATION_DUMMY_HASH`] when there is no row, so the response time
-///   does not say who plays here.
-/// - The derivation runs on the blocking pool. It is tens of milliseconds of
-///   pure CPU; on an async worker it stalls every other request that worker
-///   is carrying, and anyone can ask for it.
-pub async fn check_login(
-    conn: &mut AsyncPgConnection,
-    username_raw: &str,
-    password: &str,
-) -> Option<Uuid> {
-    if !credential_is_within_bounds(username_raw, password) {
-        log::warn!(
-            "credential check: refused an over-long username or password without hashing (username {} bytes, password {} bytes)",
-            username_raw.len(),
-            password.len()
-        );
-        return None;
-    }
-    let username = normalise_username(username_raw);
-    let found = find_by_username(conn, &username).await.unwrap_or(None);
-    let (user_id, hash) = match found {
-        Some(row) => (Some(row.user_id), row.password_hash),
-        None => (None, ENUMERATION_DUMMY_HASH.to_string()),
-    };
-    let ok = verify_password_off_the_async_workers(password.to_string(), hash).await;
-    user_id.filter(|_| ok)
-}
+// Checking a username and password lives in `crate::login_guard`: the
+// failure limits, the bound on concurrent verifications and the rule that the
+// pooled connection is returned before the hash runs all sit around the same
+// three steps, so they are kept in one place. What it relies on from here:
+//
+// - [`credential_is_within_bounds`] before anything is normalised or hashed;
+// - [`find_by_username`] for the row, and [`ENUMERATION_DUMMY_HASH`] when there
+//   is none, so "no such user" costs the same PBKDF2 work as "wrong password";
+// - [`verify_password`], run on the blocking pool.
 
-/// [`verify_password`] on the blocking pool. A task that cannot be joined is a
-/// failed check, never a passed one.
-pub async fn verify_password_off_the_async_workers(password: String, stored: String) -> bool {
-    tokio::task::spawn_blocking(move || verify_password(&password, &stored))
-        .await
-        .unwrap_or(false)
-}
-
-/// [`hash_password`] on the blocking pool, for the same reason.
+/// [`hash_password`] on the blocking pool: tens of milliseconds of pure CPU
+/// stall every other request an async worker is carrying.
 pub async fn hash_password_off_the_async_workers(password: String) -> Option<String> {
     tokio::task::spawn_blocking(move || hash_password(&password))
         .await
@@ -366,22 +333,11 @@ mod tests {
     }
 
     /// The property is "not on the thread that is serving requests". The
-    /// counter is per thread, so a derivation that ran here would show.
+    /// counter is per thread, so a derivation that ran here would show. The
+    /// login guard's verification is pinned the same way in `check_login_tests`.
     #[tokio::test]
-    async fn verification_and_hashing_run_off_the_calling_thread() {
-        let cheap = {
-            let salt = [7u8; SALT_LEN];
-            let dk = pbkdf2_sha256(b"pw", &salt, 1000);
-            format!("pbkdf2$1000${}${}", hex(&salt), hex(&dk))
-        };
+    async fn hashing_runs_off_the_calling_thread() {
         let before = pbkdf2_runs_on_this_thread();
-
-        assert!(verify_password_off_the_async_workers("pw".into(), cheap.clone()).await);
-        assert!(!verify_password_off_the_async_workers("wrong".into(), cheap).await);
-        assert!(
-            !verify_password_off_the_async_workers("pw".into(), ENUMERATION_DUMMY_HASH.into())
-                .await
-        );
         let stored = hash_password_off_the_async_workers("pw".into())
             .await
             .expect("the hashing task joins");
@@ -479,7 +435,36 @@ mod tests {
 #[cfg(test)]
 mod check_login_tests {
     use super::*;
+    use crate::login_guard::{LoginGuard, LoginGuardConfig, LoginOutcome};
     use diesel_async::AsyncConnection;
+
+    /// The production check (limits, bounds, dummy hash, blocking pool) with
+    /// the row read through this test's own connection.
+    async fn check_login(
+        conn: &mut AsyncPgConnection,
+        username_raw: &str,
+        password: &str,
+    ) -> Option<Uuid> {
+        // A fresh guard per call: these tests are about the credential, not
+        // about the failure limits, which `login_guard` tests on their own.
+        let guard = LoginGuard::new(LoginGuardConfig::from_env());
+        let before = PBKDF2_RUNS_ON_THIS_THREAD.with(|runs| runs.get());
+        let outcome = guard
+            .check(None, username_raw, password, |name| async move {
+                Ok(find_by_username(conn, &name).await.unwrap_or(None))
+            })
+            .await;
+        assert_eq!(
+            PBKDF2_RUNS_ON_THIS_THREAD.with(|runs| runs.get()),
+            before,
+            "the derivation ran on the thread serving the request"
+        );
+        match outcome {
+            LoginOutcome::Accepted(id) => Some(id),
+            LoginOutcome::Refused => None,
+            LoginOutcome::Busy => panic!("busy with one request in flight"),
+        }
+    }
 
     /// A private `arena_credentials` holding one login, `ruukoto` / `pw`.
     async fn one_login() -> Option<(AsyncPgConnection, Uuid)> {
