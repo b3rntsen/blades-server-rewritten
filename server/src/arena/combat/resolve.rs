@@ -1686,8 +1686,6 @@ fn stun_the_blocked_attacker(
         return out;
     }
     let secs = BASE_STAGGER_DURATION_SECS;
-    // Held Powerful Block weakness, read BEFORE the stagger refreshes anything.
-    let weakness_held = combat.fighters[attacker_slot].has_staggered_weakness(now);
     // A refused stagger (Reckless Fury, paralysis) has no Staggered status, so
     // `CombatManager$$ApplyDamage@0x1bd2770` fires no `CausedStagger` hook: no op51(3),
     // and no Powerful Block `StaggeredWeakness` either.
@@ -1698,6 +1696,9 @@ fn stun_the_blocked_attacker(
         );
         return out;
     }
+    // Read AFTER the stagger: one that replaced an earlier stagger removed the
+    // weakness that stagger carried, so Powerful Block applies again below.
+    let weakness_held = combat.fighters[attacker_slot].has_staggered_weakness(now);
     let obj = combat.fighters[attacker_slot].net_object_id;
     // The duration the attacker is actually held, after their Shorten Stagger — the
     // value the client is told below (#295).
@@ -1723,9 +1724,10 @@ fn stun_the_blocked_attacker(
     // It ships NO duration of its own — every captured op51 carries 0.0 — and is
     // removed with the Staggered that produced it.
     //
-    // It never stacks and never refreshes: `PowerfulBlockBonusInstance$$CausedStagger
-    // @0x1d51214` returns early when the attacker already has StaggeredWeakness (10),
-    // so the first magnitude sticks and no second apply is sent.
+    // It never stacks: `PowerfulBlockBonusInstance$$CausedStagger@0x1d51214` returns
+    // early when the attacker already has StaggeredWeakness (10). A stagger that
+    // REPLACED an earlier one has already removed that weakness with it (#600), so
+    // the attacker does not hold it here and it is applied again.
     let weakness = combat.fighters[blocker_slot].loadout.powerful_block;
     if weakness > 0.0 && !weakness_held {
         combat.fighters[attacker_slot].weakness_rating = weakness;
@@ -3819,6 +3821,11 @@ fn apply_shipped_effects_phased(
                 .unwrap_or(super::state::BASE_STAGGER_DURATION_SECS);
             // A refused stagger (Fury, paralysis) is not announced.
             if combat.fighters[target_slot].apply_stagger_for(now, secs) {
+                // The state frame goes out BEFORE the status frame, as on the
+                // high-block path — and for a stagger that replaced an earlier one
+                // this drain is also what sends the old status's op51 remove, which
+                // must reach the client ahead of the apply below (#600).
+                out.extend(drain_state_changes_for(combat, now, Some(target_slot)));
                 let obj = combat.fighters[target_slot].net_object_id;
                 // Announce the duration actually applied (Shorten Stagger), #295.
                 let secs = combat.fighters[target_slot].shortened_stagger_secs(secs);
@@ -6876,6 +6883,21 @@ pub fn drain_state_changes_for(
     for slot in 0..viewers {
         if matches!(only, Some(s) if s != slot) {
             continue;
+        }
+        // A stagger that replaced an earlier one: the old Staggered (and the
+        // StaggeredWeakness that rode it) is removed BEFORE the op39 that re-enters
+        // the state, and the caller's op51 apply follows — retail's order in 21 of
+        // 21 captured re-staggers (report #600).
+        let replaced = std::mem::take(&mut combat.fighters[slot].restagger_removals);
+        if !replaced.is_empty() {
+            let obj = combat.fighters[slot].net_object_id;
+            for (status, remaining) in replaced {
+                debug!("combat: slot {slot} re-staggered — op51 remove {status:?} first");
+                let frame = messages::change_combat_status_effect(obj, false, status, remaining);
+                for viewer in 0..viewers {
+                    out.push((viewer, frame.clone()));
+                }
+            }
         }
         let changes = combat.fighters[slot].take_state_changes();
         if changes.is_empty() {
@@ -21245,13 +21267,218 @@ mod status_removals_tests {
         assert!(c.fighters[1].is_paralyzed());
     }
 
-    // ---- 03-D10: StaggeredWeakness is not re-applied while held ---------------
+    // ---- report #600: a stagger on a Staggered actor REPLACES the old one ------
 
-    /// ch03 §7: "Two high blocks within one stagger, from blockers with different
-    /// Powerful Block tiers. The magnitude must stay at the first."
-    /// (`PowerfulBlockBonusInstance$$CausedStagger@0x1d51214` returns early.)
+    /// What ONE viewer is sent about `slot`'s stagger, in wire order: `-3` / `+3`
+    /// (op51 Staggered remove / apply), `-10` / `+10` (StaggeredWeakness) and `39:5`
+    /// (the op39 that enters the Staggered state).
+    fn stagger_wire(c: &MatchCombat, slot: usize, out: &[(usize, Vec<u8>)]) -> Vec<String> {
+        let obj = i64::from(c.fighters[slot].net_object_id);
+        out.iter()
+            .filter(|(viewer, f)| *viewer == 0 && f.len() > 2 && f[1] == 0x36)
+            .filter_map(|(_, f)| {
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                if nd.int(0) != Some(obj) {
+                    return None;
+                }
+                match nd.int(3) {
+                    Some(51) => {
+                        let status = nd.int(5)?;
+                        let weakness = StatusEffectType::StaggeredWeakness as u16 as i64;
+                        let staggered = StatusEffectType::Staggered as u16 as i64;
+                        if status != staggered && status != weakness {
+                            return None;
+                        }
+                        let sign = match nd.props.get(&4) {
+                            Some(arena_proto::NetDataValue::Bool(true)) => '+',
+                            _ => '-',
+                        };
+                        Some(format!("{sign}{status}"))
+                    }
+                    Some(39) if nd.int(6) == Some(ActorStateType::Staggered as u8 as i64) => {
+                        Some("39:5".to_string())
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// Staggering Bash rank 1 on slot 1, unblocked, over its threshold.
+    fn bash(c: &mut MatchCombat, now: Instant) -> Vec<(usize, Vec<u8>)> {
+        let u = uuid_of("StaggeringBash");
+        let threshold = super::super::gamedata::ability_rank_clamped(u, 1)
+            .and_then(|r| r.damage_to_cause_stagger())
+            .expect("StaggeringBash R1 ships _damageToCauseStagger");
+        apply_shipped_effects(c, 0, 1, u, 1, threshold + 1.0, false, false, now)
+    }
+
+    /// Run the match at production's ~2 ms engine step: slot 1 is high-blocked at 0 s
+    /// (stunned `BASE_STAGGER_DURATION_SECS`), then takes a Staggering Bash at
+    /// `bash_at_ms`. Returns what viewer 0 is sent about slot 1's stagger, as
+    /// `(ms, event)`.
+    fn run_stun_then_bash(c: &mut MatchCombat, bash_at_ms: u64) -> Vec<(u64, String)> {
+        let now = Instant::now();
+        let mut wire = Vec::new();
+        for ms in (0..=4_000u64).step_by(2) {
+            let t = now + Duration::from_millis(ms);
+            let mut out = Vec::new();
+            if ms == 0 {
+                out.extend(stun_the_blocked_attacker(c, 1, 0, t));
+            }
+            if ms == bash_at_ms {
+                out.extend(bash(c, t));
+            }
+            out.extend(on_tick(c, t, false));
+            wire.extend(stagger_wire(c, 1, &out).into_iter().map(|e| (ms, e)));
+        }
+        wire
+    }
+
+    /// What the PvP client ends up holding. It cannot replace a status itself and
+    /// never times one out (`PvpPlayerActor$$RemoveStatusEffect@0x1a32aa8` removes
+    /// only on `force`): every apply adds an instance and every remove takes one.
+    fn most_staggered_instances_held(wire: &[(u64, String)]) -> (i32, i32) {
+        let (mut held, mut most) = (0, 0);
+        for (_, event) in wire {
+            match event.as_str() {
+                "+3" => held += 1,
+                "-3" => held -= 1,
+                _ => {}
+            }
+            most = most.max(held);
+        }
+        (most, held)
+    }
+
+    /// CONTROL: one stun, never re-staggered — state, apply, and one remove when the
+    /// 2.5 s are up.
     #[test]
-    fn a_second_powerful_block_does_not_overwrite_the_weakness() {
+    fn a_single_stun_is_applied_once_and_removed_at_its_expiry() {
+        let mut c = combat2(Instant::now());
+        let wire = run_stun_then_bash(&mut c, u64::MAX);
+        let events: Vec<&str> = wire.iter().map(|(_, e)| e.as_str()).collect();
+        assert_eq!(events, ["39:5", "+3", "-3"], "{wire:?}");
+        let removed_at = wire[2].0;
+        assert!(
+            (2_500..=2_504).contains(&removed_at),
+            "removed at {removed_at} ms"
+        );
+    }
+
+    /// Report #600. A Staggering Bash on an already stunned target is, on the retail
+    /// wire, `op51 remove Staggered` → `op39 Staggered` → `op51 apply Staggered`: 21 of
+    /// 21 captured re-staggers, and none of 689 applies arrives while the status is
+    /// held (`Actor$$AddStatusEffectInternal@0x1c5700c` removes the timed instance
+    /// first). We sent the apply alone, so the client held TWO Staggered instances and
+    /// the single remove at expiry cleared one of them.
+    #[test]
+    fn a_bash_on_a_stunned_target_removes_the_old_stagger_before_the_new_one() {
+        let mut c = combat2(Instant::now());
+        let wire = run_stun_then_bash(&mut c, 450);
+        let events: Vec<&str> = wire.iter().map(|(_, e)| e.as_str()).collect();
+        assert_eq!(
+            events,
+            ["39:5", "+3", "-3", "39:5", "+3", "-3"],
+            "stun, then remove → state → apply for the bash, then the one final remove: {wire:?}"
+        );
+        assert!(
+            wire[2..5].iter().all(|(ms, _)| *ms == 450),
+            "the replace is one burst at the bash: {wire:?}"
+        );
+        assert_eq!(
+            most_staggered_instances_held(&wire),
+            (1, 0),
+            "the client never holds two Staggered instances and ends with none"
+        );
+        // The new stagger REPLACES the old one: 1.3 s from the bash, although the
+        // high-block stun had 2.05 s left (retail s414: a 2.5 s stun replaced after
+        // 0.43 s by a 1.3 s one).
+        let removed_at = wire[5].0;
+        assert!(
+            (1_750..=1_754).contains(&removed_at),
+            "removed at {removed_at} ms"
+        );
+    }
+
+    /// Report #603. Shorten Stagger (0.2 at every tier) is applied ONCE to a stagger,
+    /// also to one that replaces another: 2.5 → 2.0 s, then the bash's 1.3 → 1.04 s
+    /// counted from the bash. The announced duration is the held one.
+    #[test]
+    fn shorten_stagger_applies_once_to_a_replacing_stagger() {
+        let now = Instant::now();
+        let mut c = combat2(now);
+        c.fighters[1].loadout.shorten_stagger = 0.20;
+        let first = stun_the_blocked_attacker(&mut c, 1, 0, now);
+        assert_eq!(staggered_secs(&first, true), [2.0, 2.0]);
+        let second = bash(&mut c, at(now, 0.45));
+        let announced = staggered_secs(&second, true);
+        assert!(
+            announced.len() == 2 && announced.iter().all(|s| (s - 1.04).abs() < 1e-4),
+            "announced {announced:?}"
+        );
+        let left = staggered_secs(&second, false);
+        assert!(
+            left.len() == 2 && left.iter().all(|s| (s - 1.55).abs() < 1e-3),
+            "the remove carries what the replaced stun had left, as retail's does: {left:?}"
+        );
+
+        let mut c = combat2(now);
+        c.fighters[1].loadout.shorten_stagger = 0.20;
+        let wire = run_stun_then_bash(&mut c, 450);
+        let removed_at = wire.last().expect("a final remove").0;
+        assert_eq!(wire.last().map(|(_, e)| e.as_str()), Some("-3"));
+        assert!(
+            (1_490..=1_494).contains(&removed_at),
+            "held 0.45 + 1.04 s, removed at {removed_at} ms"
+        );
+        assert_eq!(most_staggered_instances_held(&wire), (1, 0));
+    }
+
+    /// The op51 Staggered durations in `out`, applies or removes.
+    fn staggered_secs(out: &[(usize, Vec<u8>)], apply: bool) -> Vec<f32> {
+        out.iter()
+            .filter_map(|(_, f)| {
+                if f.len() <= 2 || f[1] != 0x36 {
+                    return None;
+                }
+                let nd = arena_proto::parse_netdata(&f[2..]);
+                let matches = nd.int(3) == Some(51)
+                    && nd.int(5) == Some(StatusEffectType::Staggered as u16 as i64)
+                    && nd.props.get(&4) == Some(&arena_proto::NetDataValue::Bool(apply));
+                match (matches, nd.props.get(&6)) {
+                    (true, Some(arena_proto::NetDataValue::Float(secs))) => Some(*secs),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    /// The StaggeredWeakness of the replaced stagger goes with it — retail s417:
+    /// `op51 remove 10`, `op51 remove 3`, `op39`, `op51 apply 3` — and is not removed
+    /// a second time when the new stagger ends.
+    #[test]
+    fn a_bash_on_a_weakened_stunned_target_removes_the_weakness_too() {
+        let mut c = combat2(Instant::now());
+        c.fighters[0].loadout.powerful_block = 50.4;
+        let wire = run_stun_then_bash(&mut c, 450);
+        let events: Vec<&str> = wire.iter().map(|(_, e)| e.as_str()).collect();
+        assert_eq!(
+            events,
+            ["39:5", "+10", "+3", "-10", "-3", "39:5", "+3", "-3"],
+            "{wire:?}"
+        );
+    }
+
+    // ---- 03-D10: StaggeredWeakness never stacks ---------------------------------
+
+    /// A second high block inside the stagger replaces the stagger, and the weakness
+    /// with it: the old one is removed with the old Staggered
+    /// (`Actor$$ReactToStatusRemoved@0x1c57850`), so `PowerfulBlockBonusInstance
+    /// $$CausedStagger@0x1d51214` no longer finds it held and applies its own. One
+    /// instance at any time, never two.
+    #[test]
+    fn a_second_powerful_block_replaces_the_weakness_with_the_stagger() {
         let now = Instant::now();
         let mut c = combat2(now);
         c.fighters[1].loadout.powerful_block = 50.4;
@@ -21259,14 +21486,14 @@ mod status_removals_tests {
         c.fighters[1].loadout.powerful_block = 20.0;
         let second = stun_the_blocked_attacker(&mut c, 0, 1, at(now, 0.5));
         assert_eq!(
-            op51(&second, StatusEffectType::StaggeredWeakness, true),
-            0,
-            "no second apply"
+            stagger_wire(&c, 0, &second),
+            ["-10", "-3", "39:5", "+10", "+3"],
+            "the old pair is removed before the new pair is applied"
         );
         assert_eq!(
             c.fighters[0].weakness_rating_against(DamageType::Slashing, at(now, 0.5)),
-            50.4,
-            "the first magnitude sticks"
+            20.0,
+            "the weakness is the one of the block that staggered"
         );
     }
 
