@@ -20,7 +20,7 @@ use actix_web::{
 };
 use blades_lib::economy::{RewardGrant, apply_reward, grant_chest};
 use blades_lib::features::{
-    chests,
+    chests, gift_capacity,
     gifts::{self, GiftError},
 };
 use blades_lib::static_data::GiftDef;
@@ -134,6 +134,82 @@ fn map_gift_err(e: GiftError) -> BladeApiError {
         GiftError::NotActive => BladeApiError::new(StatusCode::BAD_REQUEST, GIFT_SERVICE_ID, 2),
         GiftError::LimitReached => BladeApiError::new(StatusCode::CONFLICT, GIFT_SERVICE_ID, 3),
     }
+}
+
+/// Hold back the gear of a claim that does not fit under the gift's backpack
+/// rule, filing it on the character. A gift without a rule is untouched.
+/// Returns how many pieces were held back.
+fn cap_claimed_gear(
+    reward: &mut RewardGrant,
+    gift_id: Uuid,
+    entry: &mut CharacterDbEntryEconomy,
+) -> u64 {
+    let Some(rule) = gift_capacity::rule_for(gift_id) else {
+        return 0;
+    };
+    gift_capacity::cap_gift_gear(
+        reward,
+        rule,
+        gift_id,
+        &entry.character.0,
+        &entry.inventory.0,
+        &mut entry.server_state.0.deferred_gift_gear,
+    )
+}
+
+/// Take the owed gear that is due and fits off the character's file, as a
+/// reward with fresh instance ids. Returns it with the count still owed.
+/// The caller applies the reward; an empty one means nothing changed.
+fn pay_deferred_gear(
+    entry: &mut CharacterDbEntryEconomy,
+    now: i64,
+    repair_data: &blades_lib::features::repair::RepairData,
+    mut new_item_id: impl FnMut() -> Uuid,
+) -> (RewardGrant, u64) {
+    let mut reward = gift_capacity::pay_deferred(
+        &mut entry.server_state.0.deferred_gift_gear,
+        &entry.character.0,
+        &entry.inventory.0,
+        now,
+        repair_data,
+    );
+    for item in &mut reward.items {
+        item.id = new_item_id();
+    }
+    let still_owed = gift_capacity::owed(&entry.server_state.0.deferred_gift_gear);
+    (reward, still_owed)
+}
+
+/// The deferred-gear payout as this character would see it now, with how many
+/// pieces they are owed in all. `None` when nothing is due or nothing fits —
+/// and for a character that is owed nothing, without reading its inventory.
+pub(crate) async fn deferred_payout(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    now: i64,
+) -> Option<(GiftDef, u64)> {
+    use crate::schema::characters;
+    let entry: CharacterDbEntryEconomy = characters::table
+        .filter(characters::id.eq(character_id))
+        .select(CharacterDbEntryEconomy::as_select())
+        .first(conn)
+        .await
+        .optional()
+        .ok()
+        .flatten()?;
+    let owed = &entry.server_state.0.deferred_gift_gear;
+    let def = gift_capacity::payout_gift_def(owed, &entry.character.0, &entry.inventory.0, now)?;
+    Some((def, gift_capacity::owed(owed)))
+}
+
+async fn deferred_payout_def(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    now: i64,
+) -> Option<GiftDef> {
+    deferred_payout(conn, character_id, now)
+        .await
+        .map(|(def, _)| def)
 }
 
 fn now_secs() -> i64 {
@@ -305,6 +381,23 @@ pub async fn get_global_gift(
             global_gift: GiftView {
                 global_gift_id: gift_id,
                 claim_count: gift.claim_count(),
+                global_gift_override: def.for_client(),
+            },
+        }));
+    }
+
+    // The deferred-gear payout (tracker #499): one fixed id, its contents this
+    // character's own — the owed pieces that are due and fit right now.
+    if gift_id == gift_capacity::DEFERRED_GEAR_GIFT_ID {
+        let def = deferred_payout_def(&mut conn, character_id, now_secs())
+            .await
+            .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+        return Ok(Json(GiftViewResponse {
+            global_gift: GiftView {
+                global_gift_id: gift_id,
+                // Never counted as claimed: a payout that left pieces owed must
+                // stay claimable for the next time there is room.
+                claim_count: 0,
                 global_gift_override: def.for_client(),
             },
         }));
@@ -627,6 +720,68 @@ pub async fn claim_global_gift(
             .await;
     }
 
+    // The deferred-gear payout (tracker #499): hand over the owed pieces that
+    // are due and fit, keep the rest on file.
+    if gift_id == gift_capacity::DEFERRED_GEAR_GIFT_ID {
+        let globals = app_state.get_ref().clone();
+        return conn
+            .transaction(move |mut conn| {
+                async move {
+                    let mut entry = {
+                        use crate::schema::characters;
+                        characters::table
+                            .filter(characters::id.eq(character_id))
+                            .filter(characters::user_id.eq(user_id))
+                            .select(CharacterDbEntryEconomy::as_select())
+                            .for_no_key_update()
+                            .first(&mut conn)
+                            .await
+                            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+                    };
+                    let (reward, still_owed) =
+                        pay_deferred_gear(&mut entry, now, &globals.repair_data, Uuid::new_v4);
+                    if reward.items.is_empty() {
+                        // Nothing due yet, or no room: nothing changes.
+                        return Err(map_gift_err(GiftError::NotActive));
+                    }
+                    let mut tracker = InventoryChangeTracker::default();
+                    apply_reward(
+                        &reward,
+                        &mut entry.wallet.0,
+                        &mut entry.inventory.0,
+                        &mut entry.character.0,
+                        &mut tracker,
+                    );
+                    entry.inventory.0.backpack_version += 1;
+
+                    let inventory = entry.inventory.0.generate_client_update(&tracker);
+                    let wallet = entry.wallet.0.clone();
+                    {
+                        use crate::schema::characters;
+                        diesel::update(characters::table.filter(characters::id.eq(entry.id)))
+                            .set(entry)
+                            .execute(&mut conn)
+                            .await?;
+                    }
+                    log::info!(
+                        "[gifts] deferred gear: paid {} piece(s) to character {character_id}, {still_owed} still owed",
+                        reward.items.len()
+                    );
+                    Ok::<_, BladeApiError>(Json(GiftClaimResponse {
+                        reward,
+                        global_gift: ClaimedGiftInfo {
+                            global_gift_id: gift_id,
+                            claim_count: 1,
+                        },
+                        inventory,
+                        wallet,
+                    }))
+                }
+                .scope_boxed()
+            })
+            .await;
+    }
+
     // Database first, static catalogue second. Reading `static_data.gifts`
     // directly would serve the payload this process booted with, and would miss
     // every gift created at runtime — a Free for All opened today would not
@@ -672,6 +827,14 @@ pub async fn claim_global_gift(
             // two claims of the same gift must not share one.
             for item in &mut reward.items {
                 item.id = Uuid::new_v4();
+            }
+            // A gift with a backpack rule grants only the gear that fits and
+            // files the rest on the character (tracker #499).
+            let held = cap_claimed_gear(&mut reward, gift_id, &mut entry);
+            if held > 0 {
+                log::info!(
+                    "[gifts] {gift_id}: {held} gear piece(s) held back for character {character_id} (backpack limit)"
+                );
             }
             for chest in &mut reward.chests {
                 if chest.level == 0 {
@@ -811,5 +974,138 @@ mod season_chest_tests {
             reward.currencies[&GOLD] < 8_069,
             "a level-5 chest pays level-5 gold"
         );
+    }
+}
+
+#[cfg(test)]
+mod deferred_gear_tests {
+    use super::*;
+    use crate::json_db::JsonDbWrapper;
+    use blades_lib::features::gift_capacity::DeferredGiftGear;
+    use blades_lib::features::repair::RepairData;
+    use blades_lib::server_state::ServerState;
+    use blades_lib::user_data::{
+        Backpack, CompleteCharacter, CompleteInventory, Item, ItemPropertiesAll, Loadout, Treasury,
+    };
+
+    const ARMOR: Uuid = Uuid::from_u128(0x1063c3f9_1bbf_4962_b80d_fb9832075c1c);
+    const DEC_25: i64 = 1_798_156_800;
+
+    fn repair() -> RepairData {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let read = |name: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(dir.join(name)).expect(name)).expect(name)
+        };
+        RepairData::from_json(&read("item_durability.json"), &read("repair_costs.json"))
+    }
+
+    /// A character at backpack tier 8 (capacity 120, so 114 at 95 %) holding
+    /// `gear` instanced items and owed `owed` armours from 25 December.
+    fn entry(gear: u64, owed: u64) -> CharacterDbEntryEconomy {
+        let mut inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: Loadout::default(),
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 7,
+            treasury_version: 0,
+        };
+        for n in 0..gear {
+            inventory.backpack.items.0.insert(
+                Uuid::from_u128(0x5000 + u128::from(n)),
+                Item {
+                    item_template_id: ARMOR,
+                    grade: None,
+                    tempering_level: 0,
+                    durability: 325.0,
+                    properties: ItemPropertiesAll::default(),
+                    arcane_tier: None,
+                },
+            );
+        }
+        let mut state = ServerState::default();
+        if owed > 0 {
+            state.deferred_gift_gear.push(DeferredGiftGear {
+                gift_id: Uuid::from_u128(6),
+                item_template_id: ARMOR,
+                quantity: owed,
+                arcane_tier: None,
+                enchanting: vec![],
+                payable_from_secs: DEC_25,
+            });
+        }
+        CharacterDbEntryEconomy {
+            id: Uuid::from_u128(1),
+            user_id: Uuid::from_u128(2),
+            character: JsonDbWrapper(CompleteCharacter {
+                inventory_level: 8,
+                ..CompleteCharacter::default()
+            }),
+            wallet: JsonDbWrapper(Default::default()),
+            inventory: JsonDbWrapper(inventory),
+            server_state: JsonDbWrapper(state),
+        }
+    }
+
+    fn counter() -> impl FnMut() -> Uuid {
+        let mut next = 0x7000u128;
+        move || {
+            next += 1;
+            Uuid::from_u128(next)
+        }
+    }
+
+    /// A payout hands over what fits with an id of its own on every piece, at
+    /// the committed durability table's value, and keeps the rest on file.
+    #[test]
+    fn a_payout_mints_distinct_instances_and_keeps_the_rest() {
+        let mut e = entry(112, 5);
+        let (reward, still_owed) = pay_deferred_gear(&mut e, DEC_25, &repair(), counter());
+        assert_eq!(reward.items.len(), 2, "114 - 112");
+        assert_eq!(still_owed, 3);
+        assert_ne!(reward.items[0].id, reward.items[1].id);
+        assert!(reward.items.iter().all(|p| !p.id.is_nil()));
+        assert!(reward.items.iter().all(|p| p.item.durability == 325.0));
+        assert!(reward.stackable_items.is_empty() && reward.currencies.is_empty());
+    }
+
+    /// Before the day, and with no room, a claim hands over nothing and the
+    /// file is untouched — the handler answers "not active" on an empty reward.
+    #[test]
+    fn nothing_is_paid_early_or_into_a_full_backpack() {
+        let mut early = entry(0, 5);
+        let (reward, still_owed) = pay_deferred_gear(&mut early, DEC_25 - 1, &repair(), counter());
+        assert!(reward.is_empty());
+        assert_eq!(still_owed, 5);
+
+        let mut full = entry(114, 5);
+        let (reward, still_owed) = pay_deferred_gear(&mut full, DEC_25, &repair(), counter());
+        assert!(reward.is_empty());
+        assert_eq!(still_owed, 5);
+    }
+
+    /// CONTROL: a gift without a backpack rule — every gift there is today —
+    /// is paid whole, into however full a backpack, exactly as before.
+    #[test]
+    fn a_gift_without_a_rule_is_never_capped() {
+        let mut e = entry(400, 0);
+        let mut reward = RewardGrant::default();
+        for n in 0..3u128 {
+            let mut piece = gifts::gear_instance(
+                &blades_lib::static_data::GiftItem {
+                    item_template_id: ARMOR,
+                    quantity: 1,
+                    arcane_tier: None,
+                    enchanting: vec![],
+                },
+                &repair(),
+            );
+            piece.id = Uuid::from_u128(0x8000 + n);
+            reward.items.push(piece);
+        }
+        let held = cap_claimed_gear(&mut reward, Uuid::from_u128(0x6f7c99c5), &mut e);
+        assert_eq!(held, 0);
+        assert_eq!(reward.items.len(), 3);
+        assert!(e.server_state.0.deferred_gift_gear.is_empty());
     }
 }

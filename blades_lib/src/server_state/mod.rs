@@ -240,6 +240,12 @@ pub struct ServerState {
     /// before the round-1 profile goes out. Rows written before the field load `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arena_hide_helmet: Option<bool>,
+    /// Gifted gear this character is still owed because it did not fit under
+    /// the gift's backpack limit when claimed (tracker #499); paid out through
+    /// [`crate::features::gift_capacity`]. Rows written before the field load
+    /// with nothing owed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deferred_gift_gear: Vec<crate::features::gift_capacity::DeferredGiftGear>,
 }
 
 #[cfg(test)]

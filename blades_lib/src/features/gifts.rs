@@ -74,28 +74,7 @@ pub fn build_gift_reward(
             *reward.currencies.entry(item.item_template_id).or_insert(0) += item.quantity;
         } else if needs_instance(item.item_template_id, items) {
             for _ in 0..item.quantity {
-                reward.items.push(RewardItem {
-                    // Replaced by the handler before it reaches the inventory.
-                    id: Uuid::nil(),
-                    item: Item {
-                        item_template_id: item.item_template_id,
-                        grade: None,
-                        tempering_level: 0,
-                        // A gift arrives new. Without the table we still hand over
-                        // something usable rather than an item at zero durability,
-                        // which is what "broken on health status" looked like.
-                        durability: repair_data
-                            .max_durability(item.item_template_id, 0)
-                            .unwrap_or(100.0),
-                        // An authored enchant (e.g. a dual-enchant arcane weapon)
-                        // is stamped on every instance; plain gear stays plain.
-                        properties: ItemPropertiesAll {
-                            enchanting: item.enchanting.clone(),
-                            ..ItemPropertiesAll::default()
-                        },
-                        arcane_tier: item.arcane_tier,
-                    },
-                });
+                reward.items.push(gear_instance(item, repair_data));
             }
         } else {
             *reward
@@ -115,6 +94,37 @@ pub fn build_gift_reward(
         })
         .collect();
     reward
+}
+
+/// One new gear instance for a gift line: the template at tempering level 0
+/// and full durability, carrying the line's authored enchant if it has one.
+///
+/// `id` is nil for the caller to replace. Shared with the deferred payout
+/// ([`crate::features::gift_capacity`]) so a piece handed over late is the
+/// piece the gift itself would have granted.
+pub fn gear_instance(line: &crate::static_data::GiftItem, repair_data: &RepairData) -> RewardItem {
+    RewardItem {
+        // Replaced by the handler before it reaches the inventory.
+        id: Uuid::nil(),
+        item: Item {
+            item_template_id: line.item_template_id,
+            grade: None,
+            tempering_level: 0,
+            // A gift arrives new. Without the table we still hand over
+            // something usable rather than an item at zero durability,
+            // which is what "broken on health status" looked like.
+            durability: repair_data
+                .max_durability(line.item_template_id, 0)
+                .unwrap_or(100.0),
+            // An authored enchant (e.g. a dual-enchant arcane weapon)
+            // is stamped on every instance; plain gear stays plain.
+            properties: ItemPropertiesAll {
+                enchanting: line.enchanting.clone(),
+                ..ItemPropertiesAll::default()
+            },
+            arcane_tier: line.arcane_tier,
+        },
+    }
 }
 
 /// The most instances one gift line may expand into.
