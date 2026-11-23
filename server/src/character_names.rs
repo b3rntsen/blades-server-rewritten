@@ -485,6 +485,26 @@ async fn claim(
     Ok(())
 }
 
+/// Drop the registry row under `alt_key`: the caller is about to re-key that
+/// character (an import stamping an unstamped live row with its alt id), and
+/// the name it held must not count against itself. Inside the caller's
+/// transaction, so a failed write puts it back.
+pub(crate) async fn release_key(
+    conn: &mut AsyncPgConnection,
+    user_id: Uuid,
+    alt_key: Uuid,
+) -> diesel::QueryResult<()> {
+    if !registry_present(conn).await? {
+        return Ok(());
+    }
+    diesel::sql_query("DELETE FROM character_names WHERE user_id = $1 AND alt_key = $2")
+        .bind::<SqlUuid, _>(user_id)
+        .bind::<SqlUuid, _>(alt_key)
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 /// A free generated name for this character. 64 tries of its own candidate
 /// stream; with ~600,000 names that only fails when the space is nearly full,
 /// and then numbers are appended, as the owner asked.
