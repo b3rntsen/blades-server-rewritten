@@ -617,7 +617,7 @@ fn client_device_id(route: &str, device_id: Option<&str>) -> Option<String> {
     let device_id = device_id.filter(|s| !s.trim().is_empty())?;
     if looks_like_a_network_address(device_id) {
         log::warn!(
-            "{route}: ignored an address-shaped deviceId sent in the request body ({} chars);              an address identifies a device only when our own proxy supplies it",
+            "{route}: ignored an address-shaped deviceId sent in the request body ({} chars); an address identifies a device only when our own proxy supplies it",
             device_id.chars().count()
         );
         return None;
@@ -642,7 +642,7 @@ fn request_source_wg_ip(req: &HttpRequest) -> Option<String> {
     let peer = req.peer_addr().map(|addr| addr.ip());
     if !peer_may_vouch_for_a_device(peer, device_ip_trusted_peers()) {
         log::warn!(
-            "ignored X-Newblades-Device-Ip from a peer that may not vouch for a device              (peer {peer:?}, {} {})",
+            "ignored X-Newblades-Device-Ip from a peer that may not vouch for a device (peer {peer:?}, {} {})",
             req.method(),
             req.path()
         );
