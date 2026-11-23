@@ -84,7 +84,10 @@ use crate::{
     BladeApiError, ServerGlobal,
     admin::check_import_token,
     arena::season_store,
-    guild::{SeatRemover, decide_application_for_website, remove_seat_for_website},
+    guild::{
+        SeatRemover, decide_application_for_website, remove_seat_for_website,
+        succeed_removed_parked_grandmaster,
+    },
     guild_policy::{GuildRank, MAX_MEMBERS, can_approve_applications, can_kick},
 };
 
@@ -1398,7 +1401,14 @@ pub(crate) async fn kick(
                         .bind::<SqlUuid, _>(target_user)
                         .execute(conn)
                         .await?;
-                        None
+                        // A Grand Master's title is parked with the seat, so
+                        // removing that seat is the Grand Master leaving: the
+                        // guild goes to a live member, as for a live one.
+                        if target_rank == GuildRank::Grandmaster {
+                            succeed_removed_parked_grandmaster(conn, &gid_owned, ts).await?
+                        } else {
+                            None
+                        }
                     }
                     (None, None) => return Err(err(StatusCode::NOT_FOUND, 43)),
                 };
@@ -2973,6 +2983,252 @@ mod tests {
             );
             assert_eq!(
                 count(&mut c, "SELECT COUNT(*) AS n FROM guild_messages").await,
+                0
+            );
+        }
+
+        // ---- a parked Grand Master (decision d110, tracker #601) -------------
+
+        /// What a switch away from the Grand Master leaves (admin.rs
+        /// `ALT_ROW_TABLES`): the seat, rank included, in the alt's version; no
+        /// live row; a LEAVE on the board. Returns the parked alt's key.
+        async fn park_the_grand_master(c: &mut AsyncPgConnection, w: &World) -> Uuid {
+            #[derive(QueryableByName)]
+            struct Alt {
+                #[diesel(sql_type = SqlUuid)]
+                alt: Uuid,
+            }
+            let alt = sql_query("SELECT source_alt_uuid AS alt FROM characters WHERE id = $1")
+                .bind::<SqlUuid, _>(w.gm_char)
+                .get_result::<Alt>(c)
+                .await
+                .unwrap()
+                .alt;
+            c.batch_execute(&format!(
+                "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, name, level,
+                     character, data, inventory, wallet, server_state, reason, saved_at) VALUES
+                   (gen_random_uuid(), '{gc}', '{gu}', '{alt}', 'Master', 60, '{{}}', '{{}}', '{{}}', '{{}}',
+                    '{{\"parkedGuildMembers\":[{{\"guild_id\":\"{G}\",\"rank\":\"GRANDMASTER\",\"join_date\":10}}],\"parkedGuildRemovals\":[]}}',
+                    'switch', 300);
+                 UPDATE characters SET source_alt_uuid = gen_random_uuid(),
+                        character = '{{\"name\":\"Second\",\"level\":1}}' WHERE id = '{gc}';
+                 DELETE FROM guild_members WHERE guild_id = '{G}' AND user_id = '{gu}';
+                 INSERT INTO guild_messages (message_id, guild_id, user_id, character_id, message_type,
+                     type_specific_data, creation_time)
+                   VALUES ('300::park', '{G}', '{gu}', '{gc}', 'LEAVE', '{{}}', 300);",
+                gc = w.gm_char,
+                gu = w.gm_user,
+            ))
+            .await
+            .unwrap();
+            alt
+        }
+
+        /// The guild stays run while its Grand Master plays another character:
+        /// the parked seat still shows "Manage guild" on the owner's profile,
+        /// and a co-guild master approves and kicks.
+        #[tokio::test]
+        async fn co_masters_run_a_guild_whose_grand_master_is_parked() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let alt = park_the_grand_master(&mut c, &w).await;
+
+            let seats = seats_of_user(&mut c, w.gm_user).await.unwrap();
+            let seat = seats
+                .iter()
+                .find(|s| s.guild_id == G)
+                .expect("the parked seat");
+            assert_eq!(
+                (
+                    seat.rank.as_str(),
+                    seat.parked,
+                    seat.can_manage,
+                    seat.alt_key
+                ),
+                ("GRANDMASTER", true, true, Some(alt)),
+                "the title is still the parked alt's"
+            );
+            assert!(
+                !seat.can_moderate,
+                "a parked seat writes nothing: every board entry needs a live author (#439)"
+            );
+            let roster = build_roster(&mut c, G).await.unwrap().unwrap();
+            let parked_gm = roster
+                .members
+                .iter()
+                .find(|m| m.parked && m.character_id == w.gm_char)
+                .expect("the roster lists the parked Grand Master");
+            assert_eq!(parked_gm.rank, "GRANDMASTER");
+
+            let (q_user, q_char) = applicant(&mut c).await;
+            let r = decide_application(&mut c, G, &decide(q_char, w.a_user, true))
+                .await
+                .unwrap();
+            assert!(r.approved);
+            assert_eq!(
+                r.member_count, 3,
+                "A, B and the newcomer; the Grand Master is parked"
+            );
+            let mut r = req(w.b_char);
+            r.actor_user_id = Some(w.a_user);
+            assert!(kick(&mut c, G, &r).await.unwrap().applied);
+
+            // A co-guild master cannot remove the parked Grand Master.
+            let mut r = req(w.gm_char);
+            r.parked = true;
+            r.alt_key = Some(alt);
+            r.actor_user_id = Some(w.a_user);
+            assert!(kick(&mut c, G, &r).await.is_err());
+
+            assert_eq!(
+                count(
+                    &mut c,
+                    "SELECT COUNT(*) AS n FROM guild_members WHERE rank = 'GRANDMASTER'"
+                )
+                .await,
+                0,
+                "nobody was promoted along the way"
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_members WHERE guild_id = '{G}' \
+                         AND user_id IN ('{}', '{q_user}')",
+                        w.a_user
+                    )
+                )
+                .await,
+                2
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    "SELECT COUNT(*) AS n FROM guild_messages \
+                      WHERE message_type NOT IN ('LEAVE', 'APPROVE', 'JOIN', 'KICK')"
+                )
+                .await,
+                0
+            );
+        }
+
+        /// Removing the parked seat is the Grand Master really going: the guild
+        /// is handed on, with a PROMOTE the client can read, authored by a
+        /// current member.
+        #[tokio::test]
+        async fn an_operator_kick_of_a_parked_grand_master_hands_the_guild_on() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            appoint_a(&mut c, &w).await;
+            let alt = park_the_grand_master(&mut c, &w).await;
+
+            let mut r = req(w.gm_char);
+            r.parked = true;
+            r.alt_key = Some(alt);
+            let resp = kick(&mut c, G, &r).await.unwrap();
+            assert!(resp.applied && resp.parked);
+            assert_eq!(resp.successor, Some(w.a_user), "the longest-serving member");
+
+            #[derive(QueryableByName)]
+            struct M {
+                #[diesel(sql_type = SqlUuid)]
+                user_id: Uuid,
+                #[diesel(sql_type = SqlUuid)]
+                character_id: Uuid,
+                #[diesel(sql_type = diesel::sql_types::Jsonb)]
+                data: serde_json::Value,
+            }
+            let m: Vec<M> = sql_query(
+                "SELECT user_id, character_id, type_specific_data AS data
+                   FROM guild_messages WHERE guild_id = $1 AND message_type = 'PROMOTE'",
+            )
+            .bind::<Text, _>(G)
+            .get_results(&mut c)
+            .await
+            .unwrap();
+            assert_eq!(m.len(), 1);
+            assert_eq!((m[0].user_id, m[0].character_id), (w.a_user, w.a_char));
+            assert_eq!(
+                m[0].data,
+                serde_json::json!({
+                    "type": "PROMOTE",
+                    "promotedUserId": w.a_user,
+                    "promotedToRank": "GRANDMASTER",
+                }),
+                "the keys the client reads (#594)"
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_members WHERE guild_id = '{G}' \
+                         AND user_id = '{}' AND rank = 'GRANDMASTER'",
+                        w.a_user
+                    )
+                )
+                .await,
+                1
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_co_masters").await,
+                0,
+                "a co-guild master who inherits is the Grand Master now"
+            );
+            assert!(seats_of_user(&mut c, w.gm_user).await.unwrap().is_empty());
+        }
+
+        /// The control for the switch: a Grand Master who actually LEAVES still
+        /// hands the guild on, as before.
+        #[tokio::test]
+        async fn a_grand_master_who_really_leaves_still_hands_the_guild_on() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            crate::guild::depart_guild(
+                &mut c,
+                G,
+                w.gm_user,
+                w.gm_char,
+                w.gm_user,
+                GuildRank::Grandmaster,
+                500,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_members WHERE guild_id = '{G}' \
+                         AND user_id = '{}' AND rank = 'GRANDMASTER'",
+                        w.a_user
+                    )
+                )
+                .await,
+                1
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_messages WHERE message_type = 'PROMOTE' \
+                         AND type_specific_data ->> 'promotedUserId' = '{}' \
+                         AND type_specific_data ->> 'promotedToRank' = 'GRANDMASTER'",
+                        w.a_user
+                    )
+                )
+                .await,
+                1
+            );
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_members WHERE user_id = '{}'",
+                        w.gm_user
+                    )
+                )
+                .await,
                 0
             );
         }

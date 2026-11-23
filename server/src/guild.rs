@@ -2185,7 +2185,7 @@ pub async fn leave_guild(
 }
 
 /// The body of a voluntary leave, run inside the caller's transaction.
-async fn depart_guild(
+pub(crate) async fn depart_guild(
     conn: &mut AsyncPgConnection,
     gid: &str,
     user_id: Uuid,
@@ -2217,9 +2217,25 @@ async fn depart_guild(
 // Sephoris's chat and donation entries for a user who was neither a member nor
 // recorded as gone. That is a board retail never produced: a member's LEAVE is
 // always newer than anything they posted, so it is always in the window with
-// it. The guild screen of every member stalled after the first load. The seat
-// is also handed on when the outgoing alt was the Grand Master (#410 found a
-// guild left with none), and a returning alt posts the JOIN a join would.
+// it. The guild screen of every member stalled after the first load. A returning
+// alt posts the JOIN a join would.
+//
+// A Grand Master's TITLE is parked with the seat (owner decision d110,
+// 2026-11-23, tracker #601): alts are separate characters and each keeps its own
+// guild, so switching away is not a hand-over. The guild has no live Grand
+// Master until the alt is switched back, and comes back to it as GRANDMASTER.
+// Until then nobody can approve, kick or edit in the game; co-guild masters do
+// the first two on the website (`guild_manage`). From #439 until then the guild
+// went to a successor on the switch and the alt came back as a MEMBER, which
+// cost Vyrthur's player the guild they had founded for a second character.
+//
+// The client is built for a guild with no Grand Master in its member list
+// (libil2cpp.so of the shipped APK, RVAs from il2cpp `dump.cs`):
+// `GuildController.GetGuildGrandMaster` (0x1C406F0) returns null when no member
+// has rank 0; `HeaderGuildInfo.Show` (0x1AB1578) branches on that null and
+// leaves the name blank; `ProcessQueryResults` raises `OnGrandMasterChanged`
+// only for a non-null member (0x1C453B8). `ValidateCurrentGuildRanks`
+// (0x1C46074), which wants exactly one, has no caller in the binary.
 
 /// A guild seat held by the alt on the live row.
 #[derive(QueryableByName, Clone, Debug, PartialEq)]
@@ -2271,23 +2287,12 @@ async fn insert_board_entry(
     Ok(())
 }
 
-#[derive(QueryableByName)]
-struct RemainingMember {
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    stored_user_id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    user_id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    rank: String,
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    join_date: i64,
-}
-
 /// After the alt's seats were removed: post a LEAVE in each guild that still
-/// exists, and hand a Grand Master's guild to its successor exactly as a leave
-/// does (`remove_member_and_succeed`). A guild the alt was the last member of is
-/// NOT torn down, unlike a leave: the alt did not choose to go, and the guild is
-/// what it comes back to when the player switches to it again.
+/// exists. Nothing else changes hands — a Grand Master's title stays parked
+/// with its seat (see above), so there is no succession and no PROMOTE. A guild
+/// the alt was the last member of is NOT torn down, unlike a leave: the alt did
+/// not choose to go, and the guild is what it comes back to when the player
+/// switches to it again.
 pub(crate) async fn record_alt_departures(
     conn: &mut AsyncPgConnection,
     seats: &[AltGuildSeat],
@@ -2309,68 +2314,97 @@ pub(crate) async fn record_alt_departures(
             ts,
         )
         .await?;
-        if GuildRank::from_wire(&seat.rank) != Some(GuildRank::Grandmaster) {
-            continue;
-        }
-        let remaining: Vec<RemainingMember> = diesel::sql_query(
-            "SELECT gm.user_id AS stored_user_id,
-                    COALESCE(c.user_id, gm.user_id) AS user_id,
-                    gm.rank, gm.join_date
-               FROM guild_members gm
-               LEFT JOIN characters c ON c.id = gm.character_id
-              WHERE gm.guild_id = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(&seat.guild_id)
-        .load(conn)
-        .await?;
-        if remaining
-            .iter()
-            .any(|m| m.rank == GuildRank::Grandmaster.as_wire())
-        {
-            continue;
-        }
-        let handles: Vec<(Uuid, GuildRank, i64)> = remaining
-            .iter()
-            .filter_map(|m| GuildRank::from_wire(&m.rank).map(|r| (m.user_id, r, m.join_date)))
-            .collect();
-        let Some(heir) = successor(&handles) else {
-            continue;
-        };
-        let heir_stored = remaining
-            .iter()
-            .find(|m| m.user_id == heir)
-            .map(|m| m.stored_user_id)
-            .unwrap_or(heir);
-        {
-            use crate::schema::guild_members::dsl as gm;
-            diesel::update(
-                gm::guild_members
-                    .filter(gm::guild_id.eq(&seat.guild_id))
-                    .filter(gm::user_id.eq(heir_stored)),
-            )
-            .set(gm::rank.eq(GuildRank::Grandmaster.as_wire()))
-            .execute(conn)
-            .await?;
-        }
-        {
-            use crate::schema::guilds::dsl as g;
-            diesel::update(g::guilds.filter(g::id.eq(&seat.guild_id)))
-                .set(g::grandmaster_since.eq(ts))
-                .execute(conn)
-                .await?;
-        }
-        insert_board_entry(
-            conn,
-            &seat.guild_id,
-            user_id,
-            character_id,
-            "PROMOTE",
-            promote_type_specific_data(heir),
-            ts,
-        )
-        .await?;
     }
     Ok(())
+}
+
+#[derive(QueryableByName)]
+struct LiveMember {
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    stored_user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    rank: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    join_date: i64,
+}
+
+/// A parked Grand Master seat was REMOVED (an operator's kick on the website):
+/// that is a real departure, so the guild goes to its successor among the live
+/// members, as it does when a live Grand Master is removed
+/// (`remove_member_and_succeed`). Returns the heir; `None` when the guild
+/// already has a live Grand Master or has no live member to inherit.
+///
+/// The PROMOTE entry is authored by the heir. The departed Grand Master's LEAVE
+/// went on the board when the seat was parked, and an entry by them newer than
+/// that LEAVE is the board #439 warns about.
+pub(crate) async fn succeed_removed_parked_grandmaster(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    ts: i64,
+) -> Result<Option<Uuid>, diesel::result::Error> {
+    let live: Vec<LiveMember> = diesel::sql_query(
+        "SELECT gm.user_id AS stored_user_id,
+                COALESCE(c.user_id, gm.user_id) AS user_id,
+                gm.character_id, gm.rank, gm.join_date
+           FROM guild_members gm
+           LEFT JOIN characters c ON c.id = gm.character_id
+          WHERE gm.guild_id = $1",
+    )
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .load(conn)
+    .await?;
+    if live
+        .iter()
+        .any(|m| m.rank == GuildRank::Grandmaster.as_wire())
+    {
+        return Ok(None);
+    }
+    let handles: Vec<(Uuid, GuildRank, i64)> = live
+        .iter()
+        .filter_map(|m| GuildRank::from_wire(&m.rank).map(|r| (m.user_id, r, m.join_date)))
+        .collect();
+    let Some(heir) = successor(&handles).and_then(|h| live.iter().find(|m| m.user_id == h)) else {
+        return Ok(None);
+    };
+    {
+        use crate::schema::guild_members::dsl as gm;
+        diesel::update(
+            gm::guild_members
+                .filter(gm::guild_id.eq(gid))
+                .filter(gm::user_id.eq(heir.stored_user_id)),
+        )
+        .set(gm::rank.eq(GuildRank::Grandmaster.as_wire()))
+        .execute(conn)
+        .await?;
+    }
+    {
+        use crate::schema::guilds::dsl as g;
+        diesel::update(g::guilds.filter(g::id.eq(gid)))
+            .set(g::grandmaster_since.eq(ts))
+            .execute(conn)
+            .await?;
+    }
+    // A co-guild master who inherits is the Grand Master now.
+    diesel::sql_query("DELETE FROM guild_co_masters WHERE guild_id = $1 AND user_id = $2")
+        .bind::<diesel::sql_types::Text, _>(gid)
+        .bind::<diesel::sql_types::Uuid, _>(heir.user_id)
+        .execute(conn)
+        .await?;
+    insert_board_entry(
+        conn,
+        gid,
+        heir.user_id,
+        heir.character_id,
+        "PROMOTE",
+        promote_type_specific_data(heir.user_id),
+        ts,
+    )
+    .await?;
+    Ok(Some(heir.user_id))
 }
 
 /// After an alt's parked seats were written back: post the JOIN a join posts in
@@ -4381,8 +4415,9 @@ mod create_wire {
         assert_eq!(obj["promotedToRank"], "GRANDMASTER");
     }
 
-    /// Both succession paths (a leave, and an alt switch) build the entry
-    /// through the one helper, so they cannot drift apart again.
+    /// Both succession paths (a live Grand Master's departure, and the removal
+    /// of a parked Grand Master's seat) build the entry through the one helper,
+    /// so they cannot drift apart again.
     #[test]
     fn every_promote_entry_is_built_by_the_one_helper() {
         let src = include_str!("guild.rs");
@@ -4396,7 +4431,11 @@ mod create_wire {
             .filter(|w| w[0] == concat!("\"PRO", "MOTE\","))
             .map(|w| w[1])
             .collect();
-        assert_eq!(sites.len(), 2, "a leave and an alt switch each post one");
+        assert_eq!(
+            sites.len(),
+            2,
+            "a departure and a removed parked seat each post one"
+        );
         for next in sites {
             assert!(
                 next.starts_with("promote_type_specific_data("),

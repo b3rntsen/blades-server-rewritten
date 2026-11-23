@@ -807,10 +807,12 @@ UPDATE character_versions
                     WHERE m.character_id = $2 OR m.user_id = $3), '[]'::jsonb))
  WHERE id = $1"#,
         delete: "DELETE FROM guild_members WHERE character_id = $1 OR user_id = $2",
-        // Back into the guild only if it still exists. A guild that gained a
-        // Grand Master while this one was away (the console can appoint one)
-        // keeps it: the returning alt comes back as a member rather than making
-        // two.
+        // Back into the guild only if it still exists, with the rank it was
+        // parked with — a Grand Master returns as Grand Master (the title is
+        // not handed on by a switch, `guild::record_alt_departures`). A guild
+        // that gained a Grand Master while this one was away (the console can
+        // appoint one) keeps it: the returning alt comes back as a member
+        // rather than making two.
         restore: r#"
 INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
 SELECT r.guild_id, $2, $1,
@@ -1008,7 +1010,8 @@ async fn park_alt_rows_in_version(
             }
         }
     }
-    // To the guild, the outgoing alt has left (tracker #439).
+    // To the guild, the outgoing alt has left (tracker #439). Its rank, Grand
+    // Master included, is in the parked seat and nowhere else.
     crate::guild::record_alt_departures(conn, &seats, user_id, character_id).await?;
     Ok(())
 }
@@ -8530,11 +8533,25 @@ mod tests {
                 );
             }
 
-            /// A Grand Master switched out hands the guild on as a leave does,
-            /// and coming back is a JOIN on the board (as a MEMBER: the guild has
-            /// a Grand Master again).
+            async fn board(c: &mut AsyncPgConnection, gid: &str, of: &str) -> i64 {
+                n(
+                    c,
+                    &format!(
+                        "SELECT count(*) AS n FROM guild_messages WHERE guild_id = '{gid}' AND {of}"
+                    ),
+                )
+                .await
+            }
+
+            /// Owner decision d110 (2026-11-23, tracker #601): a Grand Master's
+            /// title is parked with its alt. Switching away hands nothing on —
+            /// no successor, no PROMOTE — and the alt comes back as GRANDMASTER.
+            ///
+            /// REPLACES `a_switched_out_grand_master_hands_on_the_guild_and_rejoins`
+            /// (#439), which pinned the opposite: the guild went to the longest
+            /// serving member and the alt returned as a MEMBER.
             #[tokio::test]
-            async fn a_switched_out_grand_master_hands_on_the_guild_and_rejoins() {
+            async fn a_switched_out_grand_master_keeps_the_title_among_other_members() {
                 let mut c = db!();
                 let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
                 let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
@@ -8542,39 +8559,61 @@ mod tests {
                 guilds(&mut c).await;
                 let (mate_u, mate_c) = (Uuid::new_v4(), Uuid::new_v4());
                 sql(&mut c, &format!(
-                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES \
+                    "UPDATE guilds SET grandmaster_since = 77 WHERE id = 'ga'; \
+                     INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES \
                          ('ga', '{uid}', '{cid}', 'GRANDMASTER', 100), \
-                         ('ga', '{mate_u}', '{mate_c}', 'MEMBER', 200)"
+                         ('ga', '{mate_u}', '{mate_c}', 'MEMBER', 200); \
+                     INSERT INTO guild_messages (message_id, guild_id, user_id, character_id, \
+                         message_type, type_specific_data, creation_time) VALUES \
+                         ('1::a', 'ga', '{uid}', '{cid}', 'CLIENT', '{{\"text\":\"hello\"}}', 1)"
                 ))
                 .await;
 
-                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                let out = apply_switch_alt(&mut c, &switch(uid, alt_b, None))
                     .await
                     .unwrap();
                 assert_eq!(
                     guild_of(&mut c, mate_u).await,
-                    Some(("ga".into(), "GRANDMASTER".into())),
-                    "a guild is never left without a Grand Master"
+                    Some(("ga".into(), "MEMBER".into())),
+                    "nobody inherits a parked title"
+                );
+                assert_eq!(guild_of(&mut c, uid).await, None);
+                assert_eq!(
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM guild_members WHERE rank = 'GRANDMASTER'"
+                    )
+                    .await,
+                    0,
+                    "the title is parked, not live"
+                );
+                let kept = version(&mut c, out.left_behind_saved_as.unwrap()).await;
+                assert_eq!(
+                    kept.server_state["parkedGuildMembers"],
+                    serde_json::json!([{"guild_id": "ga", "rank": "GRANDMASTER", "join_date": 100}])
+                );
+                assert_eq!(board(&mut c, "ga", "message_type = 'PROMOTE'").await, 0);
+                assert_eq!(
+                    board(
+                        &mut c,
+                        "ga",
+                        &format!(
+                            "user_id = '{uid}' AND message_type = 'LEAVE' \
+                             AND type_specific_data = '{{}}'::jsonb AND creation_time > 1"
+                        )
+                    )
+                    .await,
+                    1,
+                    "the board still records that the alt is gone (#439)"
                 );
                 assert_eq!(
                     n(
                         &mut c,
-                        &format!(
-                            "SELECT count(*) AS n FROM guild_messages WHERE guild_id = 'ga' \
-                           AND message_type = 'PROMOTE' \
-                           AND type_specific_data->>'promotedUserId' = '{mate_u}'"
-                        )
-                    )
-                    .await,
-                    1
-                );
-                assert!(
-                    n(
-                        &mut c,
                         "SELECT grandmaster_since AS n FROM guilds WHERE id = 'ga'"
                     )
-                    .await
-                        > 0
+                    .await,
+                    77,
+                    "the guild did not change hands"
                 );
                 board_names_only_members_or_leavers(&mut c, "ga").await;
 
@@ -8583,20 +8622,133 @@ mod tests {
                     .unwrap();
                 assert_eq!(
                     guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
+                assert_eq!(
+                    guild_of(&mut c, mate_u).await,
                     Some(("ga".into(), "MEMBER".into()))
                 );
                 assert_eq!(
                     n(
                         &mut c,
+                        "SELECT join_date AS n FROM guild_members WHERE rank = 'GRANDMASTER'"
+                    )
+                    .await,
+                    100,
+                    "the founding seat, not a new one"
+                );
+                assert_eq!(
+                    board(
+                        &mut c,
+                        "ga",
                         &format!(
-                            "SELECT count(*) AS n FROM guild_messages WHERE guild_id = 'ga' \
-                           AND user_id = '{uid}' AND message_type = 'JOIN'"
+                            "user_id = '{uid}' AND message_type = 'JOIN' \
+                             AND type_specific_data = '{{}}'::jsonb"
                         )
                     )
                     .await,
                     1,
                     "the board shows the alt coming back"
                 );
+                assert_eq!(board(&mut c, "ga", "message_type = 'PROMOTE'").await, 0);
+                assert_eq!(
+                    board(
+                        &mut c,
+                        "ga",
+                        "message_type NOT IN ('CLIENT', 'LEAVE', 'JOIN')"
+                    )
+                    .await,
+                    0,
+                    "a switch writes only entries retail's boards carry"
+                );
+                board_names_only_members_or_leavers(&mut c, "ga").await;
+            }
+
+            /// The case production already has (two guilds, 2026-11-23): the
+            /// Grand Master is the only member. Unchanged — the guild is kept
+            /// with no live member and the alt returns as its Grand Master.
+            #[tokio::test]
+            async fn a_sole_member_grand_master_switches_out_and_back() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                guilds(&mut c).await;
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                         VALUES ('ga', '{uid}', '{cid}', 'GRANDMASTER', 100)"
+                ))
+                .await;
+
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    n(
+                        &mut c,
+                        "SELECT count(*) AS n FROM guild_members WHERE guild_id = 'ga'"
+                    )
+                    .await,
+                    0
+                );
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM guilds WHERE id = 'ga'").await,
+                    1,
+                    "an empty guild with a parked Grand Master is kept"
+                );
+                assert_eq!(board(&mut c, "ga", "message_type = 'LEAVE'").await, 1);
+
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
+                assert_eq!(board(&mut c, "ga", "message_type = 'JOIN'").await, 1);
+                assert_eq!(board(&mut c, "ga", "message_type = 'PROMOTE'").await, 0);
+            }
+
+            /// The control: an ordinary member's round trip is what it was.
+            #[tokio::test]
+            async fn an_ordinary_member_switches_out_and_back() {
+                let mut c = db!();
+                let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+                let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 40, 0, Some(alt_a)).await;
+                legacy_version(&mut c, cid, uid, alt_b, alt_a).await;
+                guilds(&mut c).await;
+                let (gm_u, gm_c) = (Uuid::new_v4(), Uuid::new_v4());
+                sql(&mut c, &format!(
+                    "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES \
+                         ('ga', '{gm_u}', '{gm_c}', 'GRANDMASTER', 50), \
+                         ('ga', '{uid}', '{cid}', 'ELDER', 100)"
+                ))
+                .await;
+
+                apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                    .await
+                    .unwrap();
+                assert_eq!(guild_of(&mut c, uid).await, None);
+                assert_eq!(
+                    guild_of(&mut c, gm_u).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
+                assert_eq!(board(&mut c, "ga", "message_type = 'LEAVE'").await, 1);
+
+                apply_switch_alt(&mut c, &switch(uid, alt_a, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, uid).await,
+                    Some(("ga".into(), "ELDER".into()))
+                );
+                assert_eq!(
+                    guild_of(&mut c, gm_u).await,
+                    Some(("ga".into(), "GRANDMASTER".into()))
+                );
+                assert_eq!(board(&mut c, "ga", "message_type = 'JOIN'").await, 1);
+                assert_eq!(board(&mut c, "ga", "message_type = 'PROMOTE'").await, 0);
+                board_names_only_members_or_leavers(&mut c, "ga").await;
             }
 
             /// A guild deleted while the alt was away is not resurrected, and the

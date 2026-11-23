@@ -125,6 +125,18 @@ left, the guild is deleted along with its board and pending applications.
 
 This is **modelled**, not observed (see §5).
 
+**An alt switch is not a departure.** A Grand Master whose player switches to
+another character keeps the title: the seat is parked with its rank in the
+alt's saved version (`admin.rs` `ALT_ROW_TABLES`), the board gets the `LEAVE`
+every parked seat posts (and a `JOIN` on the way back), and nobody is promoted
+(owner decision d110, 2026-11-23, tracker #601). Until the alt is switched back
+the guild has no live Grand Master — its member list simply has none, which the
+client handles (`GuildController.GetGuildGrandMaster` returns null and
+`HeaderGuildInfo` leaves the name blank; evidence in `guild.rs`, "Alt
+switches"). Nobody can approve, kick or edit in the game meanwhile; co-guild
+masters approve and kick on the website. Removing the parked seat itself (an
+operator's kick) IS a departure and hands the guild to a live member.
+
 ### The message board
 
 `guild_messages` is a typed log. `type` values are retail's `GuildMessageType`:
