@@ -183,8 +183,38 @@ pub fn withhold_gear(
     count
 }
 
-/// Apply a gift's [`GearCapRule`] to the reward a claim is about to grant.
-/// Returns how many pieces were held back.
+/// Order gear set by set: the first copy of every template in the gift's own
+/// order, then the second copies, and so on. A gift line of "3 x armour,
+/// 3 x boots, …" is then handed over as whole sets, so a backpack with room
+/// for five of twelve pieces gets one complete set and one piece, not three
+/// armours and two pairs of boots.
+fn order_set_by_set(items: &mut Vec<RewardItem>) {
+    let mut copies: Vec<(Uuid, usize)> = Vec::new();
+    let mut keyed: Vec<(usize, RewardItem)> = std::mem::take(items)
+        .into_iter()
+        .map(|piece| {
+            let template = piece.item.item_template_id;
+            let copy = match copies.iter_mut().find(|(t, _)| *t == template) {
+                Some((_, n)) => {
+                    *n += 1;
+                    *n
+                }
+                None => {
+                    copies.push((template, 0));
+                    0
+                }
+            };
+            (copy, piece)
+        })
+        .collect();
+    // Stable: within one copy number the gift's own order is kept.
+    keyed.sort_by_key(|(copy, _)| *copy);
+    items.extend(keyed.into_iter().map(|(_, piece)| piece));
+}
+
+/// Apply a gift's [`GearCapRule`] to the reward a claim is about to grant:
+/// whole sets first, then whatever still fits. Returns how many pieces were
+/// held back.
 pub fn cap_gift_gear(
     reward: &mut RewardGrant,
     rule: GearCapRule,
@@ -193,6 +223,7 @@ pub fn cap_gift_gear(
     inventory: &CompleteInventory,
     deferred: &mut Vec<DeferredGiftGear>,
 ) -> u64 {
+    order_set_by_set(&mut reward.items);
     let room = gear_room(character, inventory, rule.fill_percent);
     withhold_gear(reward, room, gift_id, rule.payable_from_secs, deferred)
 }
@@ -490,6 +521,44 @@ mod tests {
                 enchanting: vec![],
                 payable_from_secs: DEC_25,
             }]
+        );
+    }
+
+    /// Three sets authored as "3 x armour, 3 x boots" reach a backpack with room
+    /// for three pieces as one whole set and one more piece — never three of
+    /// the same.
+    #[test]
+    fn whole_sets_are_handed_over_before_a_partial_one() {
+        let mut reward = gear_reward(&[ARMOR, ARMOR, ARMOR, BOOTS, BOOTS, BOOTS]);
+        let mut deferred = Vec::new();
+        let held = cap_gift_gear(
+            &mut reward,
+            GearCapRule {
+                fill_percent: 95,
+                payable_from_secs: DEC_25,
+            },
+            GIFT,
+            &character(8, 0),
+            &inventory(111),
+            &mut deferred,
+        );
+        assert_eq!(held, 3);
+        assert_eq!(
+            reward
+                .items
+                .iter()
+                .map(|p| p.item.item_template_id)
+                .collect::<Vec<_>>(),
+            vec![ARMOR, BOOTS, ARMOR]
+        );
+        let ids: std::collections::BTreeSet<Uuid> = reward.items.iter().map(|p| p.id).collect();
+        assert_eq!(ids.len(), 3, "every piece keeps its own id");
+        assert_eq!(
+            deferred
+                .iter()
+                .map(|d| (d.item_template_id, d.quantity))
+                .collect::<Vec<_>>(),
+            vec![(BOOTS, 2), (ARMOR, 1)]
         );
     }
 
