@@ -4532,8 +4532,9 @@ fn emit_damage_with_outcome(
         0.0
     };
     let dealt = hp_before.saturating_sub(hp_after);
+    let target_block = combat.fighters[target_slot].block_verdict(now);
     info!(
-        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} dodge_absorbed={dodge_absorbed:.1} dodge_left={dodge_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) absorbed=({},{},{}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?}",
+        "combat event: gsid={} attacker_slot={attacker_slot} attacker={} target_slot={target_slot} target={} source={:?} side={:?} components={components:?} total={total:.1} pool_absorbed={pool_absorbed:.1} pool_left={pool_left:.1} dodge_absorbed={dodge_absorbed:.1} dodge_left={dodge_left:.1} pct_max_hp={pct:.1} hp={hp_before}->{hp_after} dealt={dealt} drained_stam={drained_stam} drained_mag={drained_mag} ravaged_stam={rav_s} ravaged_mag={rav_m} ravaged_hp={rav_h} shield_ravaged=({sr_s},{sr_m},{sr_h}) absorbed=({},{},{}) max_stam_now={} max_mag_now={} blocked={} target_state={:?} target_block_phase={:?} {}",
         combat.game_session_id,
         combat.fighters[attacker_slot].loadout.display_name,
         combat.fighters[target_slot].loadout.display_name,
@@ -4549,7 +4550,10 @@ fn emit_damage_with_outcome(
         // player-reported match can be settled from the journal alone.
         resolved.blocked,
         combat.fighters[target_slot].actor_state(),
-        combat.fighters[target_slot].block_phase(now),
+        target_block.map(|v| v.phase),
+        // Which rule made a low block low (d116): held too long, or raised inside
+        // the post-release recovery. The raise and release are `combat block:` lines.
+        hit_block_fields(target_block),
     );
 
     let msg = {
@@ -6837,6 +6841,112 @@ pub fn drain_state_changes(combat: &mut MatchCombat, now: Instant) -> Vec<(usize
     drain_state_changes_for(combat, now, None)
 }
 
+/// Write a `combat block:` line for each guard `slot` raised or lowered since the
+/// last drain (decision d116).
+///
+/// A hit already logs `blocked=… target_block_phase=…`, but a block is LOW for one
+/// of two reasons — held `BLOCK_OPTIMAL_TIME_SECS` or longer, or raised inside the
+/// `OPTIMAL_BLOCK_RECOVERY_SECS` after the previous release — and both are decided
+/// by when the guard went up and came down, which nothing logged. With these lines
+/// `grep 'combat block:\|combat event:'` on one gsid reads as the whole exchange.
+///
+/// Observability only: `Fighter::observe_guard` reads the guard and writes a field
+/// nothing else reads. Costs two comparisons per fighter per drain when nothing
+/// changed; a line is built only on a transition.
+fn log_guard_transitions(combat: &mut MatchCombat, slot: usize, now: Instant) {
+    let round_live = matches!(combat.phase, FlowState::StateTimeout);
+    let events = combat.fighters[slot].observe_guard(now, round_live);
+    for event in events.into_iter().flatten() {
+        // A gear-calculator simulation is not a fight (`gear_calc::quiet`). Its
+        // logger drops the record anyway; this spares building it.
+        if crate::arena::gear_calc::is_quiet() {
+            continue;
+        }
+        let line = guard_event_line(
+            &combat.game_session_id,
+            slot,
+            &combat.fighters[slot].loadout.display_name,
+            &event,
+        );
+        #[cfg(test)]
+        block_log_capture::push(&line);
+        info!("{line}");
+    }
+}
+
+/// The `combat block:` line for one guard transition, in the `key=value` style of
+/// `combat attack_input:` and `combat event:`.
+fn guard_event_line(
+    gsid: &str,
+    slot: usize,
+    actor: &str,
+    event: &super::state::GuardEvent,
+) -> String {
+    use super::state::{BLOCK_OPTIMAL_TIME_SECS, GuardEvent, OPTIMAL_BLOCK_RECOVERY_SECS};
+    match *event {
+        GuardEvent::Raised {
+            ability,
+            optimal_allowed,
+            since_release_ms,
+            window_ms,
+        } => {
+            let why = match (ability, optimal_allowed, since_release_ms) {
+                (true, _, _) => "ability_guard",
+                (false, false, _) => "raised_in_recovery",
+                (false, true, None) => "first_guard",
+                (false, true, Some(_)) => "recovered",
+            };
+            let since =
+                since_release_ms.map_or_else(|| "none".to_string(), |ms| format!("{ms:.1}"));
+            format!(
+                "combat block: gsid={gsid} slot={slot} actor={actor} event=raise optimal_allowed={optimal_allowed} why={why} since_release_ms={since} recovery_ms={:.0} ability_guard={ability} window_ms={window_ms:.0}",
+                OPTIMAL_BLOCK_RECOVERY_SECS * 1000.0,
+            )
+        }
+        GuardEvent::Lowered {
+            ability,
+            held_ms,
+            end,
+        } => format!(
+            "combat block: gsid={gsid} slot={slot} actor={actor} event=release held_ms={held_ms:.1} reason={} ability_guard={ability} optimal_window_ms={:.0}",
+            end.code(),
+            BLOCK_OPTIMAL_TIME_SECS * 1000.0,
+        ),
+    }
+}
+
+/// The two fields a hit's `combat event:` line ends with: how long the target's
+/// guard had been up, and why the block was low if it was. `none` when there is no
+/// guard, or the block was optimal.
+fn hit_block_fields(verdict: Option<super::state::BlockVerdict>) -> String {
+    match verdict {
+        Some(v) => format!(
+            "target_block_held_ms={:.1} target_block_late_reason={}",
+            v.held_ms,
+            v.late_reason.map_or("none", |r| r.code()),
+        ),
+        None => "target_block_held_ms=none target_block_late_reason=none".to_string(),
+    }
+}
+
+/// What `log_guard_transitions` wrote on this thread, for the tests.
+#[cfg(test)]
+mod block_log_capture {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn push(line: &str) {
+        LINES.with(|l| l.borrow_mut().push(line.to_string()));
+    }
+
+    pub(super) fn take() -> Vec<String> {
+        LINES.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+}
+
 /// As [`drain_state_changes`], but optionally for ONE slot.
 ///
 /// Exists for ordering. Retail sends the actor-state frame BEFORE the status frame
@@ -6980,6 +7090,7 @@ pub fn drain_state_changes_for(
         if matches!(only, Some(s) if s != slot) {
             continue;
         }
+        log_guard_transitions(combat, slot, now);
         if let Some(up) = combat.fighters[slot].sync_blocking_status(now) {
             let obj = combat.fighters[slot].net_object_id;
             debug!(
@@ -24036,5 +24147,300 @@ mod report542_tests {
             !c.channels.iter().any(|ch| ch.ability_uuid == u),
             "and the storm is spent after the third"
         );
+    }
+}
+
+/// Decision d116: the journal says when a guard went up and came down, and a hit
+/// says why its block was low. Driven through the real op46 press/release and the
+/// real swing, so the lines are what a fight on the box would write.
+#[cfg(test)]
+mod block_log_tests {
+    use super::super::loadout::starter;
+    use super::super::state::{
+        ActorStateType, BlockPhase, Fighter, FlowState, LateBlockReason, MatchCombat, WeaponProfile,
+    };
+    use super::phase4_tests::make_act_frame;
+    use super::*;
+
+    const GSID: &str = "d116";
+
+    /// Two humans with a plain blade and a shield rating, live round.
+    fn combat(now: Instant) -> MatchCombat {
+        let mut c = MatchCombat::new(2, 2, now);
+        c.game_session_id = GSID.to_string();
+        for slot in 0..2 {
+            let obj = c.alloc_net_object_id();
+            let mut f = Fighter::new(slot, obj, starter(), now);
+            f.loadout.weapon = WeaponProfile {
+                primary_type: Some(super::super::state::DamageType::Slashing),
+                base_by_type: vec![(super::super::state::DamageType::Slashing, 113.82)],
+                weight: Some(super::super::tables::Weight::Light),
+            };
+            f.loadout.weapon_template = None;
+            f.loadout.block_rating = 379.5;
+            f.loadout.display_name = format!("P{slot}");
+            c.fighters.push(f);
+        }
+        c.match_net_object_id = c.alloc_net_object_id();
+        c.phase = FlowState::StateTimeout;
+        c.phase_entered = now;
+        c
+    }
+
+    type Wire = Vec<(usize, Vec<u8>)>;
+
+    /// A c2s frame the way `MatchInstance::on_c2s` runs it: resolve, then drain.
+    fn c2s(c: &mut MatchCombat, sender: usize, frame: &[u8], at: Instant) -> Wire {
+        let mut out = on_c2s_input(c, sender, frame, at);
+        out.extend(drain_state_changes(c, at));
+        out
+    }
+
+    fn press_block(c: &mut MatchCombat, at: Instant) -> Wire {
+        let out = c2s(c, 0, &make_act_frame(true, 0.0, true), at);
+        assert_eq!(c.fighters[0].actor_state(), ActorStateType::Blocking);
+        out
+    }
+
+    fn release_block(c: &mut MatchCombat, at: Instant) -> Wire {
+        let out = c2s(c, 0, &make_act_frame(false, 0.0, true), at);
+        assert_ne!(c.fighters[0].actor_state(), ActorStateType::Blocking);
+        out
+    }
+
+    /// Slot 1 swings at slot 0; the hit lands on the FollowThrough beat. Returns the
+    /// frames, and the two block fields the hit's `combat event:` line carries.
+    fn swing(c: &mut MatchCombat, at: Instant) -> (Wire, String) {
+        let mut out = resolve_swing(c, 1, 0, 1.0, at);
+        let impact = at + FOLLOW_THROUGH_DELAY + Duration::from_millis(1);
+        // What the hit line reads, at the instant it reads it.
+        let fields = hit_block_fields(c.fighters[0].block_verdict(impact));
+        out.extend(land_due_hits(c, impact));
+        out.extend(on_tick(c, impact, false));
+        (out, fields)
+    }
+
+    fn ms(t0: Instant, n: u64) -> Instant {
+        t0 + Duration::from_millis(n)
+    }
+
+    fn line(event: &str) -> String {
+        format!("combat block: gsid={GSID} slot=0 actor=P0 {event}")
+    }
+
+    #[test]
+    fn an_optimal_block_logs_its_raise_and_release() {
+        let t0 = Instant::now();
+        let mut c = combat(t0);
+        let _ = block_log_capture::take();
+
+        press_block(&mut c, t0);
+        let (_, hit) = swing(&mut c, ms(t0, 300));
+        assert_eq!(
+            hit,
+            "target_block_held_ms=351.0 target_block_late_reason=none"
+        );
+        assert!(
+            c.fighters[1].is_staggered(ms(t0, 400)),
+            "a high block stuns"
+        );
+        release_block(&mut c, ms(t0, 600));
+
+        assert_eq!(
+            block_log_capture::take(),
+            [
+                line(
+                    "event=raise optimal_allowed=true why=first_guard since_release_ms=none \
+                     recovery_ms=800 ability_guard=false window_ms=8000"
+                ),
+                line(
+                    "event=release held_ms=600.0 reason=released ability_guard=false \
+                     optimal_window_ms=2000"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_block_held_too_long_says_so_on_the_hit() {
+        let t0 = Instant::now();
+        let mut c = combat(t0);
+        let _ = block_log_capture::take();
+
+        press_block(&mut c, t0);
+        // Ticks while it is held write nothing.
+        for n in (2..2300).step_by(2) {
+            let _ = on_tick(&mut c, ms(t0, n), false);
+        }
+        let (_, hit) = swing(&mut c, ms(t0, 2300));
+        assert_eq!(
+            hit,
+            "target_block_held_ms=2351.0 target_block_late_reason=held_too_long"
+        );
+        assert_eq!(
+            c.fighters[0].block_verdict(ms(t0, 2351)).map(|v| v.phase),
+            Some(BlockPhase::Late)
+        );
+        assert!(
+            !c.fighters[1].is_staggered(ms(t0, 2400)),
+            "a low block does not"
+        );
+
+        let lines = block_log_capture::take();
+        assert_eq!(
+            lines.len(),
+            1,
+            "one raise, however long it is held: {lines:?}"
+        );
+        assert!(lines[0].contains("event=raise optimal_allowed=true why=first_guard"));
+    }
+
+    #[test]
+    fn a_block_raised_inside_the_recovery_says_so_on_the_raise_and_the_hit() {
+        let t0 = Instant::now();
+        let mut c = combat(t0);
+        let _ = block_log_capture::take();
+
+        press_block(&mut c, t0);
+        release_block(&mut c, ms(t0, 500));
+        press_block(&mut c, ms(t0, 800));
+        let (_, hit) = swing(&mut c, ms(t0, 900));
+        assert_eq!(
+            hit,
+            "target_block_held_ms=151.0 target_block_late_reason=raised_in_recovery"
+        );
+        assert_eq!(
+            c.fighters[0]
+                .block_verdict(ms(t0, 951))
+                .and_then(|v| v.late_reason),
+            Some(LateBlockReason::RaisedInRecovery)
+        );
+        release_block(&mut c, ms(t0, 1200));
+        // 0.9 s after that release: the recovery has run out.
+        press_block(&mut c, ms(t0, 2100));
+
+        let lines = block_log_capture::take();
+        assert_eq!(
+            lines[2],
+            line(
+                "event=raise optimal_allowed=false why=raised_in_recovery since_release_ms=300.0 \
+                 recovery_ms=800 ability_guard=false window_ms=8000"
+            )
+        );
+        assert_eq!(
+            lines[4],
+            line(
+                "event=raise optimal_allowed=true why=recovered since_release_ms=900.0 \
+                 recovery_ms=800 ability_guard=false window_ms=8000"
+            )
+        );
+        assert_eq!(lines.len(), 5, "{lines:?}");
+    }
+
+    /// The release line names what ended the guard.
+    #[test]
+    fn a_release_names_what_ended_the_guard() {
+        let reason = |end: &dyn Fn(&mut MatchCombat, Instant)| {
+            let t0 = Instant::now();
+            let mut c = combat(t0);
+            press_block(&mut c, t0);
+            let _ = block_log_capture::take();
+            let at = ms(t0, 400);
+            end(&mut c, at);
+            let _ = drain_state_changes(&mut c, at);
+            let lines = block_log_capture::take();
+            assert_eq!(lines.len(), 1, "{lines:?}");
+            let l = &lines[0];
+            let from = l.find("reason=").expect("a release line") + "reason=".len();
+            l[from..].split(' ').next().unwrap().to_string()
+        };
+        assert_eq!(
+            reason(&|c, at| {
+                c.fighters[0].apply_stagger_for(at, 2.5);
+            }),
+            "stagger"
+        );
+        assert_eq!(
+            reason(&|c, at| {
+                let _ = on_c2s_input(c, 0, &make_act_frame(true, 0.0, false), at);
+            }),
+            "attack_press"
+        );
+        assert_eq!(
+            reason(&|c, at| {
+                // A window that ends at `at`, seen while it is still open.
+                c.fighters[0].blocking_until = Some(at);
+                let _ = drain_state_changes(c, at - Duration::from_millis(2));
+                let _ = on_tick(c, at, false);
+            }),
+            "expired"
+        );
+        assert_eq!(reason(&|c, _| c.phase = FlowState::RoundEnd), "round_end");
+        assert_eq!(reason(&|c, _| c.fighters[0].health = 0), "death");
+    }
+
+    /// One exchange covering all three cases, as bytes.
+    fn exchange(t0: Instant) -> Wire {
+        let mut c = combat(t0);
+        let mut out = Vec::new();
+        out.extend(press_block(&mut c, t0));
+        out.extend(swing(&mut c, ms(t0, 300)).0);
+        out.extend(release_block(&mut c, ms(t0, 600)));
+        out.extend(press_block(&mut c, ms(t0, 900)));
+        for n in (902..4000).step_by(2) {
+            out.extend(on_tick(&mut c, ms(t0, n), false));
+        }
+        out.extend(swing(&mut c, ms(t0, 4000)).0);
+        out.extend(release_block(&mut c, ms(t0, 4200)));
+        out
+    }
+
+    fn fnv1a(wire: &Wire) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |b: u8| {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        for (viewer, frame) in wire {
+            eat(*viewer as u8);
+            for b in (frame.len() as u32).to_le_bytes() {
+                eat(b);
+            }
+            for b in frame {
+                eat(*b);
+            }
+        }
+        h
+    }
+
+    /// The logging changes no frame. `exchange` sends exactly the bytes it sent on
+    /// fork/main 0b4adbc, before any of this existed: the count and hash below were
+    /// taken there, with this same function. A deliberate wire change in these
+    /// paths updates them; nothing in this module may.
+    #[test]
+    fn the_wire_is_byte_identical_with_the_logging_in_place() {
+        let wire = exchange(Instant::now());
+        assert_eq!((wire.len(), fnv1a(&wire)), WIRE_BEFORE_THE_LOGGING);
+    }
+
+    const WIRE_BEFORE_THE_LOGGING: (usize, u64) = (50, 4_802_344_220_950_389_458);
+
+    /// A gear-calculator simulation writes none of these lines, and fights the
+    /// same fight.
+    #[test]
+    fn a_simulated_match_writes_no_block_lines() {
+        let t0 = Instant::now();
+        let _ = block_log_capture::take();
+        let live = exchange(t0);
+        let written = block_log_capture::take();
+        assert_eq!(
+            written.len(),
+            4,
+            "control: a real fight writes them: {written:?}"
+        );
+
+        let simulated = crate::arena::gear_calc::quiet(|| exchange(t0));
+        assert_eq!(block_log_capture::take(), Vec::<String>::new());
+        assert_eq!(simulated, live);
     }
 }
