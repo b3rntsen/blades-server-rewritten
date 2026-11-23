@@ -3625,6 +3625,24 @@ impl Fighter {
         self.reckless_fury_until.is_some_and(|t| now < t)
     }
 
+    /// `Actor$$get_CanBlock@0x1c5b9d4`: `!HasStatus(RecklessFury 11)`. Every path
+    /// that raises a guard from an input or a bot decision must ask this.
+    pub fn can_block(&self, now: Instant) -> bool {
+        !self.has_reckless_fury(now)
+    }
+
+    /// Clear a lapsed Reckless Fury, returning true on the tick it ended. The client
+    /// decides its guard from the button's current state
+    /// (`PlayerActorState$$PredictNextStateChange@0x1d5c27c` reads `CanBlock` and the
+    /// live input), so the caller resumes a guard still held at that moment.
+    pub fn reconcile_fury_end(&mut self, now: Instant) -> bool {
+        if self.reckless_fury_until.is_some_and(|t| now >= t) {
+            self.reckless_fury_until = None;
+            return true;
+        }
+        false
+    }
+
     /// Combat Focus's condition: in the Maneuver state, or Reckless Fury is up.
     pub fn combat_focus_active(&self, now: Instant) -> bool {
         self.maneuver_state_until.is_some_and(|t| now < t) || self.has_reckless_fury(now)
