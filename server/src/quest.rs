@@ -7391,6 +7391,99 @@ mod event_quest_tests {
         }
     }
 
+    /// The December 2026 fast rotation (tracker #499), as the quest map sees it:
+    /// at every hour from 28 November to 5 January the `/quests` rows are
+    /// exactly the instances the `/gameevents` feed serves — never more than
+    /// two open and one in warning — and every one of them is a real, playable
+    /// event: a template in `parsed.json` with objectives, a dungeon and a
+    /// milestone ladder. A third open row, or one the client cannot name or
+    /// build, is what wedges the quest map.
+    #[test]
+    fn the_december_rotation_mints_only_playable_events_two_open_one_in_warning() {
+        use blades_lib::features::game_events::{
+            DECEMBER_2026_ROTATION, MAX_CONCURRENT_EVENTS, MAX_WARNING_EVENTS, WARNING_LEAD_SECS,
+            active_events_themed, upcoming_events_themed,
+        };
+        use std::collections::BTreeSet;
+
+        let sd = static_data();
+        let gd = game_data();
+        let theme = sd.game_event_theme.as_ref();
+        let instance = |q: &blades_lib::user_data::Quest| {
+            q.game_event_quest_data
+                .as_ref()
+                .unwrap()
+                .game_event_instance_id
+                .clone()
+        };
+
+        let mut minted_in_december: BTreeSet<String> = BTreeSet::new();
+        let mut now = DECEMBER_2026_ROTATION.start_secs - 3 * 86_400;
+        while now <= DECEMBER_2026_ROTATION.end_secs + 5 * 86_400 {
+            let feed: Vec<String> = active_events_themed(&sd.game_events, theme, now)
+                .into_iter()
+                .map(|e| e.game_event_instance_id)
+                .collect();
+            let minted = event_quests::mint(&sd, &gd, CHAR, 40, now);
+            let got: Vec<String> = minted.iter().map(|m| instance(&m.quest)).collect();
+            assert_eq!(got, feed, "t={now}: quest rows and feed disagree");
+            assert!(
+                (1..=MAX_CONCURRENT_EVENTS).contains(&minted.len()),
+                "t={now}: {} open event rows",
+                minted.len()
+            );
+            for m in &minted {
+                assert!(
+                    gd.quests.contains_key(&m.quest.gld_quest_id),
+                    "t={now}: {} is not a quest the game knows",
+                    m.quest.gld_quest_id
+                );
+                assert!(
+                    sd.event_quests
+                        .templates
+                        .contains_key(&m.quest.gld_quest_id),
+                    "t={now}: no milestone ladder"
+                );
+                assert!(
+                    !m.quest.objective_statuses.is_empty(),
+                    "t={now}: no objectives"
+                );
+                assert!(m.dungeon.is_some(), "t={now}: no dungeon");
+                if (DECEMBER_2026_ROTATION.start_secs..DECEMBER_2026_ROTATION.end_secs)
+                    .contains(&now)
+                {
+                    minted_in_december.insert(instance(&m.quest));
+                }
+            }
+            let ids: BTreeSet<Uuid> = minted.iter().map(|m| m.quest_id).collect();
+            assert_eq!(ids.len(), minted.len(), "t={now}: two rows share an id");
+
+            let soon: Vec<String> =
+                upcoming_events_themed(&sd.game_events, theme, now, WARNING_LEAD_SECS)
+                    .into_iter()
+                    .map(|e| e.game_event_instance_id)
+                    .collect();
+            let warned: Vec<String> = event_quests::upcoming(&sd, &gd, CHAR, 40, now)
+                .iter()
+                .map(|q| instance(&q.quest))
+                .collect();
+            assert_eq!(warned, soon, "t={now}: warning row and feed disagree");
+            assert!(
+                warned.len() <= MAX_WARNING_EVENTS,
+                "t={now}: {} warning rows",
+                warned.len()
+            );
+            now += 3_600;
+        }
+        // 46 fast openings, the two ordinary ones still open as the month
+        // begins, and the holiday event of 18 December.
+        assert!(
+            minted_in_december.len() >= 46,
+            "only {} distinct event rows in December",
+            minted_in_december.len()
+        );
+    }
+
     /// Every open event must be *playable*: objectives and dungeon data, resolved
     /// through the template. Advertising an event with no dungeon data is what hangs
     /// the client's quest map (report #62), and the instance id resolves to nothing,
