@@ -12,6 +12,7 @@ pub mod character_ops;
 pub mod chest_soul_gems;
 pub mod chests;
 pub mod daily_reward;
+pub mod december_2026;
 pub mod decoration_prestige;
 pub mod event_materials;
 pub mod free_for_all;

@@ -112,7 +112,13 @@ impl GiftOverrideRow {
 }
 
 /// The gift definition in force for `gift_id`: the database row if there is one,
-/// otherwise the static catalogue.
+/// otherwise the static catalogue, otherwise the compiled December 2026
+/// calendar (tracker #499).
+///
+/// The calendar comes last on purpose: a `gift_overrides` row published under a
+/// door's id replaces that door without a deploy — the lever for swapping out a
+/// decoration that fails its device check. The door's backpack rule goes by the
+/// id and still applies.
 ///
 /// Every `globalgifts` handler goes through here. A handler that read
 /// `static_data.gifts` directly would serve the payload this process booted with
@@ -129,10 +135,21 @@ pub async fn effective_gift(
         .first(conn)
         .await
         .ok();
-    match row {
-        Some(r) => Some(r.to_def()),
-        None => app_state.static_data.gifts.get(&gift_id).cloned(),
-    }
+    gift_in_force(
+        row.map(|r| r.to_def()),
+        &app_state.static_data.gifts,
+        gift_id,
+    )
+}
+
+/// [`effective_gift`]'s order of precedence, without the database.
+fn gift_in_force(
+    row: Option<GiftDef>,
+    static_gifts: &std::collections::HashMap<Uuid, GiftDef>,
+    gift_id: Uuid,
+) -> Option<GiftDef> {
+    row.or_else(|| static_gifts.get(&gift_id).cloned())
+        .or_else(|| blades_lib::features::december_2026::gift(gift_id).cloned())
 }
 
 /// Every authored gift whose window covers `now`.
@@ -787,6 +804,63 @@ mod tests {
         assert_eq!(window_from(Some(-5), None).start_hour_utc, 0);
         assert_eq!(window_from(None, Some(0)).duration_secs, 60);
         assert_eq!(window_from(None, Some(999_999)).duration_secs, ffa::DAY);
+    }
+
+    /// The December 2026 calendar (tracker #499) is found as a gift by its
+    /// door's id, with no row and no static file — and only under those ids.
+    #[test]
+    fn a_calendar_door_is_a_gift_without_a_row_or_a_static_file() {
+        use blades_lib::features::december_2026::door_gift_id;
+        let none = std::collections::HashMap::new();
+        let door = gift_in_force(None, &none, door_gift_id(6)).expect("door 6 is a gift");
+        assert_eq!(door.global_gift_id, door_gift_id(6));
+        assert_eq!(
+            door.description.as_deref(),
+            Some("Adventskalender Türchen Nr. 6 / Advent calendar door no. 6")
+        );
+        assert!(
+            gift_in_force(None, &none, door_gift_id(25)).is_none(),
+            "no door on the 25th"
+        );
+        assert!(gift_in_force(None, &none, Uuid::from_u128(7)).is_none());
+    }
+
+    /// A published row under a door's id replaces the door — the lever for
+    /// changing one day without a deploy — and the static catalogue still
+    /// answers for its own ids before the calendar is asked.
+    #[test]
+    fn a_published_row_replaces_a_calendar_door() {
+        use blades_lib::features::december_2026::door_gift_id;
+        let authored = GiftDef {
+            global_gift_id: door_gift_id(16),
+            items: Vec::new(),
+            chests: Vec::new(),
+            start_time: 1,
+            end_time: 2,
+            claim_count_limit: 1,
+            description: Some("replacement".into()),
+        };
+        let none = std::collections::HashMap::new();
+        let got = gift_in_force(Some(authored.clone()), &none, door_gift_id(16)).unwrap();
+        assert_eq!(got.description.as_deref(), Some("replacement"));
+
+        let sunset = Uuid::from_u128(0x32d4f977_5438_457d_9b48_69e5eaf70eb0);
+        let mut statics = std::collections::HashMap::new();
+        statics.insert(
+            sunset,
+            GiftDef {
+                global_gift_id: sunset,
+                description: Some("Sunset Gift".into()),
+                ..authored
+            },
+        );
+        assert_eq!(
+            gift_in_force(None, &statics, sunset)
+                .unwrap()
+                .description
+                .as_deref(),
+            Some("Sunset Gift")
+        );
     }
 
     #[test]
