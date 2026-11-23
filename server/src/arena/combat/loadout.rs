@@ -376,8 +376,17 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             );
             // Keep `enchant_property_ids` positionally aligned with `enchants`: an
             // enchant that produced a damage track records the property behind it.
+            //
+            // The track's damage is read from the weapon-class table at hit time, so
+            // the Fortify Primary share of its xValue multiplier rides along in
+            // `enchant_primary_multipliers`; the magnitude `apply_enchant` scaled is
+            // not used for a weapon damage track (report #608). A template track
+            // (Dawnbreaker's fire) pushed earlier carries none: pad it with 1.0 so
+            // this item's entries land on their own indices.
+            lo.enchant_primary_multipliers.resize(before, 1.0);
             for _ in before..lo.enchants.len() {
                 lo.enchant_property_ids.push(prop.id);
+                lo.enchant_primary_multipliers.push(primary_mult);
             }
         }
     }
@@ -1003,7 +1012,17 @@ fn apply_enchant_with_rating_and_multiplier(
         "ConvertDamagePoisonPropertyLogic" => {
             lo.convert_damage.push((DamageType::Poison, magnitude))
         }
-        "HastePropertyLogic" => lo.haste += (1.0 - magnitude).max(0.0),
+        // `HasteBonusInstance$$GetRawXValue@0x1d4fff4` is `1 - tier value` (0.70 at
+        // tier 10 -> 30%), and `GetXValue@0x24d0a84` multiplies THAT by the item's
+        // xValue multiplier, so Fortify Primary Enchant makes it 0.30 x 1.15 = 0.345.
+        // Scaling the tier value first and subtracting afterwards inverted the bonus:
+        // 1 - 0.70 x 1.15 = 0.195, a weapon slower than with no Fortify Primary at all
+        // (report #612). Each source then subtracts from the speed multiplier
+        // (`Actor$$WeaponSpeedMultiplierMethod@0x1c5c560`), so Warlock's Ring adds.
+        "HastePropertyLogic" => {
+            let raw = gamedata::enchant_magnitude(&uuid, tier).unwrap_or(1.0);
+            lo.haste += (1.0 - raw).max(0.0) * xvalue_multiplier.max(0.0);
+        }
         "CoolDownPenaltyPropertyLogic" => lo.cooldown_penalty_secs += magnitude,
         "ShortenStaggerPropertyLogic" => lo.shorten_stagger += magnitude,
         "ResistSpellsPropertyLogic" => push_resist(lo, DamageType::None, magnitude),

@@ -711,8 +711,19 @@ impl RetailDamageModel {
                 && attacker.enchant_property_ids.get(idx).is_some_and(|id| {
                     attacker.property_ids.iter().filter(|p| *p == id).count() > 1
                 });
-            let synergy_mult = if stacked { 1.0 + synergy } else { 1.0 };
-            let mut v = magnitude * amp * synergy_mult;
+            // `ItemPropertyBonusInstance$$GetXValueMultiplier@0x24d0d2c` is ONE sum:
+            // `1 + Σ Fortify Primary Enchant on the same item + [Synergy]`. The
+            // track is read through `GetXValue`
+            // (`ElementalDamageBonusInstance$$AddElementalDamage@0x1d4cea0`), so a
+            // weapon's "Improves main enchantment by 15%" raises it. It used to be
+            // dropped for exactly these tracks (report #608).
+            let primary_mult = attacker
+                .enchant_primary_multipliers
+                .get(idx)
+                .copied()
+                .unwrap_or(1.0);
+            let xvalue_mult = primary_mult + if stacked { synergy } else { 0.0 };
+            let mut v = magnitude * amp * xvalue_mult;
             // Once per swing, on the first elemental track, mirroring PDOC.
             if edoc_left > 0.0 {
                 v += edoc_left;
