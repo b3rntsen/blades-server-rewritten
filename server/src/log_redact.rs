@@ -108,6 +108,28 @@ mod tests {
         }
     }
 
+    /// A session id is the bearer token a client presents on every request; the
+    /// session store's failure lines may name one only through `opaque_tag`.
+    #[test]
+    fn the_session_store_does_not_log_a_session_token() {
+        // The whole file: session.rs has a `#[cfg(test)]` item near the top, so
+        // cutting at the first one would skip the store itself.
+        let code = include_str!("session.rs");
+        assert!(code.contains("fn persist_session("));
+        for level in ["error!(", "warn!(", "info!(", "debug!(", "trace!("] {
+            for (n, statement) in code.split(level).enumerate().skip(1) {
+                let call = macro_call(statement);
+                let without_tags = call.replace("opaque_tag(&session_id", "");
+                for banned in ["session_id", "secret_user_id", "extra_secret"] {
+                    assert!(
+                        !without_tags.contains(banned),
+                        "{level} call #{n} in session.rs mentions `{banned}`: {call}"
+                    );
+                }
+            }
+        }
+    }
+
     /// The text of one `level!( … )` call: up to the parenthesis that closes
     /// the one it opens, with string literals skipped so a `)` in a message
     /// does not end it early.

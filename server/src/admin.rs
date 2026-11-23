@@ -2890,8 +2890,8 @@ pub async fn reassign_device(
     // "10.99.0.250.evil" is not, and a regex would have to be right about that.
     if body.device_id.parse::<std::net::Ipv4Addr>().is_err() {
         warn!(
-            "reassign-device: refusing {:?} — not an IPv4 address, so not an address this platform allocated",
-            body.device_id
+            "reassign-device: refusing {} — not an IPv4 address, so not an address this platform allocated",
+            crate::log_redact::device_for_log(&body.device_id)
         );
         return Err(BladeApiError::new(
             StatusCode::FORBIDDEN,

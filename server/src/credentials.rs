@@ -260,7 +260,7 @@ pub async fn check_login(
 ) -> Option<Uuid> {
     if !credential_is_within_bounds(username_raw, password) {
         log::warn!(
-            "credential check: refused an over-long username or password without hashing              (username {} bytes, password {} bytes)",
+            "credential check: refused an over-long username or password without hashing (username {} bytes, password {} bytes)",
             username_raw.len(),
             password.len()
         );
