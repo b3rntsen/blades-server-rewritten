@@ -316,35 +316,20 @@ pub async fn get_social_characters(
         })
         .collect();
 
-    // An id that is no account is an alt key: a guild lists an alt that is not
-    // being played under it (guild.rs `load_members`). Its card is its newest
-    // version, offline, with the alt key as both ids — the character id the
-    // town and loadout routes below resolve the same way.
+    // An id that is no account may be an alt's member id: a guild lists an
+    // alt that is not being played under it (guild.rs `load_members`). Its
+    // card is its newest version, offline, with the member id as both ids —
+    // the character id the town and loadout routes below resolve the same way.
     let unresolved: Vec<Uuid> = wanted
         .iter()
         .copied()
         .filter(|w| !rows.iter().any(|r| r.user_id == *w))
         .collect();
-    for alt in versions_of_alts(&mut conn, &unresolved).await? {
-        let (Ok(c), Ok(d)) = (
-            serde_json::from_value::<blades_lib::user_data::CompleteCharacter>(alt.character),
-            serde_json::from_value::<blades_lib::user_data::CompleteCharacterData>(alt.data),
-        ) else {
-            log::warn!(
-                "[social] alt {} has a version this build cannot read; no card",
-                alt.alt_key
-            );
-            continue;
-        };
+    for alt in versions_of_members(&mut conn, &unresolved).await? {
+        let member = alt.member_id;
+        let (c, d) = alt_card_parts(alt);
         characters.push(SocialCharacterWire::build(
-            alt.alt_key,
-            alt.alt_key,
-            &c,
-            &d,
-            false,
-            now_ms,
-            full,
-            &data_keys,
+            member, member, &c, &d, false, now_ms, full, &data_keys,
         ));
     }
 
@@ -353,12 +338,19 @@ pub async fn get_social_characters(
     }))
 }
 
-/// The newest version of each alt in `alt_keys` (an alt is known by its
-/// `source_alt_uuid`, or by a version id when it never had one).
+/// The newest version of the alt behind each member id in `member_ids`
+/// (`alt_member_ids`: an (account, alt) pair, the alt known by its
+/// `source_alt_uuid` or by a version id when it never had one). Scoped by the
+/// account — an alt label is shared by an original and its numbered copies —
+/// or by the character row the id was minted on, which a re-link keeps.
 #[derive(diesel::QueryableByName)]
 pub(crate) struct AltVersion {
     #[diesel(sql_type = diesel::sql_types::Uuid)]
-    pub(crate) alt_key: Uuid,
+    pub(crate) member_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    pub(crate) name: String,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
+    level: i32,
     #[diesel(sql_type = diesel::sql_types::Jsonb)]
     pub(crate) character: Value,
     #[diesel(sql_type = diesel::sql_types::Jsonb)]
@@ -369,21 +361,52 @@ pub(crate) struct AltVersion {
     inventory: Value,
 }
 
-pub(crate) async fn versions_of_alts(
+/// The character and data a member's card is built from. A card the client
+/// asked for must come back — a missing one leaves that member loading forever
+/// — so a version this build cannot read still yields a minimal valid card (its
+/// stored name and level), and a log line.
+fn alt_card_parts(
+    alt: AltVersion,
+) -> (
+    blades_lib::user_data::CompleteCharacter,
+    blades_lib::user_data::CompleteCharacterData,
+) {
+    let member = alt.member_id;
+    let c = serde_json::from_value::<blades_lib::user_data::CompleteCharacter>(alt.character)
+        .unwrap_or_else(|e| {
+            log::warn!("[social] member {member}: version unreadable ({e}); minimal card");
+            blades_lib::user_data::CompleteCharacter {
+                name: alt.name.clone(),
+                level: u16::try_from(alt.level).unwrap_or(1).max(1),
+                ..Default::default()
+            }
+        });
+    let d = serde_json::from_value::<blades_lib::user_data::CompleteCharacterData>(alt.data)
+        .unwrap_or_else(|e| {
+            log::warn!("[social] member {member}: version data unreadable ({e}); empty data");
+            Default::default()
+        });
+    (c, d)
+}
+
+pub(crate) async fn versions_of_members(
     conn: &mut diesel_async::AsyncPgConnection,
-    alt_keys: &[Uuid],
+    member_ids: &[Uuid],
 ) -> Result<Vec<AltVersion>, BladeApiError> {
-    if alt_keys.is_empty() {
+    if member_ids.is_empty() {
         return Ok(Vec::new());
     }
     Ok(diesel::sql_query(
-        r#"SELECT DISTINCT ON (k.alt_key)
-                  k.alt_key, v."character", v.data, v.town, v.inventory
-             FROM unnest($1::uuid[]) AS k(alt_key)
-             JOIN character_versions v ON v.source_alt_uuid = k.alt_key OR v.id = k.alt_key
-            ORDER BY k.alt_key, v.saved_at DESC, v.id DESC"#,
+        r#"SELECT DISTINCT ON (r.member_id)
+                  r.member_id, v.name, v.level, v."character", v.data, v.town, v.inventory
+             FROM alt_member_ids r
+             JOIN character_versions v
+               ON (v.source_alt_uuid = r.alt_key OR v.id = r.alt_key)
+              AND (v.user_id = r.user_id OR v.character_id = r.character_id)
+            WHERE r.member_id = ANY($1)
+            ORDER BY r.member_id, (v.user_id = r.user_id) DESC, v.saved_at DESC, v.id DESC"#,
     )
-    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(alt_keys)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(member_ids)
     .load(conn)
     .await?)
 }
@@ -438,7 +461,7 @@ pub async fn get_social_town(
     // A guildmate's alt that is not being played visits as its newest version.
     let alt_town: Option<Option<Value>> =
         if rows.is_empty() && wanted_user_id == wanted_character_id {
-            versions_of_alts(&mut conn, &[wanted_user_id])
+            versions_of_members(&mut conn, &[wanted_user_id])
                 .await?
                 .into_iter()
                 .next()
@@ -495,7 +518,7 @@ pub async fn get_social_loadout(
         Some(row) => row.inventory.0.loadout.equipped_items.clone(),
         // A guildmate's alt that is not being played: its newest version.
         None if wanted_user_id == wanted_character_id => {
-            versions_of_alts(&mut conn, &[wanted_user_id])
+            versions_of_members(&mut conn, &[wanted_user_id])
                 .await?
                 .into_iter()
                 .next()
@@ -968,5 +991,21 @@ mod wire {
             [Uuid::from_u128(7)],
             "one bad id must not drop the good one"
         );
+    }
+
+    /// Review F4: an alt whose version this build cannot read still gets a
+    /// card (the client never stops loading a member it gets no card for).
+    #[test]
+    fn an_unreadable_alt_version_still_makes_a_card() {
+        let (c, _) = super::alt_card_parts(super::AltVersion {
+            member_id: Uuid::from_u128(9),
+            name: "Taheen".into(),
+            level: 37,
+            character: serde_json::json!({"name": 5, "level": "x"}),
+            data: serde_json::json!("garbage"),
+            town: None,
+            inventory: serde_json::json!(null),
+        });
+        assert_eq!((c.name.as_str(), c.level), ("Taheen", 37));
     }
 }

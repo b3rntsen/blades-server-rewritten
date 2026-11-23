@@ -8795,14 +8795,17 @@ mod tests {
                     "no succession: the Grand Master never left"
                 );
                 assert_eq!(n(&mut c, gms).await, 1, "exactly one Grand Master");
+                let ma = crate::guild::member_id_for_tests(&mut c, uid, alt_a).await;
+                assert_ne!(ma, uid);
+                assert_ne!(ma, alt_a, "a member id is never the shareable alt label");
                 let (_, members) = crate::guild::board_and_members_for_tests(&mut c, "ga").await;
                 assert_eq!(
                     members,
                     vec![
-                        (alt_a, "GRANDMASTER".to_string()),
+                        (ma, "GRANDMASTER".to_string()),
                         (mate_u, "MEMBER".to_string())
                     ],
-                    "the game lists A, under its alt key, with its own rank"
+                    "the game lists A, under its member id, with its own rank"
                 );
                 assert_eq!(guild_of(&mut c, uid).await, None, "B is in no guild");
 
@@ -8851,22 +8854,20 @@ mod tests {
                     ),
                 )
                 .await;
+                let ma = crate::guild::member_id_for_tests(&mut c, uid, alt_a).await;
                 let (_, members) = crate::guild::board_and_members_for_tests(&mut c, "ga").await;
                 assert_eq!(
                     members,
-                    vec![
-                        (alt_a, "GRANDMASTER".to_string()),
-                        (uid, "MEMBER".to_string())
-                    ]
+                    vec![(ma, "GRANDMASTER".to_string()), (uid, "MEMBER".to_string())]
                 );
-                assert_ne!(alt_a, uid, "two ids, never the same member twice");
+                assert_ne!(ma, uid, "two ids, never the same member twice");
                 // The played alt's id is the account's (the client finds "me"
-                // by it); A's resolves to A's own newest version.
-                let cards = crate::social::versions_of_alts(&mut c, &[alt_a, uid])
+                // by it); A's member id resolves to A's own newest version.
+                let cards = crate::social::versions_of_members(&mut c, &[ma, uid])
                     .await
                     .unwrap();
-                assert_eq!(cards.len(), 1, "an account id is not an alt key");
-                assert_eq!(cards[0].alt_key, alt_a);
+                assert_eq!(cards.len(), 1, "an account id is not a member id");
+                assert_eq!(cards[0].member_id, ma);
                 assert_eq!(cards[0].character["name"], "Aran");
             }
 
@@ -8949,14 +8950,15 @@ mod tests {
                 );
                 let (board, members) =
                     crate::guild::board_and_members_for_tests(&mut c, "ga").await;
-                assert!(members.contains(&(sephoris, "MEMBER".to_string())));
+                let ms = crate::guild::member_id_for_tests(&mut c, uid, sephoris).await;
+                assert!(members.contains(&(ms, "MEMBER".to_string())));
                 let hello = board.iter().find(|m| m["type"] == "CLIENT").unwrap();
-                assert_eq!(hello["userId"], sephoris.to_string(), "Sephoris's own line");
-                assert_eq!(hello["characterId"], sephoris.to_string());
+                assert_eq!(hello["userId"], ms.to_string(), "Sephoris's own line");
+                assert_eq!(hello["characterId"], ms.to_string());
                 let donate = board.iter().find(|m| m["type"] == "DONATE").unwrap();
                 assert_eq!(
                     donate["typeSpecificData"]["requesterUserId"],
-                    sephoris.to_string()
+                    ms.to_string()
                 );
                 assert_eq!(
                     donate["userId"],
@@ -9000,10 +9002,11 @@ mod tests {
                 apply_switch_alt(&mut c, &switch(uid, alt_b, None))
                     .await
                     .unwrap();
+                let ma = crate::guild::member_id_for_tests(&mut c, uid, alt_a).await;
                 let (board, _) = crate::guild::board_and_members_for_tests(&mut c, "ga").await;
                 assert_eq!(
                     author(&board),
-                    (serde_json::json!(alt_a), serde_json::json!(alt_a))
+                    (serde_json::json!(ma), serde_json::json!(ma))
                 );
                 board_names_only_members_or_leavers(&mut c, "ga").await;
 
@@ -9044,9 +9047,16 @@ mod tests {
                          VALUES ('gb', '{uid}', '{cid}', 'MEMBER', 300)"
                 ))
                 .await;
-                crate::guild::remove_other_member_for_tests(&mut c, gm_u, gm_c, alt_a, false)
+                let ma = crate::guild::member_id_for_tests(&mut c, uid, alt_a).await;
+                crate::guild::remove_other_member_for_tests(&mut c, gm_u, gm_c, ma, false)
                     .await
                     .unwrap();
+                assert!(
+                    crate::guild::remove_other_member_for_tests(&mut c, gm_u, gm_c, ma, false)
+                        .await
+                        .is_err(),
+                    "a seat already gone is not kicked twice"
+                );
                 assert_eq!(
                     n(&mut c, "SELECT count(*) AS n FROM guild_alt_seats").await,
                     0
@@ -9061,8 +9071,8 @@ mod tests {
                         &mut c,
                         &format!(
                             "SELECT count(*) AS n FROM guild_messages WHERE message_type = 'KICK' \
-                               AND type_specific_data->>'kickedUserId' = '{alt_a}' \
-                               AND target_alt_key = '{alt_a}'"
+                               AND type_specific_data->>'kickedUserId' = '{ma}' \
+                               AND target_account = '{uid}' AND target_alt_key = '{alt_a}'"
                         )
                     )
                     .await,
@@ -9131,6 +9141,18 @@ mod tests {
                 // A deleted guild, and a version from before parking existed.
                 seed += &version(alt_old, seat("gone", "MEMBER", 6), 100);
                 seed += &version(alt_old, "{}".to_string(), 300);
+                // Another account whose copy shares alt_m1's label (review F1),
+                // parked in another guild: both are seated, neither is skipped.
+                let (cid2, uid2) =
+                    seed_character_on_alt(&mut c, "Copy 2", 40, 0, Some(Uuid::new_v4())).await;
+                seed += &format!(
+                    "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, \
+                         name, \"character\", data, inventory, wallet, server_state, saved_at) \
+                     VALUES ('{}', '{cid2}', '{uid2}', '{alt_m1}', 'x', '{{}}', '{{}}', '{{}}', '{{}}', \
+                         '{}', 400);",
+                    Uuid::new_v4(),
+                    seat("gb", "MEMBER", 13)
+                );
                 sql(&mut c, &seed).await;
 
                 let migration = include_str!(
@@ -9178,11 +9200,152 @@ mod tests {
                     guild_of(&mut c, heir_u).await,
                     Some(("ga".into(), "GRANDMASTER".into()))
                 );
+                let mgm2 = crate::guild::member_id_for_tests(&mut c, uid, alt_gm2).await;
                 let (_, members) = crate::guild::board_and_members_for_tests(&mut c, "gz").await;
                 assert_eq!(
                     members,
-                    vec![(alt_gm2, "GRANDMASTER".to_string())],
+                    vec![(mgm2, "GRANDMASTER".to_string())],
                     "a guild with nobody live lists its Grand Master again (joinable)"
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM guild_alt_seats \
+                          WHERE user_id = '{uid2}' AND alt_key = '{alt_m1}' AND guild_id = 'gb'"
+                        )
+                    )
+                    .await,
+                    1,
+                    "the copy's own seat, keyed by its own account"
+                );
+                assert_eq!(
+                    n(
+                        &mut c,
+                        "SELECT count(DISTINCT member_id) AS n FROM guild_alt_seats"
+                    )
+                    .await,
+                    5,
+                    "every seat its own member id"
+                );
+            }
+
+            /// Review F1: an alt label is NOT unique — a numbered copy ("Taheen 2")
+            /// carries its original's label (17 labels on production belong to
+            /// two accounts). Everything keyed by an alt label must also be keyed
+            /// by the account: the board, `/social/characters`, the seats, the
+            /// guild score.
+            #[tokio::test]
+            async fn two_accounts_sharing_one_alt_label_never_cross() {
+                let mut c = db!();
+                let shared = Uuid::new_v4();
+                let (b1, b2) = (Uuid::new_v4(), Uuid::new_v4());
+                guilds(&mut c).await;
+                let (c1, u1) = seed_character_on_alt(&mut c, "Taheen", 40, 0, Some(shared)).await;
+                let (c2, u2) = seed_character_on_alt(&mut c, "Taheen 2", 41, 0, Some(shared)).await;
+                legacy_version(&mut c, c1, u1, b1, shared).await;
+                legacy_version(&mut c, c2, u2, b2, shared).await;
+                let (gm_u, gm_c) = (Uuid::new_v4(), Uuid::new_v4());
+                sql(&mut c, &format!(
+                    "INSERT INTO characters (id, user_id, character, data, inventory, wallet, \
+                         server_state) VALUES ('{gm_c}', '{gm_u}', '{{}}', '{{}}', '{{}}', '{{}}', '{{}}'); \
+                     INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) VALUES \
+                         ('ga', '{gm_u}', '{gm_c}', 'GRANDMASTER', 1), \
+                         ('ga', '{u1}', '{c1}', 'MEMBER', 10), \
+                         ('gb', '{u2}', '{c2}', 'GRANDMASTER', 20)"
+                ))
+                .await;
+                crate::guild::append_message_for_tests(&mut c, "ga", u1, c1, "CLIENT").await;
+
+                // Taheen switches away while the copy still PLAYS its
+                // `shared`-labelled alt — the production shape that made an
+                // unscoped lookup name the copy's account.
+                apply_switch_alt(&mut c, &switch(u1, b1, None))
+                    .await
+                    .unwrap();
+                let m1 = crate::guild::member_id_for_tests(&mut c, u1, shared).await;
+                let (board, members) =
+                    crate::guild::board_and_members_for_tests(&mut c, "ga").await;
+                assert_eq!(
+                    board[0]["userId"],
+                    m1.to_string(),
+                    "Taheen, not the copy's account"
+                );
+                assert!(members.iter().any(|m| m.0 == m1));
+                board_names_only_members_or_leavers(&mut c, "ga").await;
+
+                apply_switch_alt(&mut c, &switch(u2, b2, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    n(
+                        &mut c,
+                        &format!(
+                            "SELECT count(*) AS n FROM guild_alt_seats WHERE alt_key = '{shared}'"
+                        )
+                    )
+                    .await,
+                    2,
+                    "one seat per (account, alt): neither overwrote the other"
+                );
+                let m2 = crate::guild::member_id_for_tests(&mut c, u2, shared).await;
+                assert!(m1 != m2 && m1 != u1 && m1 != u2 && m1 != shared);
+
+                // The board names Taheen by Taheen's member id — never the copy's
+                // account, which is no member of `ga` (the #439 stall).
+                let (board, members) =
+                    crate::guild::board_and_members_for_tests(&mut c, "ga").await;
+                assert_eq!(board[0]["userId"], m1.to_string());
+                assert!(members.iter().any(|m| m.0 == m1));
+                board_names_only_members_or_leavers(&mut c, "ga").await;
+
+                // The card is Taheen's own version, not the copy's.
+                let cards = crate::social::versions_of_members(&mut c, &[m1, m2])
+                    .await
+                    .unwrap();
+                let name = |m: Uuid| {
+                    cards
+                        .iter()
+                        .find(|v| v.member_id == m)
+                        .map(|v| v.character["name"].clone())
+                };
+                assert_eq!(name(m1), Some(serde_json::json!("Taheen")));
+                assert_eq!(name(m2), Some(serde_json::json!("Taheen 2")));
+
+                // The guild score credits each alt to its own guild.
+                result(&mut c, c1, Some(shared), 2_000, 30).await;
+                result(&mut c, c2, Some(shared), 2_001, 20).await;
+                let standings =
+                    season_store::freeze_standings(&mut c, &season(Uuid::new_v4(), "active"))
+                        .await
+                        .unwrap();
+                let guild_of_char = |cid: Uuid| {
+                    standings
+                        .iter()
+                        .find(|s| s.character_id == cid)
+                        .and_then(|s| s.guild_id.clone())
+                };
+                assert_eq!(guild_of_char(c1).as_deref(), Some("ga"));
+                assert_eq!(guild_of_char(c2).as_deref(), Some("gb"));
+
+                // And each comes back to its own guild, with its own rank.
+                apply_switch_alt(&mut c, &switch(u1, shared, None))
+                    .await
+                    .unwrap();
+                apply_switch_alt(&mut c, &switch(u2, shared, None))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    guild_of(&mut c, u1).await,
+                    Some(("ga".into(), "MEMBER".into()))
+                );
+                assert_eq!(
+                    guild_of(&mut c, u2).await,
+                    Some(("gb".into(), "GRANDMASTER".into()))
+                );
+                assert_eq!(
+                    n(&mut c, "SELECT count(*) AS n FROM guild_alt_seats").await,
+                    0
                 );
             }
 

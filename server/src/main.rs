@@ -317,6 +317,20 @@ async fn main() -> Result<()> {
             // hand-applied migration: every ranking query names it.
             dev_alt_lock::ensure_table(&db_pool).await;
 
+            // Refuse to serve guilds against a schema without their tables: a
+            // hand restart or an `arena.sh sync` must never run this binary
+            // before `2026-11-23-000000-0000_alts_stay_in_guilds` is applied.
+            {
+                let mut conn = db_pool.get().await.unwrap();
+                if let Err(missing) = guild::required_schema_present(&mut conn).await {
+                    log::error!(
+                        "refusing to start: {missing} missing — apply \
+                         migrations/2026-11-23-000000-0000_alts_stay_in_guilds/up.sql first"
+                    );
+                    std::process::exit(1);
+                }
+            }
+
             let mut game_data: GameData = {
                 let parsed_data_path = static_data.join("parsed.json");
                 let mut game_data_file = File::open(&parsed_data_path).unwrap();

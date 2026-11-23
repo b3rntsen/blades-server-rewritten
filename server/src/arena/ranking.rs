@@ -1375,7 +1375,7 @@ pub(crate) const H2H_BOARD_ENTRIES_SQL: &str = "\
          LEFT JOIN LATERAL ( \
              SELECT v.character ->> 'name' AS name, \
                     (v.character ->> 'level')::bigint AS level, \
-                    (SELECT s.guild_id FROM guild_alt_seats s WHERE s.alt_key = v.source_alt_uuid) AS parked_guild_id \
+                    (SELECT s.guild_id FROM guild_alt_seats s WHERE s.user_id = v.user_id AND s.alt_key = v.source_alt_uuid) AS parked_guild_id \
              FROM character_versions v \
              WHERE v.character_id = r.character_id \
                AND v.source_alt_uuid = r.alt_key \
@@ -2259,11 +2259,13 @@ mod tests {
             "CREATE TABLE characters (id UUID PRIMARY KEY, character JSONB NOT NULL, \
                  source_alt_uuid UUID)",
             "CREATE TABLE character_versions (id UUID PRIMARY KEY, character_id UUID NOT NULL, \
+                 user_id UUID, \
                  source_alt_uuid UUID, character JSONB NOT NULL, server_state JSONB, \
                  saved_at BIGINT NOT NULL)",
             "CREATE TABLE guilds (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
             "CREATE TABLE guild_members (guild_id TEXT NOT NULL, character_id UUID PRIMARY KEY)",
-            "CREATE TABLE guild_alt_seats (alt_key UUID PRIMARY KEY, guild_id TEXT NOT NULL)",
+            "CREATE TABLE guild_alt_seats (user_id UUID NOT NULL, alt_key UUID NOT NULL, \
+                 guild_id TEXT NOT NULL, PRIMARY KEY (user_id, alt_key))",
         ];
 
         #[derive(Debug, PartialEq, Eq, diesel::QueryableByName)]
@@ -3313,8 +3315,8 @@ mod tests {
             seed_alt_character(&mut conn, row, Some(live), "Live").await;
             seed_alt_character(&mut conn, opp, None, "Opp").await;
             diesel::sql_query(
-                "INSERT INTO character_versions (id, character_id, source_alt_uuid, character, server_state, saved_at) \
-                 VALUES ($1, $2, $3, '{\"name\":\"Parked\",\"level\":7}', \
+                "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, character, server_state, saved_at) \
+                 VALUES ($1, $2, $2, $3, '{\"name\":\"Parked\",\"level\":7}', \
                          '{\"parkedGuildMembers\":[{\"guild_id\":\"g-parked\"}]}', 1700000500)",
             )
             .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
@@ -3336,7 +3338,8 @@ mod tests {
                 .unwrap();
             // The parked alt's seat stays in its guild (2026-11-23), as an alt
             // seat; the legacy `parkedGuildMembers` key above is read by nothing.
-            diesel::sql_query("INSERT INTO guild_alt_seats VALUES ($1, 'g-parked')")
+            diesel::sql_query("INSERT INTO guild_alt_seats VALUES ($1, $2, 'g-parked')")
+                .bind::<diesel::sql_types::Uuid, _>(row)
                 .bind::<diesel::sql_types::Uuid, _>(parked)
                 .execute(&mut conn)
                 .await

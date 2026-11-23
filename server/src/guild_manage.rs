@@ -290,6 +290,7 @@ const PARKED_SEATS_SQL: &str = r#"
 SELECT s.guild_id,
        s.character_id,
        s.alt_key                           AS alt_key,
+       s.member_id,
        s.user_id,
        s.rank,
        s.join_date,
@@ -315,6 +316,9 @@ pub(crate) struct ParkedSeatRow {
     character_id: Uuid,
     #[diesel(sql_type = Nullable<SqlUuid>)]
     alt_key: Option<Uuid>,
+    /// The id the game lists this seat under (`alt_member_ids`).
+    #[diesel(sql_type = SqlUuid)]
+    member_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     user_id: Uuid,
     #[diesel(sql_type = Text)]
@@ -429,9 +433,10 @@ struct ActorSeat {
 }
 
 /// Who `actor_user_id` is to this guild. Absent = an operator. An account acts
-/// from its played alt's seat if that is here, else from its strongest other
-/// alt's seat (owner decision 2026-11-23: "I can manage things on web for all
-/// alts that are guild masters").
+/// from its STRONGEST seat here — played alt or not, a Grand Master's before
+/// anything else, the played alt's on a tie (owner decision 2026-11-23: "I can
+/// manage things on web for all alts that are guild masters"). An account may
+/// hold several seats in one guild (one per alt).
 fn resolve_actor(
     live: &[LiveSeatRow],
     parked: &[ParkedSeatRow],
@@ -441,47 +446,50 @@ fn resolve_actor(
     let Some(actor_user) = actor_user_id else {
         return Ok((KickActor::Operator, None));
     };
-    let seat = match live.iter().find(|s| s.user_id == actor_user) {
-        Some(s) => Some((
+    // (rank, played-first, join date) — smallest wins.
+    let mut candidates: Vec<((u8, u8, i64), String, ActorSeat)> = Vec::new();
+    for s in live.iter().filter(|s| s.user_id == actor_user) {
+        let Some(rank) = GuildRank::from_wire(&s.rank) else {
+            return Err(err(StatusCode::CONFLICT, 48));
+        };
+        candidates.push((
+            (rank as u8, 0, s.join_date),
             s.rank.clone(),
             ActorSeat {
                 name: s.name.clone(),
                 author_user: actor_user,
                 author_character: s.character_id,
             },
-        )),
-        None => parked
-            .iter()
-            .filter(|s| s.user_id == actor_user)
-            .filter_map(|s| {
-                let alt = s.alt_key?;
-                let rank = GuildRank::from_wire(&s.rank)?;
-                Some((rank as u8, s.join_date, alt, s))
-            })
-            .min_by_key(|(rank, join, alt, _)| (*rank, *join, *alt))
-            .map(|(_, _, alt, s)| {
-                (
-                    s.rank.clone(),
-                    ActorSeat {
-                        name: s.name.clone(),
-                        author_user: alt,
-                        author_character: alt,
-                    },
-                )
-            }),
-    };
-    match seat {
-        Some((rank_wire, seat)) => match GuildRank::from_wire(&rank_wire) {
-            Some(rank) => Ok((
+        ));
+    }
+    for s in parked.iter().filter(|s| s.user_id == actor_user) {
+        let Some(rank) = GuildRank::from_wire(&s.rank) else {
+            return Err(err(StatusCode::CONFLICT, 48));
+        };
+        candidates.push((
+            (rank as u8, 1, s.join_date),
+            s.rank.clone(),
+            ActorSeat {
+                name: s.name.clone(),
+                author_user: s.member_id,
+                author_character: s.member_id,
+            },
+        ));
+    }
+    candidates.sort_by_key(|c| c.0);
+    match candidates.into_iter().next() {
+        Some((_, rank_wire, seat)) => {
+            let rank =
+                GuildRank::from_wire(&rank_wire).ok_or_else(|| err(StatusCode::CONFLICT, 48))?;
+            Ok((
                 KickActor::Member {
                     user_id: actor_user,
                     rank,
                     co_master: is_co_master(co_masters, actor_user, &rank_wire),
                 },
                 Some(seat),
-            )),
-            None => Err(err(StatusCode::CONFLICT, 48)),
-        },
+            ))
+        }
         None => Ok((KickActor::Outsider, None)),
     }
 }
@@ -1295,11 +1303,11 @@ pub(crate) async fn kick(
         let alt = body
             .alt_key
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, 42))?;
-        // By alt key alone: the character id the roster lists for a seat whose
-        // alt is not played is the account's row, shared by its alts.
+        // Alt key AND character: an alt label is shared by an original and its
+        // numbered copies, so the label alone may match two accounts' seats.
         let seat = parked
             .iter()
-            .find(|s| s.alt_key == Some(alt))
+            .find(|s| s.alt_key == Some(alt) && s.character_id == body.character_id)
             .cloned()
             .ok_or_else(|| err(StatusCode::NOT_FOUND, 43))?;
         ((seat.user_id, seat.rank, seat.name), None, Some(alt))
@@ -2103,6 +2111,7 @@ mod tests {
             p_user: Uuid,
             p_char: Uuid,
             pa_alt: Uuid,
+            pa_member: Uuid,
         }
 
         async fn seed(c: &mut AsyncPgConnection) -> World {
@@ -2116,6 +2125,7 @@ mod tests {
                 p_user: Uuid::new_v4(),
                 p_char: Uuid::new_v4(),
                 pa_alt: Uuid::new_v4(),
+                pa_member: Uuid::new_v4(),
             };
             let (b_user, b_char) = (w.b_user, w.b_char);
             let (gm_alt, a_alt, b_alt, pb_alt) = (
@@ -2149,8 +2159,11 @@ mod tests {
                     '{{\"parkedGuildMembers\":[{{\"guild_id\":\"{G}\",\"rank\":\"MEMBER\",\"join_date\":15}}],\"parkedGuildRemovals\":[]}}',
                     'switch', 200);
                  -- PA's seat as the 2026-11-23 migration leaves it: still in the guild.
-                 INSERT INTO guild_alt_seats (alt_key, user_id, guild_id, character_id, rank,
-                     join_date, parked_at) VALUES ('{pa}', '{pu}', '{G}', '{pc}', 'MEMBER', 15, 200);
+                 INSERT INTO alt_member_ids (member_id, user_id, alt_key, character_id)
+                     VALUES ('{pm}', '{pu}', '{pa}', '{pc}');
+                 INSERT INTO guild_alt_seats (user_id, alt_key, member_id, guild_id, character_id,
+                     rank, join_date, parked_at)
+                     VALUES ('{pu}', '{pa}', '{pm}', '{G}', '{pc}', 'MEMBER', 15, 200);
                  INSERT INTO device_bindings (device_id, user_id, last_seen) VALUES
                    ('dev-a', '{au}', to_timestamp(5000));",
                 gu = w.gm_user,
@@ -2162,6 +2175,7 @@ mod tests {
                 bc = b_char,
                 pc = w.p_char,
                 pa = w.pa_alt,
+                pm = w.pa_member,
             );
             // Wins worth 30/20/10/40 cups (GM, A, B, parked PA).
             for (cid, alt, d, t) in [
@@ -2378,7 +2392,7 @@ mod tests {
                     &format!(
                         "SELECT COUNT(*) AS n FROM guild_messages WHERE guild_id = '{G}' \
                           AND message_type = 'LEAVE' AND user_id = '{}' AND alt_key = '{}'",
-                        w.pa_alt, w.pa_alt
+                        w.pa_member, w.pa_alt
                     )
                 )
                 .await,
@@ -2419,10 +2433,22 @@ mod tests {
             .await
             .unwrap();
 
+            // Review F2: P's PLAYED alt is a plain member of the same guild; P
+            // still acts from its strongest seat there, PA's Grand Master seat.
+            sql_query(format!(
+                "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                 VALUES ('{G}', '{}', '{}', 'MEMBER', 40)",
+                w.p_user, w.p_char
+            ))
+            .execute(&mut c)
+            .await
+            .unwrap();
+
             let seats = seats_of_user(&mut c, w.p_user).await.unwrap();
-            assert_eq!(seats.len(), 1);
-            assert!(seats[0].parked && seats[0].can_manage && seats[0].can_moderate);
-            assert_eq!(seats[0].alt_key, Some(w.pa_alt));
+            assert_eq!(seats.len(), 2);
+            let pa = seats.iter().find(|s| s.parked).unwrap();
+            assert!(pa.can_manage && pa.can_moderate);
+            assert_eq!(pa.alt_key, Some(w.pa_alt));
 
             let mut r = req(w.a_char);
             r.actor_user_id = Some(w.p_user);
@@ -2435,12 +2461,35 @@ mod tests {
                         "SELECT COUNT(*) AS n FROM guild_messages WHERE message_type = 'KICK' \
                           AND user_id = '{}' AND alt_key = '{}' \
                           AND type_specific_data->>'kickedUserId' = '{}'",
-                        w.pa_alt, w.pa_alt, w.a_user
+                        w.pa_member, w.pa_alt, w.a_user
                     )
                 )
                 .await,
                 1,
                 "authored by PA, under the id the game lists PA by"
+            );
+        }
+
+        /// Review F5: the binary refuses to start without the 2026-11-23 schema.
+        #[tokio::test]
+        async fn the_startup_check_names_a_missing_table_or_column() {
+            let mut c = db!();
+            assert_eq!(crate::guild::required_schema_present(&mut c).await, Ok(()));
+            sql_query("ALTER TABLE guild_messages DROP COLUMN target_account")
+                .execute(&mut c)
+                .await
+                .unwrap();
+            assert_eq!(
+                crate::guild::required_schema_present(&mut c).await,
+                Err("guild_messages.target_account".to_string())
+            );
+            sql_query("DROP TABLE guild_alt_seats")
+                .execute(&mut c)
+                .await
+                .unwrap();
+            assert_eq!(
+                crate::guild::required_schema_present(&mut c).await,
+                Err("guild_alt_seats".to_string())
             );
         }
 
