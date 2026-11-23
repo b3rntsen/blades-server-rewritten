@@ -186,6 +186,66 @@ fn snapshot_fallback_alt(outgoing: Option<Uuid>, incoming: Option<Uuid>) -> Opti
     outgoing.filter(|o| Some(*o) != incoming).or(incoming)
 }
 
+/// Does this import stamp an unstamped live row with the SAME character's own
+/// alt id?
+///
+/// The name registry keys a live row by `COALESCE(source_alt_uuid, id)`. A row
+/// from before alt ids existed is therefore registered under its row id, and
+/// the import that finally says which alt it is moves it to the alt id. Both
+/// keys are one character — but only when the snapshot of the outgoing row is
+/// filed under the incoming alt too. With an `outgoingAltUuid` hint naming
+/// another alt, the outgoing character is kept as that alt and keeps its name.
+fn import_rekeys_unstamped_row(
+    created: bool,
+    live_alt: Option<Uuid>,
+    outgoing_hint: Option<Uuid>,
+    incoming_alt: Option<Uuid>,
+) -> bool {
+    !created
+        && live_alt.is_none()
+        && incoming_alt.is_some()
+        && snapshot_fallback_alt(outgoing_hint, incoming_alt) == incoming_alt
+}
+
+/// The name an imported character lands under, keyed by the alt the row will
+/// hold after this write — the incoming one, else whatever the row already
+/// knew, else its row id.
+///
+/// Tracker #607: a player re-imported "Legoless" over his own live "Legoless"
+/// and got "Legoless 2". The live row predated alt ids, so its name was
+/// registered under the row id; the import arrived with the alt id, looked the
+/// name up under that new key, and found it held by "another" character — the
+/// very row it was about to overwrite. The old key is released first when it is
+/// the same character ([`import_rekeys_unstamped_row`]); the commit-time sync
+/// would drop it anyway, since no alt is keyed by the row id after the write.
+async fn settle_import_name(
+    conn: &mut diesel_async::AsyncPgConnection,
+    user_id: Uuid,
+    character_id: Uuid,
+    created: bool,
+    outgoing_hint: Option<Uuid>,
+    incoming_alt: Option<Uuid>,
+    desired: &str,
+) -> Result<String, diesel::result::Error> {
+    use crate::schema::characters;
+    let live_alt: Option<Uuid> = if created {
+        None
+    } else {
+        characters::table
+            .filter(characters::id.eq(character_id))
+            .select(characters::source_alt_uuid)
+            .first::<Option<Uuid>>(conn)
+            .await
+            .optional()?
+            .flatten()
+    };
+    let name_alt = incoming_alt.or(live_alt).unwrap_or(character_id);
+    if import_rekeys_unstamped_row(created, live_alt, outgoing_hint, incoming_alt) {
+        crate::character_names::release_key(conn, user_id, character_id).await?;
+    }
+    crate::character_names::settle_name(conn, user_id, name_alt, desired).await
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportCharacterResponse {
@@ -1362,26 +1422,17 @@ pub async fn import_character(
 
                 // One name, one character: a name another character holds gets
                 // the lowest free number, the "Adventurer" placeholder a
-                // generated name. Keyed by the alt the row will hold after this
-                // write — the incoming one, else whatever the row already knew.
-                let name_alt = match incoming_alt {
-                    Some(alt) => alt,
-                    None => characters::table
-                        .filter(characters::id.eq(character_id))
-                        .select(characters::source_alt_uuid)
-                        .first::<Option<Uuid>>(&mut conn)
-                        .await
-                        .optional()?
-                        .flatten()
-                        .unwrap_or(character_id),
-                };
+                // generated name.
                 if body.ai_copy {
                     crate::character_names::mark_ai_copy_user(&mut conn, user_id).await?;
                 }
-                let settled = crate::character_names::settle_name(
+                let settled = settle_import_name(
                     &mut conn,
                     user_id,
-                    name_alt,
+                    character_id,
+                    created,
+                    body.outgoing_alt_uuid,
+                    incoming_alt,
                     &character.name,
                 )
                 .await?;
@@ -7388,6 +7439,104 @@ mod tests {
             names.sort();
             names.dedup();
             assert_eq!(names.len(), 3);
+        }
+
+        /// Tracker #607: re-importing a character over its own live row, which
+        /// predates alt ids, must not number it against itself.
+        #[tokio::test]
+        async fn a_reimport_over_its_own_unstamped_row_keeps_its_name() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Legoless", 41, 0).await;
+            flush(&mut c).await.unwrap();
+            let alt = Uuid::new_v4();
+            let got = crate::admin::settle_import_name(
+                &mut c,
+                uid,
+                cid,
+                false,
+                None,
+                Some(alt),
+                "Legoless",
+            )
+            .await
+            .unwrap();
+            assert_eq!(got, "Legoless", "the row being overwritten is not a rival");
+
+            // Control: somebody ELSE's "Legoless" still numbers the import.
+            let (other_cid, other_uid) = seed_character(&mut c, "Thorn", 10, 0).await;
+            flush(&mut c).await.unwrap();
+            let got = crate::admin::settle_import_name(
+                &mut c,
+                other_uid,
+                other_cid,
+                false,
+                None,
+                Some(Uuid::new_v4()),
+                "Legoless",
+            )
+            .await
+            .unwrap();
+            assert_eq!(got, "Legoless 2");
+        }
+
+        /// The outgoing character is kept as ANOTHER alt (the website said so):
+        /// it keeps its name, and a same-named import is numbered.
+        #[tokio::test]
+        async fn an_import_over_a_different_unstamped_alt_does_not_take_its_name() {
+            let mut c = db!();
+            let (cid, uid) = seed_character(&mut c, "Legoless", 41, 0).await;
+            flush(&mut c).await.unwrap();
+            let (outgoing, incoming) = (Uuid::new_v4(), Uuid::new_v4());
+            let got = crate::admin::settle_import_name(
+                &mut c,
+                uid,
+                cid,
+                false,
+                Some(outgoing),
+                Some(incoming),
+                "Legoless",
+            )
+            .await
+            .unwrap();
+            assert_eq!(got, "Legoless 2");
+        }
+
+        #[test]
+        fn only_a_same_character_restamp_releases_the_row_id_key() {
+            let (a, b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+            assert!(crate::admin::import_rekeys_unstamped_row(
+                false,
+                None,
+                None,
+                Some(a)
+            ));
+            assert!(crate::admin::import_rekeys_unstamped_row(
+                false,
+                None,
+                Some(a),
+                Some(a)
+            ));
+            assert!(!crate::admin::import_rekeys_unstamped_row(
+                false,
+                None,
+                Some(b),
+                Some(a)
+            ));
+            assert!(!crate::admin::import_rekeys_unstamped_row(
+                false,
+                Some(a),
+                None,
+                Some(a)
+            ));
+            assert!(!crate::admin::import_rekeys_unstamped_row(
+                false, None, None, None
+            ));
+            assert!(!crate::admin::import_rekeys_unstamped_row(
+                true,
+                None,
+                None,
+                Some(a)
+            ));
         }
 
         #[tokio::test]
