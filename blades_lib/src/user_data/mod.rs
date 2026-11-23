@@ -81,6 +81,15 @@ pub struct CharacterChallengeSeason {
     pub premium: bool,
 }
 
+fn deserialize_loadout_profiles<'de, D>(de: D) -> Result<Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut profiles = Value::deserialize(de)?;
+    crate::features::character_ops::normalize_loadout_profiles_value(&mut profiles);
+    Ok(profiles)
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 // May also be sent to the user on initial sync (does not have the id field, see #[serde(flatten)])
@@ -116,7 +125,13 @@ pub struct CompleteCharacter {
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub global_shop_offers: Value,
     pub challenge_season: CharacterChallengeSeason,
-    #[serde(default, skip_serializing_if = "Value::is_null")]
+    /// Normalized as it is read (tracker #598): whichever handler loads the
+    /// character, the client is never served a saved build it cannot apply.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_loadout_profiles",
+        skip_serializing_if = "Value::is_null"
+    )]
     pub loadout_profiles: Value,
     pub last_guild_exchange_request_time: u64,
     pub last_guild_exchange_donation_time: u64,
