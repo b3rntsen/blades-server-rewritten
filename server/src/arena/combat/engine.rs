@@ -495,6 +495,11 @@ pub struct MatchInstance {
     /// [`crate::arena::arena_fight_gift::weapon_on_result_card`], held per match so
     /// tests can exercise both delivery paths.
     weapon_on_result_card: bool,
+    /// The clock the December Sigil-per-fight window is read against (tracker
+    /// #499). `None` — production — is the match-end wall clock. Held per match
+    /// so a test pins it; a test build starts outside the window, so no card
+    /// assertion depends on the day the suite runs.
+    fight_sigil_clock: Option<i64>,
     /// The slot that ended the match by conceding — the exit button or an ENet
     /// departure — if one did. That side abandoned the fight: it keeps the
     /// recorded loss but is paid no arena Gems and the fight does not count
@@ -570,6 +575,7 @@ impl MatchInstance {
             interround_profiles_sent: vec![false; capacity],
             staged_loadouts: vec![None; capacity],
             weapon_on_result_card: crate::arena::arena_fight_gift::weapon_on_result_card(),
+            fight_sigil_clock: cfg!(test).then_some(0),
             conceded_slot: None,
         }
     }
@@ -2210,12 +2216,33 @@ impl MatchInstance {
                     .min(i64::MAX as u64) as i64
             });
 
+            // The December Sigil-per-fight (tracker #499): the rule of the Gems
+            // above — a finished fight, won or lost — inside the window, or for a
+            // rehearsing test character. Priced here once, so the card and the
+            // durable credit are one number.
+            let sigil = if f.loadout.fight_sigil_rehearsal {
+                arena_bonus_rewards::rehearsal_sigil(finish)
+            } else {
+                arena_bonus_rewards::match_sigil(
+                    finish,
+                    self.fight_sigil_clock.unwrap_or(completed_at_secs),
+                )
+            };
+            let wallet_sigil = (sigil > 0).then(|| {
+                f.loadout
+                    .wallet_sigil
+                    .saturating_add(sigil)
+                    .min(i64::MAX as u64) as i64
+            });
+
             let reward = messages::MatchEndReward {
                 gold: payout.gold,
                 character_xp: payout.character_xp,
                 wallet_gold,
                 gems: gems as i64,
                 wallet_gems,
+                sigil: sigil as i64,
+                wallet_sigil,
                 character_experience,
                 backpack_version,
                 treasury_version,
@@ -2360,6 +2387,7 @@ impl MatchInstance {
                     gold: payout.gold,
                     character_xp: payout.character_xp,
                     gems: gems as i64,
+                    sigil: sigil as i64,
                     finished_fight: finish.is_finished(),
                     card_weapon: card_weapon.clone(),
                     trophy_delta: if void_result { 0 } else { trophy_delta },
@@ -5558,6 +5586,139 @@ pub(in crate::arena::combat) mod tests {
             1,
             "leaver's wallet unchanged"
         );
+    }
+
+    /// Every op49 card of a match, by slot, once it has walked to its end.
+    fn cards_to_the_end(
+        m: &mut MatchInstance,
+        from: Instant,
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        let mut cards = std::collections::BTreeMap::new();
+        let step = Duration::from_millis(250);
+        for i in 1..=120u32 {
+            for (slot, b) in m.on_tick(2, from + step * i) {
+                if b.len() > 3 && b[1] == 0x36 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    if nd.int(3) == Some(49) {
+                        let v: serde_json::Value =
+                            serde_json::from_str(nd.string(13).unwrap()).unwrap();
+                        assert!(
+                            cards.insert(slot, v).is_none(),
+                            "slot {slot} was sent a second result card"
+                        );
+                    }
+                }
+            }
+            if m.phase() == FlowState::Finished {
+                break;
+            }
+        }
+        cards
+    }
+
+    /// A 2-0 match (slot 0 wins) that ends at `sigil_clock`, each side holding
+    /// 41 Sigil before it; the two result cards.
+    fn fought_out_cards(
+        sigil_clock: i64,
+        rehearsing: [bool; 2],
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        let (mut m, _t0, live) = live_inst_at(2);
+        m.fight_sigil_clock = Some(sigil_clock);
+        for (slot, rehearsal) in rehearsing.into_iter().enumerate() {
+            m.combat.fighters[slot].loadout.wallet_sigil = 41;
+            m.combat.fighters[slot].loadout.fight_sigil_rehearsal = rehearsal;
+        }
+        let (_d1, t1) = swing_until_death(&mut m, 0, live);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "slot 0 won the match 2-0");
+        let cards = cards_to_the_end(&mut m, t);
+        assert_eq!(cards.len(), 2, "one op49 per player");
+        cards
+    }
+
+    fn card_sigil(card: &serde_json::Value) -> Option<i64> {
+        let sigil = blades_lib::economy::SIGIL.to_string();
+        card["reward"]["currencies"]
+            .get(sigil.as_str())
+            .and_then(|v| v.as_i64())
+    }
+
+    fn card_sigil_balance(card: &serde_json::Value) -> Option<i64> {
+        let sigil = blades_lib::economy::SIGIL.to_string();
+        card["wallet"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["currencyId"] == sigil.as_str())
+            .and_then(|w| w["balance"].as_i64())
+    }
+
+    /// The December 2026 Sigil-per-fight (tracker #499): a fight that ends in
+    /// December pays the winner AND the loser one Sigil each, on the card and
+    /// in the card's wallet, exactly once per player.
+    #[test]
+    fn a_december_fight_pays_both_fighters_one_sigil() {
+        use crate::arena::arena_bonus_rewards::FIGHT_SIGIL_FROM_SECS;
+        let cards = fought_out_cards(FIGHT_SIGIL_FROM_SECS + 15 * 86_400, [false, false]);
+        for slot in [0, 1] {
+            assert_eq!(card_sigil(&cards[&slot]), Some(1), "slot {slot}");
+            assert_eq!(card_sigil_balance(&cards[&slot]), Some(42), "slot {slot}");
+        }
+    }
+
+    /// NOTHING BEFORE 1 DECEMBER 00:00 UTC, nothing from 1 January 00:00 UTC:
+    /// a fight ending one second outside either edge carries no Sigil anywhere
+    /// on its card, and one second inside does.
+    #[test]
+    fn the_fight_sigil_follows_the_window_to_the_second() {
+        use crate::arena::arena_bonus_rewards::{FIGHT_SIGIL_FROM_SECS, FIGHT_SIGIL_UNTIL_SECS};
+        let sigil = blades_lib::economy::SIGIL.to_string();
+        for (clock, paid) in [
+            (FIGHT_SIGIL_FROM_SECS - 1, false),
+            (FIGHT_SIGIL_FROM_SECS, true),
+            (FIGHT_SIGIL_UNTIL_SECS - 1, true),
+            (FIGHT_SIGIL_UNTIL_SECS, false),
+        ] {
+            let cards = fought_out_cards(clock, [false, false]);
+            for slot in [0, 1] {
+                assert_eq!(
+                    card_sigil(&cards[&slot]).is_some(),
+                    paid,
+                    "clock {clock} slot {slot}"
+                );
+                assert_eq!(
+                    cards[&slot].to_string().contains(&sigil),
+                    paid,
+                    "clock {clock} slot {slot}: Sigil on the card"
+                );
+            }
+        }
+    }
+
+    /// The side that leaves abandoned the fight and is paid no Sigil; the one
+    /// who stayed is paid — the rule of the arena Gems.
+    #[test]
+    fn a_december_departure_pays_the_survivor_a_sigil_and_not_the_leaver() {
+        use crate::arena::arena_bonus_rewards::FIGHT_SIGIL_FROM_SECS;
+        let (mut m, t0) = live_inst(2);
+        m.fight_sigil_clock = Some(FIGHT_SIGIL_FROM_SECS + 86_400);
+        let leave = t0 + Duration::from_secs(3);
+        m.concede_by_departure(1, leave);
+        let cards = cards_to_the_end(&mut m, leave);
+        assert_eq!(card_sigil(&cards[&0]), Some(1), "the survivor");
+        assert_eq!(card_sigil(&cards[&1]), None, "the leaver");
+        assert_eq!(card_sigil_balance(&cards[&1]), None);
+    }
+
+    /// The rehearsal pays a marked test character outside the window, and
+    /// nobody else: their opponent's card is the ordinary one.
+    #[test]
+    fn a_rehearsal_pays_only_the_test_character() {
+        let cards = fought_out_cards(0, [false, true]);
+        assert_eq!(card_sigil(&cards[&0]), None, "the ordinary player");
+        assert_eq!(card_sigil(&cards[&1]), Some(1), "the test character");
+        assert_eq!(card_sigil_balance(&cards[&1]), Some(42));
     }
 
     /// A concession must NOT fire when the match is already ending — a disconnect there

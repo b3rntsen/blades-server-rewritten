@@ -747,6 +747,17 @@ async fn load_loadout(
     character_id: Option<Uuid>,
 ) -> crate::arena::combat::Loadout {
     let mut lo = load_character_loadout(db, user_id, character_id).await;
+    // The Sigil-per-fight rehearsal (tracker #499): only with the switch on, and
+    // only for a marked test character. A failed read rehearses nothing.
+    if crate::arena::arena_bonus_rewards::fight_sigil_rehearsal_enabled()
+        && let Ok(id) = Uuid::parse_str(&lo.character_uuid)
+        && let Some(db) = db
+        && let Ok(mut conn) = db.get().await
+    {
+        lo.fight_sigil_rehearsal = crate::testchar::live_alt_is_test(&mut conn, id)
+            .await
+            .unwrap_or(false);
+    }
     // Only the result-card delivery needs the count (#401); while it is off the
     // milestone is decided by the writer alone, as in #539.
     if lo.character_uuid.is_empty() || !crate::arena::arena_fight_gift::weapon_on_result_card() {
@@ -901,6 +912,7 @@ fn loadout_from_row(r: &CharacterDbEntryCharacterWalletInventory) -> crate::aren
         .expect("arena gold currency is a valid UUID");
     lo.wallet_gold = r.wallet.0.balance(gold);
     lo.wallet_gems = r.wallet.0.balance(blades_lib::economy::GEMS);
+    lo.wallet_sigil = r.wallet.0.balance(blades_lib::economy::SIGIL);
     lo.character_experience = r.character.0.experience;
     lo.backpack_version = r.inventory.0.backpack_version;
     lo.treasury_version = r.inventory.0.treasury_version;

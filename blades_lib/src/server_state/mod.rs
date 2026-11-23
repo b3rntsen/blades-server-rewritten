@@ -240,6 +240,12 @@ pub struct ServerState {
     /// before the round-1 profile goes out. Rows written before the field load `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arena_hide_helmet: Option<bool>,
+    /// The `gameSessionId` of the last arena fight this character was credited
+    /// the December 2026 Sigil-per-fight for (tracker #499). Server-only
+    /// idempotency state: the same fight reaching the writer again credits
+    /// nothing. Rows written before the field load `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arena_last_sigil_fight: Option<Uuid>,
 }
 
 #[cfg(test)]

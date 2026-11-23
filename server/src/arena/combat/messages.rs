@@ -1599,6 +1599,13 @@ pub struct MatchEndReward {
     /// promotion Gems, when the match changed it. `None` keeps the retail
     /// gold-only `wallet`.
     pub wallet_gems: Option<i64>,
+    /// Sigil granted this match (`reward.currencies[SIGIL]`): the December 2026
+    /// Sigil-per-fight (tracker #499). 0 — every match outside that window —
+    /// leaves the card exactly as it was.
+    pub sigil: i64,
+    /// The recipient's Sigil balance AFTER crediting, when the match paid one.
+    /// `None` leaves the `wallet` array as it was.
+    pub wallet_sigil: Option<i64>,
     /// Total character XP after crediting the match reward.
     pub character_experience: u64,
     /// Post-mutation inventory versions. Retail includes both even when only one
@@ -1673,6 +1680,8 @@ impl Default for MatchEndReward {
             wallet_gold: 0,
             gems: 0,
             wallet_gems: None,
+            sigil: 0,
+            wallet_sigil: None,
             character_experience: 0,
             backpack_version: 0,
             treasury_version: 0,
@@ -1827,6 +1836,14 @@ pub fn results_json(
         vec![json!({ "currencyId": ARENA_GOLD_CURRENCY_UUID, "balance": reward.wallet_gold })];
     if let Some(balance) = reward.wallet_gems {
         wallet.push(json!({ "currencyId": gems_currency, "balance": balance }));
+    }
+    // The December Sigil-per-fight (tracker #499), in the same two places.
+    let sigil_currency = blades_lib::economy::SIGIL.to_string();
+    if reward.sigil > 0 {
+        currencies.insert(sigil_currency.clone(), json!(reward.sigil));
+    }
+    if let Some(balance) = reward.wallet_sigil {
+        wallet.push(json!({ "currencyId": sigil_currency, "balance": balance }));
     }
 
     // Retail's match `reward`: currencies, the meter chest(s) when the meter
@@ -3381,6 +3398,64 @@ mod tests {
         assert_eq!(v["wallet"][0]["currencyId"], ARENA_GOLD_CURRENCY_UUID);
         assert_eq!(v["wallet"][1]["currencyId"], gems.as_str());
         assert_eq!(v["wallet"][1]["balance"], 1_206);
+    }
+
+    /// The December Sigil-per-fight (tracker #499) rides the card exactly as the
+    /// arena Gems do: one more entry in `reward.currencies`, one more in `wallet`
+    /// with the credited balance.
+    #[test]
+    fn results_json_carries_the_fight_sigil() {
+        let gems = blades_lib::economy::GEMS.to_string();
+        let sigil = blades_lib::economy::SIGIL.to_string();
+        let reward = MatchEndReward {
+            gold: 4047,
+            wallet_gold: 10_000,
+            gems: 6,
+            wallet_gems: Some(1_206),
+            sigil: 1,
+            wallet_sigil: Some(43),
+            ..Default::default()
+        };
+        let out = results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "{}",
+            "{}",
+            &reward,
+            1,
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["reward"]["currencies"][sigil.as_str()], 1);
+        assert_eq!(v["reward"]["currencies"][gems.as_str()], 6);
+        assert_eq!(v["reward"]["currencies"][ARENA_GOLD_CURRENCY_UUID], 4047);
+        let wallet = v["wallet"].as_array().unwrap();
+        assert_eq!(wallet.len(), 3);
+        assert_eq!(wallet[2]["currencyId"], sigil.as_str());
+        assert_eq!(wallet[2]["balance"], 43);
+    }
+
+    /// CONTROL: a match that pays no Sigil — every match outside December 2026
+    /// — produces the very same card, byte for byte, as before the field existed.
+    #[test]
+    fn a_card_without_a_sigil_is_unchanged() {
+        let sigil = blades_lib::economy::SIGIL.to_string();
+        let reward = MatchEndReward {
+            gold: 4047,
+            wallet_gold: 10_000,
+            gems: 6,
+            wallet_gems: Some(1_206),
+            ..Default::default()
+        };
+        let out = results_json(
+            "38c987fd-c42b-4ea6-b869-c8d4c03055f9",
+            "{}",
+            "{}",
+            &reward,
+            1,
+        );
+        assert!(!out.contains(&sigil), "no Sigil anywhere on the card");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["wallet"].as_array().unwrap().len(), 2);
+        assert_eq!(v["reward"]["currencies"].as_object().unwrap().len(), 2);
     }
 
     /// Retail op49 carries a compact post-match character snapshot, not the full
