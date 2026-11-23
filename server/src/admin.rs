@@ -2803,8 +2803,9 @@ pub async fn bind_device(
         // now, an indistinguishable one: 409s and 500s looked identical in the
         // access log and neither said who or what.
         warn!(
-            "bind-device: guard declined the claim of {:?} by {} (nothing written)",
-            body.device_id, body.user_id
+            "bind-device: guard declined the claim of {} by {} (nothing written)",
+            crate::log_redact::device_for_log(&body.device_id),
+            body.user_id
         );
         return Err(BladeApiError::new(
             StatusCode::CONFLICT,
@@ -3072,7 +3073,11 @@ pub async fn set_arena_credential(
             40,
         ));
     }
-    if body.password.chars().count() < credentials::MIN_PASSWORD_LEN {
+    // The same ceiling the login applies, so no login can be SET that the
+    // sign-in routes would then refuse.
+    if body.password.chars().count() < credentials::MIN_PASSWORD_LEN
+        || body.password.len() > credentials::MAX_PASSWORD_BYTES
+    {
         return Err(BladeApiError::new(
             StatusCode::BAD_REQUEST,
             IMPORT_SERVICE_ID,
@@ -3080,7 +3085,15 @@ pub async fn set_arena_credential(
         ));
     }
     let username = credentials::normalise_username(&body.username);
-    let hash = credentials::hash_password(&body.password);
+    let Some(hash) = credentials::hash_password_off_the_async_workers(body.password.clone()).await
+    else {
+        log::error!("arena-credentials: the hashing task did not complete");
+        return Err(BladeApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            IMPORT_SERVICE_ID,
+            47,
+        ));
+    };
 
     let mut conn = app_state.db_pool.get().await.unwrap();
     use crate::schema::arena_credentials::dsl as c;

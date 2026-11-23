@@ -196,27 +196,15 @@ async fn bnet_log_in(
     let (user_id, log_name) = if let (Some(username_raw), Some(password)) =
         (body.username.as_deref(), body.password.as_deref())
     {
-        let username = crate::credentials::normalise_username(username_raw);
-        let found = crate::credentials::find_by_username(&mut conn, &username)
-            .await
-            .unwrap_or(None);
-
-        // One 401 for "no such user" AND "wrong password", and the password is
-        // verified even when the row is missing. Answering faster for an unknown
-        // username turns this endpoint into a way to enumerate who plays here.
-        let (user_id, hash) = match found {
-            Some(row) => (Some(row.user_id), row.password_hash),
-            None => (
-                None,
-                // A well-formed hash of a value nobody can supply, so the failure
-                // path does the same PBKDF2 work as the success path.
-                crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
-            ),
-        };
-        let ok = crate::credentials::verify_password(password, &hash);
-        let Some(user_id) = user_id.filter(|_| ok) else {
+        // One 401 for "no such user", "wrong password" and "not a credential
+        // at all"; see `credentials::check_login` for what keeps them
+        // indistinguishable and off the async workers.
+        let Some(user_id) =
+            crate::credentials::check_login(&mut conn, username_raw, password).await
+        else {
             return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
         };
+        let username = crate::credentials::normalise_username(username_raw);
         (user_id, Some(username))
     } else if let Some(login_token) = body.login_token.as_deref() {
         // This is the normal cold-start request after a successful BNet link:
@@ -260,8 +248,9 @@ async fn bnet_log_in(
             move_throwaway_device_claim(&mut conn, source_user_id, user.id, device_id).await
         {
             log::warn!(
-                "device claim move failed for {device_id} from {source_user_id} to {} after \
+                "device claim move failed for {} from {source_user_id} to {} after \
                  account login: {error}",
+                crate::log_redact::device_for_log(device_id),
                 user.id
             );
         }
@@ -374,21 +363,12 @@ async fn resolve_link(
     username_raw: &str,
     password: &str,
 ) -> Result<(Uuid, Uuid, Arc<Session>), BladeApiError> {
-    let username = crate::credentials::normalise_username(username_raw);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let found = crate::credentials::find_by_username(&mut conn, &username)
-        .await
-        .unwrap_or(None);
-
-    // Same constant-work failure path as bnet_log_in: an unknown username must
-    // not be faster than a wrong password, or this endpoint enumerates players.
-    let (user_id, hash) = match found {
-        Some(row) => (Some(row.user_id), row.password_hash),
-        None => (None, crate::credentials::ENUMERATION_DUMMY_HASH.to_string()),
-    };
-    let ok = crate::credentials::verify_password(password, &hash);
-    let Some(user_id) = user_id.filter(|_| ok) else {
+    // The same check as bnet_log_in, by construction.
+    let Some(user_id) =
+        crate::credentials::check_login(&mut conn, username_raw, password).await
+    else {
         return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 112));
     };
 
@@ -534,7 +514,7 @@ async fn move_throwaway_device_claim(
     for row in &moved {
         log::info!(
             "device claim moved: {} from {} to {} (reason: account login)",
-            row.device_id,
+            crate::log_redact::device_for_log(&row.device_id),
             source_user_id,
             target_user_id
         );
@@ -621,8 +601,8 @@ async fn bnet_link(
         // answers would switch them without consent — and the loser of that
         // choice is discarded.
         log::info!(
-            "account link: conflict — credential names {secret_id}, client is signed in as {:?}",
-            body.selected_user_id
+            "{}",
+            crate::log_redact::link_conflict_line(user_id, body.selected_user_id.as_deref())
         );
         return Ok(web::Json(BnetLinkResponse {
             account_link_result: AccountLinkResult {
@@ -963,8 +943,9 @@ async fn bnet_link_force(
                 move_throwaway_device_claim(&mut conn, source_user_id, user_id, device_id).await
         {
             log::warn!(
-                "device claim move failed for {device_id} from {source_user_id} to {user_id} \
-                 after forced account link: {error}"
+                "device claim move failed for {} from {source_user_id} to {user_id} \
+                 after forced account link: {error}",
+                crate::log_redact::device_for_log(device_id)
             );
         }
         apply_forced_link_changes(&mut conn, source_user_id, user_id, keep_played)
@@ -1242,7 +1223,7 @@ async fn anon_login_inner(
                         "device_bindings: WG-IP fallback resolved {} via source_wg_ip {} \
                          (primary key miss — device reconnected with null deviceId after \
                          being bound under a stable hash; Fix 1 systemic binding fix)",
-                        device_id_val,
+                        crate::log_redact::device_for_log(&device_id_val),
                         wg_ip
                     );
                 }
@@ -1478,7 +1459,7 @@ async fn anon_login_inner(
                 let user = &existing[0];
                 log::info!(
                     "anon login: device {} recognised as existing user {}",
-                    this_device,
+                    crate::log_redact::device_for_log(this_device),
                     user.id
                 );
                 let session = Arc::new(Session::new(
@@ -1516,7 +1497,7 @@ async fn anon_login_inner(
                 log::warn!(
                     "anon login: device {} matches {} users — not guessing which; \
                      minting a new one. These need merging.",
-                    this_device,
+                    crate::log_redact::device_for_log(this_device),
                     existing.len()
                 );
             }
