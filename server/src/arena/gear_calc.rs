@@ -79,6 +79,12 @@ pub fn quiet<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// Is this thread inside [`quiet`]? For a log line that is built before it is
+/// written, so a simulation does not pay for text nobody will read.
+pub fn is_quiet() -> bool {
+    QUIET.with(Cell::get)
+}
+
 /// A logger that drops records made inside [`quiet`].
 pub struct ScopedLogger<L>(pub L);
 

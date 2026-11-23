@@ -655,6 +655,103 @@ pub enum BlockPhase {
     Late,
 }
 
+/// Which of the two rules made a block LOW ([`BlockPhase::Late`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LateBlockReason {
+    /// The guard had been up for `BLOCK_OPTIMAL_TIME_SECS` or longer at the hit.
+    HeldTooLong,
+    /// The guard was raised less than `OPTIMAL_BLOCK_RECOVERY_SECS` after the
+    /// previous release, so it was low from the press.
+    RaisedInRecovery,
+}
+
+impl LateBlockReason {
+    /// The code the combat log carries.
+    pub fn code(self) -> &'static str {
+        match self {
+            LateBlockReason::HeldTooLong => "held_too_long",
+            LateBlockReason::RaisedInRecovery => "raised_in_recovery",
+        }
+    }
+}
+
+/// [`Fighter::block_phase`] with what decided it, for the combat log.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlockVerdict {
+    pub phase: BlockPhase,
+    /// How long the guard had been up.
+    pub held_ms: f32,
+    /// `Some` exactly when `phase` is [`BlockPhase::Late`].
+    pub late_reason: Option<LateBlockReason>,
+}
+
+/// How a guard came down, as the combat log names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardEnd {
+    /// The player let go (or a bot lowered its guard).
+    Released,
+    /// An attack press ended it.
+    AttackPress,
+    /// Its window ran out: a bash guard's `_blockDuration`, or the leak guard.
+    Expired,
+    Stagger,
+    Paralysis,
+    /// A maneuver was cast from it (a bash's own guard replaces it).
+    Maneuver,
+    /// Reckless Fury forbids blocking.
+    RecklessFury,
+    Death,
+    RoundEnd,
+    /// Raised again while still up, which restarts the optimal window.
+    Reraised,
+}
+
+impl GuardEnd {
+    pub fn code(self) -> &'static str {
+        match self {
+            GuardEnd::Released => "released",
+            GuardEnd::AttackPress => "attack_press",
+            GuardEnd::Expired => "expired",
+            GuardEnd::Stagger => "stagger",
+            GuardEnd::Paralysis => "paralysis",
+            GuardEnd::Maneuver => "maneuver",
+            GuardEnd::RecklessFury => "reckless_fury",
+            GuardEnd::Death => "death",
+            GuardEnd::RoundEnd => "round_end",
+            GuardEnd::Reraised => "reraised",
+        }
+    }
+}
+
+/// A guard going up or coming down, as [`Fighter::observe_guard`] reports it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GuardEvent {
+    Raised {
+        /// A shield bash's guard: optimal for its whole window, no latch.
+        ability: bool,
+        /// The latch `block_phase` reads: can this guard block high at all.
+        optimal_allowed: bool,
+        /// From the previous release to this raise; `None` for the first guard of
+        /// the round. Below `OPTIMAL_BLOCK_RECOVERY_SECS` is what denies the latch.
+        since_release_ms: Option<f32>,
+        /// How long the guard stays up if nothing ends it.
+        window_ms: f32,
+    },
+    Lowered {
+        ability: bool,
+        held_ms: f32,
+        end: GuardEnd,
+    },
+}
+
+/// The guard the log last reported as up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LoggedGuard {
+    raised_at: Instant,
+    until: Instant,
+    ability: bool,
+}
+
 /// The status condition an elemental [`DamageType`] accumulates toward (the
 /// conditioning rule, §5). `Fire→Burning`, `Frost→Frozen`, `Shock→Enervated`,
 /// `Poison→Poisoned`; non-elemental types have no condition.
@@ -2064,6 +2161,9 @@ pub struct Fighter {
     /// Kept out of `announced_statuses` so the removal diff can never absorb a raise
     /// silently. See [`Self::sync_blocking_status`].
     announced_blocking: bool,
+    /// The guard the combat log last reported as up. Written and read only by
+    /// [`Self::observe_guard`]: nothing that decides combat or builds a frame sees it.
+    logged_guard: Option<LoggedGuard>,
     /// Set when a hit exhausts this fighter's Spellbreaker ward; consumed by
     /// `resolve::drain_state_changes_for`, which staggers the fighter.
     pub spellbreaker_broke: bool,
@@ -2460,6 +2560,7 @@ impl Fighter {
             announced_statuses: Vec::new(),
             status_timers: Vec::new(),
             announced_blocking: false,
+            logged_guard: None,
             spellbreaker_broke: false,
             consumables_used: 0,
             continuous_next_tick_at: None,
@@ -3295,25 +3396,129 @@ impl Fighter {
     ///
     /// Returns `None` when the guard is not up.
     pub fn block_phase(&self, now: Instant) -> Option<BlockPhase> {
+        self.block_verdict(now).map(|v| v.phase)
+    }
+
+    /// [`Self::block_phase`], with how long the guard had been up and, for a low
+    /// block, which rule made it low. The phase is decided here and only here.
+    pub fn block_verdict(&self, now: Instant) -> Option<BlockVerdict> {
         let raised = self.block_raised_at?;
         // Guard must still be up.
         if !matches!(self.blocking_until, Some(until) if now < until) {
             return None;
         }
-        if self.is_ability_guard() {
+        let held_secs = now.saturating_duration_since(raised).as_secs_f32();
+        let late_reason = if self.is_ability_guard() {
             // The bash window is its own length (`_blockDuration`, 0.5 s) and optimal
             // throughout: see `is_ability_guard`.
-            return Some(BlockPhase::Optimal);
-        }
-        let held_secs = now.saturating_duration_since(raised).as_secs_f32();
-        if held_secs >= BLOCK_OPTIMAL_TIME_SECS {
-            return Some(BlockPhase::Late);
-        }
-        Some(if self.optimal_block_allowed_at(raised) {
-            BlockPhase::Optimal
+            None
+        } else if held_secs >= BLOCK_OPTIMAL_TIME_SECS {
+            Some(LateBlockReason::HeldTooLong)
+        } else if !self.optimal_block_allowed_at(raised) {
+            Some(LateBlockReason::RaisedInRecovery)
         } else {
-            BlockPhase::Late
+            None
+        };
+        Some(BlockVerdict {
+            phase: if late_reason.is_some() {
+                BlockPhase::Late
+            } else {
+                BlockPhase::Optimal
+            },
+            held_ms: held_secs * 1000.0,
+            late_reason,
         })
+    }
+
+    /// The guard transitions since the last call, for the combat log: at most a
+    /// `Lowered` for the guard that was up, then a `Raised` for the one that is
+    /// now. Call at the seam every c2s and every tick passes
+    /// (`resolve::drain_state_changes_for`); two `None`s when nothing changed, which
+    /// is every call but a handful per fight.
+    ///
+    /// OBSERVES ONLY. It reads the guard fields and writes `logged_guard`, which
+    /// nothing else reads, so it cannot change an outcome or a frame. The reason a
+    /// guard ended is read off the fighter as it is found, because a guard is
+    /// dropped on a dozen paths and threading a reason through each would touch
+    /// every one of them.
+    ///
+    /// `round_live` is false outside the fighting phase: a guard still up when the
+    /// round ends is reported down as `round_end`, and nothing is raised until the
+    /// next round is live.
+    pub fn observe_guard(&mut self, now: Instant, round_live: bool) -> [Option<GuardEvent>; 2] {
+        let current = match (self.block_raised_at, self.blocking_until) {
+            (Some(raised_at), Some(until)) if round_live && now < until && !self.is_dead() => {
+                Some(LoggedGuard {
+                    raised_at,
+                    until,
+                    ability: self.is_ability_guard(),
+                })
+            }
+            _ => None,
+        };
+        let previous = self.logged_guard;
+        // Stored every time, so a refreshed window (`until`) is the one an expiry is
+        // later measured against.
+        self.logged_guard = current;
+        match (previous, current) {
+            (None, None) => return [None, None],
+            (Some(old), Some(new)) if old.raised_at == new.raised_at => return [None, None],
+            _ => {}
+        }
+        let lowered = previous.map(|old| {
+            let end = if self.is_dead() {
+                GuardEnd::Death
+            } else if !round_live {
+                GuardEnd::RoundEnd
+            } else if let Some(new) = current {
+                if new.ability {
+                    GuardEnd::Maneuver
+                } else {
+                    GuardEnd::Reraised
+                }
+            } else if now >= old.until {
+                GuardEnd::Expired
+            } else if self.has_reckless_fury(now) {
+                GuardEnd::RecklessFury
+            } else {
+                match self.actor_state() {
+                    ActorStateType::Staggered => GuardEnd::Stagger,
+                    ActorStateType::Paralyzed => GuardEnd::Paralysis,
+                    ActorStateType::Maneuver => GuardEnd::Maneuver,
+                    ActorStateType::Charging => GuardEnd::AttackPress,
+                    _ => GuardEnd::Released,
+                }
+            };
+            let ended_at = if end == GuardEnd::Expired {
+                old.until
+            } else {
+                now
+            };
+            GuardEvent::Lowered {
+                ability: old.ability,
+                held_ms: ended_at
+                    .saturating_duration_since(old.raised_at)
+                    .as_secs_f32()
+                    * 1000.0,
+                end,
+            }
+        });
+        let raised = current.map(|new| GuardEvent::Raised {
+            ability: new.ability,
+            optimal_allowed: new.ability || self.optimal_block_allowed_at(new.raised_at),
+            since_release_ms: self.last_block_dropped_at.map(|dropped| {
+                new.raised_at
+                    .saturating_duration_since(dropped)
+                    .as_secs_f32()
+                    * 1000.0
+            }),
+            window_ms: new
+                .until
+                .saturating_duration_since(new.raised_at)
+                .as_secs_f32()
+                * 1000.0,
+        });
+        [lowered, raised]
     }
 
     /// The `ReceiveDamage` bit 3 (`wasOptimalBlocking`) for a frame addressed to this
