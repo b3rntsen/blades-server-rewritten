@@ -388,6 +388,13 @@ const MATCH_STATE_INTERROUND_PROGRESSION: &[(MatchState, Duration, f32)] = &[
     ),
 ];
 
+/// The cups a fight moves: none at all when a developer's device-locked alt
+/// (" (TST)") is in it, for EITHER side (owner, 2026-11-24). The single gate
+/// both the card preview and the persisted payout go through.
+pub(crate) fn no_cups_in_test_fight(test_fight: bool, delta: i64) -> i64 {
+    if test_fight { 0 } else { delta }
+}
+
 /// Whether a finished match's cups and W/L must be thrown away.
 ///
 /// Owner policy, 2026-09-20: a bug in a human-vs-AI match nulls the result. We
@@ -1889,10 +1896,20 @@ impl MatchInstance {
                 crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[slot].loadout)
             })
             .collect();
+        // A developer's device-locked alt (" (TST)", owner 2026-11-24) meets real
+        // players, but the fight moves NO cups for anyone in it and is never
+        // head-to-head — so the feature cannot be used to raise another alt on
+        // any ladder. Otherwise the human is treated as against an AI copy.
+        let is_test_slot: Vec<bool> = (0..n)
+            .map(|slot| {
+                crate::arena::matchmaker::is_test_loadout(&self.combat.fighters[slot].loadout)
+            })
+            .collect();
+        let test_fight = is_test_slot.iter().any(|x| *x);
         let h2h_match = ranking::is_h2h_match(
             n,
             self.combat.expected_peers(),
-            is_bot_slot.iter().any(|x| *x),
+            is_bot_slot.iter().any(|x| *x) || test_fight,
         );
 
         // What each slot's trophy swing is priced against. Computed once so the card
@@ -1938,15 +1955,18 @@ impl MatchInstance {
                     rounds_lost,
                     win: is_winner,
                 };
-                let trophy_delta = ranking::trophy_delta(
-                    &self.ranking.config,
-                    ranking::TrophyDeltaInput {
-                        outcome,
-                        own_trophies: p.trophies,
-                        opponent_trophies_for_pricing: opponent_trophies,
-                        h2h: h2h_match,
-                        h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
-                    },
+                let trophy_delta = no_cups_in_test_fight(
+                    test_fight,
+                    ranking::trophy_delta(
+                        &self.ranking.config,
+                        ranking::TrophyDeltaInput {
+                            outcome,
+                            own_trophies: p.trophies,
+                            opponent_trophies_for_pricing: opponent_trophies,
+                            h2h: h2h_match,
+                            h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
+                        },
+                    ),
                 );
                 (p.trophies + trophy_delta).max(0)
             })
@@ -1992,11 +2012,16 @@ impl MatchInstance {
                 h2h: h2h_match,
                 h2h_pair_matches_today: self.ranking.h2h_pair_matches_today,
             };
-            let trophy_delta = ranking::trophy_delta(&self.ranking.config, delta_input);
+            let trophy_delta = no_cups_in_test_fight(
+                test_fight,
+                ranking::trophy_delta(&self.ranking.config, delta_input),
+            );
             // d54: what the classic rule pays, stored beside the payout so a
             // switch of rule can be recalculated back losslessly.
-            let classic_trophy_delta =
-                ranking::classic_trophy_delta(&self.ranking.config, delta_input);
+            let classic_trophy_delta = no_cups_in_test_fight(
+                test_fight,
+                ranking::classic_trophy_delta(&self.ranking.config, delta_input),
+            );
 
             // Post-match counters, computed once so the card and the durable write are
             // literally the same numbers.
@@ -2151,8 +2176,12 @@ impl MatchInstance {
             // left alone: taking those back turns one complaint into a different
             // one, and they are not what the policy is about.
             let never_arrived = !self.saw_in_round_c2s.get(slot).copied().unwrap_or(true);
+            // A test character is treated like an AI copy here too (owner, 2026-11-24).
             let versus_bot = opponent
-                .map(|o| crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout))
+                .map(|o| {
+                    crate::arena::matchmaker::is_bot_loadout(&self.combat.fighters[o].loadout)
+                        || is_test_slot[o]
+                })
                 .unwrap_or(false);
             let void_result = void_ai_match_result(!never_arrived, versus_bot);
 
@@ -6223,6 +6252,97 @@ pub(in crate::arena::combat) mod tests {
         );
         l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
         l
+    }
+
+    /// Drive a 2-0 PvP match (slot 0 wins) and return BOTH sides' post-match
+    /// `pvpTrophies` from their own ResultsJSON. `test_slot` marks that fighter as
+    /// a developer's device-locked alt the way the matchmaker does.
+    fn both_post_trophies(test_slot: Option<usize>) -> [i64; 2] {
+        let now = Instant::now();
+        let mut fighters = vec![
+            opponent_loadout("Winner", None),
+            opponent_loadout("Loser", None),
+        ];
+        fighters[0].character_uuid = "38c987fd-c42b-4ea6-b869-c8d4c03055f9".into();
+        for (i, f) in fighters.iter_mut().enumerate() {
+            f.profile_character_json = format!(
+                r#"{{"id":"{}","name":"{}","level":86,"pvpTrophies":500,"matchmakingPvpTrophies":500}}"#,
+                f.character_uuid, f.display_name
+            );
+            if test_slot == Some(i) {
+                crate::arena::matchmaker::mark_loadout_as_test(f);
+            }
+        }
+        let mut m = MatchInstance::new_with_ranking_context(
+            2,
+            2,
+            fighters,
+            now,
+            crate::arena::ranking::MatchRankingContext::default(),
+        );
+        let live = drive_to_live(&mut m, 2, now);
+        let (_d1, t1) = swing_until_death(&mut m, 0, live);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        assert_eq!(m.combat.rounds_won, [2, 0], "precondition: slot 0 won 2-0");
+        let mut got = [None, None];
+        let step = Duration::from_millis(250);
+        for i in 1..=80u32 {
+            for (slot, b) in m.on_tick(2, t + step * i) {
+                let is_op49 = b.len() > 3
+                    && b[1] == 0x36
+                    && arena_proto::parse_netdata(&b[2..]).int(3) == Some(49);
+                if is_op49 {
+                    let nd = arena_proto::parse_netdata(&b[2..]);
+                    let v: serde_json::Value =
+                        serde_json::from_str(nd.string(13).expect("ResultsJSON")).unwrap();
+                    got[slot] = v["character"]["pvpTrophies"].as_i64();
+                }
+            }
+            if got.iter().all(Option::is_some) {
+                break;
+            }
+        }
+        [got[0].expect("slot 0 card"), got[1].expect("slot 1 card")]
+    }
+
+    /// Owner, 2026-11-24: NO ONE gains or loses cups in a fight with a (TST)
+    /// character — not the test side, not the normal player — whichever side the
+    /// test character is on and whichever side wins.
+    #[test]
+    fn a_test_character_fight_moves_no_cups_for_either_side() {
+        // Control: the same fight between two players does move cups.
+        let control = both_post_trophies(None);
+        assert_ne!(
+            control,
+            [500, 500],
+            "control: a fight between players moves cups"
+        );
+        assert_eq!(
+            both_post_trophies(Some(0)),
+            [500, 500],
+            "test character won"
+        );
+        assert_eq!(
+            both_post_trophies(Some(1)),
+            [500, 500],
+            "test character lost"
+        );
+    }
+
+    #[test]
+    fn the_test_marker_is_the_account_flag_and_labels_both_names() {
+        let mut lo = opponent_loadout("Pixelle", None);
+        assert!(!crate::arena::matchmaker::is_test_loadout(&lo));
+        // The label alone is not the marker: a name cannot make a fight a test one.
+        lo.display_name = "Pixelle (TST)".into();
+        assert!(!crate::arena::matchmaker::is_test_loadout(&lo));
+        crate::arena::matchmaker::mark_loadout_as_test(&mut lo);
+        crate::arena::matchmaker::mark_loadout_as_test(&mut lo);
+        assert!(crate::arena::matchmaker::is_test_loadout(&lo));
+        assert_eq!(lo.display_name, "Pixelle (TST)", "op50 name, labelled once");
+        let profile: serde_json::Value = serde_json::from_str(&lo.profile_character_json).unwrap();
+        assert_eq!(profile["name"], "Pixelle (TST)", "op54 profile name");
     }
 
     /// Ranking v2 default: human-vs-human pays the normal fixed human delta plus

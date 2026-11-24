@@ -33,3 +33,11 @@ LANGUAGE sql STABLE AS $$
      AND NOT EXISTS (SELECT 1 FROM test_characters t WHERE t.alt_uuid = a.alt_key)
      AND NOT EXISTS (SELECT 1 FROM arena_ai_copy_users u WHERE u.user_id = a.user_id)
 $$;
+
+CREATE OR REPLACE FUNCTION character_name_exempt(n text) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT character_name_norm(n) = ''
+      OR character_name_norm(n) ~ '^adventurer( [0-9]+)?$'
+      OR character_name_norm(n) LIKE '%(ai)'
+      OR character_name_norm(n) LIKE '% (test)'
+$$;

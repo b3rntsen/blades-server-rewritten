@@ -8,6 +8,11 @@
 --
 -- Same definition as 2026-11-16-000002, plus the last NOT EXISTS. Requires the
 -- 2026-11-24-000000 table. APPLY BY HAND on the box. Idempotent.
+--
+-- Also: parentheses are now RESERVED for system labels (owner, 2026-11-24), so
+-- the exemption is "(AI)" or "(TST)" at the end; the operator test label moved
+-- from " (Test)" to " (TST)". Prod had 0 player names with parentheses and 0
+-- test characters when this was written, so nothing is backfilled.
 
 CREATE OR REPLACE FUNCTION character_name_all_alts(only_user uuid DEFAULT NULL)
 RETURNS TABLE (user_id uuid, alt_key uuid, name text, norm_name text, level int,
@@ -43,4 +48,12 @@ LANGUAGE sql STABLE AS $$
      AND NOT EXISTS (SELECT 1 FROM test_characters t WHERE t.alt_uuid = a.alt_key)
      AND NOT EXISTS (SELECT 1 FROM arena_ai_copy_users u WHERE u.user_id = a.user_id)
      AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts l WHERE l.child_user_id = a.user_id)
+$$;
+
+CREATE OR REPLACE FUNCTION character_name_exempt(n text) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT character_name_norm(n) = ''
+      OR character_name_norm(n) ~ '^adventurer( [0-9]+)?$'
+      OR character_name_norm(n) LIKE '%(ai)'
+      OR character_name_norm(n) LIKE '%(tst)'
 $$;

@@ -308,11 +308,42 @@ pub(crate) fn without_ai_marker(name: &str) -> String {
 }
 
 /// Names that never take part (SQL `character_name_exempt`, minus the default
-/// name, which the server replaces rather than exempts): blank, AI copies,
-/// operator test characters.
+/// name, which the server replaces rather than exempts): blank, and the system
+/// labels — AI copies "(AI)", test characters "(TST)".
 pub(crate) fn is_exempt(name: &str) -> bool {
     let n = norm(name);
-    n.is_empty() || n.ends_with("(ai)") || n.ends_with(" (test)")
+    n.is_empty() || n.ends_with("(ai)") || n.ends_with("(tst)")
+}
+
+/// Parentheses are RESERVED for system labels — "(AI)", "(TST)" — so a label can
+/// never be imitated, nor a real name mistaken for one (owner, 2026-11-24).
+/// Every player-chosen name is refused when this is true: website rename and
+/// new alt, import, in-game creation, and `settle_name` as the backstop.
+/// Full-width and small forms count too; they render as brackets.
+pub(crate) fn has_reserved_brackets(name: &str) -> bool {
+    name.chars().any(|c| {
+        matches!(
+            c,
+            '(' | ')'
+                | '\u{FF08}'
+                | '\u{FF09}'
+                | '\u{FE59}'
+                | '\u{FE5A}'
+                | '\u{207D}'
+                | '\u{207E}'
+                | '\u{208D}'
+                | '\u{208E}'
+        )
+    })
+}
+
+/// The error `settle_name` returns for a name with reserved brackets.
+pub(crate) const RESERVED_BRACKETS_ERROR: &str =
+    "character names may not contain parentheses; they are reserved for (AI) and (TST)";
+
+/// Whether `e` is [`settle_name`]'s refusal of a bracketed name.
+pub(crate) fn is_reserved_brackets_error(e: &diesel::result::Error) -> bool {
+    matches!(e, diesel::result::Error::QueryBuilderError(m) if m.to_string() == RESERVED_BRACKETS_ERROR)
 }
 
 /// Write `name` into `data.customization.Name`, honouring `NameVersion` (the
@@ -559,6 +590,11 @@ pub(crate) async fn settle_name(
     } else {
         desired.trim()
     };
+    if has_reserved_brackets(desired) {
+        return Err(diesel::result::Error::QueryBuilderError(
+            RESERVED_BRACKETS_ERROR.into(),
+        ));
+    }
     if desired.is_empty() || is_default_name(desired) {
         let name = generate_free(conn, user_id, alt_key).await?;
         claim(conn, user_id, alt_key, &name).await?;
@@ -1405,7 +1441,7 @@ mod tests {
         assert!(!is_default_name("Adventurer Bob"));
         assert!(!is_default_name("Adventurers"));
         assert!(is_exempt("Ravena (AI)"));
-        assert!(is_exempt("Ravena (Test)"));
+        assert!(is_exempt("Ravena (TST)"));
         assert!(!is_exempt("Ravena"));
     }
 

@@ -486,6 +486,23 @@ fn last_call_partner(
 ///
 /// Returns index pairs into `queue`, the first of each the older ticket.
 fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<(usize, usize)> {
+    pairing_round_avoiding(queue, now, &[])
+}
+
+/// [`pairing_round`], with pairs to put LAST (owner, 2026-11-24): a developer's
+/// test character (" (TST)") and an opponent it fought recently. Never a refusal —
+/// with nobody else it may meet, the repeat is still made rather than no match.
+fn pairing_round_avoiding(
+    queue: &[(Option<Skill>, Instant, Uuid)],
+    now: Instant,
+    avoid: &[(Uuid, Uuid)],
+) -> Vec<(usize, usize)> {
+    let repeat = |i: usize, j: usize| {
+        let (a, b) = (queue[i].2, queue[j].2);
+        avoid
+            .iter()
+            .any(|&(x, y)| (x, y) == (a, b) || (x, y) == (b, a))
+    };
     let gap = |i: usize, j: usize| match (queue[i].0, queue[j].0) {
         (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
         _ => i64::MAX,
@@ -505,7 +522,7 @@ fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<
     let first = free.iter().enumerate().find_map(|(pos, &o)| {
         free.iter()
             .filter(|&&j| j != o && may_meet(o, j))
-            .min_by_key(|&&j| (gap(o, j), queue[j].1))
+            .min_by_key(|&&j| (repeat(o, j), gap(o, j), queue[j].1))
             .map(|&j| (pos, o, j))
     });
     if let Some((_, o, j)) = first {
@@ -515,20 +532,20 @@ fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<
 
     // 2. The rest by best match.
     loop {
-        let mut best: Option<(i64, Instant, usize, usize)> = None;
+        let mut best: Option<(bool, i64, Instant, usize, usize)> = None;
         for (x, &i) in free.iter().enumerate() {
             for &j in &free[x + 1..] {
                 if !may_meet(i, j) {
                     continue;
                 }
                 // `free` is in age order, so `i` is the older; ties go to the older pair.
-                let key = (gap(i, j), queue[i].1, i, j);
-                if best.is_none_or(|b| (key.0, key.1) < (b.0, b.1)) {
+                let key = (repeat(i, j), gap(i, j), queue[i].1, i, j);
+                if best.is_none_or(|b| (key.0, key.1, key.2) < (b.0, b.1, b.2)) {
                     best = Some(key);
                 }
             }
         }
-        let Some((_, _, i, j)) = best else { break };
+        let Some((_, _, _, i, j)) = best else { break };
         pairs.push((i, j));
         free.retain(|&k| k != i && k != j);
     }
@@ -747,6 +764,14 @@ async fn load_loadout(
     character_id: Option<Uuid>,
 ) -> crate::arena::combat::Loadout {
     let mut lo = load_character_loadout(db, user_id, character_id).await;
+    // A developer's device-locked alt fights as " (TST)": decided by the account.
+    if !lo.character_uuid.is_empty()
+        && let Some(db) = db
+        && let Ok(mut conn) = db.get().await
+        && crate::dev_alt_lock::is_lock_child(&mut conn, user_id).await
+    {
+        mark_loadout_as_test(&mut lo);
+    }
     // Only the result-card delivery needs the count (#401); while it is off the
     // milestone is decided by the writer alone, as in #539.
     if lo.character_uuid.is_empty() || !crate::arena::arena_fight_gift::weapon_on_result_card() {
@@ -1418,6 +1443,39 @@ const BOT_FALLBACK_NAME: &str = "Fighter";
 /// the two from drifting; `the_bot_marker_round_trips` pins that.
 pub fn is_bot_loadout(lo: &crate::arena::combat::Loadout) -> bool {
     lo.display_name.ends_with(BOT_NAME_SUFFIX)
+}
+
+/// The suffix a developer's device-locked alt carries (owner, 2026-11-24): it
+/// meets real players, and they must be able to tell it is a test character.
+/// Parentheses are reserved for these system labels — no player name has one.
+pub(crate) const TEST_NAME_SUFFIX: &str = " (TST)";
+
+/// Whether this fighter is a developer's device-locked alt. The single source
+/// for "this fight moves no cups and is not head-to-head": the flag is set from
+/// the ACCOUNT ([`mark_loadout_as_test`]), so renaming a character cannot make
+/// it count, and stripping the label cannot make a test fight rank.
+pub fn is_test_loadout(lo: &crate::arena::combat::Loadout) -> bool {
+    lo.dev_test
+}
+
+/// Mark a loadout as a test character's: the account flag, and " (TST)" on both
+/// places the client reads a name (op50 `display_name`, op54 profile `name`).
+/// Idempotent — the lock already stores the suffix in the character's name.
+pub(crate) fn mark_loadout_as_test(lo: &mut crate::arena::combat::Loadout) {
+    lo.dev_test = true;
+    if lo.display_name.is_empty() {
+        lo.display_name = format!("{BOT_FALLBACK_NAME}{TEST_NAME_SUFFIX}");
+    } else if !lo.display_name.ends_with(TEST_NAME_SUFFIX) {
+        lo.display_name.push_str(TEST_NAME_SUFFIX);
+    }
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&lo.profile_character_json) {
+        if let Some(name) = v.get_mut("name").and_then(|n| n.as_str().map(String::from)) {
+            if !name.ends_with(TEST_NAME_SUFFIX) {
+                v["name"] = serde_json::Value::String(format!("{name}{TEST_NAME_SUFFIX}"));
+                lo.profile_character_json = v.to_string();
+            }
+        }
+    }
 }
 
 fn mark_loadout_as_bot(lo: &mut crate::arena::combat::Loadout) {
@@ -4838,6 +4896,18 @@ async fn resolve_pair(
     }
 }
 
+/// (test account, recent opponent) pairs among `users`; empty on any failure,
+/// which only loses the preference, never a match.
+async fn recent_test_opponents(db: &Option<DbPool>, users: &[Uuid]) -> Vec<(Uuid, Uuid)> {
+    let Some(db) = db else { return Vec::new() };
+    let Ok(mut conn) = db.get().await else {
+        return Vec::new();
+    };
+    crate::dev_alt_lock::recent_test_opponents(&mut conn, users)
+        .await
+        .unwrap_or_default()
+}
+
 /// Run [`pairing_round`] over `waiting` and resolve every pair it returns. Returns the
 /// ticket ids that were paired.
 async fn run_pairing_round(
@@ -4853,7 +4923,13 @@ async fn run_pairing_round(
         .iter()
         .map(|(t, s)| (t.skill, *s, t.user_id))
         .collect();
-    let pairs = pairing_round(&shape, now);
+    // A test character's recent opponents, only when there is a choice to make.
+    let avoid = if shape.len() >= 3 {
+        recent_test_opponents(db, &shape.iter().map(|q| q.2).collect::<Vec<_>>()).await
+    } else {
+        Vec::new()
+    };
+    let pairs = pairing_round_avoiding(&shape, now, &avoid);
     if pairs.is_empty() {
         return Vec::new();
     }
@@ -8338,6 +8414,33 @@ mod humans_first_tests {
             vec![(0, 2)],
             "oldest takes its closest (410), 400 waits"
         );
+    }
+
+    /// Owner, 2026-11-24: a (TST) character avoids the same normal character
+    /// again when another opponent is available, and falls back to a repeat
+    /// rather than no match.
+    #[test]
+    fn a_test_character_prefers_a_new_opponent_but_still_repeats_when_alone() {
+        let now = Instant::now();
+        let ago = |s: u64| now - StdDuration::from_secs(s);
+        let (tst, rival, other) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        // The rival is the closer match.
+        let shape = vec![
+            (sk(500), ago(40), tst),
+            (sk(505), ago(20), rival),
+            (sk(560), ago(10), other),
+        ];
+        let avoid = [(rival, tst)];
+        assert_eq!(
+            pairing_round_avoiding(&shape, now, &avoid),
+            vec![(0, 2)],
+            "the test character meets someone new"
+        );
+        // Control: without the history the closest match wins.
+        assert_eq!(pairing_round_avoiding(&shape, now, &[]), vec![(0, 1)]);
+        // Only the rival is there: a repeat beats no match.
+        let two = vec![(sk(500), ago(40), tst), (sk(505), ago(20), rival)];
+        assert_eq!(pairing_round_avoiding(&two, now, &avoid), vec![(0, 1)]);
     }
 
     /// "If there are multiple (>3), then make the better match, as long as the longest

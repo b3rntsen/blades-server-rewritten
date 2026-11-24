@@ -89,6 +89,8 @@ pub(crate) const MONTHLY_MATCHES_SQL: &str = "\
          FROM arena_match_results r \
          INNER JOIN characters c ON c.id = r.character_id \
          WHERE r.recorded_at >= $1 AND r.recorded_at < $2 \
+           AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl \
+                            WHERE dl.child_character_id IN (r.character_id, r.opponent_character_id)) \
      ) \
      SELECT r.recorded_at, r.character_id, r.alt_key, r.is_h2h, r.win, \
             COALESCE(CASE WHEN r.alt_key = r.live_alt THEN r.live_name ELSE ( \
@@ -224,6 +226,8 @@ pub(crate) const SEASON_MATCHES_SQL: &str = "\
          FROM arena_match_results r \
          INNER JOIN characters c ON c.id = r.character_id \
          WHERE r.recorded_at >= $1 AND r.recorded_at < $2 \
+           AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl \
+                            WHERE dl.child_character_id IN (r.character_id, r.opponent_character_id)) \
      ), pair_sessions AS ( \
          SELECT LEAST(x.character_id, x.opponent_character_id) AS a, \
                 GREATEST(x.character_id, x.opponent_character_id) AS b, \
@@ -539,7 +543,8 @@ mod tests {
                 format!("SET LOCAL search_path TO {schema}"),
                 "CREATE TABLE arena_match_results (id UUID PRIMARY KEY, character_id UUID NOT NULL, \
                  win BOOLEAN NOT NULL, recorded_at TIMESTAMPTZ NOT NULL, \
-                 is_h2h BOOLEAN NOT NULL DEFAULT false, source_alt_uuid UUID)"
+                 is_h2h BOOLEAN NOT NULL DEFAULT false, source_alt_uuid UUID, \
+                 opponent_character_id UUID)"
                     .into(),
                 "CREATE TABLE characters (id UUID PRIMARY KEY, character JSONB NOT NULL, source_alt_uuid UUID)"
                     .into(),
@@ -602,7 +607,7 @@ mod tests {
                 return;
             };
             for stmt in [
-                "ALTER TABLE arena_match_results ADD COLUMN opponent_character_id UUID, \
+                "ALTER TABLE arena_match_results \
                  ADD COLUMN game_session_id UUID, ADD COLUMN rounds_won INT NOT NULL DEFAULT 0, \
                  ADD COLUMN rounds_lost INT NOT NULL DEFAULT 0, ADD COLUMN trophy_delta BIGINT NOT NULL DEFAULT 0, \
                  ADD COLUMN classic_trophy_delta BIGINT",

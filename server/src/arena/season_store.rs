@@ -275,6 +275,8 @@ pub(crate) const FREEZE_STANDINGS_SQL: &str = "\
          JOIN characters c ON c.id = r.character_id \
          WHERE r.recorded_at >= to_timestamp($1) \
            AND r.recorded_at < to_timestamp($2) \
+           AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl \
+                            WHERE dl.child_character_id IN (r.character_id, r.opponent_character_id)) \
      ), season_deltas AS ( \
          SELECT character_id, alt, recorded_at, id, \
                 (SUM(trophy_delta) OVER ( \

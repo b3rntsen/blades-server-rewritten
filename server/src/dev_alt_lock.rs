@@ -36,8 +36,9 @@
 use std::sync::Arc;
 
 use actix_web::{
-    HttpRequest, post,
+    HttpRequest,
     http::StatusCode,
+    post,
     web::{self, Json},
 };
 use blades_lib::user_data::UserAccount;
@@ -45,7 +46,9 @@ use diesel::{
     OptionalExtension, insert_into,
     sql_types::{BigInt, Jsonb, Nullable, Text, Uuid as SqlUuid},
 };
-use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
+use diesel_async::{
+    AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -100,11 +103,10 @@ struct IdRow {
 /// hand-applied migration; the guards then have nothing to guard and must not
 /// fail the switch, restore or import they sit in.
 async fn table_exists(conn: &mut AsyncPgConnection) -> Result<bool, diesel::result::Error> {
-    let row: Flag = diesel::sql_query(
-        "SELECT to_regclass('dev_alt_lock_accounts') IS NOT NULL AS flag",
-    )
-    .get_result(conn)
-    .await?;
+    let row: Flag =
+        diesel::sql_query("SELECT to_regclass('dev_alt_lock_accounts') IS NOT NULL AS flag")
+            .get_result(conn)
+            .await?;
     Ok(row.flag)
 }
 
@@ -135,6 +137,87 @@ pub(crate) async fn refuse_if_alt_locked(
         return Err(refuse(StatusCode::CONFLICT, LOCK_ALT_LOCKED));
     }
     Ok(())
+}
+
+/// Add (`on`) or remove the " (TST)" label on a character's name, in both
+/// places the game reads it: `character.name` and `data.customization.Name`.
+pub(crate) fn relabel(character: &mut Value, data: &mut Value, on: bool) {
+    let suffix = crate::arena::matchmaker::TEST_NAME_SUFFIX;
+    let Some(name) = character
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let base = name
+        .strip_suffix(suffix)
+        .unwrap_or(&name)
+        .trim_end()
+        .to_string();
+    let want = if on { format!("{base}{suffix}") } else { base };
+    if want == name {
+        return;
+    }
+    character["name"] = Value::String(want.clone());
+    if let Some(customization) = data.get_mut("customization") {
+        crate::character_names::set_customization_name(customization, &want);
+    }
+}
+
+/// Whether `user_id` is a lock child holding a locked alt right now. False when
+/// the table is missing (binary ahead of the hand-applied migration) or the
+/// read fails: an unmarked fighter is the pre-feature behaviour.
+pub(crate) async fn is_lock_child(conn: &mut AsyncPgConnection, user_id: Uuid) -> bool {
+    diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM dev_alt_lock_accounts \
+                         WHERE child_user_id = $1 AND locked_alt_uuid IS NOT NULL) AS flag",
+    )
+    .bind::<SqlUuid, _>(user_id)
+    .get_result::<Flag>(conn)
+    .await
+    .map(|f| f.flag)
+    .unwrap_or(false)
+}
+
+/// How many of a test character's latest fights count as "recent" for the
+/// rematch rule.
+pub(crate) const RECENT_OPPONENTS: i64 = 3;
+
+#[derive(diesel::QueryableByName)]
+struct Pair {
+    #[diesel(sql_type = SqlUuid)]
+    test_user: Uuid,
+    #[diesel(sql_type = SqlUuid)]
+    opponent_user: Uuid,
+}
+
+/// (test account, opponent account) for the last [`RECENT_OPPONENTS`] fights of
+/// every waiting test account in `users`. The matchmaker prefers anyone else
+/// over these (owner, 2026-11-24): a test character should not farm one player.
+pub(crate) async fn recent_test_opponents(
+    conn: &mut AsyncPgConnection,
+    users: &[Uuid],
+) -> Result<Vec<(Uuid, Uuid)>, diesel::result::Error> {
+    let rows: Vec<Pair> = diesel::sql_query(
+        "SELECT DISTINCT dl.child_user_id AS test_user, oc.user_id AS opponent_user \
+           FROM dev_alt_lock_accounts dl \
+           CROSS JOIN LATERAL ( \
+                SELECT r.opponent_character_id FROM arena_match_results r \
+                 WHERE r.character_id = dl.child_character_id \
+                   AND r.opponent_character_id IS NOT NULL \
+                 ORDER BY r.recorded_at DESC LIMIT $2) last \
+           JOIN characters oc ON oc.id = last.opponent_character_id \
+          WHERE dl.locked_alt_uuid IS NOT NULL AND dl.child_user_id = ANY($1)",
+    )
+    .bind::<diesel::sql_types::Array<SqlUuid>, _>(users)
+    .bind::<BigInt, _>(RECENT_OPPONENTS)
+    .load(conn)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|p| (p.test_user, p.opponent_user))
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -384,8 +467,8 @@ pub(crate) async fn apply_lock_alt(
 
     let Version {
         id: restored_from,
-        character,
-        data,
+        mut character,
+        mut data,
         inventory,
         wallet,
         town,
@@ -394,6 +477,9 @@ pub(crate) async fn apply_lock_alt(
     let parked = take_parked_quests(&mut server_state);
     let parked_events = take_parked_events(&mut server_state);
     let parked_rows = take_parked_alt_rows(&mut server_state);
+    // Shown as " (TST)" everywhere its name is read — HUD, profile, social —
+    // because the label lives in the stored name, not in one renderer.
+    relabel(&mut character, &mut data, true);
 
     let child_row: Option<IdRow> =
         diesel::sql_query("SELECT id FROM characters WHERE user_id = $1 FOR UPDATE")
@@ -449,7 +535,9 @@ pub(crate) async fn apply_lock_alt(
     // The alt brings what it parked when it was last left: quests, event rows,
     // guild seat and ledgers — exactly what a `switch-alt` to it would restore.
     if let Some(parked) = parked {
-        unpark_quests(conn, character_id, parked).await.map_err(internal)?;
+        unpark_quests(conn, character_id, parked)
+            .await
+            .map_err(internal)?;
     }
     unpark_events(conn, character_id, parked_events)
         .await
@@ -538,12 +626,36 @@ pub(crate) async fn apply_unlock_alt(
     let saved_as = snapshot_character(conn, character_id, child, Some(alt), "dev-unlock", true)
         .await
         .map_err(internal)?;
-    diesel::sql_query("UPDATE character_versions SET user_id = $2 WHERE id = $1")
+    // Back on the parent the alt is a player character again: the label goes.
+    #[derive(diesel::QueryableByName)]
+    struct Kept {
+        #[diesel(sql_type = Jsonb)]
+        character: Value,
+        #[diesel(sql_type = Jsonb)]
+        data: Value,
+    }
+    let Kept {
+        mut character,
+        mut data,
+    } = diesel::sql_query("SELECT \"character\", data FROM character_versions WHERE id = $1")
         .bind::<SqlUuid, _>(saved_as)
-        .bind::<SqlUuid, _>(parent)
-        .execute(conn)
+        .get_result(conn)
         .await
         .map_err(internal)?;
+    relabel(&mut character, &mut data, false);
+    diesel::sql_query(
+        "UPDATE character_versions \
+            SET user_id = $2, \"character\" = $3, data = $4, \
+                name = COALESCE($3->>'name', name) \
+          WHERE id = $1",
+    )
+    .bind::<SqlUuid, _>(saved_as)
+    .bind::<SqlUuid, _>(parent)
+    .bind::<Jsonb, _>(&character)
+    .bind::<Jsonb, _>(&data)
+    .execute(conn)
+    .await
+    .map_err(internal)?;
     // Dormant: the row no longer claims to be the alt.
     diesel::sql_query("UPDATE characters SET source_alt_uuid = NULL WHERE id = $1")
         .bind::<SqlUuid, _>(character_id)
@@ -659,6 +771,12 @@ mod tests {
         assert!(crate::arena::leaderboards::RANKED_CTE.contains(marker));
         assert!(crate::arena::season_store::FREEZE_STANDINGS_SQL.contains(marker));
         assert!(crate::arena::ranking::H2H_BOARD_ENTRIES_SQL.contains(marker));
+        // A fight WITH a test character is not a monthly or season entry either,
+        // for the normal player's side too (owner, 2026-11-24).
+        let both_sides = "dl.child_character_id IN (r.character_id, r.opponent_character_id)";
+        assert!(crate::arena::monthly_matches::MONTHLY_MATCHES_SQL.contains(both_sides));
+        assert!(crate::arena::monthly_matches::SEASON_MATCHES_SQL.contains(both_sides));
+        assert!(crate::arena::season_store::FREEZE_STANDINGS_SQL.contains(both_sides));
         assert!(
             include_str!("../../migrations/2026-11-24-000001-0000_dev_alt_locks_names/up.sql")
                 .contains("l.child_user_id = a.user_id")
@@ -717,9 +835,11 @@ mod tests {
             .expect("TEST_DATABASE_URL is set but unreachable");
         conn.begin_test_transaction().await.unwrap();
         let schema = format!("t{}", Uuid::new_v4().simple());
-        conn.batch_execute(&format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}"))
-            .await
-            .unwrap();
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}"
+        ))
+        .await
+        .unwrap();
         for stmt in SCHEMA {
             diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
         }
@@ -743,7 +863,9 @@ mod tests {
         // The real name registry: a lock must get past its commit-time check.
         for ddl in [
             include_str!("../../migrations/2026-11-16-000000-0000_unique_character_names/up.sql"),
-            include_str!("../../migrations/2026-11-16-000001-0000_unique_names_holder_check/up.sql"),
+            include_str!(
+                "../../migrations/2026-11-16-000001-0000_unique_names_holder_check/up.sql"
+            ),
             include_str!("../../migrations/2026-11-16-000002-0000_ai_copy_users/up.sql"),
             // Applied twice on purpose: forward-only migrations must be re-runnable.
             MIGRATION_FOR_TESTS,
@@ -786,7 +908,13 @@ mod tests {
         id
     }
 
-    async fn live(conn: &mut AsyncPgConnection, user: Uuid, alt: Uuid, name: &str, level: i64) -> Uuid {
+    async fn live(
+        conn: &mut AsyncPgConnection,
+        user: Uuid,
+        alt: Uuid,
+        name: &str,
+        level: i64,
+    ) -> Uuid {
         let id = Uuid::new_v4();
         diesel::sql_query(
             "INSERT INTO characters (id, user_id, character, data, inventory, wallet, \
@@ -803,7 +931,14 @@ mod tests {
         id
     }
 
-    async fn kept(conn: &mut AsyncPgConnection, character: Uuid, user: Uuid, alt: Uuid, name: &str, level: i64) {
+    async fn kept(
+        conn: &mut AsyncPgConnection,
+        character: Uuid,
+        user: Uuid,
+        alt: Uuid,
+        name: &str,
+        level: i64,
+    ) {
         diesel::sql_query(
             "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, name, \
                  level, character, data, inventory, wallet, server_state, saved_at) \
@@ -886,12 +1021,16 @@ mod tests {
         let (parent, _, _, b) = owner(&mut c).await;
         assert_eq!(plays(&mut c, "pixel").await, ("Ipadia".into(), 40));
 
-        let out = apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
+        let out = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
         assert!(!out.reused_child);
-        check_deferred(&mut c).await.expect("the name registry accepts the lock");
+        check_deferred(&mut c)
+            .await
+            .expect("the name registry accepts the lock");
 
         assert_eq!(plays(&mut c, "ipad").await, ("Ipadia".into(), 40));
-        assert_eq!(plays(&mut c, "pixel").await, ("Pixelle".into(), 12));
+        assert_eq!(plays(&mut c, "pixel").await, ("Pixelle (TST)".into(), 12));
     }
 
     #[tokio::test]
@@ -901,16 +1040,24 @@ mod tests {
         let x = Uuid::new_v4();
         kept(&mut c, ch, parent, x, "Iphonia", 5).await;
         bind(&mut c, "iphone7", parent).await;
-        apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
+        apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
 
-        let again = apply_lock_alt(&mut c, &lock(parent, b, "iphone7")).await.unwrap_err();
+        let again = apply_lock_alt(&mut c, &lock(parent, b, "iphone7"))
+            .await
+            .unwrap_err();
         assert_eq!(code(again), LOCK_ALT_LOCKED);
-        let busy = apply_lock_alt(&mut c, &lock(parent, x, "pixel")).await.unwrap_err();
+        let busy = apply_lock_alt(&mut c, &lock(parent, x, "pixel"))
+            .await
+            .unwrap_err();
         assert_eq!(code(busy), LOCK_DEVICE_LOCKED);
         // A second alt on a second device is exactly the owner's setup.
-        apply_lock_alt(&mut c, &lock(parent, x, "iphone7")).await.unwrap();
-        assert_eq!(plays(&mut c, "iphone7").await, ("Iphonia".into(), 5));
-        assert_eq!(plays(&mut c, "pixel").await, ("Pixelle".into(), 12));
+        apply_lock_alt(&mut c, &lock(parent, x, "iphone7"))
+            .await
+            .unwrap();
+        assert_eq!(plays(&mut c, "iphone7").await, ("Iphonia (TST)".into(), 5));
+        assert_eq!(plays(&mut c, "pixel").await, ("Pixelle (TST)".into(), 12));
         assert_eq!(plays(&mut c, "ipad").await, ("Ipadia".into(), 40));
     }
 
@@ -918,16 +1065,24 @@ mod tests {
     async fn live_alt_foreign_device_and_nested_lock_are_refused() {
         let mut c = db!();
         let (parent, _, a, b) = owner(&mut c).await;
-        let live_err = apply_lock_alt(&mut c, &lock(parent, a, "pixel")).await.unwrap_err();
+        let live_err = apply_lock_alt(&mut c, &lock(parent, a, "pixel"))
+            .await
+            .unwrap_err();
         assert_eq!(code(live_err), LOCK_ALT_IS_LIVE);
 
         let stranger = user(&mut c).await;
         bind(&mut c, "strangers-phone", stranger).await;
-        let foreign = apply_lock_alt(&mut c, &lock(parent, b, "strangers-phone")).await.unwrap_err();
+        let foreign = apply_lock_alt(&mut c, &lock(parent, b, "strangers-phone"))
+            .await
+            .unwrap_err();
         assert_eq!(code(foreign), LOCK_DEVICE_NOT_YOURS);
 
-        let out = apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
-        let nested = apply_lock_alt(&mut c, &lock(out.child_user_id, b, "pixel")).await.unwrap_err();
+        let out = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        let nested = apply_lock_alt(&mut c, &lock(out.child_user_id, b, "pixel"))
+            .await
+            .unwrap_err();
         assert_eq!(code(nested), LOCK_ON_CHILD);
     }
 
@@ -935,7 +1090,9 @@ mod tests {
     async fn a_locked_alt_cannot_be_switched_to_or_restored_on_the_parent() {
         let mut c = db!();
         let (parent, _, _, b) = owner(&mut c).await;
-        apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
+        apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
 
         let switch = apply_switch_alt(
             &mut c,
@@ -966,10 +1123,12 @@ mod tests {
     async fn unlock_keeps_the_progress_made_on_the_device() {
         let mut c = db!();
         let (parent, _, _, b) = owner(&mut c).await;
-        let out = apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
+        let out = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
         // Played on the Pixel: level 12 -> 15.
         diesel::sql_query(
-            "UPDATE characters SET \"character\" = '{\"name\":\"Pixelle\",\"level\":15}' \
+            "UPDATE characters SET \"character\" = '{\"name\":\"Pixelle (TST)\",\"level\":15}' \
               WHERE user_id = $1",
         )
         .bind::<SqlUuid, _>(out.child_user_id)
@@ -987,7 +1146,9 @@ mod tests {
         .await
         .unwrap();
         assert!(un.device_returned);
-        check_deferred(&mut c).await.expect("the name registry accepts the unlock");
+        check_deferred(&mut c)
+            .await
+            .expect("the name registry accepts the unlock");
         assert_eq!(plays(&mut c, "pixel").await, ("Ipadia".into(), 40));
 
         // Switching the parent to the alt now finds the device's progress.
@@ -1022,7 +1183,9 @@ mod tests {
         let (parent, ch, _, b) = owner(&mut c).await;
         let x = Uuid::new_v4();
         kept(&mut c, ch, parent, x, "Iphonia", 5).await;
-        let first = apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
+        let first = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
         apply_unlock_alt(
             &mut c,
             &UnlockAltRequest {
@@ -1032,24 +1195,197 @@ mod tests {
         )
         .await
         .unwrap();
-        let second = apply_lock_alt(&mut c, &lock(parent, x, "pixel")).await.unwrap();
+        let second = apply_lock_alt(&mut c, &lock(parent, x, "pixel"))
+            .await
+            .unwrap();
         assert!(second.reused_child);
         assert_eq!(second.child_user_id, first.child_user_id);
         check_deferred(&mut c).await.unwrap();
-        assert_eq!(plays(&mut c, "pixel").await, ("Iphonia".into(), 5));
+        assert_eq!(plays(&mut c, "pixel").await, ("Iphonia (TST)".into(), 5));
     }
 
     #[tokio::test]
     async fn devices_list_includes_locked_devices() {
         let mut c = db!();
         let (parent, _, _, b) = owner(&mut c).await;
-        apply_lock_alt(&mut c, &lock(parent, b, "pixel")).await.unwrap();
+        apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
         let devices = devices_with_locks(&mut c, parent).await.unwrap();
-        let pixel = devices.iter().find(|d| d.device_id == "pixel").expect("pixel listed");
+        let pixel = devices
+            .iter()
+            .find(|d| d.device_id == "pixel")
+            .expect("pixel listed");
         assert_eq!(pixel.locked_alt_uuid, Some(b));
         assert_eq!(pixel.platform.as_deref(), Some("android"));
-        let ipad = devices.iter().find(|d| d.device_id == "ipad").expect("ipad listed");
+        let ipad = devices
+            .iter()
+            .find(|d| d.device_id == "ipad")
+            .expect("ipad listed");
         assert_eq!(ipad.locked_alt_uuid, None);
         assert_eq!(devices.len(), 2);
+    }
+
+    #[test]
+    fn parentheses_are_reserved_for_system_labels() {
+        use crate::character_names::{has_reserved_brackets, is_exempt};
+        for bad in [
+            "Ravena (AI)",
+            "Bob(",
+            "x)",
+            "Fullwidth\u{FF08}x\u{FF09}",
+            "(TST)",
+        ] {
+            assert!(has_reserved_brackets(bad), "{bad:?} must be refused");
+        }
+        for ok in ["Ravena", "O'Neil", "Anna-Lena 2"] {
+            assert!(!has_reserved_brackets(ok), "{ok:?} is a fine name");
+        }
+        assert!(is_exempt("Pixelle (TST)") && is_exempt("Ravena (AI)"));
+        assert!(
+            !is_exempt("Ravena (Test)"),
+            "the old label is no longer a system one"
+        );
+    }
+
+    #[tokio::test]
+    async fn settle_name_refuses_a_bracketed_player_name() {
+        let mut c = db!();
+        let u = user(&mut c).await;
+        let e = crate::character_names::settle_name(&mut c, u, Uuid::new_v4(), "Thorn (Bard)")
+            .await
+            .unwrap_err();
+        assert!(
+            crate::character_names::is_reserved_brackets_error(&e),
+            "{e:?}"
+        );
+        // The AI marker is still taken off rather than refused.
+        let ok = crate::character_names::settle_name(&mut c, u, Uuid::new_v4(), "Thorn (AI)")
+            .await
+            .unwrap();
+        assert_eq!(ok, "Thorn");
+    }
+
+    #[tokio::test]
+    async fn lock_labels_the_name_and_unlock_takes_the_label_off() {
+        let mut c = db!();
+        let (parent, _, _, b) = owner(&mut c).await;
+        apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        assert_eq!(plays(&mut c, "pixel").await.0, "Pixelle (TST)");
+        let un = apply_unlock_alt(
+            &mut c,
+            &UnlockAltRequest {
+                user_id: parent,
+                device_id: "pixel".into(),
+            },
+        )
+        .await
+        .unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct Named {
+            #[diesel(sql_type = Text)]
+            name: String,
+            #[diesel(sql_type = Text)]
+            json_name: String,
+        }
+        let v: Named = diesel::sql_query(
+            "SELECT name, \"character\"->>'name' AS json_name FROM character_versions WHERE id = $1",
+        )
+        .bind::<SqlUuid, _>(un.saved_as)
+        .get_result(&mut c)
+        .await
+        .unwrap();
+        assert_eq!(
+            (v.name.as_str(), v.json_name.as_str()),
+            ("Pixelle", "Pixelle")
+        );
+    }
+
+    async fn fight(
+        c: &mut AsyncPgConnection,
+        character: Uuid,
+        opponent: Uuid,
+        win: bool,
+        delta: i64,
+    ) {
+        diesel::sql_query(
+            "INSERT INTO arena_match_results (id, character_id, opponent_character_id, win, \
+                 rounds_won, rounds_lost, trophy_delta, recorded_at) \
+             VALUES ($1, $2, $3, $4, 2, 0, $5, now())",
+        )
+        .bind::<SqlUuid, _>(Uuid::new_v4())
+        .bind::<SqlUuid, _>(character)
+        .bind::<SqlUuid, _>(opponent)
+        .bind::<diesel::sql_types::Bool, _>(win)
+        .bind::<BigInt, _>(delta)
+        .execute(c)
+        .await
+        .unwrap();
+    }
+
+    /// The normal player's side of a fight with a test character never reaches
+    /// the season standings (Top 100, awards, guild score) — not even as a match
+    /// played — and the test side never does either.
+    #[tokio::test]
+    async fn fights_with_a_test_character_stay_out_of_the_standings() {
+        let mut c = db!();
+        let (parent, _, _, b) = owner(&mut c).await;
+        let locked = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        let human = user(&mut c).await;
+        let human_char = live(&mut c, human, Uuid::new_v4(), "Normal", 30).await;
+        let third = user(&mut c).await;
+        let third_char = live(&mut c, third, Uuid::new_v4(), "Third", 30).await;
+        fight(&mut c, human_char, locked.character_id, true, 0).await;
+        fight(&mut c, locked.character_id, human_char, false, 0).await;
+        fight(&mut c, human_char, third_char, true, 30).await; // the control
+
+        #[derive(diesel::QueryableByName)]
+        struct Standing {
+            #[diesel(sql_type = SqlUuid)]
+            character_id: Uuid,
+            #[diesel(sql_type = BigInt)]
+            matches: i64,
+        }
+        let rows: Vec<Standing> =
+            diesel::sql_query(crate::arena::season_store::FREEZE_STANDINGS_SQL)
+                .bind::<BigInt, _>(0i64)
+                .bind::<BigInt, _>(i64::from(i32::MAX))
+                .load(&mut c)
+                .await
+                .unwrap();
+        assert!(rows.iter().all(|r| r.character_id != locked.character_id));
+        let h = rows
+            .iter()
+            .find(|r| r.character_id == human_char)
+            .expect("human ranks");
+        assert_eq!(h.matches, 1, "only the fight against a real player counts");
+    }
+
+    #[tokio::test]
+    async fn recent_opponents_of_a_test_character_are_found() {
+        let mut c = db!();
+        let (parent, _, _, b) = owner(&mut c).await;
+        let locked = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        let human = user(&mut c).await;
+        let human_char = live(&mut c, human, Uuid::new_v4(), "Normal", 30).await;
+        fight(&mut c, locked.character_id, human_char, true, 0).await;
+        let pairs = recent_test_opponents(&mut c, &[locked.child_user_id, human])
+            .await
+            .unwrap();
+        assert_eq!(pairs, vec![(locked.child_user_id, human)]);
+        assert!(
+            recent_test_opponents(&mut c, &[human])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(is_lock_child(&mut c, locked.child_user_id).await);
+        assert!(!is_lock_child(&mut c, parent).await);
     }
 }

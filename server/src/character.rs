@@ -146,6 +146,18 @@ async fn create_characters(
     body: web::Json<CharacterCreationRequest>,
 ) -> Result<web::Json<CharacterCreationResponse>, BladeApiError> {
     let session = session.get_session_or_error()?;
+    // "(" and ")" are reserved for the system labels (AI) and (TST).
+    if crate::character_names::has_reserved_brackets(&body.name) {
+        log::warn!(
+            "character creation refused: name {:?} has reserved parentheses",
+            body.name
+        );
+        return Err(BladeApiError::new(
+            actix_web::http::StatusCode::BAD_REQUEST,
+            102,
+            801,
+        ));
+    }
     let created = build_starter_character(
         &app_state,
         session.session.user_id,

@@ -2887,7 +2887,7 @@ mod tests {
             let (row_t, test_alt) = (Uuid::from_u128(0x10), Uuid::from_u128(0x1a));
             let (row_r, real_alt) = (Uuid::from_u128(0x20), Uuid::from_u128(0x2a));
             let (row_o, other_alt) = (Uuid::from_u128(0x30), Uuid::from_u128(0x3a));
-            seed_alt_character(&mut conn, row_t, Some(test_alt), "Tester (Test)").await;
+            seed_alt_character(&mut conn, row_t, Some(test_alt), "Tester (TST)").await;
             seed_alt_character(&mut conn, row_r, Some(real_alt), "Real").await;
             seed_alt_character(&mut conn, row_o, Some(other_alt), "Other").await;
             // The test alt beats Real; Real beats Other.
