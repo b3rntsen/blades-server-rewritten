@@ -199,11 +199,12 @@ pub(crate) async fn refuses_account_link(conn: &mut AsyncPgConnection, user_id: 
     }
 }
 
-/// Every lock child account, for leaving them out of the AI-opponent pools.
-/// Empty when the table is missing.
+/// Every lock child account. `None` when it cannot be read — never an empty
+/// set, which would read as "nobody is a child" and switch off the label
+/// fallback in the matchmaker.
 pub(crate) async fn lock_child_users(
     conn: &mut AsyncPgConnection,
-) -> std::collections::HashSet<Uuid> {
+) -> Option<std::collections::HashSet<Uuid>> {
     #[derive(diesel::QueryableByName)]
     struct U {
         #[diesel(sql_type = SqlUuid)]
@@ -213,7 +214,7 @@ pub(crate) async fn lock_child_users(
         .load::<U>(conn)
         .await
         .map(|v| v.into_iter().map(|u| u.child_user_id).collect())
-        .unwrap_or_default()
+        .ok()
 }
 
 /// Every lock child account, in memory, so the matchmaker can mark a fighter
@@ -232,10 +233,28 @@ pub(crate) fn known_child(user_id: Uuid) -> Option<bool> {
         .and_then(|g| g.as_ref().map(|set| set.contains(&user_id)))
 }
 
+/// Add a new child to the in-memory list — only when the list was loaded: a
+/// list holding just this child would wrongly answer "no" for every other one.
 pub(crate) fn remember_child(user_id: Uuid) {
     if let Ok(mut g) = CHILDREN.write() {
-        g.get_or_insert_with(Default::default).insert(user_id);
+        add_if_loaded(&mut g, user_id);
     }
+}
+
+fn add_if_loaded(cache: &mut Option<std::collections::HashSet<Uuid>>, user_id: Uuid) {
+    if let Some(set) = cache.as_mut() {
+        set.insert(user_id);
+    }
+}
+
+/// Tests share the process-wide list: make sure it is loaded, then add.
+#[cfg(test)]
+pub(crate) fn remember_child_for_tests(user_id: Uuid) {
+    CHILDREN
+        .write()
+        .unwrap()
+        .get_or_insert_with(Default::default)
+        .insert(user_id);
 }
 
 /// The lock table, created at startup if the hand-applied migration has not
@@ -258,31 +277,60 @@ pub(crate) async fn ensure_table(pool: &crate::DbPool) {
     if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, NAMES_DDL).await {
         log::warn!("[dev-lock] could not install the lock-aware name rules: {e}");
     }
-    let children = lock_child_users(&mut conn).await;
-    log::info!("[dev-lock] {} lock child account(s) known", children.len());
-    if let Ok(mut g) = CHILDREN.write() {
-        *g = Some(children);
+    match lock_child_users(&mut conn).await {
+        Some(children) => {
+            log::info!("[dev-lock] {} lock child account(s) known", children.len());
+            if let Ok(mut g) = CHILDREN.write() {
+                *g = Some(children);
+            }
+        }
+        // Left unloaded: the matchmaker falls back to the stored " (TST)" label.
+        None => log::warn!("[dev-lock] lock child accounts unreadable; using the name label"),
     }
     drop(conn);
     // The rematch rule reads arena_match_results by opponent; build its index
     // without blocking match writes (CONCURRENTLY cannot run in a transaction,
-    // so not in the migration batch).
+    // so not in the migration batch). An interrupted CONCURRENTLY build leaves
+    // an INVALID index that IF NOT EXISTS would skip for ever: drop and rebuild.
     let pool = pool.clone();
     tokio::spawn(async move {
         let Ok(mut conn) = pool.get().await else {
             return;
         };
-        if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(
-            &mut conn,
-            "CREATE INDEX CONCURRENTLY IF NOT EXISTS arena_match_results_by_opponent \
-               ON arena_match_results (opponent_character_id, recorded_at DESC)",
-        )
-        .await
-        {
-            log::warn!("[dev-lock] could not build arena_match_results_by_opponent: {e}");
+        #[derive(diesel::QueryableByName)]
+        struct Valid {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            indisvalid: bool,
+        }
+        let state: Option<Valid> = diesel::sql_query(OPPONENT_INDEX_VALID_SQL)
+            .get_result(&mut conn)
+            .await
+            .optional()
+            .unwrap_or(None);
+        let mut steps: Vec<&str> = Vec::new();
+        if state.is_some_and(|v| !v.indisvalid) {
+            log::warn!("[dev-lock] arena_match_results_by_opponent is INVALID; rebuilding");
+            steps.push("DROP INDEX CONCURRENTLY IF EXISTS arena_match_results_by_opponent");
+        }
+        steps.push(OPPONENT_INDEX_SQL);
+        for sql in steps {
+            if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, sql).await
+            {
+                log::warn!("[dev-lock] opponent index: {e}");
+                return;
+            }
         }
     });
 }
+
+const OPPONENT_INDEX_SQL: &str = "CREATE INDEX CONCURRENTLY IF NOT EXISTS arena_match_results_by_opponent \
+       ON arena_match_results (opponent_character_id, recorded_at DESC)";
+
+/// Whether the opponent index exists and is VALID (no row: not built yet).
+const OPPONENT_INDEX_VALID_SQL: &str = "SELECT i.indisvalid FROM pg_index i \
+       JOIN pg_class c ON c.oid = i.indexrelid \
+      WHERE c.relname = 'arena_match_results_by_opponent' \
+        AND c.relnamespace = to_regnamespace(current_schema())";
 
 /// The lock-aware name rules (migration 2026-11-24-000001), also run at startup.
 pub(crate) const NAMES_DDL: &str =
@@ -1639,6 +1687,7 @@ mod tests {
         assert!(
             lock_child_users(&mut c)
                 .await
+                .expect("readable")
                 .contains(&locked.child_user_id)
         );
     }
@@ -1782,11 +1831,49 @@ mod tests {
     }
 
     #[test]
-    fn the_child_cache_marks_without_a_database() {
+    fn the_child_cache_marks_without_a_database_and_never_from_a_partial_list() {
+        // Not loaded: a lock must not create a list holding only its own child.
+        let mut cache = None;
+        add_if_loaded(&mut cache, Uuid::new_v4());
+        assert!(cache.is_none(), "an unloaded list stays unloaded");
+        let mut cache = Some(std::collections::HashSet::new());
         let child = Uuid::new_v4();
-        remember_child(child);
+        add_if_loaded(&mut cache, child);
+        assert!(cache.unwrap().contains(&child));
+
+        let child = Uuid::new_v4();
+        remember_child_for_tests(child);
         assert_eq!(known_child(child), Some(true));
         assert_eq!(known_child(Uuid::new_v4()), Some(false));
+    }
+
+    /// The opponent index is rebuilt when an interrupted CONCURRENTLY build
+    /// left it INVALID (it reads as existing, so IF NOT EXISTS would skip it).
+    #[tokio::test]
+    async fn an_invalid_opponent_index_is_seen_as_invalid() {
+        let mut c = db!();
+        #[derive(diesel::QueryableByName)]
+        struct Valid {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            indisvalid: bool,
+        }
+        let none: Option<Valid> = diesel::sql_query(OPPONENT_INDEX_VALID_SQL)
+            .get_result(&mut c)
+            .await
+            .optional()
+            .unwrap();
+        assert!(none.is_none(), "not built yet");
+        c.batch_execute(
+            "CREATE INDEX arena_match_results_by_opponent \
+               ON arena_match_results (opponent_character_id, recorded_at DESC)",
+        )
+        .await
+        .unwrap();
+        let ok: Valid = diesel::sql_query(OPPONENT_INDEX_VALID_SQL)
+            .get_result(&mut c)
+            .await
+            .unwrap();
+        assert!(ok.indisvalid);
     }
 
     /// The normal player's wins against a (TST) character are not counted on

@@ -25,7 +25,7 @@ use actix_web::{
 };
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
 use diesel_async::pooled_connection::bb8::PooledConnection;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use futures_util::FutureExt;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -1715,7 +1715,9 @@ async fn pick_bot_loadout(
     drop_rows_of_logged_in_users(&mut rows, &logged_in);
     // Nor a developer's lock child: it would come out as "X (TST) (AI)", a copy
     // of a test copy of a real alt.
-    let lock_children = crate::dev_alt_lock::lock_child_users(&mut conn).await;
+    let lock_children = crate::dev_alt_lock::lock_child_users(&mut conn)
+        .await
+        .unwrap_or_default();
     drop_rows_of_logged_in_users(&mut rows, &lock_children);
     let ranking_config = ranking::load(db).await.config;
     apply_recent_bot_avoidance(
@@ -4922,16 +4924,20 @@ async fn recent_test_opponents(db: &Option<DbPool>, users: &[Uuid]) -> Vec<(Uuid
     let Ok(mut conn) = db.get().await else {
         return Vec::new();
     };
-    // This runs in the single matchmaker loop: bound it on the server side
-    // (a dropped future could hand a half-read connection back to the pool).
-    let _ = diesel::sql_query("SET statement_timeout = 250")
-        .execute(&mut conn)
-        .await;
-    let pairs = crate::dev_alt_lock::recent_test_opponents(&mut conn, users).await;
-    let _ = diesel::sql_query("RESET statement_timeout")
-        .execute(&mut conn)
-        .await;
-    pairs.unwrap_or_default()
+    // This runs in the single matchmaker loop: bound it on the server side, in
+    // its own transaction so the limit cannot outlive it on a pooled connection.
+    let users = users.to_vec();
+    diesel_async::AsyncConnection::transaction::<_, diesel::result::Error, _>(&mut *conn, |conn| {
+        async move {
+            diesel::sql_query("SET LOCAL statement_timeout = '250ms'")
+                .execute(conn)
+                .await?;
+            crate::dev_alt_lock::recent_test_opponents(conn, &users).await
+        }
+        .scope_boxed()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Run [`pairing_round`] over `waiting` and resolve every pair it returns. Returns the
@@ -8461,7 +8467,7 @@ mod humans_first_tests {
     #[test]
     fn a_lock_child_is_marked_even_on_the_starter_loadout() {
         let child = Uuid::new_v4();
-        crate::dev_alt_lock::remember_child(child);
+        crate::dev_alt_lock::remember_child_for_tests(child);
         let mut starter = crate::arena::combat::loadout::starter();
         mark_if_test_account(&mut starter, child);
         assert!(is_test_loadout(&starter));

@@ -2464,6 +2464,10 @@ impl Fighter {
         next.hide_helmet = self.loadout.hide_helmet;
         // Read at queue time, not off the character row: the rebuilt loadout has none.
         next.account_arena_fights = self.loadout.account_arena_fights;
+        // A developer's (TST) fighter stays one for the whole match.
+        if self.loadout.dev_test {
+            crate::arena::matchmaker::mark_loadout_as_test(&mut next);
+        }
         let (max_health, max_stamina, max_magicka) = max_pools_for(&next);
         self.max_health = max_health;
         self.max_stamina = max_stamina;

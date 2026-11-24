@@ -6393,6 +6393,27 @@ pub(in crate::arena::combat) mod tests {
         );
     }
 
+    /// A between-rounds loadout change keeps the (TST) mark: the reloaded
+    /// loadout is built from the character row, which carries no account flag.
+    #[test]
+    fn a_between_rounds_reload_keeps_the_test_mark() {
+        let mut fighters = vec![
+            opponent_loadout("Normal", None),
+            opponent_loadout("Pixelle", None),
+        ];
+        crate::arena::matchmaker::mark_loadout_as_test(&mut fighters[1]);
+        let mut m = MatchInstance::new(2, 2, fighters, Instant::now());
+        m.combat.fighters[1].adopt_between_rounds_loadout(opponent_loadout("Pixelle", None));
+        m.combat.fighters[0].adopt_between_rounds_loadout(opponent_loadout("Normal", None));
+        assert!(crate::arena::matchmaker::is_test_loadout(
+            &m.combat.fighters[1].loadout
+        ));
+        assert_eq!(m.combat.fighters[1].loadout.display_name, "Pixelle (TST)");
+        assert!(!crate::arena::matchmaker::is_test_loadout(
+            &m.combat.fighters[0].loadout
+        ));
+    }
+
     #[test]
     fn the_test_marker_is_the_account_flag_and_labels_both_names() {
         let mut lo = opponent_loadout("Pixelle", None);
