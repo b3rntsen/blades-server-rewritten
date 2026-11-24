@@ -477,67 +477,79 @@ impl FromRequest for SessionLookedUpMaybe {
                 }
             };
 
-            // A Blades session token is `…=<session_id>|<extra_secret>`. A header
-            // that isn't that shape — notably `Authorization: Bearer <token>` used
-            // by our out-of-band tooling routes (admin import, arena debug-inject)
-            // — is simply "no session": let it through as `None` so the route's own
-            // token check runs, instead of 400-ing every Bearer request in the
-            // global session middleware (which pre-empted those handlers entirely).
-            let token = match authorization.split('=').nth(1) {
-                Some(token) => token,
-                None => return Ok(SessionLookedUpMaybe(None)),
-            };
-
-            let mut token_splitted = token.split('|');
-            let (session_id, extra_secret) = if let Some(session_id) = token_splitted.next()
-                && let Some(extra_secret) = token_splitted.next()
-            {
-                let session_id = match Uuid::parse_str(session_id) {
-                    Ok(v) => v,
-                    Err(_err) => {
-                        return Err(actix_web::error::ErrorBadRequest(
-                            "can’t parse session id part of the token",
-                        ));
-                    }
-                };
-                let extra_secret = match Uuid::parse_str(extra_secret) {
-                    Ok(v) => v,
-                    Err(_err) => {
-                        return Err(actix_web::error::ErrorBadRequest(
-                            "can’t parse extra secret part of the token",
-                        ));
-                    }
-                };
-                (session_id, extra_secret)
-            } else {
-                return Err(actix_web::error::ErrorBadRequest(
-                    "Invalid token format (no |)",
-                ));
-            };
-
-            // In-memory first; on a cold miss (e.g. just after a restart emptied the map)
-            // fall back to the persisted `sessions` table and repopulate, so an
-            // arena-server rebuild no longer logs everyone out.
-            let session = match global.session_store.get(session_id) {
-                Some(v) => v,
-                None => match load_persisted_session(&global.db_pool, session_id).await {
-                    Some(s) => global
-                        .session_store
-                        .insert_existing(session_id, Arc::new(s)),
-                    None => return Ok(SessionLookedUpMaybe(None)),
-                },
-            };
-            if session.extra_secret == extra_secret {
-                Ok(SessionLookedUpMaybe(Some(SessionLookedUp {
-                    session_id,
-                    session,
-                })))
-            } else {
-                Err(actix_web::error::ErrorUnauthorized(
-                    "Invalid token (extra secret mismatch)",
-                ))
-            }
+            lookup_authorization(&global, authorization).await
         })
+    }
+}
+
+/// Resolve an `Authorization` value (`…=<session_id>|<extra_secret>`) to its session.
+///
+/// Shared by the [`SessionLookedUpMaybe`] extractor and by routes whose client cannot
+/// set an `Authorization` header — a browser WebSocket carries the same token in its
+/// subprotocol list instead (`arena::ws_transport`).
+pub async fn lookup_authorization(
+    global: &Arc<ServerGlobal>,
+    authorization: &str,
+) -> Result<SessionLookedUpMaybe, actix_web::Error> {
+    // A Blades session token is `…=<session_id>|<extra_secret>`. A header
+    // that isn't that shape — notably `Authorization: Bearer <token>` used
+    // by our out-of-band tooling routes (admin import, arena debug-inject)
+    // — is simply "no session": let it through as `None` so the route's own
+    // token check runs, instead of 400-ing every Bearer request in the
+    // global session middleware (which pre-empted those handlers entirely).
+    let token = match authorization.split('=').nth(1) {
+        Some(token) => token,
+        None => return Ok(SessionLookedUpMaybe(None)),
+    };
+
+    let mut token_splitted = token.split('|');
+    let (session_id, extra_secret) = if let Some(session_id) = token_splitted.next()
+        && let Some(extra_secret) = token_splitted.next()
+    {
+        let session_id = match Uuid::parse_str(session_id) {
+            Ok(v) => v,
+            Err(_err) => {
+                return Err(actix_web::error::ErrorBadRequest(
+                    "can’t parse session id part of the token",
+                ));
+            }
+        };
+        let extra_secret = match Uuid::parse_str(extra_secret) {
+            Ok(v) => v,
+            Err(_err) => {
+                return Err(actix_web::error::ErrorBadRequest(
+                    "can’t parse extra secret part of the token",
+                ));
+            }
+        };
+        (session_id, extra_secret)
+    } else {
+        return Err(actix_web::error::ErrorBadRequest(
+            "Invalid token format (no |)",
+        ));
+    };
+
+    // In-memory first; on a cold miss (e.g. just after a restart emptied the map)
+    // fall back to the persisted `sessions` table and repopulate, so an
+    // arena-server rebuild no longer logs everyone out.
+    let session = match global.session_store.get(session_id) {
+        Some(v) => v,
+        None => match load_persisted_session(&global.db_pool, session_id).await {
+            Some(s) => global
+                .session_store
+                .insert_existing(session_id, Arc::new(s)),
+            None => return Ok(SessionLookedUpMaybe(None)),
+        },
+    };
+    if session.extra_secret == extra_secret {
+        Ok(SessionLookedUpMaybe(Some(SessionLookedUp {
+            session_id,
+            session,
+        })))
+    } else {
+        Err(actix_web::error::ErrorUnauthorized(
+            "Invalid token (extra secret mismatch)",
+        ))
     }
 }
 

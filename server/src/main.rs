@@ -765,6 +765,7 @@ async fn main() -> Result<()> {
                     .service(arena::presence::arena_presence)
                     .service(arena::avatar::set_avatar)
                     .service(arena::matchmaking::matchmaking_ws)
+                    .service(arena::ws_transport::arena_match_ws)
                     .service(arena::matchmaker::create_match)
                     .service(arena::matchmaker::cancel_match)
                     // DEBUG/experimental packet-injection harness (token-gated).

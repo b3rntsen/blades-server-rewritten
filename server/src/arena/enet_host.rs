@@ -45,6 +45,7 @@ use rusty_enet::{
 
 use crate::ServerGlobal;
 use crate::arena::match_registry::MatchRegistry;
+use crate::arena::ws_transport::{WsBridge, WsEvent};
 
 /// A [`Socket`] wrapper that translates Blades' ENet protocol-header flag convention
 /// to/from the vanilla ENet that `rusty_enet` implements, transparently on the wire.
@@ -130,9 +131,17 @@ pub async fn run_enet_host(globals: Arc<ServerGlobal>) -> anyhow::Result<()> {
     // One ENet peer per connected client: up to 2 players per match, plus headroom.
     let peer_limit = (registry.max_matches * 2).clamp(2, 256);
 
+    // WP17: the browser transport shares this thread's registry. Off unless
+    // ARENA_WS_TRANSPORT is set; while off, `ws` is None and `serve` is unchanged.
+    let ws = crate::arena::ws_transport::enabled_from_env()
+        .then(crate::arena::ws_transport::init_production);
+    if ws.is_some() {
+        info!("arena-ws: WebSocket arena transport ENABLED (ARENA_WS_TRANSPORT)");
+    }
+
     thread::Builder::new()
         .name("arena-enet".into())
-        .spawn(move || serve(socket, registry, peer_limit))
+        .spawn(move || serve(socket, registry, peer_limit, ws))
         .map_err(|e| anyhow::anyhow!("arena-enet: spawn host thread: {e}"))?;
 
     info!("arena-enet: live host bound udp/{port} (rusty_enet, peer_limit {peer_limit})");
@@ -140,7 +149,12 @@ pub async fn run_enet_host(globals: Arc<ServerGlobal>) -> anyhow::Result<()> {
 }
 
 /// The ENet service loop (own thread): drain queued events each tick, flush, yield.
-fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
+fn serve(
+    socket: UdpSocket,
+    registry: Arc<MatchRegistry>,
+    peer_limit: usize,
+    ws: Option<Arc<WsBridge>>,
+) {
     let mut host = match Host::new(
         BladesEnetSocket::new(socket),
         HostSettings {
@@ -157,9 +171,15 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
     // addr -> PeerID, so we can send to the *opponent* (not just the event peer).
     let mut peer_at: HashMap<std::net::SocketAddr, PeerID> = HashMap::new();
 
+    // WebSocket peer → the playerSessionId its authenticated upgrade named.
+    let mut ws_psid: HashMap<std::net::SocketAddr, String> = HashMap::new();
+
     let mut last_housekeep = std::time::Instant::now();
     loop {
         while pump(&mut host, &registry, &mut peer_at) {}
+        if let Some(ws) = &ws {
+            drain_ws(&mut host, &registry, &peer_at, ws, &mut ws_psid);
+        }
         let now = std::time::Instant::now();
         service_reconnects(&mut host, &registry, &mut peer_at, now);
         // Server-initiated combat output (flow-control heartbeat, damage, etc.).
@@ -215,6 +235,9 @@ fn serve(socket: UdpSocket, registry: Arc<MatchRegistry>, peer_limit: usize) {
                 );
                 peer.disconnect_later(0);
                 peer_at.remove(&addr);
+            } else {
+                // A WebSocket peer: close after its queue drains, like disconnect_later.
+                crate::arena::ws_transport::close_later(&addr, 0);
             }
         }
         // DEBUG/experimental: drain any hand-crafted frames queued by the
@@ -269,6 +292,8 @@ fn release_reclaimed(
                 r.addr, r.reason
             );
             host.peer_mut(pid).disconnect_later(r.reason);
+        } else {
+            crate::arena::ws_transport::close_later(&r.addr, r.reason);
         }
     }
 }
@@ -462,14 +487,7 @@ fn handle_packet(
             }
             match registry.admit_connection(addr, &client_pub) {
                 Some((server_pk, nonce)) => {
-                    let mut reply = Vec::with_capacity(55);
-                    reply.extend_from_slice(&[0xBE, 0x38]);
-                    reply.extend_from_slice(&conn_id);
-                    reply.extend_from_slice(&[0, 0, 0, 1]);
-                    reply.extend_from_slice(&[0x01, 0x20]);
-                    reply.extend_from_slice(&server_pk);
-                    reply.push(0x08);
-                    reply.extend_from_slice(&nonce);
+                    let reply = key_exchange_reply(&conn_id, &server_pk, &nonce);
                     send_to(host, peer_at, &addr, 0, &reply);
                     info!("arena-enet: {addr} admitted (op-0x38 key exchange)");
                 }
@@ -550,6 +568,95 @@ fn handle_packet(
     );
 }
 
+/// The s2c op-0x38 reply: BE 38 | conn_id(6) | 00 00 00 01 | 01 20 | server_pk(32) |
+/// 08 | nonce(8).
+fn key_exchange_reply(conn_id: &[u8; 6], server_pk: &[u8; 32], nonce: &[u8; 8]) -> Vec<u8> {
+    let mut reply = Vec::with_capacity(55);
+    reply.extend_from_slice(&[0xBE, 0x38]);
+    reply.extend_from_slice(conn_id);
+    reply.extend_from_slice(&[0, 0, 0, 1]);
+    reply.extend_from_slice(&[0x01, 0x20]);
+    reply.extend_from_slice(server_pk);
+    reply.push(0x08);
+    reply.extend_from_slice(nonce);
+    reply
+}
+
+/// Handle what the WebSocket peers sent since the last tick (WP17), on this thread so
+/// every registry call stays single-threaded as on the ENet path.
+///
+/// The only difference from an ENet peer is the key exchange: the socket's upgrade was
+/// authenticated and named the player's `playerSessionId`, so the slot is bound by
+/// [`MatchRegistry::admit`] instead of by source IP. Everything after it — the
+/// encrypted frames, the replies, a departure — goes through the same functions as
+/// ENet, and `send_to` routes replies to whichever transport each target uses.
+fn drain_ws(
+    host: &mut ArenaHost,
+    registry: &MatchRegistry,
+    peer_at: &HashMap<std::net::SocketAddr, PeerID>,
+    ws: &WsBridge,
+    ws_psid: &mut HashMap<std::net::SocketAddr, String>,
+) {
+    for ev in ws.drain() {
+        match ev {
+            WsEvent::Connect {
+                addr,
+                player_session_id,
+            } => {
+                ws_psid.insert(addr, player_session_id);
+            }
+            WsEvent::Receive {
+                addr,
+                channel,
+                data,
+            } => {
+                // Like ENet's receive path, the inbound channel doesn't steer handling;
+                // it's kept for the log.
+                debug!("arena-ws: {addr} {} B on channel {channel}", data.len());
+                if let Some((conn_id, client_pub)) = parse_key_exchange(&data) {
+                    if registry.is_active(&addr) {
+                        debug!("arena-ws: duplicate op-0x38 from {addr}; ignored");
+                        continue;
+                    }
+                    let Some(psid) = ws_psid.get(&addr) else {
+                        warn!("arena-ws: op-0x38 from {addr} with no session binding");
+                        continue;
+                    };
+                    match registry.admit(addr, psid, &client_pub) {
+                        Some((server_pk, nonce)) => {
+                            let reply = key_exchange_reply(&conn_id, &server_pk, &nonce);
+                            send_to(host, peer_at, &addr, 0, &reply);
+                            info!("arena-ws: {addr} admitted (op-0x38 key exchange, psess {psid})");
+                        }
+                        None => {
+                            warn!(
+                                "arena-ws: {addr} op-0x38 for psess {psid}, but no match is waiting for it"
+                            );
+                            crate::arena::ws_transport::close_later(
+                                &addr,
+                                crate::arena::match_registry::disconnect_reason::NOT_ENOUGH_PLAYERS,
+                            );
+                        }
+                    }
+                    continue;
+                }
+                handle_packet(host, registry, peer_at, addr, &data);
+            }
+            WsEvent::Disconnect { addr } => {
+                ws_psid.remove(&addr);
+                registry.forget_connect(&addr);
+                let now = std::time::Instant::now();
+                if registry.park_departed(&addr, now) {
+                    continue;
+                }
+                for (target, channel, bytes) in registry.peer_departed(&addr, now) {
+                    send_to(host, peer_at, &target, channel, &bytes);
+                }
+            }
+        }
+    }
+}
+
 /// Decode the fixed prefix of the retail plaintext op-0x38 key exchange.
 fn parse_key_exchange(data: &[u8]) -> Option<([u8; 6], [u8; 32])> {
     if data.len() < 46 || data[0] != 0xBE || data[1] != 0x38 || data[12] != 0x01 || data[13] != 0x20
@@ -594,6 +701,10 @@ fn send_to(
             }
             return;
         }
+    }
+    // A WebSocket peer (WP17): its synthetic address is never in `peer_at`.
+    if crate::arena::ws_transport::deliver(addr, channel, bytes) {
+        return;
     }
     debug!("arena-enet: no live peer for {addr}; dropping reply");
 }
@@ -1966,6 +2077,400 @@ mod tests {
         for s in &summary {
             eprintln!("CRE-SOAK enet: {s}");
         }
+    }
+    // ---------------------------------------------------------------------------
+    // WP17: the WebSocket transport, end to end over real sockets.
+    // ---------------------------------------------------------------------------
+
+    /// Run the WebSocket upgrade route on a real actix server (own thread and runtime),
+    /// binding each socket to the `playerSessionId` in its path — the test stand-in for
+    /// the authenticated session lookup the production route does.
+    fn spawn_ws_server(bridge: Arc<WsBridge>) -> SocketAddr {
+        use actix_web::{App, HttpRequest, HttpServer, web};
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            actix_web::rt::System::new().block_on(async move {
+                let srv = HttpServer::new(move || {
+                    let b = bridge.clone();
+                    App::new().route(
+                        "/ws/{psid}",
+                        web::get().to(
+                            move |req: HttpRequest,
+                                  stream: web::Payload,
+                                  path: web::Path<String>| {
+                                let b = b.clone();
+                                async move {
+                                    let slot = b.acquire_user_slot(Uuid::new_v4()).unwrap();
+                                    crate::arena::ws_transport::upgrade(
+                                        &req,
+                                        stream,
+                                        b,
+                                        path.into_inner(),
+                                        slot,
+                                    )
+                                }
+                            },
+                        ),
+                    )
+                })
+                .workers(1)
+                .bind("127.0.0.1:0")
+                .unwrap();
+                tx.send(srv.addrs()[0]).unwrap();
+                srv.run().await.unwrap();
+            });
+        });
+        rx.recv().unwrap()
+    }
+
+    /// A minimal RFC 6455 client over a plain TCP socket (no extra crates): what a
+    /// browser's `WebSocket` does on the wire, with `binaryType = "arraybuffer"`.
+    struct WsClient {
+        s: std::net::TcpStream,
+        buf: Vec<u8>,
+        inbox: Vec<Vec<u8>>,
+        crypto: Option<CryptoCtx>,
+        /// The close frame's (code, reason) once the server closed.
+        closed: Option<(u16, String)>,
+    }
+
+    impl WsClient {
+        fn connect(server: SocketAddr, path: &str) -> Self {
+            use std::io::{Read, Write};
+            let mut s = std::net::TcpStream::connect(server).unwrap();
+            write!(
+                s,
+                "GET {path} HTTP/1.1\r\nHost: {server}\r\nUpgrade: websocket\r\n\
+                 Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                 Sec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: nb-arena\r\n\r\n"
+            )
+            .unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let head_end = loop {
+                let n = s.read(&mut chunk).unwrap();
+                assert!(n > 0, "server closed during the upgrade");
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break i + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&buf[..head_end]).to_ascii_lowercase();
+            assert!(head.starts_with("http/1.1 101"), "upgrade refused: {head}");
+            assert!(
+                head.contains("sec-websocket-protocol: nb-arena"),
+                "a browser drops the socket unless the server selects its subprotocol: {head}"
+            );
+            buf.drain(..head_end);
+            s.set_nonblocking(true).unwrap();
+            WsClient {
+                s,
+                buf,
+                inbox: Vec::new(),
+                crypto: None,
+                closed: None,
+            }
+        }
+
+        fn send(&mut self, channel: u8, payload: &[u8]) {
+            use std::io::Write;
+            let msg = crate::arena::ws_transport::encode_frame(channel, payload);
+            let mask = [0x11u8, 0x22, 0x33, 0x44];
+            let mut f = vec![0x82u8];
+            if msg.len() < 126 {
+                f.push(0x80 | msg.len() as u8);
+            } else {
+                f.push(0x80 | 126);
+                f.extend_from_slice(&(msg.len() as u16).to_be_bytes());
+            }
+            f.extend_from_slice(&mask);
+            f.extend(msg.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+            let mut off = 0;
+            while off < f.len() {
+                match self.s.write(&f[off..]) {
+                    Ok(n) => off += n,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(1))
+                    }
+                    Err(e) => panic!("ws write: {e}"),
+                }
+            }
+        }
+
+        fn send_enc(&mut self, marker: u8, opcode: u8) {
+            let c = self.crypto.clone().expect("keyed");
+            let mut ud = vec![marker, opcode];
+            chacha20_legacy_xor(&mut ud, &c.key, &c.nonce);
+            self.send(0, &ud);
+        }
+
+        /// Read what has arrived; decrypt binary frames (minus the channel byte).
+        fn drain(&mut self) {
+            use std::io::Read;
+            let mut chunk = [0u8; 65536];
+            loop {
+                match self.s.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
+                }
+            }
+            loop {
+                if self.buf.len() < 2 {
+                    return;
+                }
+                let op = self.buf[0] & 0x0f;
+                assert_eq!(self.buf[1] & 0x80, 0, "server frames are unmasked");
+                let (len, hdr) = match self.buf[1] & 0x7f {
+                    126 if self.buf.len() >= 4 => {
+                        (u16::from_be_bytes([self.buf[2], self.buf[3]]) as usize, 4)
+                    }
+                    127 if self.buf.len() >= 10 => {
+                        let mut b = [0u8; 8];
+                        b.copy_from_slice(&self.buf[2..10]);
+                        (u64::from_be_bytes(b) as usize, 10)
+                    }
+                    126 | 127 => return,
+                    n => (n as usize, 2),
+                };
+                if self.buf.len() < hdr + len {
+                    return;
+                }
+                let payload: Vec<u8> = self.buf[hdr..hdr + len].to_vec();
+                self.buf.drain(..hdr + len);
+                match op {
+                    0x2 => {
+                        let (_ch, p) =
+                            crate::arena::ws_transport::decode_frame(&payload).expect("framed");
+                        let mut d = p.to_vec();
+                        if let Some(c) = &self.crypto {
+                            chacha20_legacy_xor(&mut d, &c.key, &c.nonce);
+                        }
+                        self.inbox.push(d);
+                    }
+                    0x8 => {
+                        let code = payload
+                            .get(..2)
+                            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                            .unwrap_or(1005);
+                        let why = String::from_utf8_lossy(payload.get(2..).unwrap_or(&[])).into();
+                        self.closed = Some((code, why));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn key_from_reply(sk: &[u8; 32], reply: &[u8]) -> CryptoCtx {
+        let (mut spk, mut n) = ([0u8; 32], [0u8; 8]);
+        spk.copy_from_slice(&reply[14..46]);
+        n.copy_from_slice(&reply[47..55]);
+        CryptoCtx {
+            key: x25519_shared(sk, &spk),
+            nonce: n,
+        }
+    }
+
+    /// The WP17 acceptance test: one player on ENet, the other on a WebSocket, in ONE
+    /// match. The WebSocket player completes the op-0x38 key exchange (bound by its
+    /// playerSessionId), receives the round-start spawns under its own key, lands a hit
+    /// the ENet player receives, and is closed cleanly after the match ends.
+    #[test]
+    fn ws_and_enet_players_share_one_match() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        let registry = MatchRegistry::new(4);
+        let gsid = Uuid::new_v4();
+        assert!(registry.allocate(
+            &["psess-enet".to_string(), "psess-ws".to_string()],
+            Vec::new(),
+            gsid
+        ));
+
+        let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let server_addr = server_sock.local_addr().unwrap();
+        let mut server = Host::new(
+            BladesEnetSocket::new(server_sock),
+            HostSettings {
+                peer_limit: 16,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut peer_at = HashMap::new();
+        let bridge = WsBridge::new();
+        let mut ws_psid = HashMap::new();
+        let http = spawn_ws_server(bridge.clone());
+
+        let mut a = Client::connect(server_addr);
+        let mut b = WsClient::connect(http, "/ws/psess-ws");
+
+        let mut vnow = std::time::Instant::now();
+        // One iteration of `serve`: ENet events, WebSocket events, (optionally) the
+        // match tick, flush; then both clients read.
+        macro_rules! drive {
+            ($tick:expr, $cond:expr, $msg:expr) => {{
+                let mut ok = false;
+                for _ in 0..2000 {
+                    while pump(&mut server, &registry, &mut peer_at) {}
+                    drain_ws(&mut server, &registry, &peer_at, &bridge, &mut ws_psid);
+                    if $tick {
+                        vnow += Duration::from_millis(250);
+                        for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                            send_to(&mut server, &peer_at, &addr, channel, &bytes);
+                        }
+                    }
+                    server.flush();
+                    std::thread::sleep(Duration::from_millis(1));
+                    a.drain();
+                    b.drain();
+                    if $cond {
+                        ok = true;
+                        break;
+                    }
+                }
+                assert!(ok, $msg);
+            }};
+        }
+
+        drive!(false, a.connected, "the ENet client connects");
+
+        // 1. Key exchange over the WebSocket: byte-identical to the ENet one.
+        let (sk_b, pk_b) = gen_keypair();
+        b.send(0, &hs_c2s(&pk_b));
+        drive!(
+            false,
+            !b.inbox.is_empty(),
+            "the WS client gets the op-0x38 reply"
+        );
+        assert_eq!(b.inbox[0].len(), 55);
+        assert_eq!(&b.inbox[0][..2], &[0xBE, 0x38]);
+        b.crypto = Some(key_from_reply(&sk_b, &b.inbox[0]));
+        b.inbox.clear();
+
+        let (sk_a, pk_a) = gen_keypair();
+        a.send_plain(&hs_c2s(&pk_a));
+        drive!(
+            false,
+            !a.inbox.is_empty(),
+            "the ENet client gets the op-0x38 reply"
+        );
+        a.crypto = Some(key_from_reply(&sk_a, &a.inbox[0]));
+        a.inbox.clear();
+        assert!(registry.is_active(&a.addr()));
+        assert_eq!(registry.active_count(), 1, "both players are in ONE match");
+
+        // 2. Round start reaches both transports, each under its own key.
+        drive!(
+            true,
+            a.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated"))
+                && b.inbox.iter().any(|m| m.ends_with(b"BackendMatchCreated")),
+            "both players receive BackendMatchCreated"
+        );
+        assert!(
+            b.inbox.iter().any(|m| m.len() >= 2 && m[1] == 0x32),
+            "the WS player receives the op50 net-object spawns"
+        );
+        assert!(
+            b.inbox.iter().all(|m| m.first() == Some(&0xBE)),
+            "every frame to the WS player decrypts under its own key"
+        );
+
+        // 3. WS player's input → server-resolved hit → the ENet player is damaged.
+        drive!(
+            true,
+            b.inbox.iter().any(|m| m.ends_with(b"StateTimeout")),
+            "the round goes live"
+        );
+        a.inbox.clear();
+        b.inbox.clear();
+        b.send_enc(0x84, 0x36);
+        drive!(
+            true,
+            a.inbox.iter().any(|m| m.len() > 2
+                && m[1] == 0x36
+                && arena_proto::parse_netdata(&m[2..]).int(3) == Some(50)),
+            "the ENet player receives ReceiveDamage from the WS player's input"
+        );
+
+        // 4. The ENet player concedes; the match ends and the WS socket is closed only
+        //    after its queued end-of-match frames.
+        a.inbox.clear();
+        b.inbox.clear();
+        a.send_enc(0x1C, arena_proto::GameMessageId::ConcedeMatch as u8);
+        let mut finished = Vec::new();
+        for _ in 0..2000 {
+            while pump(&mut server, &registry, &mut peer_at) {}
+            drain_ws(&mut server, &registry, &peer_at, &bridge, &mut ws_psid);
+            vnow += Duration::from_millis(250);
+            for (addr, channel, bytes) in registry.tick_matches(vnow) {
+                send_to(&mut server, &peer_at, &addr, channel, &bytes);
+            }
+            finished = registry.take_finished_peers();
+            server.flush();
+            a.drain();
+            b.drain();
+            if !finished.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(finished.len(), 2, "the match retires both peers");
+        for addr in finished {
+            match peer_at.remove(&addr) {
+                Some(pid) => server.peer_mut(pid).disconnect_later(0),
+                None => assert!(crate::arena::ws_transport::close_later(&addr, 0)),
+            }
+        }
+        drive!(
+            false,
+            b.closed.is_some(),
+            "the WS socket is closed after the match"
+        );
+        assert_eq!(b.closed.as_ref().unwrap().0, 1000, "a normal close");
+        assert!(
+            b.inbox.iter().any(|m| m.len() >= 2 && m[0] == 0xBE),
+            "the end-of-match frames arrived before the close"
+        );
+        drive!(false, registry.active_count() == 0, "the slot is released");
+    }
+
+    /// A WebSocket whose session names no waiting match is told NotEnoughPlayers and
+    /// closed, never joined to somebody else's match.
+    #[test]
+    fn ws_key_exchange_without_a_waiting_match_is_closed() {
+        let registry = MatchRegistry::new(4);
+        // A match is waiting — but for other players.
+        let other = Uuid::new_v4();
+        assert!(registry.allocate(&["psess-other".to_string()], Vec::new(), other));
+        let server_sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut server =
+            Host::new(BladesEnetSocket::new(server_sock), HostSettings::default()).unwrap();
+        let peer_at = HashMap::new();
+        let bridge = WsBridge::new();
+        let mut ws_psid = HashMap::new();
+        let http = spawn_ws_server(bridge.clone());
+
+        let mut b = WsClient::connect(http, "/ws/psess-stranger");
+        let (_sk, pk) = gen_keypair();
+        b.send(0, &hs_c2s(&pk));
+        for _ in 0..2000 {
+            drain_ws(&mut server, &registry, &peer_at, &bridge, &mut ws_psid);
+            std::thread::sleep(Duration::from_millis(1));
+            b.drain();
+            if b.closed.is_some() {
+                break;
+            }
+        }
+        let (code, why) = b.closed.expect("closed");
+        assert_eq!(code, 1000);
+        assert!(why.contains("DisconnectReason 6"), "{why}");
+        assert!(b.inbox.is_empty(), "no key-exchange reply");
+        assert!(
+            registry.awaits_player(other, "psess-other"),
+            "the other match keeps its slot"
+        );
     }
 }
 
