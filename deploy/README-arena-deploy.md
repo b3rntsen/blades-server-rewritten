@@ -105,7 +105,7 @@ logged. No output means every file loaded.
 ## Wire the web (makes /arena Transfer work)
 On the `newblades-web` container set (same token as `arena.env`):
 ```
-ARENA_SERVER_URL=http://arena-server:8080     # reachable by name over edge_net
+ARENA_SERVER_URL=http://arena-server:8080     # reachable by name over nb_edge
 ARENA_IMPORT_TOKEN=<same as ARENA_IMPORT_TOKEN in arena.env>
 ```
 then `scripts/deploy.sh web`. Until then `/arena` Transfer returns 503 (the
@@ -125,7 +125,7 @@ plays on our server instead of Bethesda — all WG-confined:
 
 ## Reachability
 REST is bound to `127.0.0.1:8087` on the host (the web reaches the server over
-`edge_net` by name, not this port). The UDP arena port is what clients dial.
+`nb_edge` by name, not this port). The UDP arena port is what clients dial.
 
 ## Notes
 - `deploy/arena.env` holds secrets — gitignored, never commit.

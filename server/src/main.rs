@@ -232,7 +232,14 @@ pub struct ServerGlobal {
 /// quest's chest (tracker #8) cost a day: the reason, `invalid value: integer
 /// \`-1\`, expected u32`, was only ever in the response body. The response is
 /// unchanged; this only adds the line.
-fn log_rejected_json_body(
+/// App-wide JSON body limit (M5, security review 2026-11-24). This is actix's own
+/// default, which every game route ran under from April until 2026-08-21 without
+/// a rejection; it was raised to 16 MiB app-wide only for character transfers,
+/// which now get that through `admin::ImportJson`. Rejections are logged by
+/// [`log_rejected_json_body`], so a game route that outgrows it is visible.
+pub(crate) const DEFAULT_JSON_LIMIT: usize = 2 * 1024 * 1024;
+
+pub(crate) fn log_rejected_json_body(
     err: actix_web::error::JsonPayloadError,
     req: &actix_web::HttpRequest,
 ) -> actix_web::Error {
@@ -549,6 +556,10 @@ async fn main() -> Result<()> {
                     .app_data(Data::new(arena::gear_calc::DevToken(
                         server_global.arena_import_token.clone(),
                     )))
+                    // App-wide JSON limit: DEFAULT_JSON_LIMIT (2 MiB). The
+                    // character transfer route alone takes 16 MiB, through
+                    // admin::ImportJson — history below.
+                    //
                     // A character transfer POSTs the whole CompleteCharacter, and
                     // actix's default JSON limit is 2 MiB — which is smaller than a
                     // real progressed character. A level-28 import was rejected with
@@ -563,7 +574,7 @@ async fn main() -> Result<()> {
                     // with room to spare while still bounding an unbounded body.
                     .app_data(
                         JsonConfig::default()
-                            .limit(16 * 1024 * 1024)
+                            .limit(DEFAULT_JSON_LIMIT)
                             .error_handler(log_rejected_json_body),
                     )
                     .wrap_fn(|mut req, srv| {

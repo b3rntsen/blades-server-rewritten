@@ -65,17 +65,28 @@ case "\$q" in
       v=\$(sed -E "s/.*VALUES \('([^']*)'\).*/\1/" <<< "\$q")
       grep -qx "\$v" "\$LEDGER" || echo "\$v" >> "\$LEDGER"; exit 0 ;;
 esac
+# No -c and no -f: the SQL arrives on stdin (the ROLES heredoc). Record it.
+if [[ -z "\$q" ]] && grep -q 'CREATE ROLE arena_runtime'; then echo roles >> "$WORK/roles"; fi
 exit 0
 EOF
   chmod +x "$WORK/psql"
   : > "$WORK/applied"
   : > "$WORK/ledger"
+  : > "$WORK/roles"
   for v in $ledger; do echo "$v" >> "$WORK/ledger"; done
 }
 
 check() {
   local name="$1" want_applied="$2" want_ledger="$3"
-  local got_applied got_ledger
+  local got_applied got_ledger got_roles
+  # H2: every path, adoption included, must converge the arena_runtime role;
+  # arena-server cannot log in without it.
+  got_roles=$(wc -l < "$WORK/roles" | tr -d ' ')
+  if [[ "$got_roles" == "1" ]]; then
+    echo "  ok    $name: roles converged once"; PASS=$((PASS+1))
+  else
+    echo "  FAIL  $name: roles step ran $got_roles times, want 1"; FAIL=$((FAIL+1))
+  fi
   got_applied=$(wc -l < "$WORK/applied" | tr -d ' ')
   got_ledger=$(wc -l < "$WORK/ledger" | tr -d ' ')
   if [[ "$got_applied" == "$want_applied" && "$got_ledger" == "$want_ledger" ]]; then
