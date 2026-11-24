@@ -8278,6 +8278,300 @@ mod tests {
         assert!(fury_seen, "precondition: Fury opened");
     }
 
+    /// Report #608 fixture: the reporter's Ebony Light Hammer (prod, read-only SELECT
+    /// 2026-11-23) — Weapon Poison Damage t10, optionally Fortify Primary Enchant
+    /// t10, Ravage Magicka t10 — parsed by `loadout::from_character`, then one swing
+    /// pressed and released over the wire with the engine stepped every 2 ms.
+    /// Returns (health the target lost, the parsed per-track multipliers).
+    fn hammer_swing(fortify_primary: bool) -> (u32, Vec<f32>) {
+        use blades_lib::user_data::{Backpack, CompleteCharacter, CompleteInventory, Treasury};
+        let mut enchanting = vec![serde_json::json!(
+            {"id": "08ea75d0-5cf1-44a9-9816-d3c6740c4191", "tier": 10}
+        )];
+        if fortify_primary {
+            enchanting.push(serde_json::json!(
+                {"id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a", "tier": 10}
+            ));
+        }
+        enchanting.push(serde_json::json!(
+            {"id": "7cdb7179-4cd4-466e-8b77-4caf2fddb268", "tier": 10}
+        ));
+        let slot = "417e79de-c810-42f8-8273-f9759df6ae25";
+        let equipped: blades_lib::user_data::Loadout = serde_json::from_value(serde_json::json!({
+            "equippedItems": { slot: {
+                "id": "6e5da063-4b43-4c0e-9c8b-801237e4f545",
+                "slot": slot,
+                "durability": 337.5,
+                "temperingLevel": 10,
+                "itemTemplateId": "56057258-58d7-4b4e-86ea-9ca47b04a14a",
+                "properties": {"GRADING": [], "ENCHANTING": enchanting},
+            }}
+        }))
+        .expect("loadout JSON");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: equipped,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let lo = super::super::loadout::from_character(&CompleteCharacter::default(), &inventory);
+        assert_eq!(
+            lo.enchants,
+            vec![(DamageType::Poison, 10)],
+            "precondition: the hammer's poison track was parsed"
+        );
+        let multipliers = lo.enchant_primary_multipliers.clone();
+
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        combat.fighters[0].loadout = lo;
+        let hp_before = combat.fighters[1].health;
+        let press = now + Duration::from_millis(100);
+        let release = press + Duration::from_millis(400);
+        let (mut pressed, mut released) = (false, false);
+        let mut t = now;
+        while t < release + Duration::from_millis(600) {
+            t += Duration::from_millis(2);
+            if !pressed && t >= press {
+                pressed = true;
+                let frame = super::phase4_tests::make_act_frame(true, 0.0, false);
+                let _ = on_c2s_input(&mut combat, 0, &frame, t);
+            }
+            if !released && t >= release {
+                released = true;
+                let frame = super::phase4_tests::make_act_frame(false, 0.0, false);
+                let _ = on_c2s_input(&mut combat, 0, &frame, t);
+            }
+            let _ = on_tick(&mut combat, t, false);
+            let _ = drain_state_changes(&mut combat, t);
+        }
+        (hp_before - combat.fighters[1].health, multipliers)
+    }
+
+    /// Report #608 (Pogagoga): "check the additional 15% enchantment; I don't think
+    /// it works". Fortify Primary Enchant — "Improves main enchantment by 15%" — adds
+    /// 0.15 to the xValue multiplier of every `_isPrimary` property on the same item
+    /// (`FortifyPrimaryEnchantBonusInstance$$GetPropertyMultiplier@0x1d4f3c4`), and a
+    /// weapon damage track is primary and read through `GetXValue`
+    /// (`ElementalDamageBonusInstance$$AddElementalDamage@0x1d4cea0`). We scaled the
+    /// magnitude `apply_enchant` computes and then threw it away for these tracks:
+    /// production match d899156c hit for the same 128.9366 poison with this hammer
+    /// as with his dagger, which has no Fortify Primary.
+    ///
+    /// Light-class Weapon Poison Damage t10 is 57.25, so the swing gains
+    /// 57.25 x 0.15 = 8.59 against an unresisting target.
+    #[test]
+    fn fortify_primary_enchant_raises_the_weapons_own_damage_enchant() {
+        let (control_hp, control_mult) = hammer_swing(false);
+        assert!(control_hp > 0, "control: the swing landed");
+        assert_eq!(control_mult, vec![1.0]);
+
+        let (hp, mult) = hammer_swing(true);
+        assert_eq!(mult.len(), 1);
+        assert!((mult[0] - 1.15).abs() < 1e-4, "got {mult:?}");
+        let gain = hp as f32 - control_hp as f32;
+        assert!(
+            (gain - 57.25 * 0.15).abs() <= 1.0,
+            "the poison track must gain 15% of 57.25 = 8.59, got {gain} \
+             ({control_hp} -> {hp})"
+        );
+    }
+
+    /// Report #612 fixture: an Ebony Longsword (versatile) carrying Haste t10 and,
+    /// optionally, Fortify Primary Enchant t10, parsed by `loadout::from_character`;
+    /// one swing pressed and released over the wire after `hold_ms`, the engine
+    /// stepped every 2 ms. Returns (health the target lost, the parsed haste).
+    fn hasted_longsword_swing(fortify_primary: bool, hold_ms: u64) -> (u32, f32) {
+        use blades_lib::user_data::{Backpack, CompleteCharacter, CompleteInventory, Treasury};
+        let mut enchanting = vec![serde_json::json!(
+            {"id": "874f28f1-cdc3-4af5-af4e-4e4d0e2a4969", "tier": 10}
+        )];
+        if fortify_primary {
+            enchanting.push(serde_json::json!(
+                {"id": "64a15ab5-f7be-42be-ad25-4a136a4ec62a", "tier": 10}
+            ));
+        }
+        let slot = "417e79de-c810-42f8-8273-f9759df6ae25";
+        let equipped: blades_lib::user_data::Loadout = serde_json::from_value(serde_json::json!({
+            "equippedItems": { slot: {
+                "id": "6e5da063-4b43-4c0e-9c8b-801237e4f546",
+                "slot": slot,
+                "durability": 337.5,
+                "temperingLevel": 10,
+                "itemTemplateId": "40ab6f8f-ef43-417a-a8e6-182837f4c10f",
+                "properties": {"GRADING": [], "ENCHANTING": enchanting},
+            }}
+        }))
+        .expect("loadout JSON");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: equipped,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let lo = super::super::loadout::from_character(&CompleteCharacter::default(), &inventory);
+        let haste = lo.haste;
+
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        combat.fighters[0].loadout = lo;
+        let hp_before = combat.fighters[1].health;
+        let press = now + Duration::from_millis(100);
+        let release = press + Duration::from_millis(hold_ms);
+        let (mut pressed, mut released) = (false, false);
+        let mut t = now;
+        while t < release + Duration::from_millis(800) {
+            t += Duration::from_millis(2);
+            if !pressed && t >= press {
+                pressed = true;
+                let frame = super::phase4_tests::make_act_frame(true, 0.0, false);
+                let _ = on_c2s_input(&mut combat, 0, &frame, t);
+            }
+            if !released && t >= release {
+                released = true;
+                let frame = super::phase4_tests::make_act_frame(false, 0.0, false);
+                let _ = on_c2s_input(&mut combat, 0, &frame, t);
+            }
+            let _ = on_tick(&mut combat, t, false);
+            let _ = drain_state_changes(&mut combat, t);
+        }
+        (hp_before - combat.fighters[1].health, haste)
+    }
+
+    /// Report #611 follow-up fixture: slot 0 wields the artifact `template` (no
+    /// instance properties, as artifacts are stored), parsed by `from_character`;
+    /// slot 1 raises its guard over the wire, slot 0's swing lands 300 ms later, the
+    /// engine stepped every 2 ms. Returns (slot 1's health lost, slot 0's Breaching).
+    fn artifact_swing_into_a_guard(template: &str) -> (u32, f32) {
+        use blades_lib::user_data::{Backpack, CompleteCharacter, CompleteInventory, Treasury};
+        let slot = "417e79de-c810-42f8-8273-f9759df6ae25";
+        let equipped: blades_lib::user_data::Loadout = serde_json::from_value(serde_json::json!({
+            "equippedItems": { slot: {
+                "id": "6e5da063-4b43-4c0e-9c8b-801237e4f547",
+                "slot": slot,
+                "durability": 675.0,
+                "temperingLevel": 0,
+                "itemTemplateId": template,
+                "properties": {"GRADING": [], "ENCHANTING": []},
+            }}
+        }))
+        .expect("loadout JSON");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: equipped,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let lo = super::super::loadout::from_character(&CompleteCharacter::default(), &inventory);
+        let breaching = lo.fortify_blocked_damage;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        combat.fighters[0].loadout = lo;
+        let hp_before = combat.fighters[1].health;
+        let guard_at = now + Duration::from_millis(100);
+        let swing_at = guard_at + Duration::from_millis(300);
+        let (mut guarded, mut swung) = (false, false);
+        let mut t = now;
+        while t < swing_at + Duration::from_millis(800) {
+            t += Duration::from_millis(2);
+            if !guarded && t >= guard_at {
+                guarded = true;
+                let frame = super::phase4_tests::make_act_frame(true, 0.0, true);
+                let _ = on_c2s_input(&mut combat, 1, &frame, t);
+            }
+            if !swung && t >= swing_at {
+                swung = true;
+                assert!(
+                    combat.fighters[1].block_phase(t).is_some(),
+                    "precondition: the guard is up"
+                );
+                let _ = resolve_swing(&mut combat, 0, 1, 1.0, t);
+            }
+            let _ = on_tick(&mut combat, t, false);
+            let _ = drain_state_changes(&mut combat, t);
+        }
+        (hp_before - combat.fighters[1].health, breaching)
+    }
+
+    /// Report #611 follow-up (Wuuthrad audited the unique heavy weapons). An
+    /// artifact's BUILT-IN Fortify Primary Effect counts: `Item$$SetupDefaultProperties
+    /// @0x1f2bae0` adds the template's mandatory properties to `Item._properties`,
+    /// the list `GetXValueMultiplier@0x24d0d2c` sums Fortify Primary over. We applied
+    /// template properties with a fixed 1.0, so Sunderblade's Breaching stayed at
+    /// 156.98 instead of 180.53. The control is Breathtaker: the same heavy 240
+    /// Slashing template with the same t10 Breaching and no Fortify Primary (its
+    /// Ravage Magicka does not touch health).
+    #[test]
+    fn an_artifacts_built_in_fortify_primary_raises_its_breaching() {
+        let (control_hp, control_breach) =
+            artifact_swing_into_a_guard("1fc67296-aa50-4de8-b23e-11c80cee9361");
+        assert!(
+            (control_breach - 156.98).abs() < 0.01,
+            "control: {control_breach}"
+        );
+        assert!(control_hp > 0, "control: the blocked swing still hurt");
+        let (hp, breach) = artifact_swing_into_a_guard("0631caaf-28a6-43a3-8ac3-763a5dd95614");
+        assert!(
+            (breach - 156.98 * 1.15).abs() < 0.01,
+            "Sunderblade Breaching t10 x 1.15 = 180.53, got {breach}"
+        );
+        assert!(
+            hp > control_hp,
+            "the extra Breaching reaches the blocked hit ({hp} vs {control_hp})"
+        );
+    }
+
+    /// Report #612 (Wuuthrad): "Attack Speed on versatile weapons" does not get the
+    /// 15% enhancement. Worse: it was inverted. `HasteBonusInstance$$GetRawXValue
+    /// @0x1d4fff4` is `1 - 0.70` = 0.30 and `GetXValue` multiplies that by 1.15, so
+    /// Fortify Primary makes it 0.345 and the weapon-speed multiplier 0.655. We
+    /// multiplied the 0.70 and subtracted afterwards: 0.195, slower than no Fortify
+    /// Primary at all. The charge plateau the crit is paid on scales with that
+    /// multiplier (`PlayerActor$$get_MaxDamageTime@0x18694b0`), so a release on the
+    /// 0.655 plateau must crit.
+    #[test]
+    fn fortify_primary_enchant_raises_haste_instead_of_lowering_it() {
+        let (_, plain) = hasted_longsword_swing(false, 400);
+        assert!(
+            (plain - 0.30).abs() < 1e-3,
+            "control: Haste t10 is 30%, got {plain}"
+        );
+
+        let s = 1.0 - 0.345_f32;
+        let w = super::super::gamedata::weapon("40ab6f8f-ef43-417a-a8e6-182837f4c10f").unwrap();
+        let start = (w.attack_delay * s) + w.backswing_time * s - w.max_damage_time * s;
+        let end = (w.attack_delay * s) + w.backswing_time * s;
+        let mid = (start + end) / 2.0;
+        let buggy_s = 1.0 - 0.195_f32;
+        let buggy_start =
+            (w.attack_delay * buggy_s) + w.backswing_time * buggy_s - w.max_damage_time * buggy_s;
+        assert!(
+            mid < buggy_start,
+            "precondition: the hold discriminates the fixed plateau from the inverted one"
+        );
+        let hold_ms = (mid * 1000.0).round() as u64;
+        let off_ms = (end * 1000.0).round() as u64 + 40;
+
+        let (crit_hp, haste) = hasted_longsword_swing(true, hold_ms);
+        assert!(
+            (haste - 0.345).abs() < 1e-3,
+            "Haste t10 x 1.15 = 34.5%, got {haste}"
+        );
+        let (plain_hp, _) = hasted_longsword_swing(true, off_ms);
+        assert!(plain_hp > 0, "control: the off-plateau swing landed");
+        assert!(
+            crit_hp > plain_hp,
+            "a release {hold_ms} ms in sits on the hasted plateau and must crit \
+             ({crit_hp} vs {plain_hp} off the plateau)"
+        );
+    }
+
     /// Report #608 fixture: slot 0 optionally casts Reckless Fury over the wire, the
     /// engine is stepped every 2 ms as production does, slot 0 presses block 1 s into
     /// the Fury window (production: +1.046 s and +1.795 s, match d899156c) and slot 1
@@ -18606,6 +18900,55 @@ mod report_31_high_block_stun {
             c.fighters[0].health < attacker_hp_before,
             "and the attacker must actually lose health to it",
         );
+    }
+
+    /// Report #608 follow-up ("the additional 15% enchantment for all armor"),
+    /// through the retaliation path: a necklace parsed by `from_character` with
+    /// Fortify Primary t10 retaliates for its Revenge x 1.15 (Revenge is
+    /// `_isPrimary`), but its SpellRevenge stays x 1.0 (`_isPrimary: 0`; we used to
+    /// raise it). The control is the same necklace without Fortify Primary with the
+    /// expected cap written in by hand. Each incoming hit is far above the cap.
+    #[test]
+    fn fortify_primary_on_a_necklace_scales_revenge_but_not_spell_revenge() {
+        use super::super::loadout::fortify_primary_on_every_item::necklace;
+        use super::super::state::{DamageSource, DamageType};
+        let now = Instant::now();
+        let lost = |defender: super::super::state::Loadout, source, ty| {
+            let mut c = combat(now, 2);
+            c.fighters[1].loadout = defender;
+            let hp = c.fighters[0].health;
+            let _ = super::apply_revenge(&mut c, 1, 0, source, &[(ty, 900.0)], now);
+            hp - c.fighters[0].health
+        };
+        for (family, source, ty, field_is_spell, mult) in [
+            (
+                "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
+                DamageSource::Attack,
+                DamageType::Frost,
+                false,
+                1.15_f32,
+            ),
+            (
+                "8a107a03-26ed-4ea9-97ac-e7f44c2bb5d3",
+                DamageSource::Spell,
+                DamageType::Fire,
+                true,
+                1.0,
+            ),
+        ] {
+            let raw = super::super::gamedata::enchant_magnitude(family, 10).unwrap();
+            let mut control = necklace(family, false);
+            let v = if field_is_spell {
+                &mut control.spell_revenge
+            } else {
+                &mut control.revenge
+            };
+            *v = vec![(ty, raw * mult)];
+            let want = lost(control, source, ty);
+            let got = lost(necklace(family, true), source, ty);
+            assert!(want > 0, "{family}: control retaliated");
+            assert_eq!(got, want, "{family}: Fortify Primary must make it x{mult}");
+        }
     }
 
     // -----------------------------------------------------------------------

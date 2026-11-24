@@ -323,30 +323,41 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         // new is modelled here; the properties simply arrive. A property whose logic
         // has no arm yet still falls through `apply_enchant`'s `_ => {}` exactly as
         // before, so this cannot switch on anything unmodelled by accident.
+        // `1 + Σ Fortify Primary Enchant` over EVERY property of this item. The client
+        // walks `Item._properties` (`GetXValueMultiplier@0x24d0d2c`), and
+        // `Item$$SetupDefaultProperties@0x1f2bae0` puts the template's mandatory
+        // properties into that same list (`Item$$AddProperty@0x1f2d200`), so an
+        // artifact's built-in Fortify Primary (Sunderblade, Onyx Saber/Cleaver,
+        // Akaviri Blade, Stendarr's Hammer) raises its built-in primaries too.
+        let instance_props = eq.item.properties.enchanting.iter().map(|prop| {
+            (
+                prop.id.as_hyphenated().to_string(),
+                prop.tier.min(u8::MAX as u64) as u8,
+            )
+        });
+        let template_props = gamedata::mandatory_properties(&template)
+            .iter()
+            .chain(super::artifact_properties::mandatory_properties(&template))
+            .map(|(id, tier)| ((*id).to_string(), *tier));
+        let primary_mult = 1.0
+            + instance_props
+                .chain(template_props)
+                .filter_map(|(id, tier)| {
+                    let family = gamedata::enchant_family(&id)?;
+                    (family.logic == "FortifyPrimaryEnchantPropertyLogic")
+                        .then(|| gamedata::enchant_magnitude(&family.uuid, tier).unwrap_or(0.15))
+                })
+                .sum::<f32>();
+
         apply_template_properties_with_context(
             &mut lo,
             &template,
             item_rating_for_material,
             &property_counts,
+            primary_mult,
         );
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
-        let primary_mult = 1.0
-            + eq.item
-                .properties
-                .enchanting
-                .iter()
-                .filter_map(|prop| {
-                    let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string())?;
-                    (family.logic == "FortifyPrimaryEnchantPropertyLogic").then(|| {
-                        gamedata::enchant_magnitude(
-                            &family.uuid,
-                            prop.tier.min(u8::MAX as u64) as u8,
-                        )
-                        .unwrap_or(0.15)
-                    })
-                })
-                .sum::<f32>();
         for prop in &eq.item.properties.enchanting {
             let tier = prop.tier.min(u8::MAX as u64) as u8;
             // Record the property id for EVERY equipped item before dispatching.
@@ -376,8 +387,17 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
             );
             // Keep `enchant_property_ids` positionally aligned with `enchants`: an
             // enchant that produced a damage track records the property behind it.
+            //
+            // The track's damage is read from the weapon-class table at hit time, so
+            // the Fortify Primary share of its xValue multiplier rides along in
+            // `enchant_primary_multipliers`; the magnitude `apply_enchant` scaled is
+            // not used for a weapon damage track (report #608). A template track
+            // (Dawnbreaker's fire) pushed earlier carries none: pad it with 1.0 so
+            // this item's entries land on their own indices.
+            lo.enchant_primary_multipliers.resize(before, 1.0);
             for _ in before..lo.enchants.len() {
                 lo.enchant_property_ids.push(prop.id);
+                lo.enchant_primary_multipliers.push(primary_mult);
             }
         }
     }
@@ -1003,7 +1023,17 @@ fn apply_enchant_with_rating_and_multiplier(
         "ConvertDamagePoisonPropertyLogic" => {
             lo.convert_damage.push((DamageType::Poison, magnitude))
         }
-        "HastePropertyLogic" => lo.haste += (1.0 - magnitude).max(0.0),
+        // `HasteBonusInstance$$GetRawXValue@0x1d4fff4` is `1 - tier value` (0.70 at
+        // tier 10 -> 30%), and `GetXValue@0x24d0a84` multiplies THAT by the item's
+        // xValue multiplier, so Fortify Primary Enchant makes it 0.30 x 1.15 = 0.345.
+        // Scaling the tier value first and subtracting afterwards inverted the bonus:
+        // 1 - 0.70 x 1.15 = 0.195, a weapon slower than with no Fortify Primary at all
+        // (report #612). Each source then subtracts from the speed multiplier
+        // (`Actor$$WeaponSpeedMultiplierMethod@0x1c5c560`), so Warlock's Ring adds.
+        "HastePropertyLogic" => {
+            let raw = gamedata::enchant_magnitude(&uuid, tier).unwrap_or(1.0);
+            lo.haste += (1.0 - raw).max(0.0) * xvalue_multiplier.max(0.0);
+        }
         "CoolDownPenaltyPropertyLogic" => lo.cooldown_penalty_secs += magnitude,
         "ShortenStaggerPropertyLogic" => lo.shorten_stagger += magnitude,
         "ResistSpellsPropertyLogic" => push_resist(lo, DamageType::None, magnitude),
@@ -1078,6 +1108,10 @@ fn apply_enchant_with_rating_and_multiplier(
     }
 }
 
+/// The logics whose static data ships `_isPrimary: 1`
+/// (`reference/game-defs/property_logic_static.json` in blades-capture): Fortify
+/// Primary Enchant raises exactly these, on its own item. SpellRevenge and
+/// BlockSpellRevenge ship `_isPrimary: 0` and are not in the list (report #608).
 fn enchant_logic_is_primary(logic: &str) -> bool {
     matches!(
         logic,
@@ -1091,14 +1125,6 @@ fn enchant_logic_is_primary(logic: &str) -> bool {
             | "RevengeFrostPropertyLogic"
             | "RevengeShockPropertyLogic"
             | "RevengePoisonPropertyLogic"
-            | "SpellRevengeFirePropertyLogic"
-            | "SpellRevengeFrostPropertyLogic"
-            | "SpellRevengeShockPropertyLogic"
-            | "SpellRevengePoisonPropertyLogic"
-            | "BlockSpellRevengeFirePropertyLogic"
-            | "BlockSpellRevengeFrostPropertyLogic"
-            | "BlockSpellRevengeShockPropertyLogic"
-            | "BlockSpellRevengePoisonPropertyLogic"
             | "ResistFirePropertyLogic"
             | "ResistFrostPropertyLogic"
             | "ResistShockPropertyLogic"
@@ -1186,7 +1212,7 @@ pub(crate) fn apply_template_properties_with_rating(
     template: &str,
     item_rating: Option<f32>,
 ) {
-    apply_template_properties_with_context(lo, template, item_rating, &HashMap::new());
+    apply_template_properties_with_context(lo, template, item_rating, &HashMap::new(), 1.0);
 }
 
 fn apply_template_properties_with_context(
@@ -1194,6 +1220,7 @@ fn apply_template_properties_with_context(
     template: &str,
     item_rating: Option<f32>,
     property_counts: &HashMap<Uuid, usize>,
+    primary_mult: f32,
 ) {
     for (property_uuid, tier) in gamedata::mandatory_properties(template)
         .iter()
@@ -1209,12 +1236,13 @@ fn apply_template_properties_with_context(
                 .map(|f| {
                     item_property_xvalue_multiplier(
                         f.logic,
-                        1.0,
+                        primary_mult,
                         lo.perks.enchantment_synergy,
                         property_counts.get(&id).copied().unwrap_or(0),
                     )
                 })
                 .unwrap_or(1.0);
+            let before = lo.enchants.len();
             apply_enchant_with_rating_and_multiplier(
                 lo,
                 &id,
@@ -1222,6 +1250,13 @@ fn apply_template_properties_with_context(
                 item_rating,
                 xvalue_multiplier,
             );
+            // A built-in weapon damage track (Stormkiss's frost) is read at hit time
+            // from the weapon-class table; carry this item's Fortify Primary with it,
+            // aligned like the instance tracks in `from_character`.
+            lo.enchant_primary_multipliers.resize(before, 1.0);
+            for _ in before..lo.enchants.len() {
+                lo.enchant_primary_multipliers.push(primary_mult);
+            }
         }
     }
 }
@@ -4408,5 +4443,203 @@ mod report_562_material_block_bonus {
             DamageType::Frost,
         );
         assert!((got - 27.0).abs() < 0.5, "frost {got}, retail 27.0");
+    }
+}
+
+/// Report #608 follow-up: "check the additional 15% enchantment for all armor".
+/// Fortify Primary Enchant adds 0.15 to the xValue multiplier of every `_isPrimary`
+/// property on the SAME item (`ItemPropertyBonusInstance$$GetXValueMultiplier
+/// @0x24d0d2c`), whatever the item is. Each family below is parsed off an Ebony
+/// Faerite Necklace through `from_character`, with and without Fortify Primary t10.
+#[cfg(test)]
+pub(crate) mod fortify_primary_on_every_item {
+    use super::super::state::Loadout;
+    use blades_lib::user_data::{Backpack, CompleteCharacter, CompleteInventory, Treasury};
+
+    const FORTIFY_PRIMARY: &str = "64a15ab5-f7be-42be-ad25-4a136a4ec62a";
+    const NECKLACE: &str = "54a7fc91-93e7-4908-a29a-0667d0b07179";
+
+    pub(crate) fn necklace(family: &str, fortify_primary: bool) -> Loadout {
+        let mut enchanting = vec![serde_json::json!({"id": family, "tier": 10})];
+        if fortify_primary {
+            enchanting.push(serde_json::json!({"id": FORTIFY_PRIMARY, "tier": 10}));
+        }
+        let slot = "8c6a3c55-2c5e-4c0e-9d0e-6f1f7b3d9a10";
+        let loadout: blades_lib::user_data::Loadout = serde_json::from_value(serde_json::json!({
+            "equippedItems": { slot: {
+                "id": "1b0f8f0e-4b8e-4f43-9c7e-2f6d3c1a9e21",
+                "slot": slot,
+                "durability": 100.0,
+                "temperingLevel": 0,
+                "itemTemplateId": NECKLACE,
+                "properties": {"GRADING": [], "ENCHANTING": enchanting},
+            }}
+        }))
+        .expect("loadout JSON");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        super::from_character(&CompleteCharacter::default(), &inventory)
+    }
+
+    /// Every number a non-weapon family can write on the loadout.
+    fn signature(lo: &Loadout) -> f32 {
+        let pairs = |v: &[(super::super::state::DamageType, f32)]| -> f32 {
+            v.iter().map(|(_, x)| *x).sum()
+        };
+        pairs(&lo.resistances)
+            + pairs(&lo.element_fortify)
+            + pairs(&lo.revenge)
+            + pairs(&lo.spell_revenge)
+            + pairs(&lo.block_spell_revenge)
+            + pairs(&lo.shield_enchant_damage)
+            + lo.absorb.iter().flat_map(|a| a.by_weight).sum::<f32>()
+            + lo.max_health_bonus
+            + lo.max_stamina_bonus
+            + lo.max_magicka_bonus
+            + lo.health_regen
+            + lo.stamina_regen
+            + lo.magicka_regen
+            + lo.powerful_block
+            + lo.fortify_combo_damage
+            + lo.fortify_blocked_damage
+    }
+
+    fn ratio(family: &str) -> f32 {
+        let base = signature(&necklace(FORTIFY_PRIMARY, false));
+        let plain = signature(&necklace(family, false)) - base;
+        let boosted = signature(&necklace(family, true)) - base;
+        assert!(plain > 0.0, "{family}: the family parsed to nothing");
+        boosted / plain
+    }
+
+    /// The `_isPrimary: 1` families an armour piece, shield or jewel can carry.
+    #[test]
+    fn every_primary_family_gains_fifteen_percent_on_its_own_item() {
+        for (family, name) in [
+            ("464bedb7-a631-43b6-a2df-f65f089d39da", "Resist Fire"),
+            ("e4d9f320-6a0d-4dd3-947a-9ab887e2a866", "Resist Frost"),
+            ("5297713f-c60e-42fd-ade0-500daf0d632e", "Resist Shock"),
+            ("dbc82d4d-3be1-4735-af21-316c54cfae55", "Resist Poison"),
+            ("626121b7-708d-455f-b32f-38e5b68bb80c", "Fortify Fire"),
+            ("23746263-41c1-4023-8859-41e698dcf49d", "Fortify Frost"),
+            ("848e02b4-32ae-4e1b-809c-83bca039542a", "Fortify Shock"),
+            ("2b8fd511-80da-4128-81b1-bd7ab6023223", "Fortify Poison"),
+            ("b4de8d1b-d8a1-4575-8517-c1e5800a7525", "Fortify Health"),
+            ("3335b921-b380-4144-8414-06832e29b011", "Fortify Stamina"),
+            ("da0ebf22-6d7b-4504-bfc1-b78b674c7c5c", "Fortify Magicka"),
+            (
+                "80980773-a388-4f71-9ba5-ac69a7e307be",
+                "Health Regeneration",
+            ),
+            (
+                "1691d3cf-4dec-4755-965a-ead0b451b052",
+                "Stamina Regeneration",
+            ),
+            (
+                "04228b59-5718-4b55-acb3-5557726a6df9",
+                "Magicka Regeneration",
+            ),
+            ("d1e286a7-7c90-4e1b-aaaa-fa04b607e698", "Fire Revenge"),
+            ("17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4", "Frost Revenge"),
+            ("4a50e3f9-eb0b-413d-8166-290eddeeac6a", "Shock Revenge"),
+            ("ef292fb2-27ad-4b47-9eb8-2f0ffbfd66c4", "Poison Revenge"),
+            ("cc432e27-813c-4afa-a3df-d587cfd550d2", "Absorb Health"),
+            ("652d5ac9-3076-405b-a163-dde1a950fb26", "Absorb Stamina"),
+            ("94aa3774-cd7e-400c-9d17-a4652fb88a93", "Absorb Magicka"),
+            ("b64fa9d4-4f13-4bb4-9129-16df08e84757", "Shield Fire Damage"),
+            (
+                "366ce3d7-ac40-459b-b363-4565e3c5ce17",
+                "Shield Frost Damage",
+            ),
+            (
+                "2b253847-5061-4a07-acfe-fbdc3c702922",
+                "Shield Shock Damage",
+            ),
+            (
+                "31dc0cd5-8f9c-4d0a-aec8-2052e72f58b2",
+                "Shield Poison Damage",
+            ),
+            (
+                "38ca6ee2-1765-4122-a5e5-d036a7d31fe3",
+                "Shield Stamina Damage",
+            ),
+            (
+                "338ec948-d1b7-4390-8a88-ab6ac11841aa",
+                "Shield Magicka Damage",
+            ),
+            ("f8e9dec5-c6e7-4976-b24b-2155f1921692", "Powerful Block"),
+            (
+                "a9b9695e-78f6-42cb-9f54-5f2e11e3cafd",
+                "Fortify Combo Damage",
+            ),
+            ("af1e56bf-1974-452c-aa70-36b2140cbb07", "Breaching"),
+        ] {
+            let r = ratio(family);
+            assert!((r - 1.15).abs() < 1e-3, "{name}: x{r}, retail x1.15");
+        }
+    }
+
+    /// SpellRevenge and BlockSpellRevenge ship `_isPrimary: 0`, so Fortify Primary
+    /// leaves them alone. We listed all eight as primary.
+    #[test]
+    fn spell_revenge_is_not_primary() {
+        for (family, name) in [
+            ("8a107a03-26ed-4ea9-97ac-e7f44c2bb5d3", "Spell Revenge Fire"),
+            (
+                "18ef65f2-7585-401b-b7a4-3fe66a830721",
+                "Spell Revenge Frost",
+            ),
+            (
+                "7ea448a6-0415-461f-8ef8-2cec9f5004f9",
+                "Spell Revenge Shock",
+            ),
+            (
+                "5665da58-5fce-4b5e-863d-0395afdf3554",
+                "Spell Revenge Poison",
+            ),
+            (
+                "7b8a958f-9a84-4802-8a8c-3fdf82481fbb",
+                "Block Spell Revenge Fire",
+            ),
+            (
+                "9dd3a8d4-3c48-46f8-a392-79bf8871cdc5",
+                "Block Spell Revenge Frost",
+            ),
+            (
+                "a9713cb3-fe76-4291-a976-2a1e70edc0e9",
+                "Block Spell Revenge Shock",
+            ),
+            (
+                "9fa6ea46-be39-4c0a-8a7f-1180b2d20afb",
+                "Block Spell Revenge Poison",
+            ),
+        ] {
+            let r = ratio(family);
+            assert!((r - 1.0).abs() < 1e-3, "{name}: x{r}, retail x1.0");
+        }
+    }
+
+    /// Exactly once and additive with Enchantment Synergy: the client's multiplier
+    /// is ONE sum, `1 + 0.15 + synergy`, not `1.15 x (1 + synergy)`.
+    #[test]
+    fn fortify_primary_and_synergy_add() {
+        assert!(
+            (super::item_property_xvalue_multiplier("ResistFirePropertyLogic", 1.15, 0.2, 2)
+                - 1.35)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            (super::item_property_xvalue_multiplier("SpellRevengeFirePropertyLogic", 1.15, 0.2, 2)
+                - 1.2)
+                .abs()
+                < 1e-6
+        );
     }
 }

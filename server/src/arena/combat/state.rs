@@ -1137,6 +1137,12 @@ pub struct Loadout {
     /// fixtures that build `enchants` directly keep working; an empty vector simply
     /// means "no synergy information", never "not stacked".
     pub enchant_property_ids: Vec<uuid::Uuid>,
+    /// `1 + Σ Fortify Primary Enchant` on the same item for each entry of
+    /// [`Loadout::enchants`], positionally aligned like `enchant_property_ids`
+    /// (report #608). A weapon damage track is `_isPrimary`, so the client's
+    /// `GetXValueMultiplier@0x24d0d2c` adds 0.15 per Fortify Primary on that weapon.
+    /// A missing entry means 1.0.
+    pub enchant_primary_multipliers: Vec<f32>,
     /// Attacker-side **Armor Piercing Rating**
     /// (`ArmorPiercingPhysicalPropertyLogic`) — subtracted from the defender's
     /// Armor Rating before the physical reduction. [Phase 3.3]
