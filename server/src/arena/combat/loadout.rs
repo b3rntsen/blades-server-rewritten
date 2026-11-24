@@ -323,30 +323,41 @@ pub fn from_character(character: &CompleteCharacter, inventory: &CompleteInvento
         // new is modelled here; the properties simply arrive. A property whose logic
         // has no arm yet still falls through `apply_enchant`'s `_ => {}` exactly as
         // before, so this cannot switch on anything unmodelled by accident.
+        // `1 + Σ Fortify Primary Enchant` over EVERY property of this item. The client
+        // walks `Item._properties` (`GetXValueMultiplier@0x24d0d2c`), and
+        // `Item$$SetupDefaultProperties@0x1f2bae0` puts the template's mandatory
+        // properties into that same list (`Item$$AddProperty@0x1f2d200`), so an
+        // artifact's built-in Fortify Primary (Sunderblade, Onyx Saber/Cleaver,
+        // Akaviri Blade, Stendarr's Hammer) raises its built-in primaries too.
+        let instance_props = eq.item.properties.enchanting.iter().map(|prop| {
+            (
+                prop.id.as_hyphenated().to_string(),
+                prop.tier.min(u8::MAX as u64) as u8,
+            )
+        });
+        let template_props = gamedata::mandatory_properties(&template)
+            .iter()
+            .chain(super::artifact_properties::mandatory_properties(&template))
+            .map(|(id, tier)| ((*id).to_string(), *tier));
+        let primary_mult = 1.0
+            + instance_props
+                .chain(template_props)
+                .filter_map(|(id, tier)| {
+                    let family = gamedata::enchant_family(&id)?;
+                    (family.logic == "FortifyPrimaryEnchantPropertyLogic")
+                        .then(|| gamedata::enchant_magnitude(&family.uuid, tier).unwrap_or(0.15))
+                })
+                .sum::<f32>();
+
         apply_template_properties_with_context(
             &mut lo,
             &template,
             item_rating_for_material,
             &property_counts,
+            primary_mult,
         );
 
         // --- enchantments, dispatched on the family's LOGIC CLASS (Phase 3.6/3.7) ---
-        let primary_mult = 1.0
-            + eq.item
-                .properties
-                .enchanting
-                .iter()
-                .filter_map(|prop| {
-                    let family = gamedata::enchant_family(&prop.id.as_hyphenated().to_string())?;
-                    (family.logic == "FortifyPrimaryEnchantPropertyLogic").then(|| {
-                        gamedata::enchant_magnitude(
-                            &family.uuid,
-                            prop.tier.min(u8::MAX as u64) as u8,
-                        )
-                        .unwrap_or(0.15)
-                    })
-                })
-                .sum::<f32>();
         for prop in &eq.item.properties.enchanting {
             let tier = prop.tier.min(u8::MAX as u64) as u8;
             // Record the property id for EVERY equipped item before dispatching.
@@ -1201,7 +1212,7 @@ pub(crate) fn apply_template_properties_with_rating(
     template: &str,
     item_rating: Option<f32>,
 ) {
-    apply_template_properties_with_context(lo, template, item_rating, &HashMap::new());
+    apply_template_properties_with_context(lo, template, item_rating, &HashMap::new(), 1.0);
 }
 
 fn apply_template_properties_with_context(
@@ -1209,6 +1220,7 @@ fn apply_template_properties_with_context(
     template: &str,
     item_rating: Option<f32>,
     property_counts: &HashMap<Uuid, usize>,
+    primary_mult: f32,
 ) {
     for (property_uuid, tier) in gamedata::mandatory_properties(template)
         .iter()
@@ -1224,12 +1236,13 @@ fn apply_template_properties_with_context(
                 .map(|f| {
                     item_property_xvalue_multiplier(
                         f.logic,
-                        1.0,
+                        primary_mult,
                         lo.perks.enchantment_synergy,
                         property_counts.get(&id).copied().unwrap_or(0),
                     )
                 })
                 .unwrap_or(1.0);
+            let before = lo.enchants.len();
             apply_enchant_with_rating_and_multiplier(
                 lo,
                 &id,
@@ -1237,6 +1250,13 @@ fn apply_template_properties_with_context(
                 item_rating,
                 xvalue_multiplier,
             );
+            // A built-in weapon damage track (Stormkiss's frost) is read at hit time
+            // from the weapon-class table; carry this item's Fortify Primary with it,
+            // aligned like the instance tracks in `from_character`.
+            lo.enchant_primary_multipliers.resize(before, 1.0);
+            for _ in before..lo.enchants.len() {
+                lo.enchant_primary_multipliers.push(primary_mult);
+            }
         }
     }
 }

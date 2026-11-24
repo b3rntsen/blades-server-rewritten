@@ -8423,6 +8423,91 @@ mod tests {
         (hp_before - combat.fighters[1].health, haste)
     }
 
+    /// Report #611 follow-up fixture: slot 0 wields the artifact `template` (no
+    /// instance properties, as artifacts are stored), parsed by `from_character`;
+    /// slot 1 raises its guard over the wire, slot 0's swing lands 300 ms later, the
+    /// engine stepped every 2 ms. Returns (slot 1's health lost, slot 0's Breaching).
+    fn artifact_swing_into_a_guard(template: &str) -> (u32, f32) {
+        use blades_lib::user_data::{Backpack, CompleteCharacter, CompleteInventory, Treasury};
+        let slot = "417e79de-c810-42f8-8273-f9759df6ae25";
+        let equipped: blades_lib::user_data::Loadout = serde_json::from_value(serde_json::json!({
+            "equippedItems": { slot: {
+                "id": "6e5da063-4b43-4c0e-9c8b-801237e4f547",
+                "slot": slot,
+                "durability": 675.0,
+                "temperingLevel": 0,
+                "itemTemplateId": template,
+                "properties": {"GRADING": [], "ENCHANTING": []},
+            }}
+        }))
+        .expect("loadout JSON");
+        let inventory = CompleteInventory {
+            backpack: Backpack::default(),
+            loadout: equipped,
+            treasury: Treasury::default(),
+            overflow_treasury: Treasury::default(),
+            backpack_version: 1,
+            treasury_version: 0,
+        };
+        let lo = super::super::loadout::from_character(&CompleteCharacter::default(), &inventory);
+        let breaching = lo.fortify_blocked_damage;
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        combat.fighters[0].loadout = lo;
+        let hp_before = combat.fighters[1].health;
+        let guard_at = now + Duration::from_millis(100);
+        let swing_at = guard_at + Duration::from_millis(300);
+        let (mut guarded, mut swung) = (false, false);
+        let mut t = now;
+        while t < swing_at + Duration::from_millis(800) {
+            t += Duration::from_millis(2);
+            if !guarded && t >= guard_at {
+                guarded = true;
+                let frame = super::phase4_tests::make_act_frame(true, 0.0, true);
+                let _ = on_c2s_input(&mut combat, 1, &frame, t);
+            }
+            if !swung && t >= swing_at {
+                swung = true;
+                assert!(
+                    combat.fighters[1].block_phase(t).is_some(),
+                    "precondition: the guard is up"
+                );
+                let _ = resolve_swing(&mut combat, 0, 1, 1.0, t);
+            }
+            let _ = on_tick(&mut combat, t, false);
+            let _ = drain_state_changes(&mut combat, t);
+        }
+        (hp_before - combat.fighters[1].health, breaching)
+    }
+
+    /// Report #611 follow-up (Wuuthrad audited the unique heavy weapons). An
+    /// artifact's BUILT-IN Fortify Primary Effect counts: `Item$$SetupDefaultProperties
+    /// @0x1f2bae0` adds the template's mandatory properties to `Item._properties`,
+    /// the list `GetXValueMultiplier@0x24d0d2c` sums Fortify Primary over. We applied
+    /// template properties with a fixed 1.0, so Sunderblade's Breaching stayed at
+    /// 156.98 instead of 180.53. The control is Breathtaker: the same heavy 240
+    /// Slashing template with the same t10 Breaching and no Fortify Primary (its
+    /// Ravage Magicka does not touch health).
+    #[test]
+    fn an_artifacts_built_in_fortify_primary_raises_its_breaching() {
+        let (control_hp, control_breach) =
+            artifact_swing_into_a_guard("1fc67296-aa50-4de8-b23e-11c80cee9361");
+        assert!(
+            (control_breach - 156.98).abs() < 0.01,
+            "control: {control_breach}"
+        );
+        assert!(control_hp > 0, "control: the blocked swing still hurt");
+        let (hp, breach) = artifact_swing_into_a_guard("0631caaf-28a6-43a3-8ac3-763a5dd95614");
+        assert!(
+            (breach - 156.98 * 1.15).abs() < 0.01,
+            "Sunderblade Breaching t10 x 1.15 = 180.53, got {breach}"
+        );
+        assert!(
+            hp > control_hp,
+            "the extra Breaching reaches the blocked hit ({hp} vs {control_hp})"
+        );
+    }
+
     /// Report #612 (Wuuthrad): "Attack Speed on versatile weapons" does not get the
     /// 15% enhancement. Worse: it was inverted. `HasteBonusInstance$$GetRawXValue
     /// @0x1d4fff4` is `1 - 0.70` = 0.30 and `GetXValue` multiplies that by 1.15, so
