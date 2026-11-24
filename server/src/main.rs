@@ -46,6 +46,7 @@ mod community_hunt;
 mod craft;
 mod credentials;
 mod daily_reward;
+mod dev_alt_lock;
 mod dungeon;
 mod dungeon_update;
 #[cfg(test)]
@@ -775,6 +776,8 @@ async fn main() -> Result<()> {
                     .service(admin::restore_character_version)
                     .service(admin::list_alts)
                     .service(admin::switch_alt)
+                    .service(dev_alt_lock::lock_alt)
+                    .service(dev_alt_lock::unlock_alt)
                     .service(arena::fight_ai::get_fight_ai)
                     .service(arena::fight_ai::set_fight_ai_route)
                     .service(arena::gear_calc::gear_calc_catalogue)

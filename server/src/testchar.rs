@@ -599,6 +599,13 @@ pub(crate) async fn apply_migration_for_tests(conn: &mut AsyncPgConnection) {
     )
     .await
     .expect("test_characters migration applies");
+    // The other ranking exclusion: developer lock children (`crate::dev_alt_lock`).
+    diesel_async::SimpleAsyncConnection::batch_execute(
+        conn,
+        crate::dev_alt_lock::MIGRATION_FOR_TESTS,
+    )
+    .await
+    .expect("dev_alt_lock_accounts migration applies");
 }
 
 #[cfg(test)]

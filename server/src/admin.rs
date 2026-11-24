@@ -496,7 +496,7 @@ UPDATE arena_match_results r
    AND r.source_alt_uuid IS NULL
 "#;
 
-async fn snapshot_character(
+pub(crate) async fn snapshot_character(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
@@ -638,14 +638,14 @@ async fn park_quests_in_version(
 /// Take the parked quest rows out of a version's `server_state`, leaving the
 /// state that belongs on the live row. `None` for a version taken before quests
 /// were parked: it never knew its quests, so the caller must not pretend it did.
-fn take_parked_quests(server_state: &mut Value) -> Option<Value> {
+pub(crate) fn take_parked_quests(server_state: &mut Value) -> Option<Value> {
     server_state
         .as_object_mut()?
         .remove(PARKED_QUESTS_KEY)
         .filter(Value::is_array)
 }
 
-async fn unpark_quests(
+pub(crate) async fn unpark_quests(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     parked: Value,
@@ -758,12 +758,12 @@ async fn park_events_in_version(
 /// no event state at all — a fresh event, which is what it has actually played
 /// here as far as anyone can tell.
 #[derive(Default)]
-struct ParkedEvents {
+pub(crate) struct ParkedEvents {
     completions: Option<Value>,
     dungeons: Option<Value>,
 }
 
-fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
+pub(crate) fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
     let Some(obj) = server_state.as_object_mut() else {
         return ParkedEvents::default();
     };
@@ -777,7 +777,7 @@ fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
     }
 }
 
-async fn unpark_events(
+pub(crate) async fn unpark_events(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     parked: ParkedEvents,
@@ -1076,7 +1076,7 @@ async fn park_alt_rows_in_version(
 /// A version's parked [`ALT_ROW_TABLES`] rows, taken out of its `server_state`
 /// so they never land on the live row. One entry per table, `None` for a table
 /// the version predates.
-struct ParkedAltRows(Vec<Option<Value>>);
+pub(crate) struct ParkedAltRows(Vec<Option<Value>>);
 
 impl ParkedAltRows {
     /// Did the version carry any alt-owned rows at all (i.e. was it taken
@@ -1086,7 +1086,7 @@ impl ParkedAltRows {
     }
 }
 
-fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
+pub(crate) fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
     let mut obj = server_state.as_object_mut();
     ParkedAltRows(
         ALT_ROW_TABLES
@@ -1102,7 +1102,7 @@ fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
 
 /// Write a version's parked rows back under the live ids. A table the version
 /// predates gets nothing: the live rows were the outgoing alt's and went with it.
-async fn unpark_alt_rows(
+pub(crate) async fn unpark_alt_rows(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
@@ -1340,6 +1340,10 @@ pub async fn import_character(
                     .await?
                     .into_iter()
                     .next();
+                // An alt locked to a developer's device lives on its child
+                // account; importing it here would make it live twice.
+                crate::dev_alt_lock::refuse_if_alt_locked(&mut conn, user_id, incoming_alt)
+                    .await?;
 
                 if body.new_alt {
                     let Some(alt_uuid) = incoming_alt else {
@@ -10488,6 +10492,8 @@ pub(crate) async fn apply_restore(
         .first(conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
+    // A version of an alt locked to a developer's device would put it live twice.
+    crate::dev_alt_lock::refuse_if_alt_locked(conn, user_id, source_alt_uuid).await?;
 
     // A version that kept its quests brings them back, and the state being
     // replaced keeps its own. A version from before quests were kept leaves the
@@ -10599,6 +10605,9 @@ pub struct AltSummary {
     pub newest_saved_at: i64,
     /// True for the alt currently in the live character row.
     pub live: bool,
+    /// The device this alt is locked to (`crate::dev_alt_lock`), if any. A
+    /// locked alt cannot be switched to; unlock it first.
+    pub locked_to_device: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -10611,12 +10620,7 @@ pub struct AltsResponse {
     pub devices: Vec<DeviceAlt>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceAlt {
-    pub device_id: String,
-    pub active_alt_uuid: Option<Uuid>,
-}
+pub use crate::dev_alt_lock::DeviceAlt;
 
 #[derive(diesel::QueryableByName)]
 struct AltRow {
@@ -10668,7 +10672,6 @@ pub async fn list_alts(
         })?;
 
     use crate::schema::characters::dsl as ch;
-    use crate::schema::device_bindings::dsl as db;
 
     let live_alt_uuid: Option<Uuid> = ch::characters
         .filter(ch::user_id.eq(user_id))
@@ -10684,10 +10687,8 @@ pub async fn list_alts(
         .await
         .unwrap_or_default();
 
-    let devices: Vec<(String, Option<Uuid>)> = db::device_bindings
-        .filter(db::user_id.eq(user_id))
-        .select((db::device_id, db::active_alt_uuid))
-        .load(&mut conn)
+    // The user's devices, including the ones locked to one of its alts.
+    let devices = crate::dev_alt_lock::devices_with_locks(&mut conn, user_id)
         .await
         .unwrap_or_default();
 
@@ -10697,6 +10698,10 @@ pub async fn list_alts(
             .into_iter()
             .map(|r| AltSummary {
                 live: Some(r.alt_uuid) == live_alt_uuid,
+                locked_to_device: devices
+                    .iter()
+                    .find(|d| d.locked_alt_uuid == Some(r.alt_uuid))
+                    .map(|d| d.device_id.clone()),
                 alt_uuid: r.alt_uuid,
                 name: r.name,
                 level: r.level,
@@ -10704,13 +10709,7 @@ pub async fn list_alts(
                 newest_saved_at: r.newest_saved_at,
             })
             .collect(),
-        devices: devices
-            .into_iter()
-            .map(|(device_id, active_alt_uuid)| DeviceAlt {
-                device_id,
-                active_alt_uuid,
-            })
-            .collect(),
+        devices,
     }))
 }
 
@@ -10786,6 +10785,9 @@ pub(crate) async fn apply_switch_alt(
         .first(conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
+
+    // Locked to a developer's device: the alt is live on its child account.
+    crate::dev_alt_lock::refuse_if_alt_locked(conn, body.user_id, Some(body.alt_uuid)).await?;
 
     if was_playing == Some(body.alt_uuid) {
         // Already there. Record the device's choice and change nothing else —

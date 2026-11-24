@@ -319,6 +319,7 @@ pub(crate) const FREEZE_STANDINGS_SQL: &str = "\
      LEFT JOIN guilds pg ON pg.id = parked.guild_id \
      WHERE m.latest = 1 \
        AND NOT EXISTS (SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = m.alt) \
+       AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl WHERE dl.child_character_id = c.id) \
      ORDER BY m.trophies DESC, m.matches DESC, c.id, m.alt";
 
 /// Live standings for every character that scored, best first.
