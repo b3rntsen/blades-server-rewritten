@@ -39,6 +39,7 @@ mod authentification;
 mod challenge;
 mod character;
 mod character_data;
+mod character_name_lookup;
 mod character_names;
 mod character_ops;
 mod chests;
@@ -807,6 +808,7 @@ async fn main() -> Result<()> {
                     .service(character_names::backfill_character_names)
                     .service(character_names::undo_character_name_backfill)
                     .service(character_names::fix_ai_names)
+                    .service(character_name_lookup::lookup_character_names)
                     .service(admin::set_current_town_name)
                     .service(admin::recent_matches)
                     .service(admin::bind_device)
