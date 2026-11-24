@@ -172,6 +172,11 @@ pub(crate) const RANKED_CTE: &str = "
         JOIN active_season s
           ON r.recorded_at >= to_timestamp(s.starts_at)
          AND r.recorded_at < to_timestamp(s.cutoff)
+        -- A fight with a developer's (TST) character is not a win for anyone.
+        WHERE NOT EXISTS (
+              SELECT 1 FROM dev_alt_lock_accounts dl
+              WHERE dl.child_character_id IN (r.character_id, r.opponent_character_id)
+        )
         GROUP BY r.character_id, COALESCE(r.source_alt_uuid, rc.source_alt_uuid)
     ),
     ranked AS (

@@ -2004,7 +2004,19 @@ impl MatchInstance {
             // is what the ladder promotes on, so a promotion earned by this very
             // match does not retroactively raise its own payout.
             let arena = arena_ladder::tier_for_trophies(p.high_water).arena;
-            let payout = arena_ladder::match_reward(level, outcome, arena);
+            // The (TST) side of a fight earns nothing unless the owner flips
+            // `TEST_SIDE_EARNS_ARENA_REWARDS`: its alt carries everything back to
+            // the parent on unlock, so paying it would make a lock a farm.
+            let unpaid_test_side =
+                is_test_slot[slot] && !crate::dev_alt_lock::TEST_SIDE_EARNS_ARENA_REWARDS;
+            let payout = if unpaid_test_side {
+                arena_ladder::MatchReward {
+                    gold: 0,
+                    character_xp: 0,
+                }
+            } else {
+                arena_ladder::match_reward(level, outcome, arena)
+            };
             let delta_input = ranking::TrophyDeltaInput {
                 outcome,
                 own_trophies: p.trophies,
@@ -2027,8 +2039,14 @@ impl MatchInstance {
             // literally the same numbers.
             let post_trophies = (p.trophies + trophy_delta).max(0);
             let post_high_water = p.high_water.max(post_trophies);
-            let (post_meter, filled) = arena_ladder::advance_chest_meter(p.chest_meter, rounds_won);
-            let post_streak = if is_winner {
+            let (post_meter, filled) = if unpaid_test_side {
+                (p.chest_meter, 0)
+            } else {
+                arena_ladder::advance_chest_meter(p.chest_meter, rounds_won)
+            };
+            let post_streak = if unpaid_test_side {
+                p.winning_streak
+            } else if is_winner {
                 if p.winning_streak > 0 {
                     p.winning_streak + 1
                 } else {
@@ -2193,7 +2211,11 @@ impl MatchInstance {
                 is_winner,
                 void_result || self.conceded_slot == Some(slot),
             );
-            let gems = arena_bonus_rewards::match_gems(finish);
+            let gems = if unpaid_test_side {
+                0
+            } else {
+                arena_bonus_rewards::match_gems(finish)
+            };
 
             // The every-25th-fight weapon (owner-approved #390/#391), shown on THIS
             // card and granted straight into the backpack (#401) rather than as a
@@ -2204,6 +2226,7 @@ impl MatchInstance {
             let card_weapon = (self.weapon_on_result_card
                 && finish.is_finished()
                 && !is_bot_slot[slot]
+                && !unpaid_test_side
                 && crate::arena::arena_fight_gift::weapon_due_on_card(
                     f.loadout.account_arena_fights,
                 ))
@@ -2258,7 +2281,7 @@ impl MatchInstance {
                 challenge_rank: p.challenge_rank.max(1),
                 pvp_chest_meter: post_meter,
                 pvp_winning_streak: post_streak,
-                number_pvp_match_played: p.matches_played + 1,
+                number_pvp_match_played: p.matches_played + i64::from(!unpaid_test_side),
                 highest_arena_reached: tier.arena as u64,
                 highest_level_arena_reached: tier.level as u64,
                 reward_new_level_arena,
@@ -2369,11 +2392,17 @@ impl MatchInstance {
             // `is_bot_loadout` is the same predicate the void-result rule above
             // already trusts for the opponent, and `mark_loadout_as_bot` is applied
             // on every bot path through a wrapper precisely so it cannot be missed.
+            // Nor the (TST) side while `TEST_SIDE_EARNS_ARENA_REWARDS` is off.
             let character_id = match uuid::Uuid::parse_str(&f.loadout.character_uuid) {
-                Ok(id) if !crate::arena::matchmaker::is_bot_loadout(&f.loadout) => Some(id),
+                Ok(id)
+                    if !crate::arena::matchmaker::is_bot_loadout(&f.loadout)
+                        && !unpaid_test_side =>
+                {
+                    Some(id)
+                }
                 Ok(_) => {
                     log::debug!(
-                        "arena economy: slot {slot} is the bot ({}) — no reward, no audit row",
+                        "arena economy: slot {slot} ({}) unpaid (bot or TST)",
                         f.loadout.display_name,
                     );
                     None
@@ -6257,7 +6286,7 @@ pub(in crate::arena::combat) mod tests {
     /// Drive a 2-0 PvP match (slot 0 wins) and return BOTH sides' post-match
     /// `pvpTrophies` from their own ResultsJSON. `test_slot` marks that fighter as
     /// a developer's device-locked alt the way the matchmaker does.
-    fn both_post_trophies(test_slot: Option<usize>) -> [i64; 2] {
+    fn both_cards(test_slot: Option<usize>) -> [serde_json::Value; 2] {
         let now = Instant::now();
         let mut fighters = vec![
             opponent_loadout("Winner", None),
@@ -6296,14 +6325,48 @@ pub(in crate::arena::combat) mod tests {
                     let nd = arena_proto::parse_netdata(&b[2..]);
                     let v: serde_json::Value =
                         serde_json::from_str(nd.string(13).expect("ResultsJSON")).unwrap();
-                    got[slot] = v["character"]["pvpTrophies"].as_i64();
+                    got[slot] = Some(v);
                 }
             }
             if got.iter().all(Option::is_some) {
                 break;
             }
         }
-        [got[0].expect("slot 0 card"), got[1].expect("slot 1 card")]
+        let [a, b] = got;
+        [a.expect("slot 0 card"), b.expect("slot 1 card")]
+    }
+
+    fn both_post_trophies(test_slot: Option<usize>) -> [i64; 2] {
+        both_cards(test_slot).map(|v| v["character"]["pvpTrophies"].as_i64().expect("pvpTrophies"))
+    }
+
+    /// Owner default 2026-11-24 (`TEST_SIDE_EARNS_ARENA_REWARDS = false`): the
+    /// (TST) side earns nothing — its alt would carry it back to the parent on
+    /// unlock — while the normal player is still paid as against an AI copy.
+    #[test]
+    fn the_test_side_earns_no_arena_rewards() {
+        assert!(!crate::dev_alt_lock::TEST_SIDE_EARNS_ARENA_REWARDS);
+        let xp = |v: &serde_json::Value| v["reward"]["characterXp"].as_i64().unwrap_or(0);
+        let played =
+            |v: &serde_json::Value| v["character"]["numberPvpMatchPlayed"].as_i64().unwrap_or(0);
+        // Control: two players are both paid.
+        let control = both_cards(None);
+        assert!(
+            xp(&control[0]) > 0 && xp(&control[1]) > 0,
+            "control pays both"
+        );
+        for test_slot in [0usize, 1] {
+            let cards = both_cards(Some(test_slot));
+            let normal = 1 - test_slot;
+            assert_eq!(
+                xp(&cards[test_slot]),
+                0,
+                "test side slot {test_slot} unpaid"
+            );
+            assert_eq!(played(&cards[test_slot]), 0, "test side match not counted");
+            assert!(xp(&cards[normal]) > 0, "the normal player is still paid");
+            assert_eq!(played(&cards[normal]), 1);
+        }
     }
 
     /// Owner, 2026-11-24: NO ONE gains or loses cups in a fight with a (TST)
@@ -7286,10 +7349,15 @@ mod the_bot_side_is_never_paid {
         let start = src
             .find("let character_id = match uuid::Uuid::parse_str(&f.loadout.character_uuid)")
             .expect("the persist guard still exists");
-        let body = &src[start..start + 700];
+        let body = &src[start..start + 1000];
         assert!(
             body.contains("is_bot_loadout(&f.loadout)"),
             "the persist path must skip the bot's own side"
+        );
+        // And the (TST) side, while its rewards are switched off (2026-11-24).
+        assert!(
+            body.contains("unpaid_test_side"),
+            "the persist path must skip an unpaid test side"
         );
         // And it must gate the RECORD, not merely log: the arena_economy call has
         // to sit behind the Some(character_id) this produces.

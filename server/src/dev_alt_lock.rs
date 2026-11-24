@@ -165,20 +165,79 @@ pub(crate) fn relabel(character: &mut Value, data: &mut Value, on: bool) {
     }
 }
 
-/// Whether `user_id` is a lock child holding a locked alt right now. False when
-/// the table is missing (binary ahead of the hand-applied migration) or the
-/// read fails: an unmarked fighter is the pre-feature behaviour.
-pub(crate) async fn is_lock_child(conn: &mut AsyncPgConnection, user_id: Uuid) -> bool {
+/// Whether `user_id` is a lock child — ANY lock row, past or present. A
+/// dormant child (its alt unlocked) is still a test account: a session it kept
+/// past the unlock must not start fighting for real cups.
+///
+/// `None` when the answer is unknown (table missing, pool or query failure);
+/// the matchmaker then falls back to the stored " (TST)" label rather than
+/// assuming a normal player ([`crate::arena::matchmaker`] `load_loadout`).
+pub(crate) async fn lock_child_status(conn: &mut AsyncPgConnection, user_id: Uuid) -> Option<bool> {
     diesel::sql_query(
-        "SELECT EXISTS (SELECT 1 FROM dev_alt_lock_accounts \
-                         WHERE child_user_id = $1 AND locked_alt_uuid IS NOT NULL) AS flag",
+        "SELECT EXISTS (SELECT 1 FROM dev_alt_lock_accounts WHERE child_user_id = $1) AS flag",
     )
     .bind::<SqlUuid, _>(user_id)
     .get_result::<Flag>(conn)
     .await
     .map(|f| f.flag)
-    .unwrap_or(false)
+    .ok()
 }
+
+/// [`lock_child_status`], unknown read as "yes": for the paths that must
+/// refuse rather than risk moving a child's row (a forced account link).
+pub(crate) async fn is_lock_child(conn: &mut AsyncPgConnection, user_id: Uuid) -> bool {
+    lock_child_status(conn, user_id).await.unwrap_or(true)
+}
+
+/// Whether a forced account link from `user_id` must be refused: it is a lock
+/// child (its row is a parent alt's copy, and "keep played" would move it onto
+/// another account). Fails closed when the table exists but cannot be read.
+pub(crate) async fn refuses_forced_link(conn: &mut AsyncPgConnection, user_id: Uuid) -> bool {
+    match lock_child_status(conn, user_id).await {
+        Some(child) => child,
+        None => table_exists(conn).await.unwrap_or(true),
+    }
+}
+
+/// Every lock child account, for leaving them out of the AI-opponent pools.
+/// Empty when the table is missing.
+pub(crate) async fn lock_child_users(
+    conn: &mut AsyncPgConnection,
+) -> std::collections::HashSet<Uuid> {
+    #[derive(diesel::QueryableByName)]
+    struct U {
+        #[diesel(sql_type = SqlUuid)]
+        child_user_id: Uuid,
+    }
+    diesel::sql_query("SELECT child_user_id FROM dev_alt_lock_accounts")
+        .load::<U>(conn)
+        .await
+        .map(|v| v.into_iter().map(|u| u.child_user_id).collect())
+        .unwrap_or_default()
+}
+
+/// The lock table, created at startup if the hand-applied migration has not
+/// run yet: every ranking query names it, so a binary that ships first must not
+/// break the leaderboards. Same statements as the migration file (idempotent).
+pub(crate) const TABLE_DDL: &str =
+    include_str!("../../migrations/2026-11-24-000000-0000_dev_alt_locks/up.sql");
+
+pub(crate) async fn ensure_table(pool: &crate::DbPool) {
+    let Ok(mut conn) = pool.get().await else {
+        log::warn!("[dev-lock] no connection to ensure dev_alt_lock_accounts");
+        return;
+    };
+    if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, TABLE_DDL).await {
+        log::warn!("[dev-lock] could not ensure dev_alt_lock_accounts: {e}");
+    }
+}
+
+/// Whether the (TST) side of a fight earns arena rewards (owner default,
+/// 2026-11-24: NO). The alt carries whatever it earns back to the parent on
+/// unlock, so paying it would make a device lock a farm. `false` = no gold, XP,
+/// gems, chest meter, W/L, sigils or 25-fight count for the test side; the
+/// normal player is unaffected by this switch. Flip to `true` to pay it.
+pub const TEST_SIDE_EARNS_ARENA_REWARDS: bool = false;
 
 /// How many of a test character's latest fights count as "recent" for the
 /// rematch rule.
@@ -193,7 +252,8 @@ struct Pair {
 }
 
 /// (test account, opponent account) for the last [`RECENT_OPPONENTS`] fights of
-/// every waiting test account in `users`. The matchmaker prefers anyone else
+/// every waiting test account in `users`, read from the NORMAL player's match
+/// rows (the test side writes none while [`TEST_SIDE_EARNS_ARENA_REWARDS`] is off). The matchmaker prefers anyone else
 /// over these (owner, 2026-11-24): a test character should not farm one player.
 pub(crate) async fn recent_test_opponents(
     conn: &mut AsyncPgConnection,
@@ -203,9 +263,8 @@ pub(crate) async fn recent_test_opponents(
         "SELECT DISTINCT dl.child_user_id AS test_user, oc.user_id AS opponent_user \
            FROM dev_alt_lock_accounts dl \
            CROSS JOIN LATERAL ( \
-                SELECT r.opponent_character_id FROM arena_match_results r \
-                 WHERE r.character_id = dl.child_character_id \
-                   AND r.opponent_character_id IS NOT NULL \
+                SELECT r.character_id AS opponent_character_id FROM arena_match_results r \
+                 WHERE r.opponent_character_id = dl.child_character_id \
                  ORDER BY r.recorded_at DESC LIMIT $2) last \
            JOIN characters oc ON oc.id = last.opponent_character_id \
           WHERE dl.locked_alt_uuid IS NOT NULL AND dl.child_user_id = ANY($1)",
@@ -297,9 +356,36 @@ pub async fn unlock_alt(
         .get()
         .await
         .map_err(|_| refuse(StatusCode::SERVICE_UNAVAILABLE, 5))?;
-    conn.transaction(move |conn| async move { apply_unlock_alt(conn, &body).await }.scope_boxed())
+    let out = conn
+        .transaction(move |conn| async move { apply_unlock_alt(conn, &body).await }.scope_boxed())
+        .await?;
+    // End every session of the child: a client still holding one would keep
+    // playing (and refreshing) the dormant child instead of logging in again
+    // through the device's binding, which now points at the parent.
+    end_sessions(&app_state.session_store, &mut conn, out.child_user_id).await;
+    Ok(Json(out))
+}
+
+/// End every session of `user_id`: the in-memory ones (so the next request is
+/// refused) and the persisted rows (so neither a restart nor `auth/refresh`
+/// brings one back). Returns how many live sessions were dropped.
+pub(crate) async fn end_sessions(
+    store: &crate::session::SessionStore,
+    conn: &mut AsyncPgConnection,
+    user_id: Uuid,
+) -> usize {
+    let evicted = store
+        .evict_other_sessions_for_user(user_id, Uuid::nil())
+        .len();
+    if let Err(e) = diesel::sql_query("DELETE FROM sessions WHERE user_id = $1")
+        .bind::<SqlUuid, _>(user_id)
+        .execute(conn)
         .await
-        .map(Json)
+    {
+        log::warn!("[dev-lock] could not delete persisted sessions of {user_id}: {e}");
+    }
+    log::info!("[dev-lock] ended {evicted} live session(s) of {user_id}");
+    evicted
 }
 
 #[derive(diesel::QueryableByName)]
@@ -480,6 +566,20 @@ pub(crate) async fn apply_lock_alt(
     // Shown as " (TST)" everywhere its name is read — HUD, profile, social —
     // because the label lives in the stored name, not in one renderer.
     relabel(&mut character, &mut data, true);
+    // ONE guild seat: the seat parked in this version goes to the child's live
+    // row below, so the parent's copy is dropped — otherwise the roster would
+    // list the alt twice for the length of the lock. Unlock parks the child's
+    // seat into a newer version, which is what the parent then reads.
+    // (Once fork #703 lands, parked seats live in `guild_alt_seats (user_id,
+    // alt_key)` instead, and this must re-key that row to the child and back.)
+    diesel::sql_query(
+        "UPDATE character_versions SET server_state = server_state - 'parkedGuildMembers' \
+          WHERE id = $1",
+    )
+    .bind::<SqlUuid, _>(restored_from)
+    .execute(conn)
+    .await
+    .map_err(internal)?;
 
     let child_row: Option<IdRow> =
         diesel::sql_query("SELECT id FROM characters WHERE user_id = $1 FOR UPDATE")
@@ -626,7 +726,10 @@ pub(crate) async fn apply_unlock_alt(
     let saved_as = snapshot_character(conn, character_id, child, Some(alt), "dev-unlock", true)
         .await
         .map_err(internal)?;
-    // Back on the parent the alt is a player character again: the label goes.
+    // Back on the parent the alt is a player character again: the label goes,
+    // and the version is filed under the PARENT's row id — the readers of a
+    // switched-out alt (in-game board, guild roster, standings) join versions
+    // by `character_id`, and the child's id would make it nobody's.
     #[derive(diesel::QueryableByName)]
     struct Kept {
         #[diesel(sql_type = Jsonb)]
@@ -646,7 +749,9 @@ pub(crate) async fn apply_unlock_alt(
     diesel::sql_query(
         "UPDATE character_versions \
             SET user_id = $2, \"character\" = $3, data = $4, \
-                name = COALESCE($3->>'name', name) \
+                name = COALESCE($3->>'name', name), \
+                character_id = COALESCE((SELECT c.id FROM characters c WHERE c.user_id = $2), \
+                                        character_id) \
           WHERE id = $1",
     )
     .bind::<SqlUuid, _>(saved_as)
@@ -1374,7 +1479,8 @@ mod tests {
             .unwrap();
         let human = user(&mut c).await;
         let human_char = live(&mut c, human, Uuid::new_v4(), "Normal", 30).await;
-        fight(&mut c, locked.character_id, human_char, true, 0).await;
+        // The normal player's row: the test side writes none.
+        fight(&mut c, human_char, locked.character_id, false, 0).await;
         let pairs = recent_test_opponents(&mut c, &[locked.child_user_id, human])
             .await
             .unwrap();
@@ -1387,5 +1493,180 @@ mod tests {
         );
         assert!(is_lock_child(&mut c, locked.child_user_id).await);
         assert!(!is_lock_child(&mut c, parent).await);
+    }
+
+    // ---- review fixes (2026-11-24) ---------------------------------------
+
+    async fn unlock(c: &mut AsyncPgConnection, parent: Uuid) -> UnlockAltResponse {
+        apply_unlock_alt(
+            c,
+            &UnlockAltRequest {
+                user_id: parent,
+                device_id: "pixel".into(),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    /// A dormant child is still a test account, and unlock ends its sessions
+    /// in memory and in the database.
+    #[tokio::test]
+    async fn an_unlocked_child_stays_a_test_account_and_loses_its_sessions() {
+        let mut c = db!();
+        let (parent, _, _, b) = owner(&mut c).await;
+        let locked = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        unlock(&mut c, parent).await;
+        assert_eq!(
+            lock_child_status(&mut c, locked.child_user_id).await,
+            Some(true)
+        );
+        assert_eq!(lock_child_status(&mut c, parent).await, Some(false));
+
+        c.batch_execute(
+            "CREATE TABLE sessions (session_id UUID PRIMARY KEY, user_id UUID NOT NULL, \
+                 secret_user_id UUID, extra_secret TEXT, expires_at TIMESTAMPTZ)",
+        )
+        .await
+        .unwrap();
+        diesel::sql_query("INSERT INTO sessions (session_id, user_id) VALUES ($1, $2), ($3, $4)")
+            .bind::<SqlUuid, _>(Uuid::new_v4())
+            .bind::<SqlUuid, _>(locked.child_user_id)
+            .bind::<SqlUuid, _>(Uuid::new_v4())
+            .bind::<SqlUuid, _>(parent)
+            .execute(&mut c)
+            .await
+            .unwrap();
+        let store = crate::session::SessionStore::new(std::time::Duration::from_secs(3600));
+        let mk = |user: Uuid| {
+            std::sync::Arc::new(crate::session::Session::new(
+                user,
+                Uuid::new_v4(),
+                std::time::Duration::from_secs(3600),
+            ))
+        };
+        let (child_session, parent_session) = (Uuid::new_v4(), Uuid::new_v4());
+        store.insert_existing(child_session, mk(locked.child_user_id));
+        store.insert_existing(parent_session, mk(parent));
+        assert_eq!(end_sessions(&store, &mut c, locked.child_user_id).await, 1);
+        assert!(
+            !store.contains(child_session),
+            "the child's live session is gone"
+        );
+        assert!(store.contains(parent_session), "the parent's is untouched");
+        #[derive(diesel::QueryableByName)]
+        struct N {
+            #[diesel(sql_type = BigInt)]
+            n: i64,
+        }
+        let n: N = diesel::sql_query("SELECT COUNT(*) AS n FROM sessions WHERE user_id = $1")
+            .bind::<SqlUuid, _>(locked.child_user_id)
+            .get_result(&mut c)
+            .await
+            .unwrap();
+        assert_eq!(n.n, 0, "persisted child sessions are gone");
+        assert!(
+            refuses_forced_link(&mut c, locked.child_user_id).await,
+            "dormant child"
+        );
+        assert!(!refuses_forced_link(&mut c, parent).await);
+    }
+
+    #[tokio::test]
+    async fn a_forced_link_is_refused_for_a_locked_child() {
+        let mut c = db!();
+        let (parent, _, _, b) = owner(&mut c).await;
+        let locked = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        assert!(refuses_forced_link(&mut c, locked.child_user_id).await);
+        assert!(!refuses_forced_link(&mut c, parent).await);
+        assert!(
+            lock_child_users(&mut c)
+                .await
+                .contains(&locked.child_user_id)
+        );
+    }
+
+    /// The unlocked version is filed under the PARENT's row, where every reader
+    /// of a switched-out alt joins it.
+    #[tokio::test]
+    async fn unlock_files_the_version_under_the_parents_row() {
+        let mut c = db!();
+        let (parent, parent_char, _, b) = owner(&mut c).await;
+        apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
+            .await
+            .unwrap();
+        let un = unlock(&mut c, parent).await;
+        let row: IdRow =
+            diesel::sql_query("SELECT character_id AS id FROM character_versions WHERE id = $1")
+                .bind::<SqlUuid, _>(un.saved_as)
+                .get_result(&mut c)
+                .await
+                .unwrap();
+        assert_eq!(row.id, parent_char);
+    }
+
+    /// One guild seat for the alt during a lock: the child's live membership,
+    /// not also the parked copy in the parent's version.
+    #[tokio::test]
+    async fn a_locked_alt_holds_one_guild_seat() {
+        let mut c = db!();
+        let (parent, parent_char, _, _) = owner(&mut c).await;
+        let x = Uuid::new_v4();
+        c.batch_execute("INSERT INTO guilds (id, name, tag_id) VALUES ('g1', 'Guild', '1234')")
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, name, \
+                 level, character, data, inventory, wallet, server_state, saved_at) \
+             VALUES ($1, $2, $3, $4, 'Seated', 9, '{\"name\":\"Seated\",\"level\":9}', '{}', '{}', '{}', \
+                     '{\"parkedGuildMembers\":[{\"guild_id\":\"g1\",\"rank\":\"MEMBER\",\"join_date\":1}]}', 2000)",
+        )
+        .bind::<SqlUuid, _>(Uuid::new_v4())
+        .bind::<SqlUuid, _>(parent_char)
+        .bind::<SqlUuid, _>(parent)
+        .bind::<SqlUuid, _>(x)
+        .execute(&mut c)
+        .await
+        .unwrap();
+        let locked = apply_lock_alt(&mut c, &lock(parent, x, "pixel"))
+            .await
+            .unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct N {
+            #[diesel(sql_type = BigInt)]
+            live: i64,
+            #[diesel(sql_type = BigInt)]
+            parked: i64,
+        }
+        let n: N = diesel::sql_query(
+            "SELECT (SELECT COUNT(*) FROM guild_members WHERE guild_id = 'g1' AND character_id = $1) AS live, \
+                    (SELECT COUNT(*) FROM character_versions WHERE user_id = $2 AND source_alt_uuid = $3 \
+                        AND server_state ? 'parkedGuildMembers') AS parked",
+        )
+        .bind::<SqlUuid, _>(locked.character_id)
+        .bind::<SqlUuid, _>(parent)
+        .bind::<SqlUuid, _>(x)
+        .get_result(&mut c)
+        .await
+        .unwrap();
+        assert_eq!((n.live, n.parked), (1, 0), "one seat, on the child");
+    }
+
+    /// The normal player's wins against a (TST) character are not counted on
+    /// the in-game board, and the cups recalc never replays such a fight.
+    #[test]
+    fn wins_and_recalcs_leave_test_fights_out() {
+        let both_sides = "dl.child_character_id IN (r.character_id, r.opponent_character_id)";
+        let season_wins = crate::arena::leaderboards::RANKED_CTE
+            .split("season_wins AS")
+            .nth(1)
+            .and_then(|s| s.split("ranked AS").next())
+            .expect("season_wins CTE");
+        assert!(season_wins.contains(both_sides));
+        assert!(crate::arena::cups_rule::SEASON_ROWS_SQL.contains(both_sides));
     }
 }

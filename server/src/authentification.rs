@@ -1058,6 +1058,9 @@ async fn apply_forced_link_changes(
     .await
 }
 
+/// A forced link from a developer's lock child account (`crate::dev_alt_lock`).
+const FORCED_LINK_FROM_LOCK_CHILD: u64 = 115;
+
 /// `POST /…/auth/bnet/link/force` — the player answered the conflict prompt.
 ///
 /// Same credential check either way; what changes is WHICH character the linked
@@ -1090,6 +1093,18 @@ async fn bnet_link_force(
 
     let (rebound, moved) = {
         let mut conn = app_state.db_pool.get().await.unwrap();
+        // A developer's device-locked alt plays on a lock child account. Linking
+        // it would move (or rebind) a copy of the parent's alt; unlock instead.
+        if crate::dev_alt_lock::refuses_forced_link(&mut conn, source_user_id).await {
+            log::warn!(
+                "account link (forced): refused for lock child {source_user_id} — unlock the device first"
+            );
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                3,
+                FORCED_LINK_FROM_LOCK_CHILD,
+            ));
+        }
         if let Some(device_id) = caller_device_id.as_deref()
             && let Err(error) =
                 move_throwaway_device_claim(&mut conn, source_user_id, user_id, device_id).await

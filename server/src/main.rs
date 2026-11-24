@@ -291,6 +291,9 @@ async fn main() -> Result<()> {
                 ))
                 .await
                 .unwrap();
+            // The developer lock table, in case the binary lands before the
+            // hand-applied migration: every ranking query names it.
+            dev_alt_lock::ensure_table(&db_pool).await;
 
             let mut game_data: GameData = {
                 let parsed_data_path = static_data.join("parsed.json");

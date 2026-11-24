@@ -765,12 +765,17 @@ async fn load_loadout(
 ) -> crate::arena::combat::Loadout {
     let mut lo = load_character_loadout(db, user_id, character_id).await;
     // A developer's device-locked alt fights as " (TST)": decided by the account.
-    if !lo.character_uuid.is_empty()
-        && let Some(db) = db
-        && let Ok(mut conn) = db.get().await
-        && crate::dev_alt_lock::is_lock_child(&mut conn, user_id).await
-    {
-        mark_loadout_as_test(&mut lo);
+    if !lo.character_uuid.is_empty() {
+        let by_account = match db {
+            Some(db) => match db.get().await {
+                Ok(mut conn) => crate::dev_alt_lock::lock_child_status(&mut conn, user_id).await,
+                Err(_) => None,
+            },
+            None => None,
+        };
+        if is_test_fighter(by_account, &lo.display_name) {
+            mark_loadout_as_test(&mut lo);
+        }
     }
     // Only the result-card delivery needs the count (#401); while it is off the
     // milestone is decided by the writer alone, as in #539.
@@ -1458,6 +1463,18 @@ pub fn is_test_loadout(lo: &crate::arena::combat::Loadout) -> bool {
     lo.dev_test
 }
 
+/// Whether to fight as (TST). The account decides; when it cannot be read
+/// (pool or query failure) this FAILS CLOSED on the stored label: parentheses
+/// are reserved, so only a lock writes " (TST)" into a name, and a test
+/// character must never fight for cups because a read failed.
+fn is_test_fighter(by_account: Option<bool>, stored_name: &str) -> bool {
+    by_account.unwrap_or_else(|| {
+        stored_name
+            .trim_end()
+            .ends_with(TEST_NAME_SUFFIX.trim_start())
+    })
+}
+
 /// Mark a loadout as a test character's: the account flag, and " (TST)" on both
 /// places the client reads a name (op50 `display_name`, op54 profile `name`).
 /// Idempotent — the lock already stores the suffix in the character's name.
@@ -1699,6 +1716,10 @@ async fn pick_bot_loadout(
     // is not a copy and must not be drawn. Their mimic copies stay eligible.
     let logged_in = users_with_live_sessions(&mut conn).await;
     drop_rows_of_logged_in_users(&mut rows, &logged_in);
+    // Nor a developer's lock child: it would come out as "X (TST) (AI)", a copy
+    // of a test copy of a real alt.
+    let lock_children = crate::dev_alt_lock::lock_child_users(&mut conn).await;
+    drop_rows_of_logged_in_users(&mut rows, &lock_children);
     let ranking_config = ranking::load(db).await.config;
     apply_recent_bot_avoidance(
         &mut rows,
@@ -1736,6 +1757,7 @@ async fn pick_bot_loadout(
         let mut wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
         wide_rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
         drop_rows_of_logged_in_users(&mut wide_rows, &logged_in);
+        drop_rows_of_logged_in_users(&mut wide_rows, &lock_children);
         apply_recent_bot_avoidance(
             &mut wide_rows,
             human_char_uuid,
@@ -8414,6 +8436,16 @@ mod humans_first_tests {
             vec![(0, 2)],
             "oldest takes its closest (410), 400 waits"
         );
+    }
+
+    /// The (TST) marker fails closed: an unreadable account falls back to the
+    /// stored label, and the account wins whenever it is known.
+    #[test]
+    fn the_test_marker_fails_closed_on_an_unreadable_account() {
+        assert!(is_test_fighter(None, "Pixelle (TST)"));
+        assert!(!is_test_fighter(None, "Pixelle"));
+        assert!(is_test_fighter(Some(true), "Pixelle"));
+        assert!(!is_test_fighter(Some(false), "Pixelle"));
     }
 
     /// Owner, 2026-11-24: a (TST) character avoids the same normal character
