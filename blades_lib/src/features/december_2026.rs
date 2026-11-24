@@ -20,11 +20,20 @@
 //!
 //! # The windows
 //!
-//! A door opens at 00:00 UTC on its day. Doors 1-24 stay claimable until
-//! 1 January 2027 00:00 UTC, so a player who misses a day can still open that
-//! door later in the month, as with a real advent calendar. The New Year's Eve
-//! gift stays claimable until 2 January 00:00 UTC. Each door can be claimed
-//! once per character.
+//! A door is claimable on its own day only: from 00:00:00 to 23:59:59 UTC.
+//! A day that is missed is gone — HauDrauf, 2026-11-24 (message 3924): "Alle
+//! Türchen gelten nur für den Tag, ich möchte regelmäßiges spielen belohnen."
+//! The New Year's Eve gift likewise only on the 31st.
+//!
+//! # One door a day per account
+//!
+//! Each day's door goes to ONE character of an account: the first one the
+//! server sees that day (HauDrauf, same message: "Die Geschenke gibt es nur für
+//! den Charakter der sich an dem Tag als erstes einloggt"). The account's other
+//! alts are not offered that day's door. Which character that is, and how it is
+//! recorded, is the server's half: `server/src/december.rs`. Here a door is
+//! still claimable once per character, which on top of that rule makes it once
+//! per account.
 //!
 //! # The armour
 //!
@@ -59,12 +68,8 @@ pub const DECEMBER_1_SECS: i64 = 1_796_083_200;
 /// 2026-12-25 00:00:00 UTC, from when armour that did not fit is paid out.
 pub const DEFERRED_ARMOR_FROM_SECS: i64 = DECEMBER_1_SECS + 24 * SECS_PER_DAY;
 
-/// 2027-01-01 00:00:00 UTC, when doors 1-24 close.
-pub const ADVENT_DOORS_CLOSE_SECS: i64 = DECEMBER_1_SECS + 31 * SECS_PER_DAY;
-
-/// How long the New Year's Eve gift stays claimable: two days, so it is still
-/// there on New Year's Day.
-pub const NEW_YEARS_EVE_GIFT_SECS: i64 = 2 * SECS_PER_DAY;
+/// How long every door stays claimable: its own UTC day, no longer.
+pub const DOOR_WINDOW_SECS: i64 = SECS_PER_DAY;
 
 /// The share of the backpack the gifted armour may fill (HauDrauf's rule).
 pub const ARMOR_FILL_PERCENT: u64 = 95;
@@ -194,11 +199,7 @@ fn build() -> Vec<Door> {
                 );
             }
             let opens_at_secs = DECEMBER_1_SECS + (i64::from(door.day) - 1) * SECS_PER_DAY;
-            let closes_at_secs = if door.day <= 24 {
-                ADVENT_DOORS_CLOSE_SECS
-            } else {
-                opens_at_secs + NEW_YEARS_EVE_GIFT_SECS
-            };
+            let closes_at_secs = opens_at_secs + DOOR_WINDOW_SECS;
             Door {
                 day: door.day,
                 gift: GiftDef {
@@ -238,7 +239,8 @@ pub fn gift(gift_id: Uuid) -> Option<&'static GiftDef> {
     door(gift_id).map(|d| &d.gift)
 }
 
-/// The doors that can be opened at `now`, oldest first.
+/// The door that can be opened at `now`, if any: windows never overlap, so
+/// this yields at most one.
 pub fn open_doors(now: i64) -> impl Iterator<Item = &'static Door> {
     doors().iter().filter(move |d| d.is_open(now))
 }
@@ -569,7 +571,7 @@ mod tests {
         );
         assert_eq!(DECEMBER_1_SECS % SECS_PER_DAY, 0, "a UTC midnight");
         assert_eq!(DEFERRED_ARMOR_FROM_SECS, utc(25, 0));
-        assert_eq!(ADVENT_DOORS_CLOSE_SECS, utc(32, 0));
+        assert_eq!(DOOR_WINDOW_SECS, SECS_PER_DAY);
     }
 
     /// One door a day from 1 to 24 December and one on the 31st; nothing on
@@ -867,10 +869,11 @@ mod tests {
         );
     }
 
-    /// Each door opens at 00:00 UTC on its own day and not a second earlier;
+    /// ONLY ON ITS OWN DAY (HauDrauf, 2026-11-24): each door opens at
+    /// 00:00:00 UTC on its day and closes at 00:00:00 the next, to the second;
     /// `is_open` and the claim check agree at every edge.
     #[test]
-    fn every_door_opens_on_its_own_day_and_closes_on_time() {
+    fn every_door_is_claimable_on_its_own_day_only() {
         for door in doors() {
             let (open, close) = (door.opens_at_secs, door.closes_at_secs);
             for (now, claimable) in [
@@ -892,32 +895,50 @@ mod tests {
                 gifts::can_claim(&door.gift, 1, open),
                 Err(GiftError::LimitReached)
             );
-            let want_close = if door.day <= 24 {
-                utc(32, 0)
-            } else {
-                utc(33, 0)
-            };
-            assert_eq!(close, want_close, "door {}", door.day);
+            assert_eq!(open, utc(door.day, 0), "door {}", door.day);
+            assert_eq!(close, utc(door.day + 1, 0), "door {}", door.day);
+            assert_eq!(door.gift.start_time, open);
+            assert_eq!(door.gift.end_time, close - 1, "23:59:59 is the last second");
         }
     }
 
-    /// Day by day through the month: on day N doors 1..=N are open (to 24),
-    /// 25-30 December add nothing, the 31st adds the New Year's Eve gift, on
-    /// 1 January only that one is left, and from 2 January none.
+    /// Day by day, second by second at the edges: on day N only door N is open
+    /// (1-24 and the 31st), yesterday's door is shut from 00:00:00, 25-30
+    /// December have none, and nothing is open from 1 January on.
     #[test]
     fn the_open_doors_follow_the_calendar() {
         for day in 1..=31u32 {
-            let open: Vec<u32> = open_doors(utc(day, 12)).map(|d| d.day).collect();
-            let mut want: Vec<u32> = (1..=day.min(24)).collect();
-            if day == 31 {
-                want.push(31);
+            let want: Vec<u32> = if day <= 24 || day == 31 {
+                vec![day]
+            } else {
+                Vec::new()
+            };
+            for now in [utc(day, 0), utc(day, 12), utc(day + 1, 0) - 1] {
+                let open: Vec<u32> = open_doors(now).map(|d| d.day).collect();
+                assert_eq!(open, want, "{day} December t={now}");
             }
-            assert_eq!(open, want, "{day} December");
+            // Yesterday's door, the second today begins.
+            if day > 1 && day - 1 <= 24 {
+                let yesterday = door(door_gift_id(day - 1)).unwrap();
+                assert!(
+                    !yesterday.is_open(utc(day, 0)),
+                    "door {} on the {day}",
+                    day - 1
+                );
+                assert_eq!(
+                    gifts::can_claim(&yesterday.gift, 0, utc(day, 0)),
+                    Err(GiftError::NotActive)
+                );
+            }
         }
-        let new_year: Vec<u32> = open_doors(utc(32, 12)).map(|d| d.day).collect();
-        assert_eq!(new_year, vec![31]);
-        assert_eq!(open_doors(utc(33, 0)).count(), 0);
-        assert_eq!(open_doors(utc(33, 0) + 400 * SECS_PER_DAY).count(), 0);
+        assert_eq!(open_doors(utc(32, 0)).count(), 0, "1 January");
+        assert_eq!(open_doors(utc(32, 0) + 400 * SECS_PER_DAY).count(), 0);
+        // Never two at once.
+        let mut t = DECEMBER_1_SECS - SECS_PER_DAY;
+        while t < utc(33, 0) {
+            assert!(open_doors(t).count() <= 1, "t={t}");
+            t += 3_600;
+        }
     }
 
     /// The label, German first as he asked, with an English line.
