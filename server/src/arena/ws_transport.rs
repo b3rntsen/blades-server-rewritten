@@ -299,7 +299,7 @@ pub fn production_bridge() -> Option<Arc<WsBridge>> {
 // ---------------------------------------------------------------------------------
 
 /// The session token from `Authorization`, or from an `nb-auth.<hex>` subprotocol.
-fn authorization_of(req: &HttpRequest) -> Option<String> {
+pub fn authorization_of(req: &HttpRequest) -> Option<String> {
     if let Some(v) = req
         .headers()
         .get("Authorization")

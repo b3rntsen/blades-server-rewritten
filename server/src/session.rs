@@ -458,7 +458,21 @@ impl FromRequest for SessionLookedUpMaybe {
         _payload: &mut actix_web::dev::Payload,
     ) -> Self::Future {
         // Clone the cheap handles out BEFORE the async move (can't hold &req across .await).
-        let authorization = req.headers().get("Authorization").cloned();
+        let authorization = req.headers().get("Authorization").cloned().or_else(|| {
+            // A browser WebSocket (the rms matchmaking socket) can't set Authorization; with the
+            // WebSocket arena transport on, it may carry the token as an `nb-auth.<hex>`
+            // subprotocol instead (WP17). Only on upgrades, and never while the flag is off.
+            let upgrade = req
+                .headers()
+                .get("Upgrade")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+            if !upgrade || crate::arena::ws_transport::production_bridge().is_none() {
+                return None;
+            }
+            crate::arena::ws_transport::authorization_of(req)
+                .and_then(|v| actix_web::http::header::HeaderValue::from_str(&v).ok())
+        });
         let global = req
             .app_data::<web::Data<Arc<ServerGlobal>>>()
             .expect("server global not in app_data (for extracting a Session)")
