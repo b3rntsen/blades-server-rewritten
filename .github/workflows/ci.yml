@@ -41,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: shell syntax
         run: |
@@ -132,7 +132,7 @@ jobs:
           --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # zstd-sys needs a C toolchain; ubuntu-latest has one, but pkg-config is
       # what the Dockerfile installs explicitly, so match it.
@@ -141,7 +141,7 @@ jobs:
 
       # 292 locked crates. Without a cache every run is a cold build and the
       # gate becomes something people want to skip.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -204,3 +204,21 @@ jobs:
             exit 1
           fi
           echo "device-claim guards verified: $n tests passed"
+
+  # RustSec advisory scan of Cargo.lock (security review 2026-11-24, M11).
+  # ADVISORY for now: continue-on-error keeps a new upstream advisory from
+  # blocking unrelated PRs. Make it blocking once the baseline is clean.
+  audit:
+    name: cargo audit (advisory)
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        run: cargo audit
