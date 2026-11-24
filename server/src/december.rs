@@ -25,8 +25,15 @@
 //!   the holder is never shown it.
 //! * The claim binds as well, so a client that somehow skips `/announcements`
 //!   cannot take the door without being first either.
-//! * The account is the arena user id: alts share it (one `characters` row per
-//!   user, `uq_characters_user_id`) and differ by `source_alt_uuid`.
+//! * The account is the WEBSITE (Discord) account wherever the arena can tell
+//!   (HauDrauf, message 3937: a second account must not be rewarded). Alts
+//!   share one arena user (one `characters` row per user,
+//!   `uq_characters_user_id`) and differ by `source_alt_uuid`. A website
+//!   account's arena user id is uuidv5 of its Discord id, so a v5 user is its
+//!   own website account; a device-only (v4) arena user counts as the single v5
+//!   user its devices are bound to in `device_bindings` — the website's claim of
+//!   that phone — and otherwise as itself. See [`ACCOUNT_SQL`]. Two different
+//!   Discord logins are two accounts: nothing on the arena side links them.
 //! * The binding is one `INSERT … ON CONFLICT DO NOTHING` on (account, day): of
 //!   two requests racing at midnight exactly one writes the row, and the other
 //!   reads it back afterwards. At the claim it runs inside the transaction that
@@ -46,6 +53,30 @@ use diesel::sql_types::{Bool, Int2, Int8, Uuid as SqlUuid};
 use diesel::{OptionalExtension, QueryableByName};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use uuid::Uuid;
+
+/// The live alt of a character row and the account its door is held under.
+///
+/// `account`: the row's own user when that is a website account (a v5 id) or
+/// when no single website account has claimed any of its devices; otherwise
+/// that website account. Read from tables the arena keeps itself — no call to
+/// the website.
+const ACCOUNT_SQL: &str = "\
+SELECT c.user_id,
+       COALESCE(c.source_alt_uuid, '00000000-0000-0000-0000-000000000000'::uuid) AS alt,
+       COALESCE(
+         (SELECT (array_agg(DISTINCT d.user_id))[1]
+            FROM users u
+            JOIN device_bindings d
+              ON COALESCE(u.data->'gp_deviceids', '[]'::jsonb) ? d.device_id
+           WHERE u.id = c.user_id
+             AND substr(c.user_id::text, 15, 1) <> '5'
+             AND d.user_id IS NOT NULL
+             AND d.user_id <> c.user_id
+             AND substr(d.user_id::text, 15, 1) = '5'
+          HAVING count(DISTINCT d.user_id) = 1),
+         c.user_id) AS account
+  FROM characters c
+ WHERE c.id = $1";
 
 /// Whether the character playing `character_id` holds the door of `day` for
 /// its account, binding it to the door if the account has no holder for that
@@ -67,21 +98,22 @@ pub async fn holds_door(
         user_id: Uuid,
         #[diesel(sql_type = SqlUuid)]
         alt: Uuid,
+        #[diesel(sql_type = SqlUuid)]
+        account: Uuid,
     }
     #[derive(QueryableByName)]
     struct Holder {
         #[diesel(sql_type = SqlUuid)]
+        user_id: Uuid,
+        #[diesel(sql_type = SqlUuid)]
         alt_uuid: Uuid,
     }
     let day = i16::try_from(day).unwrap_or(i16::MAX);
-    let Some(live): Option<Live> = diesel::sql_query(
-        "SELECT user_id, COALESCE(source_alt_uuid, '00000000-0000-0000-0000-000000000000'::uuid) AS alt \
-           FROM characters WHERE id = $1",
-    )
-    .bind::<SqlUuid, _>(character_id)
-    .get_result(conn)
-    .await
-    .optional()?
+    let Some(live): Option<Live> = diesel::sql_query(ACCOUNT_SQL)
+        .bind::<SqlUuid, _>(character_id)
+        .get_result(conn)
+        .await
+        .optional()?
     else {
         return Ok(false);
     };
@@ -89,29 +121,32 @@ pub async fn holds_door(
     // the read below sees whichever row won.
     diesel::sql_query(
         "INSERT INTO december_2026_door_holders \
-                (user_id, day, rehearsal, alt_uuid, character_id, bound_at) \
-         VALUES ($1, $2, $3, $4, $5, $6) \
-         ON CONFLICT (user_id, day, rehearsal) DO NOTHING",
+                (account_id, day, rehearsal, user_id, alt_uuid, character_id, bound_at) \
+         VALUES ($1, $2, $3, $7, $4, $5, $6) \
+         ON CONFLICT (account_id, day, rehearsal) DO NOTHING",
     )
-    .bind::<SqlUuid, _>(live.user_id)
+    .bind::<SqlUuid, _>(live.account)
     .bind::<Int2, _>(day)
     .bind::<Bool, _>(rehearsal)
     .bind::<SqlUuid, _>(live.alt)
     .bind::<SqlUuid, _>(character_id)
     .bind::<Int8, _>(now)
+    .bind::<SqlUuid, _>(live.user_id)
     .execute(conn)
     .await?;
     let holder: Option<Holder> = diesel::sql_query(
-        "SELECT alt_uuid FROM december_2026_door_holders \
-          WHERE user_id = $1 AND day = $2 AND rehearsal = $3",
+        "SELECT user_id, alt_uuid FROM december_2026_door_holders \
+          WHERE account_id = $1 AND day = $2 AND rehearsal = $3",
     )
-    .bind::<SqlUuid, _>(live.user_id)
+    .bind::<SqlUuid, _>(live.account)
     .bind::<Int2, _>(day)
     .bind::<Bool, _>(rehearsal)
     .get_result(conn)
     .await
     .optional()?;
-    Ok(holder.is_some_and(|h| h.alt_uuid == live.alt))
+    // The same alt of the same arena user: an alt uuid is only unique within
+    // its user, and one website account may now span several arena users.
+    Ok(holder.is_some_and(|h| h.user_id == live.user_id && h.alt_uuid == live.alt))
 }
 
 /// The door open on this character's calendar clock, if any, and whether this
@@ -392,6 +427,13 @@ mod tests {
                 id UUID PRIMARY KEY,
                 user_id UUID NOT NULL,
                 source_alt_uuid UUID);
+            CREATE TABLE users (
+                id UUID PRIMARY KEY,
+                secret_id UUID NOT NULL DEFAULT gen_random_uuid(),
+                data JSONB NOT NULL DEFAULT '{}'::jsonb);
+            CREATE TABLE device_bindings (
+                device_id TEXT PRIMARY KEY,
+                user_id UUID);
         ";
         const MIGRATION: &str = include_str!(
             "../../migrations/2026-11-24-000000-0000_december_2026_door_holders/up.sql"
@@ -604,6 +646,98 @@ mod tests {
             for (day, x, y) in race {
                 let (x, y) = (x.unwrap(), y.unwrap());
                 assert!(x ^ y, "door {day}: exactly one holder, got A={x} B={y}");
+            }
+        }
+
+        /// A website account's arena user id: a v5 uuid (the web's
+        /// `arenaUserId` is uuidv5 of `discord:<id>`).
+        fn website_user(_discord_id: &str) -> Uuid {
+            // The crate is built without the `v5` feature; the version nibble
+            // (5) is all the server reads, so a v5-shaped id stands in for one.
+            let id = uuid::Builder::from_sha1_bytes(*Uuid::new_v4().as_bytes()).into_uuid();
+            assert_eq!(id.get_version_num(), 5);
+            id
+        }
+
+        async fn device_user(conn: &mut AsyncPgConnection, user: Uuid, devices: &[&str]) {
+            diesel::sql_query("INSERT INTO users (id, data) VALUES ($1, $2::jsonb)")
+                .bind::<SqlUuid, _>(user)
+                .bind::<diesel::sql_types::Text, _>(
+                    serde_json::json!({ "gp_deviceids": devices }).to_string(),
+                )
+                .execute(conn)
+                .await
+                .unwrap();
+        }
+
+        async fn bind_device(conn: &mut AsyncPgConnection, device: &str, user: Uuid) {
+            diesel::sql_query("INSERT INTO device_bindings (device_id, user_id) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Text, _>(device)
+                .bind::<SqlUuid, _>(user)
+                .execute(conn)
+                .await
+                .unwrap();
+        }
+
+        /// TWO ARENA USERS OF ONE WEBSITE ACCOUNT SHARE ONE DOOR (HauDrauf,
+        /// message 3937): the website account's own arena user, and a
+        /// device-only arena user on a phone that website account claimed.
+        /// Whichever is first holds the day; the other gets nothing — and the
+        /// next day the other can be first.
+        #[tokio::test]
+        async fn two_arena_users_of_one_website_account_share_one_door() {
+            let mut c = db!();
+            let web = website_user("123456789012345678");
+            let device_only = Uuid::new_v4();
+            let (row_web, row_dev) = (Uuid::new_v4(), Uuid::new_v4());
+            device_user(&mut c, device_only, &["phone-2"]).await;
+            bind_device(&mut c, "phone-2", web).await;
+            put(&mut c, row_web, web, Some(Uuid::new_v4())).await;
+            put(&mut c, row_dev, device_only, Some(Uuid::new_v4())).await;
+
+            let t = DECEMBER_1_SECS + 2 * DAY;
+            assert!(
+                holds_door(&mut c, row_dev, 3, false, t).await.unwrap(),
+                "device user first"
+            );
+            assert!(
+                !holds_door(&mut c, row_web, 3, false, t + 5).await.unwrap(),
+                "website user second"
+            );
+            assert!(
+                holds_door(&mut c, row_web, 4, false, t + DAY)
+                    .await
+                    .unwrap(),
+                "website user first on the 4th"
+            );
+            assert!(
+                !holds_door(&mut c, row_dev, 4, false, t + DAY + 5)
+                    .await
+                    .unwrap()
+            );
+        }
+
+        /// CONTROLS — what is NOT merged: a device-only user nobody claimed;
+        /// one whose phone is shared by two website accounts (ambiguous); and
+        /// two website accounts, i.e. two different Discord logins, which the
+        /// arena cannot link. Each of those holds its own door.
+        #[tokio::test]
+        async fn unlinked_ambiguous_and_two_discord_accounts_stay_separate() {
+            let mut c = db!();
+            let (web_a, web_b) = (website_user("111"), website_user("222"));
+            let (lonely, shared) = (Uuid::new_v4(), Uuid::new_v4());
+            device_user(&mut c, lonely, &["phone-l"]).await;
+            device_user(&mut c, shared, &["phone-a", "phone-b"]).await;
+            bind_device(&mut c, "phone-a", web_a).await;
+            bind_device(&mut c, "phone-b", web_b).await;
+            let t = DECEMBER_1_SECS;
+            for user in [web_a, web_b, lonely, shared] {
+                let row = Uuid::new_v4();
+                put(&mut c, row, user, Some(Uuid::new_v4())).await;
+                assert!(
+                    holds_door(&mut c, row, 1, false, t).await.unwrap(),
+                    "{user}"
+                );
             }
         }
     }
