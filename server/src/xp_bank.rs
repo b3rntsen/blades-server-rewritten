@@ -211,6 +211,18 @@ INSERT INTO character_xp_bank
      entry_experience, resulting_experience, reason, banked_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
 ON CONFLICT (user_id, alt_key) DO UPDATE SET
+    -- When a copy holds MORE than the bank remembers, its entry point is the
+    -- one recorded; a smaller or equal one changes nothing but the counters.
+    entry_level          = CASE WHEN EXCLUDED.banked_xp > character_xp_bank.banked_xp
+                                THEN EXCLUDED.entry_level ELSE character_xp_bank.entry_level END,
+    entry_experience     = CASE WHEN EXCLUDED.banked_xp > character_xp_bank.banked_xp
+                                THEN EXCLUDED.entry_experience ELSE character_xp_bank.entry_experience END,
+    resulting_experience = CASE WHEN EXCLUDED.banked_xp > character_xp_bank.banked_xp
+                                THEN EXCLUDED.resulting_experience ELSE character_xp_bank.resulting_experience END,
+    character_name       = CASE WHEN EXCLUDED.banked_xp > character_xp_bank.banked_xp
+                                THEN EXCLUDED.character_name ELSE character_xp_bank.character_name END,
+    reason               = CASE WHEN EXCLUDED.banked_xp > character_xp_bank.banked_xp
+                                THEN EXCLUDED.reason ELSE character_xp_bank.reason END,
     banked_xp    = GREATEST(character_xp_bank.banked_xp, EXCLUDED.banked_xp),
     updated_at   = EXCLUDED.updated_at,
     events       = character_xp_bank.events + 1
@@ -305,6 +317,50 @@ pub async fn bank_experience(
     Ok(banked)
 }
 
+/// The import's call: bank a transferred character before it is written.
+/// The alt key is the alt the row will hold — the incoming one, else the live
+/// row's own (an import that names no alt keeps the live stamp).
+pub async fn bank_import(
+    conn: &mut AsyncPgConnection,
+    character_id: Uuid,
+    user_id: Uuid,
+    incoming_alt: Option<Uuid>,
+    created: bool,
+    character: &mut blades_lib::user_data::CompleteCharacter,
+    ai_copy: bool,
+) -> Result<u64, diesel::result::Error> {
+    use crate::schema::characters::dsl as ch;
+    use diesel::{ExpressionMethods, QueryDsl};
+    let row_alt = match (incoming_alt, created) {
+        (Some(alt), _) => Some(alt),
+        (None, true) => None,
+        (None, false) => ch::characters
+            .filter(ch::id.eq(character_id))
+            .select(ch::source_alt_uuid)
+            .first::<Option<Uuid>>(conn)
+            .await
+            .optional_row()?
+            .flatten(),
+    };
+    let mut experience = character.experience;
+    let banked = bank_experience(
+        conn,
+        BankOwner::new(character_id, user_id, row_alt),
+        &character.name.clone(),
+        u64::from(character.level),
+        &mut experience,
+        if ai_copy {
+            "import (ai copy)"
+        } else {
+            "import"
+        },
+        None,
+    )
+    .await?;
+    character.experience = experience;
+    Ok(banked)
+}
+
 // ---------------------------------------------------------------------------
 // The release: every row, once.
 // ---------------------------------------------------------------------------
@@ -322,23 +378,55 @@ struct ScanRow {
     user_id: Uuid,
     #[diesel(sql_type = Nullable<SqlUuid>)]
     source_alt_uuid: Option<Uuid>,
-    #[diesel(sql_type = Jsonb)]
-    character: Value,
+    #[diesel(sql_type = Text)]
+    name: String,
+    #[diesel(sql_type = BigInt)]
+    level: i64,
+    #[diesel(sql_type = BigInt)]
+    experience: i64,
+    #[diesel(sql_type = BigInt)]
+    banked: i64,
 }
 
-/// Live rows first, so an alt's entry point is recorded from the row it is
-/// played on; then every parked version. Only rows that hold any experience.
+/// The rows that bank, computed IN POSTGRES: only ids, name, level and
+/// experience ever reach this process — never a `character` blob. Production
+/// holds ~1,600 rows (characters + versions); parsing every blob in a 512 MiB
+/// container at startup risked an OOM, a rollback and a restart loop.
+///
+/// `$1` is `needs` as a JSON array (`needs[L]` = XP still needed to reach 100).
+/// Non-numeric level/experience text is skipped, never cast (the CASE keeps
+/// the cast from being evaluated on it). Live rows first, so an alt's entry
+/// point is recorded from the row it is played on.
 const SCAN_SQL: &str = r#"
-SELECT 'live' AS kind, c.id AS row_id, c.id AS character_id, c.user_id,
-       c.source_alt_uuid, c.character
-  FROM characters c
- WHERE COALESCE(c.character->>'experience', '0') NOT IN ('0', '')
-UNION ALL
-SELECT 'version' AS kind, v.id AS row_id, v.character_id, v.user_id,
-       v.source_alt_uuid, v.character
-  FROM character_versions v
- WHERE COALESCE(v.character->>'experience', '0') NOT IN ('0', '')
-ORDER BY kind, row_id
+WITH src AS (
+    SELECT 'live' AS kind, c.id AS row_id, c.id AS character_id, c.user_id,
+           c.source_alt_uuid, COALESCE(c.character->>'name', '') AS name,
+           c.character->>'level' AS lv, c.character->>'experience' AS xp
+      FROM characters c
+    UNION ALL
+    SELECT 'version', v.id, v.character_id, v.user_id, v.source_alt_uuid,
+           COALESCE(v.character->>'name', ''),
+           v.character->>'level', v.character->>'experience'
+      FROM character_versions v
+), num AS (
+    SELECT kind, row_id, character_id, user_id, source_alt_uuid, name,
+           CASE WHEN lv ~ '^[0-9]{1,6}(\.[0-9]+)?$' THEN floor(lv::numeric)::bigint END AS level,
+           CASE WHEN xp ~ '^[0-9]{1,15}(\.[0-9]+)?$' THEN floor(xp::numeric)::bigint END AS experience
+      FROM src
+), owed AS (
+    SELECT num.*, ($1::jsonb ->> level::int)::bigint AS need
+      FROM num
+     WHERE level IS NOT NULL AND level <= 100 AND experience IS NOT NULL
+)
+SELECT kind, row_id, character_id, user_id, source_alt_uuid, name, level, experience,
+       experience - need AS banked
+  FROM owed
+ WHERE need IS NOT NULL AND experience > need
+ ORDER BY kind, banked DESC, row_id
+"#;
+
+const COUNT_SQL: &str = r#"
+SELECT (SELECT count(*) FROM characters) + (SELECT count(*) FROM character_versions) AS n
 "#;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -368,41 +456,42 @@ pub struct BankReport {
     pub lines: Vec<BankLine>,
 }
 
+#[derive(diesel::QueryableByName)]
+struct Count {
+    #[diesel(sql_type = BigInt)]
+    n: i64,
+}
+
+/// The lean plan, shared by the dry run and the release.
 async fn plan(
     conn: &mut AsyncPgConnection,
     needs: &[u64],
-) -> Result<(usize, Vec<(BankLine, Value)>), diesel::result::Error> {
-    let rows: Vec<ScanRow> = diesel::sql_query(SCAN_SQL).get_results(conn).await?;
-    let seen = rows.len();
-    let mut out = Vec::new();
-    for r in rows {
-        let (level, experience, name) = read_character(&r.character);
-        let banked = excess(level, experience, needs);
-        if banked == 0 {
-            continue;
-        }
-        let owner = BankOwner::new(r.character_id, r.user_id, r.source_alt_uuid);
-        let mut character = r.character;
-        character["experience"] = Value::from(experience - banked);
-        out.push((
+) -> Result<(usize, Vec<BankLine>), diesel::result::Error> {
+    let seen: Count = diesel::sql_query(COUNT_SQL).get_result(conn).await?;
+    let rows: Vec<ScanRow> = diesel::sql_query(SCAN_SQL)
+        .bind::<Jsonb, _>(Value::from(needs.to_vec()))
+        .get_results(conn)
+        .await?;
+    let lines = rows
+        .into_iter()
+        .map(|r| {
+            let owner = BankOwner::new(r.character_id, r.user_id, r.source_alt_uuid);
+            let (experience, banked) = (r.experience as u64, r.banked as u64);
             BankLine {
                 kind: r.kind,
                 row_id: r.row_id,
                 character_id: r.character_id,
                 alt_key: owner.alt_key,
                 user_id: owner.user_id,
-                name,
-                level,
+                name: r.name,
+                level: r.level as u64,
                 experience,
                 banked,
                 resulting_experience: experience - banked,
-            },
-            character,
-        ));
-    }
-    // `ORDER BY kind` puts 'live' before 'version' already; keep it explicit.
-    out.sort_by_key(|(l, _)| (l.kind != "live", std::cmp::Reverse(l.banked)));
-    Ok((seen, out))
+            }
+        })
+        .collect();
+    Ok((seen.n as usize, lines))
 }
 
 fn report(applied: bool, seen: usize, lines: Vec<BankLine>) -> BankReport {
@@ -417,14 +506,29 @@ fn report(applied: bool, seen: usize, lines: Vec<BankLine>) -> BankReport {
 }
 
 /// What the release would bank. Read-only: creates nothing, writes nothing.
+/// Same lean query as the release.
 pub async fn dry_run(conn: &mut AsyncPgConnection, data: &LevelUpData) -> Result<BankReport> {
     let needs = needs_to_retail_max(data).context("level table does not reach level 100")?;
     let already = release(conn).await?.map(|(t, _)| t);
-    let (seen, planned) = plan(conn, &needs).await?;
-    let mut r = report(false, seen, planned.into_iter().map(|(l, _)| l).collect());
+    let (seen, lines) = plan(conn, &needs).await?;
+    let mut r = report(false, seen, lines);
     r.already_released_at = already;
     Ok(r)
 }
+
+/// Lowers one row's experience in place, in Postgres: the blob never leaves it,
+/// and every other key is kept as it was.
+const LOWER_LIVE_SQL: &str = "UPDATE characters \
+    SET character = jsonb_set(character, '{experience}', to_jsonb($2::bigint)) \
+    WHERE id = $1";
+const LOWER_VERSION_SQL: &str = "UPDATE character_versions \
+    SET character = jsonb_set(character, '{experience}', to_jsonb($2::bigint)) \
+    WHERE id = $1";
+
+/// How long the release may wait for a lock, and run, before it gives up and
+/// the server starts at cap 100 (to retry on the next start).
+const RELEASE_LOCK_TIMEOUT: &str = "5s";
+const RELEASE_STATEMENT_TIMEOUT: &str = "60s";
 
 /// Bank every row, once. A second call finds the release row and changes
 /// nothing. One transaction: either every row is banked and the release is
@@ -438,12 +542,22 @@ pub async fn apply_release(
     let Some(needs) = needs_to_retail_max(data) else {
         bail!("level table does not reach level 100; refusing to bank against a guess");
     };
+    if let Some((at, _)) = release(conn).await? {
+        let mut r = report(false, 0, Vec::new());
+        r.already_released_at = Some(at);
+        return Ok(r);
+    }
     conn.batch_execute(XP_BANK_DDL)
         .await
         .context("creating the XP bank tables")?;
     let report = conn
         .transaction::<_, diesel::result::Error, _>(|conn| {
             async move {
+                conn.batch_execute(&format!(
+                    "SET LOCAL lock_timeout = '{RELEASE_LOCK_TIMEOUT}'; \
+                     SET LOCAL statement_timeout = '{RELEASE_STATEMENT_TIMEOUT}';"
+                ))
+                .await?;
                 let claimed = diesel::sql_query(
                     "INSERT INTO xp_bank_release (id, released_at, max_level, needs) \
                      VALUES (1, $1, $2, $3) ON CONFLICT (id) DO NOTHING",
@@ -459,16 +573,16 @@ pub async fn apply_release(
                     r.already_released_at = at;
                     return Ok(r);
                 }
-                let (seen, planned) = plan(conn, &needs).await?;
-                for (line, character) in &planned {
+                let (seen, lines) = plan(conn, &needs).await?;
+                for line in &lines {
                     let sql = if line.kind == "live" {
-                        "UPDATE characters SET character = $2 WHERE id = $1"
+                        LOWER_LIVE_SQL
                     } else {
-                        "UPDATE character_versions SET character = $2 WHERE id = $1"
+                        LOWER_VERSION_SQL
                     };
                     diesel::sql_query(sql)
                         .bind::<SqlUuid, _>(line.row_id)
-                        .bind::<Jsonb, _>(character)
+                        .bind::<BigInt, _>(line.resulting_experience as i64)
                         .execute(&mut *conn)
                         .await?;
                     record(
@@ -491,7 +605,6 @@ pub async fn apply_release(
                     )
                     .await?;
                 }
-                let lines: Vec<BankLine> = planned.into_iter().map(|(l, _)| l).collect();
                 let r = report(true, seen, lines);
                 diesel::sql_query(
                     "UPDATE xp_bank_release SET rows_banked = $1, total_banked = $2 WHERE id = 1",
@@ -551,12 +664,32 @@ pub async fn ensure_released(pool: &DbPool, data: &LevelUpData, max_level: u16) 
             max_level
         }
         Err(e) => {
-            log::error!(
-                "[xp-bank] could not bank pre-release XP ({e:#}); keeping the level cap at \
-                 {RETAIL_MAX_LEVEL} so no banked XP can buy a level"
-            );
-            RETAIL_MAX_LEVEL
+            let released = match pool.get().await {
+                Ok(mut conn) => release(&mut conn).await.ok().flatten().is_some(),
+                Err(_) => false,
+            };
+            cap_after_failure(released, max_level, &e)
         }
+    }
+}
+
+/// A failed bank keeps the cap at 100 — unless the release already happened
+/// on an earlier start: then the XP is banked, characters may already stand
+/// past 100, and dropping the cap would bounce them. Only an UNRELEASED
+/// failure (including a lock or statement timeout) keeps 100, to retry on the
+/// next start.
+fn cap_after_failure(released: bool, max_level: u16, e: &anyhow::Error) -> u16 {
+    if released {
+        log::error!(
+            "[xp-bank] check failed ({e:#}) but the release is recorded; keeping cap {max_level}"
+        );
+        max_level
+    } else {
+        log::error!(
+            "[xp-bank] could not bank pre-release XP ({e:#}); keeping the level cap at \
+             {RETAIL_MAX_LEVEL} so no banked XP can buy a level (retried on the next start)"
+        );
+        RETAIL_MAX_LEVEL
     }
 }
 
@@ -886,6 +1019,104 @@ mod tests {
             .unwrap();
         assert_eq!(banked_by_alt(&mut c, real).await.unwrap()[&alt], 27_273_128);
         assert_eq!(banked_by_alt(&mut c, copy).await.unwrap()[&alt], 22_679_295);
+    }
+
+    /// The release edits only `experience`, in Postgres: every other key of
+    /// the blob survives, and junk level/experience text is skipped, not cast.
+    #[tokio::test]
+    async fn the_release_touches_only_experience_and_skips_junk() {
+        let mut c = db!();
+        let (cid, _) = seed(&mut c, "Swanne", 100, 76_163_908, None).await;
+        diesel::sql_query(
+            "UPDATE characters SET character = character || '{\"abilities\":[1,2],\"tagId\":\"0042\"}' \
+             WHERE id = $1",
+        )
+        .bind::<SqlUuid, _>(cid)
+        .execute(&mut c)
+        .await
+        .unwrap();
+        let junk = Uuid::new_v4();
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character) VALUES \
+             ($1, $1, '{\"name\":\"J\",\"level\":\"x\",\"experience\":\"99999999999999999999\"}')",
+        )
+        .bind::<SqlUuid, _>(junk)
+        .execute(&mut c)
+        .await
+        .unwrap();
+
+        let r = apply_release(&mut c, &table(), 150, RELEASE_AT)
+            .await
+            .unwrap();
+        assert_eq!(r.rows_banked, 1);
+        assert_eq!(r.rows_seen, 2);
+        let b: Blob = diesel::sql_query("SELECT character FROM characters WHERE id = $1")
+            .bind::<SqlUuid, _>(cid)
+            .get_result(&mut c)
+            .await
+            .unwrap();
+        assert_eq!(b.character["experience"], 0);
+        assert_eq!(b.character["abilities"], serde_json::json!([1, 2]));
+        assert_eq!(b.character["tagId"], "0042");
+        assert_eq!(b.character["name"], "Swanne");
+    }
+
+    /// The release cannot hang a start: it runs under a lock and a statement
+    /// timeout (a timeout is a failed release → cap 100, retried next start).
+    #[tokio::test]
+    async fn the_release_runs_under_timeouts() {
+        let mut c = db!();
+        apply_release(&mut c, &table(), 150, RELEASE_AT)
+            .await
+            .unwrap();
+        #[derive(diesel::QueryableByName)]
+        struct T {
+            #[diesel(sql_type = Text)]
+            lock_timeout: String,
+        }
+        // The test wraps everything in one outer transaction, so the release's
+        // SET LOCAL is still visible here.
+        let t: T = diesel::sql_query("SELECT current_setting('lock_timeout') AS lock_timeout")
+            .get_result(&mut c)
+            .await
+            .unwrap();
+        assert_eq!(t.lock_timeout, RELEASE_LOCK_TIMEOUT);
+    }
+
+    /// A failure keeps 100 only while unreleased; after a release it keeps the
+    /// requested cap so characters already past 100 do not bounce.
+    #[test]
+    fn a_failure_after_the_release_keeps_the_cap() {
+        let e = anyhow::anyhow!("boom");
+        assert_eq!(cap_after_failure(false, 150, &e), RETAIL_MAX_LEVEL);
+        assert_eq!(cap_after_failure(true, 150, &e), 150);
+    }
+
+    /// The per-alt entry point follows the largest banked copy.
+    #[tokio::test]
+    async fn the_entry_point_follows_the_largest_bank() {
+        let mut c = db!();
+        apply_release(&mut c, &table(), 150, RELEASE_AT)
+            .await
+            .unwrap();
+        let (cid, uid, alt) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        let owner = BankOwner::new(cid, uid, Some(alt));
+        let mut small = 13_000_000u64;
+        bank_experience(&mut c, owner, "A", 99, &mut small, "import", None)
+            .await
+            .unwrap();
+        let mut big = 40_000_000u64;
+        bank_experience(&mut c, owner, "A", 100, &mut big, "restore", None)
+            .await
+            .unwrap();
+        let mut smaller = 1_000u64;
+        bank_experience(&mut c, owner, "A", 100, &mut smaller, "import", None)
+            .await
+            .unwrap();
+        let b = bank(&mut c, alt).await.unwrap();
+        assert_eq!(b.banked_xp, 40_000_000);
+        assert_eq!((b.entry_level, b.entry_experience), (100, 40_000_000));
+        assert_eq!(b.reason, "restore");
     }
 
     /// Running twice changes nothing the second time.

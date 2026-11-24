@@ -1452,27 +1452,16 @@ pub async fn import_character(
                 // Levels past 100 are earned here (#425): a transfer brings the
                 // capture's XP up to level 100 and banks the rest, so no import
                 // can buy a level the release banked. Inert before the release.
-                let row_alt = match (incoming_alt, created) {
-                    (Some(alt), _) => Some(alt),
-                    (None, true) => None,
-                    (None, false) => characters::table
-                        .filter(characters::id.eq(character_id))
-                        .select(characters::source_alt_uuid)
-                        .first::<Option<Uuid>>(&mut conn)
-                        .await?,
-                };
-                let mut experience = character.experience;
-                crate::xp_bank::bank_experience(
+                crate::xp_bank::bank_import(
                     &mut conn,
-                    crate::xp_bank::BankOwner::new(character_id, user_id, row_alt),
-                    &imported_name,
-                    u64::from(character.level),
-                    &mut experience,
-                    if body.ai_copy { "import (ai copy)" } else { "import" },
-                    None,
+                    character_id,
+                    user_id,
+                    incoming_alt,
+                    created,
+                    &mut character,
+                    body.ai_copy,
                 )
                 .await?;
-                character.experience = experience;
 
                 let entry = CharacterDbEntry {
                     id: character_id,
@@ -6494,6 +6483,29 @@ mod tests {
             assert_eq!(banked.get(&alt_b), Some(&40_000_000));
         }
 
+        /// #425: an import after the release banks the capture's excess under
+        /// the alt the row holds — here the live row's own, since the import
+        /// names none.
+        #[tokio::test]
+        async fn an_import_after_the_release_banks_under_the_live_alt() {
+            let mut c = db!();
+            let alt = Uuid::new_v4();
+            let (cid, uid) = seed_character_on_alt(&mut c, "Retail", 100, 1, Some(alt)).await;
+            crate::xp_bank::apply_release(&mut c, &xp_table(), 150, chrono_now_secs())
+                .await
+                .unwrap();
+            let mut ch = blades_lib::user_data::CompleteCharacter::default();
+            ch.name = "Retail".into();
+            ch.level = 100;
+            ch.experience = 33_000_000;
+            let n = crate::xp_bank::bank_import(&mut c, cid, uid, None, false, &mut ch, false)
+                .await
+                .unwrap();
+            assert_eq!((n, ch.experience), (33_000_000, 0));
+            let banked = crate::xp_bank::banked_by_alt(&mut c, uid).await.unwrap();
+            assert_eq!(banked.get(&alt), Some(&33_000_000));
+        }
+
         fn chrono_now_secs() -> i64 {
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -10269,11 +10281,11 @@ mod seasons_are_what_the_database_says {
     fn an_import_banks_xp_past_100_before_writing() {
         let body = handler_code("pub async fn import_character(");
         let bank = body
-            .find("crate::xp_bank::bank_experience(")
+            .find("crate::xp_bank::bank_import(")
             .expect("the import must call the XP bank");
         let write = body.find("let entry = CharacterDbEntry {").unwrap();
         assert!(bank < write, "banked before the entry is built");
-        assert!(body[bank..write].contains("character.experience = experience;"));
+        assert!(body[bank..write].contains("&mut character,"));
     }
 
     #[test]
