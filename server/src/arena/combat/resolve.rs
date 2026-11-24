@@ -18650,6 +18650,55 @@ mod report_31_high_block_stun {
         );
     }
 
+    /// Report #608 follow-up ("the additional 15% enchantment for all armor"),
+    /// through the retaliation path: a necklace parsed by `from_character` with
+    /// Fortify Primary t10 retaliates for its Revenge x 1.15 (Revenge is
+    /// `_isPrimary`), but its SpellRevenge stays x 1.0 (`_isPrimary: 0`; we used to
+    /// raise it). The control is the same necklace without Fortify Primary with the
+    /// expected cap written in by hand. Each incoming hit is far above the cap.
+    #[test]
+    fn fortify_primary_on_a_necklace_scales_revenge_but_not_spell_revenge() {
+        use super::super::loadout::fortify_primary_on_every_item::necklace;
+        use super::super::state::{DamageSource, DamageType};
+        let now = Instant::now();
+        let lost = |defender: super::super::state::Loadout, source, ty| {
+            let mut c = combat(now, 2);
+            c.fighters[1].loadout = defender;
+            let hp = c.fighters[0].health;
+            let _ = super::apply_revenge(&mut c, 1, 0, source, &[(ty, 900.0)], now);
+            hp - c.fighters[0].health
+        };
+        for (family, source, ty, field_is_spell, mult) in [
+            (
+                "17718cb7-fb8a-4fbc-adeb-c4cdbc37faf4",
+                DamageSource::Attack,
+                DamageType::Frost,
+                false,
+                1.15_f32,
+            ),
+            (
+                "8a107a03-26ed-4ea9-97ac-e7f44c2bb5d3",
+                DamageSource::Spell,
+                DamageType::Fire,
+                true,
+                1.0,
+            ),
+        ] {
+            let raw = super::super::gamedata::enchant_magnitude(family, 10).unwrap();
+            let mut control = necklace(family, false);
+            let v = if field_is_spell {
+                &mut control.spell_revenge
+            } else {
+                &mut control.revenge
+            };
+            *v = vec![(ty, raw * mult)];
+            let want = lost(control, source, ty);
+            let got = lost(necklace(family, true), source, ty);
+            assert!(want > 0, "{family}: control retaliated");
+            assert_eq!(got, want, "{family}: Fortify Primary must make it x{mult}");
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Bot blocking — the other half of the high-block stun
     // -----------------------------------------------------------------------
