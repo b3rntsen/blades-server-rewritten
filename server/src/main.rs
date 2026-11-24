@@ -85,6 +85,7 @@ mod town;
 mod town_construction;
 mod util;
 mod wallet;
+mod xp_bank;
 
 pub use error::BladeApiError;
 use uuid::Uuid;
@@ -131,6 +132,18 @@ enum Commands {
         /// Unix seconds when the live arena-promotion Gem grant first deployed.
         #[arg(long, default_value_t = arena::promotion_gem_backfill::DEFAULT_LIVE_GRANT_START_SECS)]
         live_grant_start_secs: i64,
+    },
+    /// Dry run of the XP bank (#425): per character and parked version, what
+    /// raising ARENA_MAX_PLAYER_LEVEL above 100 would bank. Read-only. The bank
+    /// itself is applied by `run` at startup when the cap is above 100.
+    #[command(name = "bank-xp-past-100")]
+    BankXpPast100 {
+        /// Database connection string.
+        #[arg(short, long, env = "ARENA_DATABASE_URL", hide_env_values = true)]
+        connection_string: String,
+        /// The static data directory holding level_rewards.json.
+        #[arg(long)]
+        static_data: PathBuf,
     },
 }
 
@@ -436,8 +449,13 @@ async fn main() -> Result<()> {
             let max_player_level = blades_lib::features::level_up::max_level_from_env(
                 std::env::var("ARENA_MAX_PLAYER_LEVEL").ok().as_deref(),
             );
-            let level_up_data = LevelUpData::from_json(&load_static_json("level_rewards.json"))
-                .with_max_level(max_player_level);
+            let level_rewards = LevelUpData::from_json(&load_static_json("level_rewards.json"));
+            // Above 100, bank the XP that would carry anyone past 100 BEFORE the
+            // cap takes effect and before anything below can serve or write a
+            // character (#425, owner 2026-11-24). Falls back to 100 if it cannot.
+            let max_player_level =
+                xp_bank::ensure_released(&db_pool, &level_rewards, max_player_level).await;
+            let level_up_data = level_rewards.with_max_level(max_player_level);
             log::info!(
                 "[level] player level cap {} (ARENA_MAX_PLAYER_LEVEL; retail {})",
                 level_up_data.max_level(),
@@ -882,6 +900,22 @@ async fn main() -> Result<()> {
                 .context("running arena promotion Gem backfill")?;
             println!("{}", serde_json::to_string_pretty(&report)?);
         }
+        Commands::BankXpPast100 {
+            connection_string,
+            static_data,
+        } => {
+            let path = static_data.join("level_rewards.json");
+            let json: serde_json::Value = serde_json::from_reader(
+                File::open(&path).with_context(|| format!("opening {path:?}"))?,
+            )
+            .with_context(|| format!("parsing {path:?}"))?;
+            let mut conn =
+                <AsyncPgConnection as diesel_async::AsyncConnection>::establish(connection_string)
+                    .await
+                    .context("connecting to the database")?;
+            let report = xp_bank::dry_run(&mut conn, &LevelUpData::from_json(&json)).await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
     }
 
     Ok(())
@@ -934,10 +968,25 @@ mod cli_tests {
             } => {
                 assert_eq!(connection_string, "postgres://u:p@h:5432/db");
             }
-            Commands::BackfillArenaPromotionGems { .. } => {
+            Commands::BackfillArenaPromotionGems { .. } | Commands::BankXpPast100 { .. } => {
                 panic!("expected the run subcommand");
             }
         }
+    }
+
+    /// The XP-bank dry run is reachable under the name the PR documents.
+    #[test]
+    fn the_xp_bank_dry_run_parses() {
+        let cli = Cli::try_parse_from([
+            "server",
+            "bank-xp-past-100",
+            "--connection-string",
+            "postgres://u:p@h:5432/db",
+            "--static-data",
+            "/data/static",
+        ])
+        .expect("bank-xp-past-100 must parse");
+        assert!(matches!(cli.command, Commands::BankXpPast100 { .. }));
     }
 
     /// With neither the flag nor the variable it must still refuse to start.
