@@ -764,19 +764,6 @@ async fn load_loadout(
     character_id: Option<Uuid>,
 ) -> crate::arena::combat::Loadout {
     let mut lo = load_character_loadout(db, user_id, character_id).await;
-    // A developer's device-locked alt fights as " (TST)": decided by the account.
-    if !lo.character_uuid.is_empty() {
-        let by_account = match db {
-            Some(db) => match db.get().await {
-                Ok(mut conn) => crate::dev_alt_lock::lock_child_status(&mut conn, user_id).await,
-                Err(_) => None,
-            },
-            None => None,
-        };
-        if is_test_fighter(by_account, &lo.display_name) {
-            mark_loadout_as_test(&mut lo);
-        }
-    }
     // Only the result-card delivery needs the count (#401); while it is off the
     // milestone is decided by the writer alone, as in #539.
     if lo.character_uuid.is_empty() || !crate::arena::arena_fight_gift::weapon_on_result_card() {
@@ -1009,7 +996,9 @@ pub(crate) async fn stage_live_match_loadout(
             return;
         }
     };
-    let lo = loadout_from_row(&row);
+    let mut lo = loadout_from_row(&row);
+    // A between-rounds reload replaces the fighter's loadout: keep the mark.
+    mark_if_test_account(&mut lo, user_id);
     let staged = registry.stage_between_rounds_loadout(&character_uuid, lo);
     info!("arena: between-rounds loadout for {character_uuid} staged={staged}");
 }
@@ -1473,6 +1462,14 @@ fn is_test_fighter(by_account: Option<bool>, stored_name: &str) -> bool {
             .trim_end()
             .ends_with(TEST_NAME_SUFFIX.trim_start())
     })
+}
+
+/// [`mark_loadout_as_test`] when `user_id` is a lock child (in-memory account
+/// list, falling back to the stored label when that is not loaded).
+fn mark_if_test_account(lo: &mut crate::arena::combat::Loadout, user_id: Uuid) {
+    if is_test_fighter(crate::dev_alt_lock::known_child(user_id), &lo.display_name) {
+        mark_loadout_as_test(lo);
+    }
 }
 
 /// Mark a loadout as a test character's: the account flag, and " (TST)" on both
@@ -4925,9 +4922,16 @@ async fn recent_test_opponents(db: &Option<DbPool>, users: &[Uuid]) -> Vec<(Uuid
     let Ok(mut conn) = db.get().await else {
         return Vec::new();
     };
-    crate::dev_alt_lock::recent_test_opponents(&mut conn, users)
-        .await
-        .unwrap_or_default()
+    // This runs in the single matchmaker loop: bound it on the server side
+    // (a dropped future could hand a half-read connection back to the pool).
+    let _ = diesel::sql_query("SET statement_timeout = 250")
+        .execute(&mut conn)
+        .await;
+    let pairs = crate::dev_alt_lock::recent_test_opponents(&mut conn, users).await;
+    let _ = diesel::sql_query("RESET statement_timeout")
+        .execute(&mut conn)
+        .await;
+    pairs.unwrap_or_default()
 }
 
 /// Run [`pairing_round`] over `waiting` and resolve every pair it returns. Returns the
@@ -5031,6 +5035,10 @@ async fn resolve(
                 crate::arena::combat::loadout::starter()
             }
         };
+        // A developer's device-locked alt fights as " (TST)" on EVERY path —
+        // the timed-out starter included — decided from memory, so no second
+        // database read sits inside the timeout above.
+        mark_if_test_account(&mut lo, t.user_id);
         lo.current_request_index = t.rms.current_request_index();
         loadouts.push(lo);
     }
@@ -8446,6 +8454,20 @@ mod humans_first_tests {
         assert!(!is_test_fighter(None, "Pixelle"));
         assert!(is_test_fighter(Some(true), "Pixelle"));
         assert!(!is_test_fighter(Some(false), "Pixelle"));
+    }
+
+    /// A lock child is marked (TST) on the timed-out starter loadout too — the
+    /// path that used to fight unmarked for real cups.
+    #[test]
+    fn a_lock_child_is_marked_even_on_the_starter_loadout() {
+        let child = Uuid::new_v4();
+        crate::dev_alt_lock::remember_child(child);
+        let mut starter = crate::arena::combat::loadout::starter();
+        mark_if_test_account(&mut starter, child);
+        assert!(is_test_loadout(&starter));
+        let mut normal = crate::arena::combat::loadout::starter();
+        mark_if_test_account(&mut normal, Uuid::new_v4());
+        assert!(!is_test_loadout(&normal));
     }
 
     /// Owner, 2026-11-24: a (TST) character avoids the same normal character

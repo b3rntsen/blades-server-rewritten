@@ -189,10 +189,10 @@ pub(crate) async fn is_lock_child(conn: &mut AsyncPgConnection, user_id: Uuid) -
     lock_child_status(conn, user_id).await.unwrap_or(true)
 }
 
-/// Whether a forced account link from `user_id` must be refused: it is a lock
-/// child (its row is a parent alt's copy, and "keep played" would move it onto
-/// another account). Fails closed when the table exists but cannot be read.
-pub(crate) async fn refuses_forced_link(conn: &mut AsyncPgConnection, user_id: Uuid) -> bool {
+/// Whether an account link (forced or not) from `user_id` must be refused: it
+/// is a lock child (its row is a parent alt's copy, and "keep played" would
+/// move it onto another account). Fails closed when the table exists but cannot be read.
+pub(crate) async fn refuses_account_link(conn: &mut AsyncPgConnection, user_id: Uuid) -> bool {
     match lock_child_status(conn, user_id).await {
         Some(child) => child,
         None => table_exists(conn).await.unwrap_or(true),
@@ -216,6 +216,28 @@ pub(crate) async fn lock_child_users(
         .unwrap_or_default()
 }
 
+/// Every lock child account, in memory, so the matchmaker can mark a fighter
+/// (TST) without a database read inside its bounded loadout timeout — a
+/// timed-out loadout (the starter) is marked as surely as a loaded one.
+/// Filled at startup ([`ensure_table`]) and on every lock; children are never
+/// removed (a dormant child stays a test account). `None` until loaded.
+static CHILDREN: std::sync::RwLock<Option<std::collections::HashSet<Uuid>>> =
+    std::sync::RwLock::new(None);
+
+/// Whether `user_id` is a lock child, from memory. `None` = not loaded.
+pub(crate) fn known_child(user_id: Uuid) -> Option<bool> {
+    CHILDREN
+        .read()
+        .ok()
+        .and_then(|g| g.as_ref().map(|set| set.contains(&user_id)))
+}
+
+pub(crate) fn remember_child(user_id: Uuid) {
+    if let Ok(mut g) = CHILDREN.write() {
+        g.get_or_insert_with(Default::default).insert(user_id);
+    }
+}
+
 /// The lock table, created at startup if the hand-applied migration has not
 /// run yet: every ranking query names it, so a binary that ships first must not
 /// break the leaderboards. Same statements as the migration file (idempotent).
@@ -230,7 +252,41 @@ pub(crate) async fn ensure_table(pool: &crate::DbPool) {
     if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, TABLE_DDL).await {
         log::warn!("[dev-lock] could not ensure dev_alt_lock_accounts: {e}");
     }
+    // The name rules too, so the database and this binary never disagree on
+    // "(TST)" vs "(Test)" while the hand-applied 000001 is outstanding. A
+    // failure (e.g. the 2026-11-16 registry not installed) only logs.
+    if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, NAMES_DDL).await {
+        log::warn!("[dev-lock] could not install the lock-aware name rules: {e}");
+    }
+    let children = lock_child_users(&mut conn).await;
+    log::info!("[dev-lock] {} lock child account(s) known", children.len());
+    if let Ok(mut g) = CHILDREN.write() {
+        *g = Some(children);
+    }
+    drop(conn);
+    // The rematch rule reads arena_match_results by opponent; build its index
+    // without blocking match writes (CONCURRENTLY cannot run in a transaction,
+    // so not in the migration batch).
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let Ok(mut conn) = pool.get().await else {
+            return;
+        };
+        if let Err(e) = diesel_async::SimpleAsyncConnection::batch_execute(
+            &mut conn,
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS arena_match_results_by_opponent \
+               ON arena_match_results (opponent_character_id, recorded_at DESC)",
+        )
+        .await
+        {
+            log::warn!("[dev-lock] could not build arena_match_results_by_opponent: {e}");
+        }
+    });
 }
+
+/// The lock-aware name rules (migration 2026-11-24-000001), also run at startup.
+pub(crate) const NAMES_DDL: &str =
+    include_str!("../../migrations/2026-11-24-000001-0000_dev_alt_locks_names/up.sql");
 
 /// Whether the (TST) side of a fight earns arena rewards (owner default,
 /// 2026-11-24: NO). The alt carries whatever it earns back to the parent on
@@ -267,7 +323,8 @@ pub(crate) async fn recent_test_opponents(
                  WHERE r.opponent_character_id = dl.child_character_id \
                  ORDER BY r.recorded_at DESC LIMIT $2) last \
            JOIN characters oc ON oc.id = last.opponent_character_id \
-          WHERE dl.locked_alt_uuid IS NOT NULL AND dl.child_user_id = ANY($1)",
+          WHERE dl.locked_alt_uuid IS NOT NULL AND dl.child_user_id = ANY($1) \
+          LIMIT 64",
     )
     .bind::<diesel::sql_types::Array<SqlUuid>, _>(users)
     .bind::<BigInt, _>(RECENT_OPPONENTS)
@@ -336,9 +393,11 @@ pub async fn lock_alt(
         .get()
         .await
         .map_err(|_| refuse(StatusCode::SERVICE_UNAVAILABLE, 5))?;
-    conn.transaction(move |conn| async move { apply_lock_alt(conn, &body).await }.scope_boxed())
-        .await
-        .map(Json)
+    let out = conn
+        .transaction(move |conn| async move { apply_lock_alt(conn, &body).await }.scope_boxed())
+        .await?;
+    remember_child(out.child_user_id);
+    Ok(Json(out))
 }
 
 /// `POST /…/dev/v1/characters/unlock-alt` — give the device back to the parent,
@@ -566,20 +625,14 @@ pub(crate) async fn apply_lock_alt(
     // Shown as " (TST)" everywhere its name is read — HUD, profile, social —
     // because the label lives in the stored name, not in one renderer.
     relabel(&mut character, &mut data, true);
-    // ONE guild seat: the seat parked in this version goes to the child's live
-    // row below, so the parent's copy is dropped — otherwise the roster would
-    // list the alt twice for the length of the lock. Unlock parks the child's
-    // seat into a newer version, which is what the parent then reads.
-    // (Once fork #703 lands, parked seats live in `guild_alt_seats (user_id,
-    // alt_key)` instead, and this must re-key that row to the child and back.)
-    diesel::sql_query(
-        "UPDATE character_versions SET server_state = server_state - 'parkedGuildMembers' \
-          WHERE id = $1",
-    )
-    .bind::<SqlUuid, _>(restored_from)
-    .execute(conn)
-    .await
-    .map_err(internal)?;
+    // The parent's version KEEPS its parked guild seat for the length of the
+    // lock: it is what the standings, the in-game board and the h2h board read
+    // the alt's guild from, and the child (which holds the live seat) is left
+    // out of all of them — so the guild's score cannot change. The website
+    // rosters skip the child's live row instead (`guild_manage`, `top100_boards`),
+    // so the alt is listed once, exactly as before the lock. (Once fork #703
+    // lands, parked seats live in `guild_alt_seats (user_id, alt_key)`, which
+    // stays the parent's in the same way.)
 
     let child_row: Option<IdRow> =
         diesel::sql_query("SELECT id FROM characters WHERE user_id = $1 FOR UPDATE")
@@ -1568,10 +1621,10 @@ mod tests {
             .unwrap();
         assert_eq!(n.n, 0, "persisted child sessions are gone");
         assert!(
-            refuses_forced_link(&mut c, locked.child_user_id).await,
+            refuses_account_link(&mut c, locked.child_user_id).await,
             "dormant child"
         );
-        assert!(!refuses_forced_link(&mut c, parent).await);
+        assert!(!refuses_account_link(&mut c, parent).await);
     }
 
     #[tokio::test]
@@ -1581,8 +1634,8 @@ mod tests {
         let locked = apply_lock_alt(&mut c, &lock(parent, b, "pixel"))
             .await
             .unwrap();
-        assert!(refuses_forced_link(&mut c, locked.child_user_id).await);
-        assert!(!refuses_forced_link(&mut c, parent).await);
+        assert!(refuses_account_link(&mut c, locked.child_user_id).await);
+        assert!(!refuses_account_link(&mut c, parent).await);
         assert!(
             lock_child_users(&mut c)
                 .await
@@ -1609,10 +1662,11 @@ mod tests {
         assert_eq!(row.id, parent_char);
     }
 
-    /// One guild seat for the alt during a lock: the child's live membership,
-    /// not also the parked copy in the parent's version.
+    /// Owner rule: a lock changes no guild score. The alt's season standing and
+    /// the guild it counts for are identical before, during and after a lock,
+    /// and the website roster lists it once throughout.
     #[tokio::test]
-    async fn a_locked_alt_holds_one_guild_seat() {
+    async fn a_lock_changes_no_guild_score_and_the_roster_lists_the_alt_once() {
         let mut c = db!();
         let (parent, parent_char, _, _) = owner(&mut c).await;
         let x = Uuid::new_v4();
@@ -1632,28 +1686,107 @@ mod tests {
         .execute(&mut c)
         .await
         .unwrap();
+        // X's season: one win worth 30 cups, fought on the parent's row.
+        diesel::sql_query(
+            "INSERT INTO arena_match_results (id, character_id, win, rounds_won, rounds_lost, \
+                 trophy_delta, recorded_at, source_alt_uuid) VALUES ($1, $2, true, 2, 0, 30, now(), $3)",
+        )
+        .bind::<SqlUuid, _>(Uuid::new_v4())
+        .bind::<SqlUuid, _>(parent_char)
+        .bind::<SqlUuid, _>(x)
+        .execute(&mut c)
+        .await
+        .unwrap();
+
+        #[derive(diesel::QueryableByName, Debug, PartialEq)]
+        struct Standing {
+            #[diesel(sql_type = Nullable<SqlUuid>)]
+            source_alt_uuid: Option<Uuid>,
+            #[diesel(sql_type = BigInt)]
+            trophies: i64,
+            #[diesel(sql_type = Nullable<Text>)]
+            guild_id: Option<String>,
+        }
+        async fn standing(c: &mut AsyncPgConnection, x: Uuid) -> Vec<Standing> {
+            let rows: Vec<Standing> =
+                diesel::sql_query(crate::arena::season_store::FREEZE_STANDINGS_SQL)
+                    .bind::<BigInt, _>(0i64)
+                    .bind::<BigInt, _>(i64::from(i32::MAX))
+                    .load(c)
+                    .await
+                    .unwrap();
+            rows.into_iter()
+                .filter(|r| r.source_alt_uuid == Some(x))
+                .collect()
+        }
+        async fn roster_entries(c: &mut AsyncPgConnection) -> usize {
+            crate::guild_manage::live_seats_of_guild(c, "g1")
+                .await
+                .unwrap()
+                .len()
+                + crate::guild_manage::parked_seats_of_guild(c, "g1")
+                    .await
+                    .unwrap()
+                    .len()
+        }
+
+        let before = standing(&mut c, x).await;
+        assert_eq!(
+            before,
+            vec![Standing {
+                source_alt_uuid: Some(x),
+                trophies: 30,
+                guild_id: Some("g1".into())
+            }]
+        );
+        assert_eq!(roster_entries(&mut c).await, 1);
+
         let locked = apply_lock_alt(&mut c, &lock(parent, x, "pixel"))
             .await
             .unwrap();
-        #[derive(diesel::QueryableByName)]
-        struct N {
-            #[diesel(sql_type = BigInt)]
-            live: i64,
-            #[diesel(sql_type = BigInt)]
-            parked: i64,
-        }
-        let n: N = diesel::sql_query(
-            "SELECT (SELECT COUNT(*) FROM guild_members WHERE guild_id = 'g1' AND character_id = $1) AS live, \
-                    (SELECT COUNT(*) FROM character_versions WHERE user_id = $2 AND source_alt_uuid = $3 \
-                        AND server_state ? 'parkedGuildMembers') AS parked",
-        )
-        .bind::<SqlUuid, _>(locked.character_id)
-        .bind::<SqlUuid, _>(parent)
-        .bind::<SqlUuid, _>(x)
-        .get_result(&mut c)
-        .await
-        .unwrap();
-        assert_eq!((n.live, n.parked), (1, 0), "one seat, on the child");
+        assert_eq!(standing(&mut c, x).await, before, "during the lock");
+        assert_eq!(
+            roster_entries(&mut c).await,
+            1,
+            "listed once during the lock"
+        );
+        // The seat is physically the child's while it plays.
+        let live: IdRow =
+            diesel::sql_query("SELECT character_id AS id FROM guild_members WHERE guild_id = 'g1'")
+                .get_result(&mut c)
+                .await
+                .unwrap();
+        assert_eq!(live.id, locked.character_id);
+
+        unlock(&mut c, parent).await;
+        assert_eq!(standing(&mut c, x).await, before, "after the unlock");
+        assert_eq!(roster_entries(&mut c).await, 1);
+    }
+
+    #[test]
+    fn the_website_guild_roster_leaves_the_child_out() {
+        assert!(
+            crate::arena::top100_boards::GUILD_ROSTER_SQL.contains("dl.child_character_id = c.id")
+        );
+    }
+
+    /// Both link endpoints refuse a lock child (D).
+    #[test]
+    fn both_account_link_endpoints_refuse_a_lock_child() {
+        let src = include_str!("authentification.rs");
+        let link = src.find("async fn bnet_link(").unwrap();
+        let force = src.find("async fn bnet_link_force").unwrap();
+        let after = src[force..].find("\n}\n").unwrap() + force;
+        assert!(src[link..force].contains("refuses_account_link(&mut conn, caller)"));
+        assert!(src[force..after].contains("refuses_account_link(&mut conn, source_user_id)"));
+    }
+
+    #[test]
+    fn the_child_cache_marks_without_a_database() {
+        let child = Uuid::new_v4();
+        remember_child(child);
+        assert_eq!(known_child(child), Some(true));
+        assert_eq!(known_child(Uuid::new_v4()), Some(false));
     }
 
     /// The normal player's wins against a (TST) character are not counted on

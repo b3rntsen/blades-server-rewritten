@@ -534,15 +534,17 @@ struct NameRow {
 }
 
 /// The guild's current roster (live alts), operator test alts left out as every
-/// ladder leaves them out.
-const GUILD_ROSTER_SQL: &str = "\
+/// ladder leaves them out — and developer lock children, whose alt the parent
+/// still holds (it was not on this roster before the lock either).
+pub(crate) const GUILD_ROSTER_SQL: &str = "\
     SELECT c.id AS character_id, c.source_alt_uuid, \
            COALESCE(c.character ->> 'name', '') AS name \
     FROM guild_members gm \
     JOIN characters c ON c.id = gm.character_id \
     WHERE gm.guild_id = $1 \
       AND NOT EXISTS (SELECT 1 FROM test_characters tc \
-                      WHERE tc.alt_uuid = COALESCE(c.source_alt_uuid, c.id))";
+                      WHERE tc.alt_uuid = COALESCE(c.source_alt_uuid, c.id)) \
+      AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl WHERE dl.child_character_id = c.id)";
 
 /// `GET /api/dev/v1/arena-ranking/guild-members?guild_id=X&board=game|h2h&season=…`
 /// — how a guild's score on the website's top 100 is made up, member by member.
