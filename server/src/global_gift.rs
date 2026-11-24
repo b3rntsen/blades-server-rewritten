@@ -511,12 +511,12 @@ pub async fn claim_global_gift(
     // The December calendar's doors and its armour payout run on the calendar
     // clock: the real one, except for a rehearsing test character
     // (`crate::december`). Every other gift is on the real clock always.
-    let now = if blades_lib::features::december_2026::door(gift_id).is_some()
-        || gift_id == gift_capacity::DEFERRED_GEAR_GIFT_ID
-    {
-        crate::december::clock_for(&mut conn, character_id, now_secs()).await
+    let real_now = now_secs();
+    let calendar_door = blades_lib::features::december_2026::door(gift_id);
+    let now = if calendar_door.is_some() || gift_id == gift_capacity::DEFERRED_GEAR_GIFT_ID {
+        crate::december::clock_for(&mut conn, character_id, real_now).await
     } else {
-        now_secs()
+        real_now
     };
 
     use crate::schema::arena_seasons::dsl as s;
@@ -949,6 +949,24 @@ pub async fn claim_global_gift(
                 .copied()
                 .unwrap_or(0);
             gifts::can_claim(&def, current, now).map_err(map_gift_err)?;
+
+            // One door a day per account (tracker #499, HauDrauf 2026-11-24):
+            // only the account's first character of the day may open it. Bound
+            // here too if `/announcements` has not bound it yet, inside the
+            // transaction holding the row so the live alt cannot switch under
+            // it. Another alt is answered as for a door that is not open.
+            if let Some(door) = calendar_door {
+                let rehearsal = now != real_now;
+                if !crate::december::holds_door(&mut conn, character_id, door.day, rehearsal, real_now)
+                    .await?
+                {
+                    log::info!(
+                        "[december] door {}: character {character_id} is not its account's holder today",
+                        door.day
+                    );
+                    return Err(map_gift_err(GiftError::NotActive));
+                }
+            }
 
             let mut reward = gifts::build_gift_reward(
                 &def,
