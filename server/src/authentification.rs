@@ -186,7 +186,7 @@ async fn bnet_log_in(
     body: web::Json<BnetLoginRequest>,
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
     let body = body.into_inner();
-    let caller_device_id = caller_device_identity(&req, body.device_id.as_deref());
+    let caller_device_id = caller_device_identity(&req, "account login", body.device_id.as_deref());
     let caller_session = current_session
         .get_session_or_error()
         .ok()
@@ -196,27 +196,15 @@ async fn bnet_log_in(
     let (user_id, log_name) = if let (Some(username_raw), Some(password)) =
         (body.username.as_deref(), body.password.as_deref())
     {
-        let username = crate::credentials::normalise_username(username_raw);
-        let found = crate::credentials::find_by_username(&mut conn, &username)
-            .await
-            .unwrap_or(None);
-
-        // One 401 for "no such user" AND "wrong password", and the password is
-        // verified even when the row is missing. Answering faster for an unknown
-        // username turns this endpoint into a way to enumerate who plays here.
-        let (user_id, hash) = match found {
-            Some(row) => (Some(row.user_id), row.password_hash),
-            None => (
-                None,
-                // A well-formed hash of a value nobody can supply, so the failure
-                // path does the same PBKDF2 work as the success path.
-                crate::credentials::ENUMERATION_DUMMY_HASH.to_string(),
-            ),
-        };
-        let ok = crate::credentials::verify_password(password, &hash);
-        let Some(user_id) = user_id.filter(|_| ok) else {
+        // One 401 for "no such user", "wrong password" and "not a credential
+        // at all"; see `credentials::check_login` for what keeps them
+        // indistinguishable and off the async workers.
+        let Some(user_id) =
+            crate::credentials::check_login(&mut conn, username_raw, password).await
+        else {
             return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
         };
+        let username = crate::credentials::normalise_username(username_raw);
         (user_id, Some(username))
     } else if let Some(login_token) = body.login_token.as_deref() {
         // This is the normal cold-start request after a successful BNet link:
@@ -260,8 +248,9 @@ async fn bnet_log_in(
             move_throwaway_device_claim(&mut conn, source_user_id, user.id, device_id).await
         {
             log::warn!(
-                "device claim move failed for {device_id} from {source_user_id} to {} after \
+                "device claim move failed for {} from {source_user_id} to {} after \
                  account login: {error}",
+                crate::log_redact::device_for_log(device_id),
                 user.id
             );
         }
@@ -374,21 +363,12 @@ async fn resolve_link(
     username_raw: &str,
     password: &str,
 ) -> Result<(Uuid, Uuid, Arc<Session>), BladeApiError> {
-    let username = crate::credentials::normalise_username(username_raw);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let found = crate::credentials::find_by_username(&mut conn, &username)
-        .await
-        .unwrap_or(None);
-
-    // Same constant-work failure path as bnet_log_in: an unknown username must
-    // not be faster than a wrong password, or this endpoint enumerates players.
-    let (user_id, hash) = match found {
-        Some(row) => (Some(row.user_id), row.password_hash),
-        None => (None, crate::credentials::ENUMERATION_DUMMY_HASH.to_string()),
-    };
-    let ok = crate::credentials::verify_password(password, &hash);
-    let Some(user_id) = user_id.filter(|_| ok) else {
+    // The same check as bnet_log_in, by construction.
+    let Some(user_id) =
+        crate::credentials::check_login(&mut conn, username_raw, password).await
+    else {
         return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 112));
     };
 
@@ -497,19 +477,170 @@ const MOVE_THROWAWAY_DEVICE_CLAIM_SQL: &str = "WITH throwaway AS ( \
         AND d.device_id = $3 \
       RETURNING d.device_id";
 
-fn request_source_wg_ip(req: &HttpRequest) -> Option<String> {
-    req.headers()
-        .get("x-newblades-device-ip")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
+/// Peers allowed to vouch for a device with `X-Newblades-Device-Ip`.
+///
+/// The header is an identity: whoever it names is who the request plays as. It
+/// is only meaningful when our own on-box proxy set it, and the proxy reaches
+/// this process over loopback or the container bridge. A request that arrives
+/// from anywhere else — a tunnel address, a routed network — is a client, and a
+/// client may not name its own identity. `ARENA_DEVICE_IP_TRUSTED_PEERS`
+/// (comma-separated addresses or CIDR blocks) replaces the default.
+const DEVICE_IP_TRUSTED_PEERS_ENV: &str = "ARENA_DEVICE_IP_TRUSTED_PEERS";
+const DEFAULT_DEVICE_IP_TRUSTED_PEERS: &str = "127.0.0.0/8,::1,172.16.0.0/12,192.168.0.0/16";
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PeerBlock {
+    network: std::net::IpAddr,
+    prefix: u8,
 }
 
-fn caller_device_identity(req: &HttpRequest, device_id: Option<&str>) -> Option<String> {
-    device_id
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| request_source_wg_ip(req))
+impl PeerBlock {
+    fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        let (addr, prefix) = match text.split_once('/') {
+            Some((addr, prefix)) => (addr, Some(prefix.parse::<u8>().ok()?)),
+            None => (text, None),
+        };
+        let network: std::net::IpAddr = addr.parse().ok()?;
+        let width = if network.is_ipv4() { 32 } else { 128 };
+        let prefix = prefix.unwrap_or(width);
+        (prefix <= width).then_some(Self { network, prefix })
+    }
+
+    fn contains(&self, addr: std::net::IpAddr) -> bool {
+        use std::net::IpAddr;
+        match (self.network, addr) {
+            (IpAddr::V4(net), IpAddr::V4(addr)) => {
+                let mask = u32::MAX.checked_shl(32 - self.prefix as u32).unwrap_or(0);
+                u32::from(net) & mask == u32::from(addr) & mask
+            }
+            (IpAddr::V6(net), IpAddr::V6(addr)) => {
+                let mask = u128::MAX.checked_shl(128 - self.prefix as u32).unwrap_or(0);
+                u128::from(net) & mask == u128::from(addr) & mask
+            }
+            _ => false,
+        }
+    }
+}
+
+fn parse_trusted_peers(list: &str) -> Vec<PeerBlock> {
+    list.split(',')
+        .filter(|entry| !entry.trim().is_empty())
+        .filter_map(|entry| {
+            let block = PeerBlock::parse(entry);
+            if block.is_none() {
+                log::warn!("{DEVICE_IP_TRUSTED_PEERS_ENV}: ignoring unparseable entry {entry:?}");
+            }
+            block
+        })
+        .collect()
+}
+
+fn device_ip_trusted_peers() -> &'static [PeerBlock] {
+    static PEERS: std::sync::OnceLock<Vec<PeerBlock>> = std::sync::OnceLock::new();
+    PEERS.get_or_init(|| {
+        // Empty counts as unset: a compose file that passes the variable
+        // through unconditionally must not switch every VPN player off.
+        let configured = std::env::var(DEVICE_IP_TRUSTED_PEERS_ENV)
+            .ok()
+            .filter(|list| !list.trim().is_empty());
+        parse_trusted_peers(
+            configured
+                .as_deref()
+                .unwrap_or(DEFAULT_DEVICE_IP_TRUSTED_PEERS),
+        )
+    })
+}
+
+fn peer_may_vouch_for_a_device(peer: Option<std::net::IpAddr>, trusted: &[PeerBlock]) -> bool {
+    // No known peer is not a trusted peer.
+    peer.map(|addr| addr.to_canonical())
+        .is_some_and(|addr| trusted.iter().any(|block| block.contains(addr)))
+}
+
+/// Does this text read as a network address rather than an opaque device id?
+///
+/// Deliberately wider than `IpAddr::from_str`: it also catches the spellings a
+/// strict parser rejects (leading zeros, hex groups, a port, brackets, a zone,
+/// stray whitespace). Real device ids are hex strings and dashed UUIDs — not one
+/// on record, in a binding or on an account, contains a dot, a colon or
+/// whitespace — so nothing legitimate is near this line.
+fn looks_like_a_network_address(raw: &str) -> bool {
+    let text: String = raw
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_control())
+        .collect();
+    if text.is_empty() {
+        return false;
+    }
+    if text.parse::<std::net::IpAddr>().is_ok() || text.parse::<std::net::SocketAddr>().is_ok() {
+        return true;
+    }
+    let numeric = |c: char| c.is_ascii_hexdigit() || matches!(c, 'x' | 'X');
+    let dotted = text.contains('.') && text.chars().all(|c| numeric(c) || c == '.');
+    let (address, _zone) = text.split_once('%').unwrap_or((&text, ""));
+    let coloned = address.contains(':')
+        && address
+            .chars()
+            .all(|c| numeric(c) || matches!(c, ':' | '.' | '[' | ']' | '/'));
+    dotted || coloned
+}
+
+/// The device id a CLIENT put in a request body, if it may be used as one.
+///
+/// An address is never a client's to claim. Address-keyed bindings belong to
+/// VPN players and are only ever reached through the proxy's header (see
+/// [`request_source_wg_ip`]); honouring one from a body would let any client
+/// name another player's binding. Such a value is treated exactly like a
+/// missing id, as is an empty one.
+fn client_device_id(route: &str, device_id: Option<&str>) -> Option<String> {
+    let device_id = device_id.filter(|s| !s.trim().is_empty())?;
+    if looks_like_a_network_address(device_id) {
+        log::warn!(
+            "{route}: ignored an address-shaped deviceId sent in the request body ({} chars); an address identifies a device only when our own proxy supplies it",
+            device_id.chars().count()
+        );
+        return None;
+    }
+    Some(device_id.to_string())
+}
+
+/// The WireGuard peer address our proxy vouches for, if this request came
+/// through it.
+///
+/// Honoured only when the connection itself comes from a trusted peer, and
+/// only when the value is an address. The public edge erases the header, but
+/// that is one configuration line on another host; the check here does not
+/// depend on it.
+fn request_source_wg_ip(req: &HttpRequest) -> Option<String> {
+    let value = req
+        .headers()
+        .get("x-newblades-device-ip")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let peer = req.peer_addr().map(|addr| addr.ip());
+    if !peer_may_vouch_for_a_device(peer, device_ip_trusted_peers()) {
+        log::warn!(
+            "ignored X-Newblades-Device-Ip from a peer that may not vouch for a device (peer {peer:?}, {} {})",
+            req.method(),
+            req.path()
+        );
+        return None;
+    }
+    if value.parse::<std::net::IpAddr>().is_err() {
+        log::warn!("ignored X-Newblades-Device-Ip: the value is not an address");
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn caller_device_identity(
+    req: &HttpRequest,
+    route: &str,
+    device_id: Option<&str>,
+) -> Option<String> {
+    client_device_id(route, device_id).or_else(|| request_source_wg_ip(req))
 }
 
 #[derive(diesel::QueryableByName)]
@@ -534,7 +665,7 @@ async fn move_throwaway_device_claim(
     for row in &moved {
         log::info!(
             "device claim moved: {} from {} to {} (reason: account login)",
-            row.device_id,
+            crate::log_redact::device_for_log(&row.device_id),
             source_user_id,
             target_user_id
         );
@@ -621,8 +752,8 @@ async fn bnet_link(
         // answers would switch them without consent — and the loser of that
         // choice is discarded.
         log::info!(
-            "account link: conflict — credential names {secret_id}, client is signed in as {:?}",
-            body.selected_user_id
+            "{}",
+            crate::log_redact::link_conflict_line(user_id, body.selected_user_id.as_deref())
         );
         return Ok(web::Json(BnetLinkResponse {
             account_link_result: AccountLinkResult {
@@ -948,7 +1079,8 @@ async fn bnet_link_force(
     // authoritative source account whose installation is being linked.
     let source_user_id = current_session.get_session_or_error()?.session.user_id;
     let body = body.into_inner();
-    let caller_device_id = caller_device_identity(&req, body.device_id.as_deref());
+    let caller_device_id =
+        caller_device_identity(&req, "account link (forced)", body.device_id.as_deref());
     let (user_id, secret_id, session) =
         resolve_link(&app_state, &body.username, &body.password).await?;
 
@@ -963,8 +1095,9 @@ async fn bnet_link_force(
                 move_throwaway_device_claim(&mut conn, source_user_id, user_id, device_id).await
         {
             log::warn!(
-                "device claim move failed for {device_id} from {source_user_id} to {user_id} \
-                 after forced account link: {error}"
+                "device claim move failed for {} from {source_user_id} to {user_id} \
+                 after forced account link: {error}",
+                crate::log_redact::device_for_log(device_id)
             );
         }
         apply_forced_link_changes(&mut conn, source_user_id, user_id, keep_played)
@@ -1125,6 +1258,16 @@ async fn anon_login_inner(
 ) -> Result<web::Json<SessionResponse>, BladeApiError> {
     use schema::users::dsl::*;
 
+    // From here on `info.device_id` is the id this client may be keyed by: an
+    // address-shaped (or empty) value from the body is gone, so every use
+    // below — the binding lookup and upsert, `gp_deviceids` — sees the same
+    // thing a client that sent no id would.
+    let info = {
+        let mut info = info.into_inner();
+        info.device_id = client_device_id("anon login", info.device_id.as_deref());
+        web::Json(info)
+    };
+
     // Per-player claim link. Record this device's anon login (so the web claim UI
     // can list "recent devices"), and if the device has already been claimed
     // (bound to a user via /api/dev/v1/bind-device), log in as THAT user — their
@@ -1242,7 +1385,7 @@ async fn anon_login_inner(
                         "device_bindings: WG-IP fallback resolved {} via source_wg_ip {} \
                          (primary key miss — device reconnected with null deviceId after \
                          being bound under a stable hash; Fix 1 systemic binding fix)",
-                        device_id_val,
+                        crate::log_redact::device_for_log(&device_id_val),
                         wg_ip
                     );
                 }
@@ -1478,7 +1621,7 @@ async fn anon_login_inner(
                 let user = &existing[0];
                 log::info!(
                     "anon login: device {} recognised as existing user {}",
-                    this_device,
+                    crate::log_redact::device_for_log(this_device),
                     user.id
                 );
                 let session = Arc::new(Session::new(
@@ -1516,7 +1659,7 @@ async fn anon_login_inner(
                 log::warn!(
                     "anon login: device {} matches {} users — not guessing which; \
                      minting a new one. These need merging.",
-                    this_device,
+                    crate::log_redact::device_for_log(this_device),
                     existing.len()
                 );
             }
@@ -2953,9 +3096,15 @@ mod token_refresh {
             "timestamp":1}}"#;
         let gc: GcLoginInfo = serde_json::from_str(body).expect("retail gc body must parse");
         let anon = gc_as_anon(gc);
-        assert_eq!(anon.device_id.as_deref(), Some("00000000-0000-0000-0000-000000000000"));
+        assert_eq!(
+            anon.device_id.as_deref(),
+            Some("00000000-0000-0000-0000-000000000000")
+        );
         assert_eq!(anon.platform, IOS_PLATFORM);
-        assert!(anon.user_id.is_none(), "a gc login never presents a secret user id");
+        assert!(
+            anon.user_id.is_none(),
+            "a gc login never presents a secret user id"
+        );
 
         let bare: GcLoginInfo = serde_json::from_str(r#"{"deviceId":null}"#).unwrap();
         assert_eq!(gc_as_anon(bare).platform, IOS_PLATFORM);
@@ -3035,5 +3184,624 @@ mod token_refresh {
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(err.error_code(), 201);
+    }
+}
+
+/// An address is a device identity only when our own proxy says so.
+///
+/// Address-keyed bindings belong to VPN players, and the address space is small
+/// and guessable. These drive the real handlers over HTTP, against the real
+/// schema, because the property is about what a REQUEST can reach: a helper
+/// that is right and a handler that forgets to call it is the bug again.
+#[cfg(test)]
+mod device_identity_tests {
+    use super::*;
+    use actix_web::{App, test as http};
+    use bb8::Pool;
+    use diesel_async::{
+        AsyncPgConnection, SimpleAsyncConnection, pooled_connection::AsyncDieselConnectionManager,
+    };
+    use std::net::SocketAddr;
+
+    const ANON: &str = "/blades.bgs.services/api/authentication/v1/public/auth/anon";
+    const GC: &str = "/blades.bgs.services/api/authentication/v1/public/auth/gc";
+    const LOGIN: &str = "/blades.bgs.services/api/authentication/v1/public/auth/bnet/login";
+    const FORCE: &str = "/blades.bgs.services/api/authentication/v1/public/auth/bnet/link/force";
+
+    /// Where our proxy's requests come from: the container bridge gateway.
+    const PROXY: &str = "172.26.0.1:41000";
+    /// The public edge. Trusted as a peer, but it never forwards the header.
+    const EDGE: &str = "172.24.0.4:41000";
+    /// A tunnel client that routed itself straight to the container.
+    const TUNNEL_CLIENT: &str = "10.99.3.7:41000";
+
+    struct Fixture {
+        admin_url: String,
+        schema: String,
+        global: Arc<ServerGlobal>,
+        conn: AsyncPgConnection,
+    }
+
+    /// A private copy of the real schema, reached through a real pool.
+    ///
+    /// Not a test transaction like the SQL-level tests above: a handler takes
+    /// its own pooled connections, so the rows have to be visible across them.
+    async fn fixture() -> Option<Fixture> {
+        let Some(admin_url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — device identity handlers not verified");
+            return None;
+        };
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        let mut admin = AsyncPgConnection::establish(&admin_url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        admin
+            .batch_execute(&format!("CREATE SCHEMA {schema}"))
+            .await
+            .unwrap();
+        let url = format!(
+            "{admin_url}{}options=-c%20search_path%3D{schema}",
+            if admin_url.contains('?') { '&' } else { '?' }
+        );
+        let mut conn = AsyncPgConnection::establish(&url).await.unwrap();
+        let migrations = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../migrations");
+        let mut dirs: Vec<_> = std::fs::read_dir(&migrations)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.join("up.sql").is_file())
+            .collect();
+        dirs.sort();
+        for dir in dirs {
+            let sql = std::fs::read_to_string(dir.join("up.sql")).unwrap();
+            conn.batch_execute(&sql)
+                .await
+                .unwrap_or_else(|e| panic!("migration {dir:?} failed: {e}"));
+        }
+
+        let db_pool = Pool::builder()
+            .max_size(4)
+            .build(AsyncDieselConnectionManager::<AsyncPgConnection>::new(url))
+            .await
+            .unwrap();
+        let null = serde_json::Value::Null;
+        let global = Arc::new(ServerGlobal {
+            db_pool: db_pool.clone(),
+            session_store: crate::session::SessionStore::new(std::time::Duration::from_secs(3600)),
+            static_data_path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../deploy/static"),
+            game_data: serde_json::from_value(serde_json::json!({
+                "items_template": {}, "interactables": {}, "quests": {}, "dungeons": {}
+            }))
+            .unwrap(),
+            static_data: Default::default(),
+            repair_data: blades_lib::features::repair::RepairData::from_json(&null, &null),
+            building_upgrades: null.clone(),
+            style_prestige: null.clone(),
+            skip_time_costs: None,
+            job_pools: null.clone(),
+            appearance_change_cost: null.clone(),
+            shop_stock: Default::default(),
+            sell_prices: blades_lib::features::merchant::SellPrices::from_json(&null, &null),
+            level_up_data: blades_lib::features::level_up::LevelUpData::from_json(&null),
+            event_quests: crate::event_quests::EventQuestData::from_json(&null),
+            arena: crate::arena::matchmaker::ArenaGlobal::start(
+                crate::arena::config::ArenaConfig::from_env(),
+                db_pool,
+            ),
+            arena_import_token: None,
+            arena_debug_token: None,
+            dev_login_user_id: None,
+        });
+        // The matchmaker task ends the PROCESS when its channel closes, which
+        // is what dropping the last `ServerGlobal` does. Keep one alive; the
+        // task is cancelled with the test's runtime instead.
+        std::mem::forget(global.clone());
+        Some(Fixture {
+            admin_url,
+            schema,
+            global,
+            conn,
+        })
+    }
+
+    impl Fixture {
+        async fn finish(self) {
+            let Fixture {
+                admin_url,
+                schema,
+                global,
+                conn,
+            } = self;
+            drop(conn);
+            drop(global);
+            if let Ok(mut admin) = AsyncPgConnection::establish(&admin_url).await {
+                let _ = admin
+                    .batch_execute(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
+                    .await;
+            }
+        }
+
+        async fn add_user(&mut self) -> UserDBEntry {
+            let user = UserDBEntry {
+                id: Uuid::new_v4(),
+                secret_id: Uuid::new_v4(),
+                data: JsonDbWrapper(UserAccount::new_random()),
+            };
+            insert_into(schema::users::table)
+                .values(&user)
+                .execute(&mut self.conn)
+                .await
+                .unwrap();
+            user
+        }
+
+        /// A claimed binding as the claim link leaves it: no platform yet, so
+        /// any anonymous login that touches the row is visible afterwards.
+        async fn bind(&mut self, device: &str, user: Uuid) {
+            diesel::sql_query(
+                "INSERT INTO device_bindings (device_id, user_id, bound_at) VALUES ($1, $2, now())",
+            )
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .bind::<diesel::sql_types::Uuid, _>(user)
+            .execute(&mut self.conn)
+            .await
+            .unwrap();
+        }
+
+        /// `(owner, platform)` of a binding row, or `None` when there is no row.
+        async fn binding(&mut self, device: &str) -> Option<(Option<Uuid>, Option<String>)> {
+            #[derive(diesel::QueryableByName)]
+            struct Row {
+                #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+                user_id: Option<Uuid>,
+                #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+                platform: Option<String>,
+            }
+            diesel::sql_query("SELECT user_id, platform FROM device_bindings WHERE device_id = $1")
+                .bind::<diesel::sql_types::Text, _>(device.to_string())
+                .get_result::<Row>(&mut self.conn)
+                .await
+                .optional()
+                .unwrap()
+                .map(|row| (row.user_id, row.platform))
+        }
+
+        async fn binding_count(&mut self) -> i64 {
+            #[derive(diesel::QueryableByName)]
+            struct Count {
+                #[diesel(sql_type = diesel::sql_types::BigInt)]
+                n: i64,
+            }
+            diesel::sql_query("SELECT count(*) AS n FROM device_bindings")
+                .get_result::<Count>(&mut self.conn)
+                .await
+                .unwrap()
+                .n
+        }
+
+        /// An account with a website login, and the password that opens it.
+        async fn add_account_with_login(&mut self) -> (UserDBEntry, String, &'static str) {
+            let user = self.add_user().await;
+            let username = format!("u{}", &Uuid::new_v4().simple().to_string()[..12]);
+            let password = "correct horse battery";
+            diesel::sql_query(
+                "INSERT INTO arena_credentials (username, user_id, password_hash, created_at, \
+                 updated_at) VALUES ($1, $2, $3, 0, 0)",
+            )
+            .bind::<diesel::sql_types::Text, _>(username.clone())
+            .bind::<diesel::sql_types::Uuid, _>(user.id)
+            .bind::<diesel::sql_types::Text, _>(crate::credentials::hash_password(password))
+            .execute(&mut self.conn)
+            .await
+            .unwrap();
+            (user, username, password)
+        }
+
+        /// The `Authorization` value of a live session for `user`.
+        fn sign_in(&self, user: &UserDBEntry) -> String {
+            let store = &self.global.session_store;
+            let session = Arc::new(Session::new(user.id, user.secret_id, store.ttl));
+            // Called through a binding: `session.rs` counts the textual mint
+            // sites in this file against the claim sites, and a test fixture
+            // is not a login path.
+            let mint = crate::session::SessionStore::store_new_session;
+            let session_id = mint(store, session.clone());
+            format!("Session={}", session.generate_token(&session_id))
+        }
+
+        /// POST `body` to `uri` as `peer`; returns the status and the account
+        /// the response signs the caller in as (public id), if it signed in.
+        async fn post(
+            &self,
+            uri: &str,
+            peer: &str,
+            headers: &[(&str, &str)],
+            body: serde_json::Value,
+        ) -> (StatusCode, Option<String>) {
+            let app = http::init_service(
+                App::new()
+                    .app_data(web::Data::new(self.global.clone()))
+                    .service(anon_log_in)
+                    .service(gc_log_in)
+                    .service(bnet_log_in)
+                    .service(bnet_link_force),
+            )
+            .await;
+            let mut req = http::TestRequest::post()
+                .uri(uri)
+                .peer_addr(peer.parse::<SocketAddr>().unwrap())
+                .set_json(body);
+            for (name, value) in headers {
+                req = req.insert_header((*name, *value));
+            }
+            let res = http::call_service(&app, req.to_request()).await;
+            let status = res.status();
+            let body: serde_json::Value =
+                serde_json::from_slice(&http::read_body(res).await).unwrap_or_default();
+            let user = body["session"]["userId"].as_str().map(str::to_string);
+            (status, user)
+        }
+    }
+
+    fn vpn_address() -> String {
+        let n = Uuid::new_v4().as_u128();
+        format!("10.99.{}.{}", (n >> 8) as u8, n as u8)
+    }
+
+    /// Spellings of an address a client might send, each paired with the
+    /// binding it would name if it were taken at its word.
+    fn address_spellings() -> Vec<String> {
+        [
+            "10.99.4.17",
+            " 10.99.4.17 ",
+            "10.99.4.17\n",
+            "\t10.99.4.17",
+            "010.099.004.017",
+            "10.99.4.17:443",
+            "::ffff:10.99.4.17",
+            "::FFFF:10.99.4.17",
+            "[::ffff:10.99.4.17]",
+            "fd00::4:17",
+            "FD00::4:17",
+            "fd00:0:0:0:0:0:4:17",
+            "fe80::1%wg0",
+            "0x0a.0x63.4.17",
+        ]
+        .map(str::to_string)
+        .to_vec()
+    }
+
+    #[test]
+    fn every_spelling_of_an_address_is_recognised_and_real_device_ids_are_not() {
+        for spelling in address_spellings() {
+            assert!(
+                looks_like_a_network_address(&spelling),
+                "{spelling:?} must read as an address"
+            );
+            assert_eq!(
+                client_device_id("test", Some(&spelling)),
+                None,
+                "{spelling:?} must not become a device key"
+            );
+        }
+        for real in [
+            "0123456789abcdef0123456789abcdef",
+            "D3ADBEEF0123456789ABCDEF01234567",
+            "6f9619ff-8b86-d011-b42d-00c04fc964ff",
+            "install-hash",
+            "12345678901234567890123456789012",
+        ] {
+            assert_eq!(client_device_id("test", Some(real)).as_deref(), Some(real));
+        }
+        assert_eq!(client_device_id("test", Some("")), None);
+        assert_eq!(client_device_id("test", Some("  ")), None);
+        assert_eq!(client_device_id("test", None), None);
+    }
+
+    #[test]
+    fn only_the_proxys_own_peers_may_vouch_for_a_device() {
+        let trusted = parse_trusted_peers(DEFAULT_DEVICE_IP_TRUSTED_PEERS);
+        let peer = |text: &str| Some(text.parse::<std::net::IpAddr>().unwrap());
+        for ok in [
+            "127.0.0.1",
+            "::1",
+            "172.26.0.1",
+            "::ffff:172.26.0.1",
+            "192.168.65.1",
+        ] {
+            assert!(peer_may_vouch_for_a_device(peer(ok), &trusted), "{ok}");
+        }
+        for no in [
+            "10.99.3.7",
+            "203.0.113.9",
+            "172.32.0.1",
+            "::ffff:10.99.3.7",
+            "fd00::1",
+        ] {
+            assert!(!peer_may_vouch_for_a_device(peer(no), &trusted), "{no}");
+        }
+        assert!(!peer_may_vouch_for_a_device(None, &trusted));
+
+        let narrowed = parse_trusted_peers("172.26.0.1, bogus, ::1/128");
+        assert_eq!(narrowed.len(), 2);
+        assert!(peer_may_vouch_for_a_device(peer("172.26.0.1"), &narrowed));
+        assert!(!peer_may_vouch_for_a_device(peer("172.26.0.2"), &narrowed));
+    }
+
+    #[actix_web::test]
+    async fn anonymous_login_never_takes_an_address_from_the_body() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let owner = fx.add_user().await;
+        for spelling in address_spellings() {
+            // The worst case: a binding keyed by exactly the text the client sends.
+            fx.bind(&spelling, owner.id).await;
+        }
+        let before = fx.binding_count().await;
+
+        for uri in [ANON, GC] {
+            for spelling in address_spellings() {
+                let (status, user) = fx
+                    .post(
+                        uri,
+                        EDGE,
+                        &[],
+                        serde_json::json!({"deviceId": spelling, "platform": "gp"}),
+                    )
+                    .await;
+                assert_eq!(status, StatusCode::OK, "{uri} {spelling:?}");
+                assert_ne!(
+                    user,
+                    Some(owner.id.to_string()),
+                    "{uri}: {spelling:?} in the body signed the caller in as the binding's owner"
+                );
+                assert_eq!(
+                    fx.binding(&spelling).await,
+                    Some((Some(owner.id), None)),
+                    "{uri}: {spelling:?} in the body touched the binding"
+                );
+            }
+        }
+        assert_eq!(fx.binding_count().await, before, "a binding was created");
+        fx.finish().await;
+    }
+
+    #[actix_web::test]
+    async fn an_address_in_the_body_creates_no_binding_and_no_remembered_device() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let address = vpn_address();
+
+        // First run: no stored secret. The client gets a fresh account, as one
+        // that sent no id would, and nothing is keyed by the address.
+        let (status, minted) = fx
+            .post(
+                ANON,
+                EDGE,
+                &[],
+                serde_json::json!({"deviceId": address, "platform": "gp"}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(minted.is_some());
+        assert_eq!(
+            fx.binding(&address).await,
+            None,
+            "a binding row was created"
+        );
+
+        // Returning client: proves its account, still sends the address.
+        let known = fx.add_user().await;
+        let (status, user) = fx
+            .post(
+                ANON,
+                EDGE,
+                &[],
+                serde_json::json!({
+                    "userId": known.secret_id, "deviceId": address, "platform": "gp"
+                }),
+            )
+            .await;
+        assert_eq!((status, user), (StatusCode::OK, Some(known.id.to_string())));
+        assert_eq!(fx.binding(&address).await, None);
+
+        #[derive(diesel::QueryableByName)]
+        struct Count {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            n: i64,
+        }
+        let remembered = diesel::sql_query(
+            "SELECT count(*) AS n FROM users \
+             WHERE COALESCE(data->'gp_deviceids', '[]'::jsonb) ? $1",
+        )
+        .bind::<diesel::sql_types::Text, _>(address.clone())
+        .get_result::<Count>(&mut fx.conn)
+        .await
+        .unwrap()
+        .n;
+        assert_eq!(
+            remembered, 0,
+            "the address was recorded as an account's device"
+        );
+        fx.finish().await;
+    }
+
+    #[actix_web::test]
+    async fn the_proxys_header_still_signs_a_vpn_player_in() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let owner = fx.add_user().await;
+        let address = vpn_address();
+        fx.bind(&address, owner.id).await;
+
+        for (uri, body) in [
+            (
+                ANON,
+                serde_json::json!({"deviceId": null, "platform": "gp"}),
+            ),
+            (GC, serde_json::json!({"deviceId": null})),
+            // What a VPN build does today if it echoes its own address: the
+            // body value is dropped and the header says the same thing.
+            (
+                ANON,
+                serde_json::json!({"deviceId": address, "platform": "gp"}),
+            ),
+        ] {
+            let (status, user) = fx
+                .post(uri, PROXY, &[("X-Newblades-Device-Ip", &address)], body)
+                .await;
+            assert_eq!(
+                (status, user),
+                (StatusCode::OK, Some(owner.id.to_string())),
+                "{uri}"
+            );
+        }
+        assert_eq!(
+            fx.binding(&address).await.map(|(user, _)| user),
+            Some(Some(owner.id))
+        );
+        fx.finish().await;
+    }
+
+    #[actix_web::test]
+    async fn the_header_is_ignored_from_a_peer_that_is_not_the_proxy() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let owner = fx.add_user().await;
+        let address = vpn_address();
+        fx.bind(&address, owner.id).await;
+
+        for peer in [TUNNEL_CLIENT, "203.0.113.9:41000"] {
+            for uri in [ANON, GC] {
+                let (status, user) = fx
+                    .post(
+                        uri,
+                        peer,
+                        &[("X-Newblades-Device-Ip", &address)],
+                        serde_json::json!({"deviceId": null, "platform": "gp"}),
+                    )
+                    .await;
+                assert_eq!(status, StatusCode::OK);
+                assert_ne!(user, Some(owner.id.to_string()), "{uri} from {peer}");
+            }
+        }
+        assert_eq!(fx.binding(&address).await, Some((Some(owner.id), None)));
+        fx.finish().await;
+    }
+
+    #[actix_web::test]
+    async fn an_opaque_device_id_still_signs_its_player_in() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let owner = fx.add_user().await;
+        let device = Uuid::new_v4().simple().to_string();
+        fx.bind(&device, owner.id).await;
+
+        // Over the public edge, and over the tunnel where the header is present
+        // too: the client's own id is the key either way.
+        let address = vpn_address();
+        for (peer, headers) in [
+            (EDGE, vec![]),
+            (PROXY, vec![("X-Newblades-Device-Ip", address.as_str())]),
+        ] {
+            let (status, user) = fx
+                .post(
+                    ANON,
+                    peer,
+                    &headers,
+                    serde_json::json!({"deviceId": device, "platform": "gp"}),
+                )
+                .await;
+            assert_eq!((status, user), (StatusCode::OK, Some(owner.id.to_string())));
+        }
+        fx.finish().await;
+    }
+
+    /// The account-login routes move the CALLER's binding to the account a
+    /// credential proved. With an address in the body, a caller could name a
+    /// binding that is not this installation's.
+    #[actix_web::test]
+    async fn account_login_and_forced_link_never_move_a_binding_named_in_the_body() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let (account, username, password) = fx.add_account_with_login().await;
+
+        for uri in [LOGIN, FORCE] {
+            let throwaway = fx.add_user().await;
+            let address = vpn_address();
+            fx.bind(&address, throwaway.id).await;
+            let authorization = fx.sign_in(&throwaway);
+            let (status, user) = fx
+                .post(
+                    uri,
+                    EDGE,
+                    &[("Authorization", &authorization)],
+                    serde_json::json!({
+                        "username": username, "password": password,
+                        "deviceId": address, "platform": "gp",
+                        "selectedUserId": account.id,
+                    }),
+                )
+                .await;
+            assert_eq!(
+                (status, user),
+                (StatusCode::OK, Some(account.id.to_string())),
+                "{uri}"
+            );
+            assert_eq!(
+                fx.binding(&address).await.map(|(user, _)| user),
+                Some(Some(throwaway.id)),
+                "{uri}: an address in the body moved a binding"
+            );
+        }
+        fx.finish().await;
+    }
+
+    #[actix_web::test]
+    async fn account_login_still_moves_the_binding_the_proxy_vouches_for() {
+        let Some(mut fx) = fixture().await else {
+            return;
+        };
+        let (account, username, password) = fx.add_account_with_login().await;
+
+        for (uri, peer, moves) in [
+            (LOGIN, PROXY, true),
+            (FORCE, PROXY, true),
+            (LOGIN, TUNNEL_CLIENT, false),
+            (FORCE, TUNNEL_CLIENT, false),
+        ] {
+            let throwaway = fx.add_user().await;
+            let address = vpn_address();
+            fx.bind(&address, throwaway.id).await;
+            let authorization = fx.sign_in(&throwaway);
+            let (status, _) = fx
+                .post(
+                    uri,
+                    peer,
+                    &[
+                        ("Authorization", &authorization),
+                        ("X-Newblades-Device-Ip", &address),
+                    ],
+                    serde_json::json!({
+                        "username": username, "password": password,
+                        "selectedUserId": account.id,
+                    }),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{uri} from {peer}");
+            let holder = if moves { account.id } else { throwaway.id };
+            assert_eq!(
+                fx.binding(&address).await.map(|(user, _)| user),
+                Some(Some(holder)),
+                "{uri} from {peer}"
+            );
+        }
+        fx.finish().await;
     }
 }

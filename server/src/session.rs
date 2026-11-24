@@ -682,7 +682,10 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
     let mut conn = match db.get().await {
         Ok(c) => c,
         Err(_) => {
-            error!("sessions: db pool unavailable (persist {session_id})");
+            error!(
+                "sessions: db pool unavailable (persist {})",
+                crate::log_redact::opaque_tag(&session_id.to_string())
+            );
             return;
         }
     };
@@ -707,7 +710,10 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
     .execute(&mut conn)
     .await
     {
-        error!("sessions: persist insert failed ({session_id}): {e}");
+        error!(
+            "sessions: persist insert failed ({}): {e}",
+            crate::log_redact::opaque_tag(&session_id.to_string())
+        );
     }
 }
 

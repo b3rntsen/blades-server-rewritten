@@ -58,8 +58,21 @@ const DK_LEN: usize = 32;
 /// pinned against published vectors in the tests, so "hand-rolled" does not mean
 /// "unverified".
 fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; DK_LEN] {
+    #[cfg(test)]
+    {
+        PBKDF2_RUNS_ON_THIS_THREAD.with(|runs| runs.set(runs.get() + 1));
+        if password.len() > MAX_PASSWORD_BYTES {
+            OVERSIZE_DERIVATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    // Keyed ONCE and cloned per round. HMAC folds a key longer than its block
+    // into a hash of the key first; keying inside the loop repeated that for
+    // every one of the 200k rounds, so the cost of a login grew with the
+    // length of the password the caller chose to send. The output is the same
+    // function — the published vectors below pin it, long key included.
+    let keyed = HmacSha256::new_from_slice(password).expect("hmac takes any key length");
     let mut u = {
-        let mut mac = HmacSha256::new_from_slice(password).expect("hmac takes any key length");
+        let mut mac = keyed.clone();
         mac.update(salt);
         // INT_32_BE(1) — the block index. dkLen is one block, so it is always 1.
         mac.update(&1u32.to_be_bytes());
@@ -67,7 +80,7 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; DK_LEN] 
     };
     let mut out = u;
     for _ in 1..iterations {
-        let mut mac = HmacSha256::new_from_slice(password).expect("hmac takes any key length");
+        let mut mac = keyed.clone();
         mac.update(&u);
         u = mac.finalize().into_bytes();
         for (o, n) in out.iter_mut().zip(u.iter()) {
@@ -77,6 +90,20 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32) -> [u8; DK_LEN] 
     let mut dk = [0u8; DK_LEN];
     dk.copy_from_slice(&out);
     dk
+}
+
+/// Derivations of a password over the limit, on ANY thread. No test derives
+/// one on purpose, so anything but zero means a bound was skipped — including
+/// on the blocking pool, where the per-thread counter cannot see.
+#[cfg(test)]
+static OVERSIZE_DERIVATIONS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread ran the key derivation. Lets a test say "no
+    /// hash work was done" (or "it was done somewhere else") as a fact rather
+    /// than a timing.
+    static PBKDF2_RUNS_ON_THIS_THREAD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -171,6 +198,26 @@ pub fn username_is_valid(raw: &str) -> bool {
 /// 200k-iteration PBKDF2 is doing real work.
 pub const MIN_PASSWORD_LEN: usize = 8;
 
+/// Longest password, in bytes, that is ever hashed or verified.
+///
+/// The login endpoints are unauthenticated and the JSON body limit is 16 MiB,
+/// so without a bound the caller chooses how much this server reads and
+/// hashes. Far above anything a person or a password manager produces; the
+/// website has never set a maximum, so the bound is generous rather than
+/// tidy — it must not turn a working login into a wrong password.
+pub const MAX_PASSWORD_BYTES: usize = 1024;
+
+/// Longest username, in bytes, that is ever looked up. A real one is at most
+/// 24 ASCII characters ([`username_is_valid`]); the slack is for whitespace a
+/// keyboard adds, which [`normalise_username`] trims.
+pub const MAX_USERNAME_BYTES: usize = 128;
+
+/// Could this pair be a real credential at all? Checked before anything is
+/// normalised, looked up or hashed.
+pub fn credential_is_within_bounds(username: &str, password: &str) -> bool {
+    username.len() <= MAX_USERNAME_BYTES && password.len() <= MAX_PASSWORD_BYTES
+}
+
 #[derive(Debug, Clone, Queryable, Selectable)]
 #[diesel(table_name = crate::schema::arena_credentials)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -193,9 +240,158 @@ pub async fn find_by_username(
         .optional()
 }
 
+/// Check a username and password, and name the account they open.
+///
+/// The one place the login and link endpoints decide whether a credential is
+/// good, so they cannot drift apart:
+///
+/// - Out-of-bounds input is refused before any work, and reads to the caller
+///   exactly like a wrong password.
+/// - "No such user" and "wrong password" do the same PBKDF2 work, against
+///   [`ENUMERATION_DUMMY_HASH`] when there is no row, so the response time
+///   does not say who plays here.
+/// - The derivation runs on the blocking pool. It is tens of milliseconds of
+///   pure CPU; on an async worker it stalls every other request that worker
+///   is carrying, and anyone can ask for it.
+pub async fn check_login(
+    conn: &mut AsyncPgConnection,
+    username_raw: &str,
+    password: &str,
+) -> Option<Uuid> {
+    if !credential_is_within_bounds(username_raw, password) {
+        log::warn!(
+            "credential check: refused an over-long username or password without hashing (username {} bytes, password {} bytes)",
+            username_raw.len(),
+            password.len()
+        );
+        return None;
+    }
+    let username = normalise_username(username_raw);
+    let found = find_by_username(conn, &username).await.unwrap_or(None);
+    let (user_id, hash) = match found {
+        Some(row) => (Some(row.user_id), row.password_hash),
+        None => (None, ENUMERATION_DUMMY_HASH.to_string()),
+    };
+    let ok = verify_password_off_the_async_workers(password.to_string(), hash).await;
+    user_id.filter(|_| ok)
+}
+
+/// [`verify_password`] on the blocking pool. A task that cannot be joined is a
+/// failed check, never a passed one.
+pub async fn verify_password_off_the_async_workers(password: String, stored: String) -> bool {
+    tokio::task::spawn_blocking(move || verify_password(&password, &stored))
+        .await
+        .unwrap_or(false)
+}
+
+/// [`hash_password`] on the blocking pool, for the same reason.
+pub async fn hash_password_off_the_async_workers(password: String) -> Option<String> {
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pbkdf2_runs_on_this_thread() -> u32 {
+        PBKDF2_RUNS_ON_THIS_THREAD.with(|runs| runs.get())
+    }
+
+    /// RFC 4231 test case 6 keys HMAC-SHA256 with 131 bytes — longer than the
+    /// 64-byte block, the case where the key is hashed first. One PBKDF2 round
+    /// over an empty salt is HMAC(key, INT(1)), so the keyed-once derivation
+    /// must agree with a freshly keyed HMAC for a long key, and with the
+    /// straightforward key-every-round loop for several rounds.
+    #[test]
+    fn a_key_longer_than_the_hmac_block_derives_the_same_bytes() {
+        for len in [1usize, 63, 64, 65, 131, 1024] {
+            let key = vec![0xaau8; len];
+            let mut u = {
+                let mut mac = HmacSha256::new_from_slice(&key).unwrap();
+                mac.update(b"salt");
+                mac.update(&1u32.to_be_bytes());
+                mac.finalize().into_bytes()
+            };
+            let mut reference = u;
+            for _ in 1..5 {
+                let mut mac = HmacSha256::new_from_slice(&key).unwrap();
+                mac.update(&u);
+                u = mac.finalize().into_bytes();
+                for (o, n) in reference.iter_mut().zip(u.iter()) {
+                    *o ^= *n;
+                }
+            }
+            assert_eq!(
+                pbkdf2_sha256(&key, b"salt", 5)[..],
+                reference[..],
+                "{len}-byte key"
+            );
+        }
+    }
+
+    #[test]
+    fn an_over_long_credential_is_refused_before_any_hash_work() {
+        let stored = hash_password("correct horse battery");
+        let before = pbkdf2_runs_on_this_thread();
+
+        let too_long = "x".repeat(MAX_PASSWORD_BYTES + 1);
+        assert!(!credential_is_within_bounds("ruukoto", &too_long));
+        assert!(!credential_is_within_bounds(
+            &"u".repeat(MAX_USERNAME_BYTES + 1),
+            "correct horse battery"
+        ));
+        // Bytes, not characters: the cost is in what has to be read.
+        assert!(!credential_is_within_bounds(
+            "ruukoto",
+            &"\u{1F512}".repeat(MAX_PASSWORD_BYTES / 4 + 1)
+        ));
+        assert_eq!(
+            pbkdf2_runs_on_this_thread(),
+            before,
+            "the bounds check must not derive anything"
+        );
+
+        // The longest allowed password is an ordinary one, and still verifies.
+        let longest = "p".repeat(MAX_PASSWORD_BYTES);
+        assert!(credential_is_within_bounds("ruukoto", &longest));
+        assert!(credential_is_within_bounds(
+            "  Ruukoto  ",
+            "correct horse battery"
+        ));
+        assert!(verify_password(&longest, &hash_password(&longest)));
+        assert!(verify_password("correct horse battery", &stored));
+        assert!(pbkdf2_runs_on_this_thread() > before);
+    }
+
+    /// The property is "not on the thread that is serving requests". The
+    /// counter is per thread, so a derivation that ran here would show.
+    #[tokio::test]
+    async fn verification_and_hashing_run_off_the_calling_thread() {
+        let cheap = {
+            let salt = [7u8; SALT_LEN];
+            let dk = pbkdf2_sha256(b"pw", &salt, 1000);
+            format!("pbkdf2$1000${}${}", hex(&salt), hex(&dk))
+        };
+        let before = pbkdf2_runs_on_this_thread();
+
+        assert!(verify_password_off_the_async_workers("pw".into(), cheap.clone()).await);
+        assert!(!verify_password_off_the_async_workers("wrong".into(), cheap).await);
+        assert!(
+            !verify_password_off_the_async_workers("pw".into(), ENUMERATION_DUMMY_HASH.into())
+                .await
+        );
+        let stored = hash_password_off_the_async_workers("pw".into())
+            .await
+            .expect("the hashing task joins");
+        assert_eq!(
+            pbkdf2_runs_on_this_thread(),
+            before,
+            "the derivation ran on the thread that awaited it"
+        );
+        assert!(verify_password("pw", &stored));
+    }
 
     /// Published PBKDF2-HMAC-SHA256 vectors. Without these, "hand-rolled
     /// PBKDF2" would only be self-consistent — it could be a different function
@@ -277,6 +473,95 @@ mod tests {
         assert!(!username_is_valid(&"x".repeat(25)), "too long");
         assert!(!username_is_valid("has space"));
         assert!(!username_is_valid("émoji"));
+    }
+}
+
+#[cfg(test)]
+mod check_login_tests {
+    use super::*;
+    use diesel_async::AsyncConnection;
+
+    /// A private `arena_credentials` holding one login, `ruukoto` / `pw`.
+    async fn one_login() -> Option<(AsyncPgConnection, Uuid)> {
+        let Some(url) = std::env::var("TEST_DATABASE_URL").ok() else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — credential check not verified");
+            return None;
+        };
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        for stmt in [
+            format!("CREATE SCHEMA {schema}"),
+            format!("SET LOCAL search_path TO {schema}"),
+            "CREATE TABLE arena_credentials (
+                 username TEXT PRIMARY KEY,
+                 user_id UUID NOT NULL,
+                 password_hash TEXT NOT NULL,
+                 created_at BIGINT NOT NULL DEFAULT 0,
+                 updated_at BIGINT NOT NULL DEFAULT 0)"
+                .to_string(),
+        ] {
+            diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
+        }
+        let user_id = Uuid::new_v4();
+        let salt = [3u8; SALT_LEN];
+        let stored = format!(
+            "pbkdf2$1000${}${}",
+            hex(&salt),
+            hex(&pbkdf2_sha256(b"pw", &salt, 1000))
+        );
+        diesel::sql_query(
+            "INSERT INTO arena_credentials (username, user_id, password_hash) VALUES ($1, $2, $3)",
+        )
+        .bind::<diesel::sql_types::Text, _>("ruukoto")
+        .bind::<diesel::sql_types::Uuid, _>(user_id)
+        .bind::<diesel::sql_types::Text, _>(stored)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        Some((conn, user_id))
+    }
+
+    #[tokio::test]
+    async fn the_right_password_names_the_account_and_nothing_else_does() {
+        let Some((mut conn, user_id)) = one_login().await else {
+            return;
+        };
+        assert_eq!(check_login(&mut conn, "ruukoto", "pw").await, Some(user_id));
+        assert_eq!(
+            check_login(&mut conn, "  Ruukoto ", "pw").await,
+            Some(user_id)
+        );
+        assert_eq!(check_login(&mut conn, "ruukoto", "wrong").await, None);
+        assert_eq!(check_login(&mut conn, "nobody", "pw").await, None);
+    }
+
+    /// Refused before the derivation — on whichever thread it would have run —
+    /// and with the same `None` a wrong password gets, even when everything
+    /// but the padding is right.
+    #[tokio::test]
+    async fn an_over_long_credential_reads_as_a_wrong_password() {
+        let Some((mut conn, user_id)) = one_login().await else {
+            return;
+        };
+        let huge = "x".repeat(MAX_PASSWORD_BYTES + 1);
+        assert_eq!(check_login(&mut conn, "ruukoto", &huge).await, None);
+        assert_eq!(check_login(&mut conn, "nobody", &huge).await, None);
+        let padded = format!("ruukoto{}", " ".repeat(MAX_USERNAME_BYTES));
+        assert_eq!(check_login(&mut conn, &padded, "pw").await, None);
+        assert_eq!(
+            // Spelled out: diesel's `RunQueryDsl::load` is in scope here.
+            std::sync::atomic::AtomicU32::load(
+                &OVERSIZE_DERIVATIONS,
+                std::sync::atomic::Ordering::SeqCst
+            ),
+            0,
+            "an over-long password reached the key derivation"
+        );
+        // The account is untouched and still opens.
+        assert_eq!(check_login(&mut conn, "ruukoto", "pw").await, Some(user_id));
     }
 }
 

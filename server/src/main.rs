@@ -66,6 +66,7 @@ mod inventory;
 mod jewelry_grade;
 mod jewelry_roll;
 mod json_db;
+mod log_redact;
 pub mod models;
 mod quest;
 mod repair;
@@ -235,11 +236,22 @@ fn log_rejected_json_body(
     err: actix_web::error::JsonPayloadError,
     req: &actix_web::HttpRequest,
 ) -> actix_web::Error {
-    log::warn!(
-        "json body rejected: {} {} -- {err}",
-        req.method(),
-        req.path()
-    );
+    // serde quotes the offending VALUE in its message ("invalid type: string
+    // \"…\""). On the sign-in routes that value can be a password or a login
+    // token, so those say only that the body was rejected.
+    if req.path().contains("/api/authentication/") {
+        log::warn!(
+            "json body rejected: {} {} -- (detail withheld on an authentication route)",
+            req.method(),
+            req.path()
+        );
+    } else {
+        log::warn!(
+            "json body rejected: {} {} -- {err}",
+            req.method(),
+            req.path()
+        );
+    }
     err.into()
 }
 

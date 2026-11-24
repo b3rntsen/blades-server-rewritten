@@ -1158,7 +1158,19 @@ pub fn on_c2s_input(
         if act.block_zone == Some(true) {
             let f = &mut combat.fighters[sender];
             f.pending_manual_attack = None;
-            if act.held {
+            if act.held && !f.can_block(now) {
+                // Report #608: Reckless Fury forbids blocking
+                // (`Actor$$get_CanBlock@0x1c5b9d4` is `!HasStatus(RecklessFury 11)`,
+                // read by `PlayerActorState$$PredictNextStateChange@0x1d5c27c`). The
+                // gate sat only on the gmid 41 handler above, which no client reaches,
+                // so a press here raised the shield under Fury and cut the next hit.
+                // `guard_held` is already recorded: a press still held when Fury ends
+                // goes up then (`Fighter::reconcile_fury_end`).
+                info!(
+                    "combat block: gsid={} slot={sender} actor={} event=refused reason=reckless_fury",
+                    combat.game_session_id, combat.fighters[sender].loadout.display_name,
+                );
+            } else if act.held {
                 // Guard UP (see `Fighter::raise_guard`).
                 f.raise_guard(now);
                 debug!("combat: slot {sender} op46 blockZone DOWN — guard UP");
@@ -1183,7 +1195,7 @@ pub fn on_c2s_input(
                 }
             }
             // A block press is not a charge and never a swing.
-            f.charge_press_at = None;
+            combat.fighters[sender].charge_press_at = None;
             return Vec::new();
         }
         if act.held {
@@ -2449,7 +2461,7 @@ fn apply_reckless_fury(
     let f = &mut combat.fighters[caster_slot];
     f.reckless_fury_until = Some(now + Duration::from_secs_f32(secs));
     f.reckless_fury_bonus = bonus;
-    // Fury cannot block: drop any guard already up, and `can_block` keeps it down.
+    // Fury cannot block: drop any guard already up; `Fighter::can_block` keeps it down.
     f.blocking_until = None;
     f.block_raised_at = None;
     let obj = f.net_object_id;
@@ -5215,6 +5227,11 @@ fn reconcile_paralysis(f: &mut super::state::Fighter, now: Instant) {
     }
     // Phase 3.13: a lapsed stagger also returns the actor to Idle.
     f.reconcile_stagger(now);
+    // Report #608: a guard press refused under Reckless Fury and still held goes up
+    // when Fury ends, through the same resume.
+    if f.reconcile_fury_end(now) {
+        f.guard_resume_pending = true;
+    }
     // Report #530: a guard held through a maneuver goes up at its end.
     f.reconcile_held_guard_resume(now);
 }
@@ -7784,7 +7801,9 @@ pub fn on_tick(combat: &mut MatchCombat, now: Instant, debug_hold: bool) -> Vec<
             continue;
         }
 
-        if snapshot.state == BotObservedState::Charging {
+        // A bot under Reckless Fury cannot guard either (#608, `Actor.CanBlock`); it
+        // goes on to its attack decision instead.
+        if snapshot.state == BotObservedState::Charging && combat.fighters[bot].can_block(now) {
             let f = &mut combat.fighters[bot];
             if f.actor_state() != ActorStateType::Blocking && f.block_phase(now).is_none() {
                 f.clear_scheduled_states();
@@ -8551,6 +8570,154 @@ mod tests {
             "a release {hold_ms} ms in sits on the hasted plateau and must crit \
              ({crit_hp} vs {plain_hp} off the plateau)"
         );
+    }
+
+    /// Report #608 fixture: slot 0 optionally casts Reckless Fury over the wire, the
+    /// engine is stepped every 2 ms as production does, slot 0 presses block 1 s into
+    /// the Fury window (production: +1.046 s and +1.795 s, match d899156c) and slot 1
+    /// swings into it. Returns (slot 0's health lost, was slot 1 stunned by a high
+    /// block, was slot 0's guard ever up).
+    fn fury_block_press(fury: bool, press: bool) -> (u32, bool, bool) {
+        let now = Instant::now();
+        let mut combat = make_live_combat(now);
+        let rf_uuid = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+        combat.fighters[0].loadout.abilities.push(EquippedAbility {
+            instance_uuid: rf_uuid.to_string(),
+            level: 1,
+            tag: AbilityTag::Maneuver,
+        });
+        combat.fighters[0].max_stamina = 660;
+        combat.fighters[0].stamina = 660;
+        let cast_at = now + Duration::from_millis(100);
+        if fury {
+            let out = on_c2s_input(&mut combat, 0, &make_ability_frame(120, rf_uuid), cast_at);
+            assert!(!out.is_empty(), "precondition: the cast was accepted");
+        }
+        let anim_end = super::super::interrupts::maneuver_timing(rf_uuid, 1, None)
+            .expect("Fury has an authored animation")
+            .end;
+        let press_at = cast_at + Duration::from_secs_f32(anim_end + 1.0);
+        let swing_at = press_at + Duration::from_millis(100);
+        let until = press_at + Duration::from_millis(600);
+        let hp_before = combat.fighters[0].health;
+        let (mut pressed, mut swung, mut blocking_seen, mut stunned) = (false, false, false, false);
+        let mut t = cast_at;
+        while t < until {
+            t += Duration::from_millis(2);
+            if press && !pressed && t >= press_at {
+                pressed = true;
+                assert_eq!(
+                    combat.fighters[0].has_reckless_fury(t),
+                    fury,
+                    "precondition: the press lands inside the Fury window"
+                );
+                let frame = super::phase4_tests::make_act_frame(true, 0.0, true);
+                let _ = on_c2s_input(&mut combat, 0, &frame, t);
+            }
+            if !swung && t >= swing_at {
+                swung = true;
+                let _ = resolve_swing(&mut combat, 1, 0, 1.0, t);
+            }
+            let _ = on_tick(&mut combat, t, false);
+            let _ = drain_state_changes(&mut combat, t);
+            blocking_seen |= combat.fighters[0].actor_state() == ActorStateType::Blocking
+                || combat.fighters[0].block_phase(t).is_some();
+            stunned |= combat.fighters[1].is_staggered(t);
+        }
+        (
+            hp_before - combat.fighters[0].health,
+            stunned,
+            blocking_seen,
+        )
+    }
+
+    /// Report #608 (Pogagoga): "check if you can block after activating Rage; that
+    /// shouldn't happen". Retail: `Actor$$get_CanBlock@0x1c5b9d4` is
+    /// `!HasStatus(RecklessFury 11)`. The gate sat only on the gmid 41 handler no
+    /// client reaches, so the real press (gmid 46, blockZone) raised the guard:
+    /// production match d899156c logged `event=raise` 1.795 s and 1.046 s into his
+    /// Fury. Under Fury the press must raise nothing and the hit must land in full.
+    #[test]
+    fn a_block_press_under_reckless_fury_raises_no_guard() {
+        // Control: without Fury the same press is a high block that stuns the attacker.
+        let (blocked_hp, stunned, seen) = fury_block_press(false, true);
+        assert!(seen && stunned, "control: a normal press blocks high");
+
+        let (open_hp, _, _) = fury_block_press(true, false);
+        assert!(
+            open_hp > blocked_hp,
+            "control: an open hit costs more than a blocked one"
+        );
+
+        let (hp, stunned, seen) = fury_block_press(true, true);
+        assert!(!seen, "no guard may go up under Reckless Fury");
+        assert!(
+            !stunned,
+            "and so the attacker is not stunned by a high block"
+        );
+        assert_eq!(hp, open_hp, "the hit lands as if no block was pressed");
+    }
+
+    /// #608: the press refused under Fury is still held when Fury ends, and the
+    /// client will not send it again, so the guard goes up then — the same shape as a
+    /// guard held through a stagger (#357) or a maneuver (#530). A press released
+    /// before the end stays down.
+    #[test]
+    fn a_block_held_through_the_end_of_reckless_fury_rises_then() {
+        for release_early in [false, true] {
+            let now = Instant::now();
+            let mut combat = make_live_combat(now);
+            let rf_uuid = "0cfe29cd-89d9-42ad-9227-8308e2f87c7f";
+            combat.fighters[0].loadout.abilities.push(EquippedAbility {
+                instance_uuid: rf_uuid.to_string(),
+                level: 1,
+                tag: AbilityTag::Maneuver,
+            });
+            combat.fighters[0].max_stamina = 660;
+            combat.fighters[0].stamina = 660;
+            let cast_at = now + Duration::from_millis(100);
+            let out = on_c2s_input(&mut combat, 0, &make_ability_frame(120, rf_uuid), cast_at);
+            assert!(!out.is_empty(), "precondition: the cast was accepted");
+            let anim_end = super::super::interrupts::maneuver_timing(rf_uuid, 1, None)
+                .expect("Fury has an authored animation")
+                .end;
+            let fury_end = cast_at + Duration::from_secs_f32(anim_end + 5.0);
+            let press_at = fury_end - Duration::from_millis(1000);
+            let release_at = fury_end - Duration::from_millis(400);
+            let (mut pressed, mut released) = (false, false);
+            let mut t = cast_at;
+            while t < fury_end + Duration::from_millis(300) {
+                t += Duration::from_millis(2);
+                if !pressed && t >= press_at {
+                    pressed = true;
+                    let frame = super::phase4_tests::make_act_frame(true, 0.0, true);
+                    let _ = on_c2s_input(&mut combat, 0, &frame, t);
+                }
+                if release_early && !released && t >= release_at {
+                    released = true;
+                    let frame = super::phase4_tests::make_act_frame(false, 0.0, true);
+                    let _ = on_c2s_input(&mut combat, 0, &frame, t);
+                }
+                let _ = on_tick(&mut combat, t, false);
+                let _ = drain_state_changes(&mut combat, t);
+                let f = &combat.fighters[0];
+                assert!(
+                    f.block_phase(t).is_none() || !f.has_reckless_fury(t),
+                    "guard up under Fury at +{}ms",
+                    t.duration_since(cast_at).as_millis()
+                );
+            }
+            assert!(
+                !combat.fighters[0].has_reckless_fury(t),
+                "precondition: Fury ended"
+            );
+            assert_eq!(
+                combat.fighters[0].block_phase(t).is_some(),
+                !release_early,
+                "release_early={release_early}: a guard still held rises at Fury's end, \
+                 a released one does not"
+            );
+        }
     }
 
     /// The control on the seeding itself: an ability that ships NO `_initialCooldown`
@@ -18845,6 +19012,26 @@ mod report_31_high_block_stun {
             "the ATTACKER must be stunned by the bot's high block — this is the thing \
              a player could never experience before bots guarded",
         );
+    }
+
+    /// Report #608: a bot under Reckless Fury cannot guard either
+    /// (`Actor$$get_CanBlock@0x1c5b9d4`). The control is the test above.
+    #[test]
+    fn a_bot_under_reckless_fury_raises_no_guard() {
+        let now = Instant::now();
+        let mut c = combat(now, 1);
+        c.fighters[1].reckless_fury_until = Some(now + Duration::from_secs(60));
+        c.fighters[0].set_actor_state(ActorStateType::Charging, now);
+        let due = bot_decision_due(&mut c, 1, now);
+        let mut t = now;
+        while t < due + Duration::from_millis(200) {
+            t += Duration::from_millis(2);
+            super::on_tick(&mut c, t, false);
+            assert!(
+                c.fighters[1].block_phase(t).is_none(),
+                "a bot must not guard under Reckless Fury"
+            );
+        }
     }
 
     /// Every actor-state frame (gmid, stateId, tick) the bot's avatar put on viewer 0's
