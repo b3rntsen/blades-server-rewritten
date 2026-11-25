@@ -72,6 +72,9 @@ pub struct MatchEconomyOutcome {
     /// on the op49 card (tracker #499, `arena_bonus_rewards::match_sigil`). 0
     /// outside the window and for an abandoned or voided match.
     pub sigil: i64,
+    /// When this fight counts toward an arena event (tracker #526): the second
+    /// it was paired, which names the event. `None` for every other fight.
+    pub event_paired_at_secs: Option<i64>,
     /// Whether this side FINISHED the fight (won or lost it; did not concede and
     /// was not voided as a no-show). Only a finished fight counts toward the
     /// per-account weapon gift ([`crate::arena::arena_fight_gift`]).
@@ -452,6 +455,60 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     }
                 }
 
+                // ARENA EVENT (tracker #526): count this fight on the account and
+                // pay what the count earned — the Sigil here, in this reward; the
+                // weapon and the participation gift as claimable gifts. In a
+                // savepoint, like the weapon gift below, so a failure costs only
+                // the event credit and never the match reward.
+                let event_tally = match o
+                    .event_paired_at_secs
+                    .and_then(crate::arena::arena_event::event_at)
+                {
+                    Some(event) => {
+                        let (user_id, character_id) = (entry.user_id, entry.id);
+                        let (session, now) = (o.game_session_id, o.completed_at_secs);
+                        let counted = conn
+                            .transaction::<_, anyhow::Error, _>(|conn| {
+                                async move {
+                                    let alt =
+                                        arena_fight_gift::live_alt(conn, character_id).await?;
+                                    crate::arena::arena_event::record_event_fight(
+                                        conn,
+                                        event,
+                                        user_id,
+                                        character_id,
+                                        alt,
+                                        session,
+                                        now,
+                                    )
+                                    .await
+                                }
+                                .scope_boxed()
+                            })
+                            .await;
+                        match counted {
+                            Ok(tally) => tally,
+                            Err(e) => {
+                                warn!(
+                                    "arena event: could not count fight {session:?} for account \
+                                     {user_id} in {}; the match REWARD IS SAFE: {e}",
+                                    event.id
+                                );
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                };
+                if let Some(tally) = &event_tally
+                    && tally.sigil > 0
+                {
+                    *reward
+                        .currencies
+                        .entry(blades_lib::economy::SIGIL)
+                        .or_insert(0) += tally.sigil;
+                }
+
                 let mut tracker = InventoryChangeTracker::default();
                 apply_reward(
                     &reward,
@@ -635,6 +692,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     fight_tally,
                     giveaway_gems: giveaway.map(|(_, g)| g).unwrap_or(0),
                     fight_sigil,
+                    event_tally,
                     character_id,
                     pre_trophies,
                     post_trophies,
@@ -718,6 +776,13 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 tally.fights
             ),
         }
+    }
+
+    if let Some(t) = &a.event_tally {
+        info!(
+            "arena event: character {} at account event fight #{} — {} Sigil, gift(s) {:?} (fight {:?})",
+            a.character_id, t.fights, t.sigil, t.gifts, outcome.game_session_id
+        );
     }
 
     if a.fight_sigil > 0 {
@@ -1140,6 +1205,8 @@ struct AppliedOutcome {
     giveaway_gems: i64,
     /// The December Sigil-per-fight actually credited (tracker #499).
     fight_sigil: u64,
+    /// What this fight counted and paid in an arena event (tracker #526).
+    event_tally: Option<crate::arena::arena_event::EventTally>,
     /// The account's fight count after this match and any weapon gift it minted;
     /// `None` when the fight did not count or could not be counted.
     fight_tally: Option<arena_fight_gift::FightTally>,
@@ -1169,6 +1236,7 @@ mod tests {
             character_xp: 691,
             gems: 6,
             sigil: 0,
+            event_paired_at_secs: None,
             finished_fight: true,
             card_weapon: None,
             trophy_delta: 30,
@@ -1413,6 +1481,7 @@ mod tests {
             character_xp: 50,
             gems,
             sigil: 0,
+            event_paired_at_secs: None,
             finished_fight: gems > 0,
             card_weapon: None,
             trophy_delta: 0,
@@ -1627,6 +1696,7 @@ mod tests {
             promotion_items: 0,
             giveaway_gems: 0,
             fight_sigil: 0,
+            event_tally: None,
             fight_tally: None,
         }
     }
@@ -1645,6 +1715,7 @@ mod tests {
             character_xp: 0,
             gems: 0,
             sigil: 0,
+            event_paired_at_secs: None,
             finished_fight: true,
             card_weapon: None,
             trophy_delta: if win { 24 } else { -24 },

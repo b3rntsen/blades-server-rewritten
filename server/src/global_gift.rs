@@ -180,6 +180,28 @@ fn cap_claimed_gear(
     )
 }
 
+/// Hold back the gear of an arena event gift (tracker #526) that does not fit
+/// under the event's backpack rule, filing it on the character to be paid from
+/// the end of the event. The every-25th-fight weapon carries no rule and is
+/// untouched. Returns how many pieces were held back.
+fn cap_event_gear(
+    reward: &mut RewardGrant,
+    gift: &arena_fight_gift::FightGiftRow,
+    entry: &mut CharacterDbEntryEconomy,
+) -> u64 {
+    let Some((event, _)) = gift.event() else {
+        return 0;
+    };
+    gift_capacity::cap_gift_gear(
+        reward,
+        event.gear_rule(),
+        gift.id,
+        &entry.character.0,
+        &entry.inventory.0,
+        &mut entry.server_state.0.deferred_gift_gear,
+    )
+}
+
 /// Take the owed gear that is due and fits off the character's file, as a
 /// reward with fresh instance ids. Returns it with the count still owed.
 /// The caller applies the reward; an empty one means nothing changed.
@@ -803,6 +825,16 @@ pub async fn claim_global_gift(
                     for item in &mut reward.items {
                         item.id = Uuid::new_v4();
                     }
+                    // An arena event's gift (tracker #526) carries the event's
+                    // backpack rule: gear fills at most 95 % of the backpack and
+                    // the rest is paid from the end of the event, as room allows.
+                    let held_back = cap_event_gear(&mut reward, &gift, &mut entry);
+                    if held_back > 0 {
+                        log::info!(
+                            "arena event gift: {gift_id} held back {held_back} piece(s) of gear for \
+                             character {character_id} (backpack rule); paid later"
+                        );
+                    }
                     let mut tracker = InventoryChangeTracker::default();
                     apply_reward(
                         &reward,
@@ -1292,6 +1324,106 @@ mod deferred_gear_tests {
             pay_deferred_gear(&mut e, DEFERRED_ARMOR_FROM_SECS, &repair(), counter());
         assert_eq!(paid.items.len(), 5);
         assert_eq!(owed, 0);
+    }
+
+    fn fight_gift_row(milestone: i64, item: serde_json::Value) -> arena_fight_gift::FightGiftRow {
+        arena_fight_gift::FightGiftRow {
+            id: Uuid::from_u128(0x0526),
+            user_id: Uuid::from_u128(2),
+            character_id: Uuid::from_u128(1),
+            source_alt_uuid: None,
+            milestone,
+            item,
+            created_at: 0,
+            granted_at: None,
+        }
+    }
+
+    /// The reward a claim of `def` builds: currencies, stackables and one
+    /// instance per gear unit, as `gifts::build_gift_reward` does.
+    fn claimed(def: &GiftDef) -> RewardGrant {
+        let decoration = crate::arena::arena_event::BEACON_DECORATION;
+        let mut reward = RewardGrant::default();
+        let mut next = counter();
+        for line in &def.items {
+            if line.item_template_id == decoration {
+                reward.stackable_items.insert(decoration, line.quantity);
+                continue;
+            }
+            for _ in 0..line.quantity {
+                let mut piece = gifts::gear_instance(line, &repair());
+                piece.id = next();
+                reward.items.push(piece);
+            }
+        }
+        reward
+    }
+
+    /// ARENA EVENT (tracker #526): the participation gift — 2 Beacons and two
+    /// Divine Dark Seducer sets at Arcane II — into a backpack at 109 of 120
+    /// hands over one whole set and one piece (114 = 95 %), files the other
+    /// three pieces payable from the end of the event, and always pays the
+    /// Beacons.
+    #[test]
+    fn an_event_gift_fills_the_backpack_to_95_percent_and_files_the_rest() {
+        use crate::arena::arena_event::{HAPPY_HOUR_2026_11_28 as E, PARTICIPATION_ARMOR_SET};
+        let row = fight_gift_row(
+            E.milestone(0),
+            serde_json::to_value(E.participation_gift()).unwrap(),
+        );
+        let def = row.gift_def().unwrap();
+        assert_eq!(def.items.len(), 5);
+        let mut reward = claimed(&def);
+        assert_eq!(reward.items.len(), 8);
+        let mut e = entry(109, 0);
+        let held = cap_event_gear(&mut reward, &row, &mut e);
+        assert_eq!(held, 3);
+        assert_eq!(reward.items.len(), 5);
+        let kept: std::collections::BTreeSet<Uuid> = reward.items[..4]
+            .iter()
+            .map(|p| p.item.item_template_id)
+            .collect();
+        assert_eq!(kept.len(), 4, "a whole set first");
+        assert!(reward.items.iter().all(|p| p.item.arcane_tier == Some(2)));
+        assert_eq!(
+            reward
+                .stackable_items
+                .get(&crate::arena::arena_event::BEACON_DECORATION),
+            Some(&2)
+        );
+        let owed = &e.server_state.0.deferred_gift_gear;
+        assert_eq!(owed.iter().map(|d| d.quantity).sum::<u64>(), 3);
+        assert!(owed.iter().all(|d| d.payable_from_secs == E.closes_at_secs));
+        assert!(owed.iter().all(|d| d.arcane_tier == Some(2)));
+        assert!(owed.iter().all(|d| {
+            PARTICIPATION_ARMOR_SET
+                .iter()
+                .any(|(t, _)| *t == d.item_template_id)
+        }));
+        // Room for everything: nothing held back.
+        let mut reward = claimed(&def);
+        assert_eq!(cap_event_gear(&mut reward, &row, &mut entry(0, 0)), 0);
+        assert_eq!(reward.items.len(), 8);
+    }
+
+    /// An event weapon gift is capped too; the every-25th-fight weapon (a
+    /// positive milestone) never is, however full the backpack.
+    #[test]
+    fn an_event_weapon_is_capped_and_the_monthly_weapon_is_not() {
+        use crate::arena::arena_event::HAPPY_HOUR_2026_11_28 as E;
+        let line = E.weapon_gift(Uuid::from_u128(2), 1);
+        let event_row = fight_gift_row(E.milestone(1), serde_json::to_value(&line).unwrap());
+        let mut reward = claimed(&event_row.gift_def().unwrap());
+        assert_eq!(
+            cap_event_gear(&mut reward, &event_row, &mut entry(114, 0)),
+            1
+        );
+        assert!(reward.items.is_empty());
+
+        let monthly = fight_gift_row(25, serde_json::to_value(&line).unwrap());
+        let mut reward = claimed(&monthly.gift_def().unwrap());
+        assert_eq!(cap_event_gear(&mut reward, &monthly, &mut entry(400, 0)), 0);
+        assert_eq!(reward.items.len(), 1);
     }
 
     /// CONTROL: a gift without a backpack rule — every gift there is today —

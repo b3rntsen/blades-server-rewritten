@@ -1313,6 +1313,10 @@ pub struct Loadout {
     /// `matchmaker::is_test_loadout`. A fight with such a fighter moves no cups
     /// for either side and is never head-to-head.
     pub dev_test: bool,
+    /// The account's counted fights in the arena event open (or about to open)
+    /// at queue time (tracker #526), so the result card can show the event
+    /// Sigil. `None` outside events, for bots, or on a failed read.
+    pub arena_event_fights: Option<i64>,
     /// The REST sequence echoed by retail's match-end card.
     pub current_request_index: i64,
     /// The client's own `HideHelmet` avatar toggle, as reported by its c2s op61
@@ -2475,6 +2479,7 @@ impl Fighter {
         if self.loadout.dev_test {
             crate::arena::matchmaker::mark_loadout_as_test(&mut next);
         }
+        next.arena_event_fights = self.loadout.arena_event_fights;
         let (max_health, max_stamina, max_magicka) = max_pools_for(&next);
         self.max_health = max_health;
         self.max_stamina = max_stamina;
