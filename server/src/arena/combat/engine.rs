@@ -2326,9 +2326,14 @@ impl MatchInstance {
             // Its Sigil is shown here from the count read at queue time; the
             // writer recounts in the database and credits what that says.
             let versus_human = opponent.is_some() && !versus_bot && !is_bot_slot[slot];
+            // Anti-farming (#526 review): an idle or instant-quit fight does not
+            // count — BOTH sides must have sent input in a live round, the same
+            // "sent input" notion the bot-void rule uses.
+            let both_played = !never_arrived
+                && opponent.is_some_and(|o| self.saw_in_round_c2s.get(o).copied().unwrap_or(false));
             let event = crate::arena::arena_event::counted_event(
                 self.paired_at_secs,
-                finish.is_finished(),
+                finish.is_finished() && both_played,
                 versus_human,
             );
             let event_sigil = match (event, f.loadout.arena_event_fights) {
@@ -5832,8 +5837,19 @@ pub(in crate::arena::combat) mod tests {
         paired_at: i64,
         event_fights: [Option<i64>; 2],
     ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        event_cards_with_input(paired_at, event_fights, [true, true])
+    }
+
+    /// As [`event_cards`], with `played[slot]` saying whether that side sent
+    /// input in a live round.
+    fn event_cards_with_input(
+        paired_at: i64,
+        event_fights: [Option<i64>; 2],
+        played: [bool; 2],
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
         let (mut m, _t0, live) = live_inst_at(2);
         m.paired_at_secs = paired_at;
+        m.saw_in_round_c2s = played;
         for (slot, before) in event_fights.into_iter().enumerate() {
             m.combat.fighters[slot].loadout.wallet_sigil = 41;
             m.combat.fighters[slot].loadout.arena_event_fights = before;
@@ -5871,6 +5887,40 @@ pub(in crate::arena::combat) mod tests {
         // An unknown count shows nothing (the writer still credits it).
         let cards = event_cards(inside, [None, None]);
         assert_eq!(card_sigil(&cards[&0]), None);
+    }
+
+    /// ANTI-FARMING (#526 review): a fight in which either side sent no input
+    /// in a live round counts for NEITHER side — an idle partner cannot be
+    /// farmed. CONTROL: both sides playing, the same counts pay.
+    #[test]
+    fn an_idle_side_makes_the_fight_count_for_nobody() {
+        use crate::arena::arena_event::HAPPY_HOUR_2026_11_28 as E;
+        let inside = E.opens_at_secs + 900;
+        // Slot 0 swings (its input is seen); slot 1 never sends a byte.
+        let cards = event_cards_with_input(inside, [Some(4), Some(4)], [true, false]);
+        assert_eq!(card_sigil(&cards[&0]), None, "the player facing an idle side");
+        assert_eq!(card_sigil(&cards[&1]), None, "the idle side");
+        let cards = event_cards_with_input(inside, [Some(4), Some(4)], [true, true]);
+        assert_eq!(card_sigil(&cards[&0]), Some(5));
+        assert_eq!(card_sigil(&cards[&1]), Some(5));
+    }
+
+    /// An instant quit — the leaver never sent input — pays the survivor no
+    /// event Sigil either.
+    #[test]
+    fn an_instant_quit_counts_for_nobody() {
+        use crate::arena::arena_event::HAPPY_HOUR_2026_11_28 as E;
+        let (mut m, t0) = live_inst(2);
+        m.paired_at_secs = E.opens_at_secs + 900;
+        m.saw_in_round_c2s = [true, false];
+        for slot in [0, 1] {
+            m.combat.fighters[slot].loadout.arena_event_fights = Some(4);
+        }
+        let leave = t0 + Duration::from_secs(3);
+        m.concede_by_departure(1, leave);
+        let cards = cards_to_the_end(&mut m, leave);
+        assert_eq!(card_sigil(&cards[&0]), None, "the survivor");
+        assert_eq!(card_sigil(&cards[&1]), None, "the leaver");
     }
 
     /// The rehearsal pays a marked test character outside the window, and

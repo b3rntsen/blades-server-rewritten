@@ -467,6 +467,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     Some(event) => {
                         let (user_id, character_id) = (entry.user_id, entry.id);
                         let (session, now) = (o.game_session_id, o.completed_at_secs);
+                        let opponent = o.opponent_character_id;
                         let counted = conn
                             .transaction::<_, anyhow::Error, _>(|conn| {
                                 async move {
@@ -478,6 +479,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                                         user_id,
                                         character_id,
                                         alt,
+                                        opponent,
                                         session,
                                         now,
                                     )

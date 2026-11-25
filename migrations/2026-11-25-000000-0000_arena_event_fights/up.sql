@@ -12,9 +12,15 @@ CREATE TABLE IF NOT EXISTS arena_event_fights (
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     game_session_id UUID NOT NULL,
     character_id UUID NOT NULL,
+    -- The opponent's account: at most MAX_COUNTED_FIGHTS_PER_OPPONENT (3)
+    -- counted fights per (event, account, opponent account).
+    opponent_user_id UUID NOT NULL,
     recorded_at BIGINT NOT NULL,
     PRIMARY KEY (event_id, user_id, game_session_id)
 );
+
+CREATE INDEX IF NOT EXISTS arena_event_fights_opponent
+    ON arena_event_fights (event_id, user_id, opponent_user_id);
 
 CREATE TABLE IF NOT EXISTS arena_event_counts (
     event_id TEXT NOT NULL,

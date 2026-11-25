@@ -124,6 +124,11 @@ pub const HAPPY_HOUR_2026_11_28: ArenaEvent = ArenaEvent {
 /// Every event, in time order.
 pub const EVENTS: &[ArenaEvent] = &[HAPPY_HOUR_2026_11_28];
 
+/// Anti-farming (#526 review): at most this many fights against the same
+/// opponent ACCOUNT count toward one event per account, so two accounts of one
+/// person cannot farm each other for the whole hour.
+pub const MAX_COUNTED_FIGHTS_PER_OPPONENT: i64 = 3;
+
 /// Milestones of one event occupy `-(ordinal * MILESTONE_STRIDE + seq)`.
 const MILESTONE_STRIDE: i64 = 1_000_000;
 
@@ -338,36 +343,72 @@ pub async fn account_event_fights(
 ///
 /// Idempotent per fight: the fight is logged under its `gameSessionId`, and a
 /// fight already logged counts nothing and pays nothing (`None`). A match with
-/// no session id (a dev match) is logged under a fresh id. Run it inside the
-/// match-reward transaction, as a savepoint.
+/// no session id (a dev match) is logged under a fresh id. A fight whose
+/// opponent account is unknown, or against an opponent account already met
+/// [`MAX_COUNTED_FIGHTS_PER_OPPONENT`] times in this event, counts nothing
+/// either. Run it inside the match-reward transaction, as a savepoint.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_event_fight(
     conn: &mut AsyncPgConnection,
     event: &ArenaEvent,
     user_id: Uuid,
     character_id: Uuid,
     alt: Option<Uuid>,
+    opponent_character_id: Option<Uuid>,
     game_session_id: Option<Uuid>,
     now_secs: i64,
 ) -> Result<Option<EventTally>> {
+    #[derive(diesel::QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        fights: i64,
+    }
+    #[derive(diesel::QueryableByName)]
+    struct Owner {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        user_id: Uuid,
+    }
+    let Some(opponent_character_id) = opponent_character_id else {
+        return Ok(None);
+    };
+    let owner: Vec<Owner> = diesel::sql_query("SELECT user_id FROM characters WHERE id = $1")
+        .bind::<diesel::sql_types::Uuid, _>(opponent_character_id)
+        .load(conn)
+        .await?;
+    let Some(opponent_user_id) = owner.into_iter().next().map(|o| o.user_id) else {
+        return Ok(None);
+    };
+    if opponent_user_id == user_id {
+        return Ok(None);
+    }
+    let Count { fights: met } = diesel::sql_query(
+        "SELECT count(*) AS fights FROM arena_event_fights \
+         WHERE event_id = $1 AND user_id = $2 AND opponent_user_id = $3",
+    )
+    .bind::<diesel::sql_types::Text, _>(event.id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .bind::<diesel::sql_types::Uuid, _>(opponent_user_id)
+    .get_result(conn)
+    .await?;
+    if met >= MAX_COUNTED_FIGHTS_PER_OPPONENT {
+        return Ok(None);
+    }
     let fight = game_session_id.unwrap_or_else(Uuid::new_v4);
     let logged = diesel::sql_query(
-        "INSERT INTO arena_event_fights (event_id, user_id, game_session_id, character_id, recorded_at) \
-         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+        "INSERT INTO arena_event_fights \
+         (event_id, user_id, game_session_id, character_id, opponent_user_id, recorded_at) \
+         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
     )
     .bind::<diesel::sql_types::Text, _>(event.id)
     .bind::<diesel::sql_types::Uuid, _>(user_id)
     .bind::<diesel::sql_types::Uuid, _>(fight)
     .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(opponent_user_id)
     .bind::<diesel::sql_types::BigInt, _>(now_secs)
     .execute(conn)
     .await?;
     if logged != 1 {
         return Ok(None);
-    }
-    #[derive(diesel::QueryableByName)]
-    struct Count {
-        #[diesel(sql_type = diesel::sql_types::BigInt)]
-        fights: i64,
     }
     let Count { fights } = diesel::sql_query(
         "INSERT INTO arena_event_counts (event_id, user_id, fights, updated_at) \
@@ -634,7 +675,7 @@ mod tests {
     /// Against Postgres: a full hour for one account — 12 human fights — pays
     /// 12 Sigil from the 5th on, the participation gift once at the 5th, weapons
     /// at the 5th and 10th, nothing for a replayed fight, and nothing at all for
-    /// an account that stops at 4.
+    /// an account that stops at 4; at most three counted fights per opponent account.
     #[tokio::test]
     async fn an_hour_of_fights_against_postgres() {
         use diesel_async::AsyncConnection;
@@ -646,13 +687,14 @@ mod tests {
         conn.begin_test_transaction().await.unwrap();
         for sql in [
             "CREATE TEMP TABLE users (id UUID PRIMARY KEY)",
-            "CREATE TEMP TABLE characters (id UUID PRIMARY KEY, source_alt_uuid UUID)",
+            "CREATE TEMP TABLE characters (id UUID PRIMARY KEY, user_id UUID, source_alt_uuid UUID)",
             "CREATE TEMP TABLE arena_fight_gifts (id UUID PRIMARY KEY, user_id UUID NOT NULL, \
              character_id UUID NOT NULL, source_alt_uuid UUID, milestone BIGINT NOT NULL, \
              item JSONB NOT NULL, created_at BIGINT NOT NULL, granted_at BIGINT, \
              UNIQUE (user_id, milestone))",
             "CREATE TEMP TABLE arena_event_fights (event_id TEXT NOT NULL, user_id UUID NOT NULL, \
-             game_session_id UUID NOT NULL, character_id UUID NOT NULL, recorded_at BIGINT NOT NULL, \
+             game_session_id UUID NOT NULL, character_id UUID NOT NULL, \
+             opponent_user_id UUID NOT NULL, recorded_at BIGINT NOT NULL, \
              PRIMARY KEY (event_id, user_id, game_session_id))",
             "CREATE TEMP TABLE arena_event_counts (event_id TEXT NOT NULL, user_id UUID NOT NULL, \
              fights BIGINT NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL, \
@@ -660,13 +702,23 @@ mod tests {
         ] {
             diesel::sql_query(sql).execute(&mut conn).await.unwrap();
         }
+        // Opponent characters 100..=139 belong to accounts 200..=239 (one each).
+        for n in 0..40u128 {
+            diesel::sql_query("INSERT INTO characters (id, user_id) VALUES ($1, $2)")
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::from_u128(100 + n))
+                .bind::<diesel::sql_types::Uuid, _>(Uuid::from_u128(200 + n))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        let foe = |n: u128| Some(Uuid::from_u128(100 + n));
         let (user, character) = (Uuid::from_u128(1), Uuid::from_u128(2));
         let now = E.opens_at_secs + 60;
         let mut sigil = 0;
         let mut gifts = Vec::new();
         for n in 1..=12u128 {
             let session = Some(Uuid::from_u128(1000 + n));
-            let t = record_event_fight(&mut conn, E, user, character, None, session, now)
+            let t = record_event_fight(&mut conn, E, user, character, None, foe(n), session, now)
                 .await
                 .unwrap()
                 .unwrap();
@@ -675,7 +727,7 @@ mod tests {
             gifts.extend(t.gifts.iter().map(|(_, m)| *m));
             // The same fight again counts nothing and pays nothing.
             assert_eq!(
-                record_event_fight(&mut conn, E, user, character, None, session, now)
+                record_event_fight(&mut conn, E, user, character, None, foe(n), session, now)
                     .await
                     .unwrap(),
                 None
@@ -693,6 +745,7 @@ mod tests {
                 stopper,
                 Uuid::from_u128(4),
                 None,
+                foe(20 + n),
                 Some(Uuid::from_u128(2000 + n)),
                 now,
             )
@@ -702,6 +755,87 @@ mod tests {
             assert_eq!(t.sigil, 0);
             assert!(t.gifts.is_empty(), "nothing below five fights");
         }
+        // ANTI-FARMING: against ONE opponent account only the first
+        // MAX_COUNTED_FIGHTS_PER_OPPONENT fights count; the 4th and later count
+        // nothing (a second character of the same account is the same account).
+        let farmer = Uuid::from_u128(5);
+        diesel::sql_query("INSERT INTO characters (id, user_id) VALUES ($1, $2)")
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::from_u128(150))
+            .bind::<diesel::sql_types::Uuid, _>(Uuid::from_u128(230))
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let mut counted = 0;
+        for n in 1..=8u128 {
+            let opponent = if n % 2 == 0 {
+                foe(30)
+            } else {
+                Some(Uuid::from_u128(150))
+            };
+            let t = record_event_fight(
+                &mut conn,
+                E,
+                farmer,
+                Uuid::from_u128(6),
+                None,
+                opponent,
+                Some(Uuid::from_u128(3000 + n)),
+                now,
+            )
+            .await
+            .unwrap();
+            counted += u32::from(t.is_some());
+        }
+        assert_eq!(counted as i64, MAX_COUNTED_FIGHTS_PER_OPPONENT);
+        assert_eq!(account_event_fights(&mut conn, E, farmer).await.unwrap(), 3);
+        // A new opponent still counts; an unknown or own-account opponent never.
+        assert!(
+            record_event_fight(
+                &mut conn,
+                E,
+                farmer,
+                Uuid::from_u128(6),
+                None,
+                foe(31),
+                None,
+                now
+            )
+            .await
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            record_event_fight(
+                &mut conn,
+                E,
+                farmer,
+                Uuid::from_u128(6),
+                None,
+                None,
+                None,
+                now
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            record_event_fight(
+                &mut conn,
+                E,
+                Uuid::from_u128(230),
+                Uuid::from_u128(7),
+                None,
+                Some(Uuid::from_u128(150)),
+                None,
+                now
+            )
+            .await
+            .unwrap()
+            .is_none(),
+            "own account"
+        );
+
         // The stored participation gift is the 5-line list.
         #[derive(diesel::QueryableByName)]
         struct Item {

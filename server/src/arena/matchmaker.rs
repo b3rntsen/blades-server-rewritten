@@ -642,13 +642,6 @@ fn humans_matching_until(
     Some(valve.map_or(until, |v| until.min(v)))
 }
 
-/// **Fight AI off** (per alt, [`crate::arena::fight_ai`]): the queue's next deadline
-/// when its oldest ticket refuses an AI.
-///
-/// With somebody else it could be paired with, the deadline is unchanged — at last call
-/// it meets that human like anyone else. With nobody, there is nothing a deadline could
-/// lead to except a bot, so it never fires: the loop just looks again every
-/// [`FALLBACK_REEVALUATE`]. Every other ticket keeps its own deadline untouched.
 /// Whether this ticket may be handed an AI opponent at `unix_secs`: its alt's
 /// "Fight AI" setting, and never while an arena event window is open (tracker
 /// #526, HauDrauf: "komplett ohne KI Gegner"). Inside a window every ticket
@@ -658,6 +651,13 @@ fn ticket_fights_ai(t: &TicketRequest, unix_secs: i64) -> bool {
     t.fights_ai && !crate::arena::arena_event::ai_off_at(unix_secs)
 }
 
+/// **Fight AI off** (per alt, [`crate::arena::fight_ai`]): the queue's next deadline
+/// when its oldest ticket refuses an AI.
+///
+/// With somebody else it could be paired with, the deadline is unchanged — at last call
+/// it meets that human like anyone else. With nobody, there is nothing a deadline could
+/// lead to except a bot, so it never fires: the loop just looks again every
+/// [`FALLBACK_REEVALUATE`]. Every other ticket keeps its own deadline untouched.
 fn no_ai_deadline(
     fights_ai: bool,
     waiting_others: usize,
