@@ -534,6 +534,12 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 if granted > 0 {
                     entry.inventory.0.treasury_version += 1;
                 }
+                // Track chests the card did not list (#625): one bump further, so
+                // the card never claims a treasury version holding chests it did
+                // not carry and the client refetches them.
+                if crate::arena::trophy_track::card_hides_track_chests(&promo) {
+                    entry.inventory.0.treasury_version += 1;
+                }
 
                 let post_trophies = entry.character.0.pvp_trophies;
                 let post_high_water = entry.character.0.matchmaking_pvp_trophies;

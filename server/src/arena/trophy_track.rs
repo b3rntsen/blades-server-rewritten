@@ -68,6 +68,23 @@ pub const TEMPLATE_BAND_START: i64 = 2000;
 pub const HEROIC_ENCHANTER_PACK: Uuid = uuid!("6ec8f67f-2cef-41aa-a7fc-f46237ae809c");
 /// Packs per town gift.
 pub const PACKS_PER_GIFT: u64 = 3;
+/// The most trophy-track chests one match-end card lists. A climb across many
+/// steps at once (a season recompute leaving the high-water mark below the cups)
+/// still pays every chest durably; the card shows the first few and the durable
+/// write moves `treasuryVersion` one further, so the client refetches the rest.
+pub const CARD_TRACK_CHESTS: usize = 3;
+
+/// `(ladder chests, track chests)` the card lists out of `promo.chests`.
+pub fn card_chest_counts(promo: &super::arena_ladder::PromotionRewards) -> (usize, usize) {
+    let ladder = promo.chests.len() - promo.track_chests;
+    (ladder, promo.track_chests.min(CARD_TRACK_CHESTS))
+}
+
+/// Whether the card hides track chests the durable write grants.
+pub fn card_hides_track_chests(promo: &super::arena_ladder::PromotionRewards) -> bool {
+    promo.track_chests > CARD_TRACK_CHESTS
+}
+
 /// Server-side description of the gift (the client shows the generic gift copy).
 pub const GIFT_DESCRIPTION: &str = "Arena: 3x Heroic Enchanter pack for a 500-cup step";
 
@@ -517,6 +534,24 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    /// The card lists the ladder's chests and at most `CARD_TRACK_CHESTS` of the
+    /// track's; the durable write knows when it hid some.
+    #[test]
+    fn the_card_caps_track_chests() {
+        let few = arena_ladder::promotion_rewards_with_track(2490, 2600, 86, true);
+        assert_eq!(few.track_chests, 1, "2550's Gold; 2500 is the ladder's");
+        assert_eq!(card_chest_counts(&few), (1, 1));
+        assert!(!card_hides_track_chests(&few));
+        // The ladder alone (what rewardNewLevelArena is built from) has no track part.
+        let only_track = arena_ladder::promotion_rewards(2990, 3010, 86);
+        assert!(only_track.is_empty(), "a track-only crossing sends `{{}}`");
+
+        let many = arena_ladder::promotion_rewards_with_track(2501, 10_000, 86, true);
+        assert_eq!(card_chest_counts(&many), (0, CARD_TRACK_CHESTS));
+        assert!(card_hides_track_chests(&many));
+        assert_eq!(many.track_chests, many.chests.len());
     }
 
     /// The card's arena/level never moves past arena 6 level 1.

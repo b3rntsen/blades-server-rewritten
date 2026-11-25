@@ -912,6 +912,11 @@ pub struct PromotionRewards {
     /// each mints one town gift durably. Not on the card — the gift arrives in
     /// town through `globalgifts`.
     pub town_gift_thresholds: Vec<i64>,
+    /// How many of `chests` (always the LAST ones) come from the trophy track
+    /// above 2500. The card never lists them in `rewardNewLevelArena` (no tier
+    /// changed, a shape retail never sent) and lists at most
+    /// [`super::trophy_track::CARD_TRACK_CHESTS`] in its treasury change set.
+    pub track_chests: usize,
     /// The tier the player ends up on, if it changed.
     pub new_tier: Option<ArenaTier>,
 }
@@ -1039,6 +1044,7 @@ pub fn promotion_rewards_with_track(
         add_fixed_loot(tier.required_trophies, tier.loot_table, true);
     }
     let mut town_gift_thresholds = Vec::new();
+    let ladder_chests = chests.len();
     if with_track {
         for (threshold, reward) in trophy_track::steps_crossed(old_high_water, new_high_water) {
             match reward {
@@ -1059,6 +1065,7 @@ pub fn promotion_rewards_with_track(
             }
         }
     }
+    let track_chests = chests.len() - ladder_chests;
     PromotionRewards {
         chests,
         stackable_items: stackable_items.into_iter().collect(),
@@ -1066,6 +1073,7 @@ pub fn promotion_rewards_with_track(
         items,
         loot_thresholds,
         town_gift_thresholds,
+        track_chests,
         new_tier: crossed.last().copied().copied(),
     }
 }
