@@ -2015,7 +2015,12 @@ impl MatchInstance {
                 -1
             };
             let tier = arena_ladder::tier_for_trophies(post_high_water);
-            let promo = arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
+            let promo = arena_ladder::promotion_rewards_in_season(
+                p.high_water,
+                post_high_water,
+                level,
+                f.loadout.pvp_season_id,
+            );
 
             // Promotion chests are assigned first, then the meter chest. Retail
             // s460 carries exactly that order (promotion ids 2/3, meter id 4) in

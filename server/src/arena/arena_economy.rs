@@ -345,10 +345,11 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 ch.highest_level_arena_reached = tier.level as u64;
 
                 // --- Currency, XP and promotion chests ----------------------------
-                let promo = arena_ladder::promotion_rewards(
+                let promo = arena_ladder::promotion_rewards_in_season(
                     pre_high_water,
                     ch.matchmaking_pvp_trophies,
                     ch.level,
+                    ch.pvp_season_id,
                 );
                 let mut reward = match_reward_grant(&o);
                 let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
@@ -464,6 +465,23 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                         .0
                         .arena_promotion_loot_grants
                         .extend(promo.loot_thresholds.iter().copied());
+                }
+                // The trophy track's town gifts (HauDrauf #625): one per 500-cup
+                // step above 2500, minted in this transaction, claimed in town.
+                for &threshold in &promo.town_gift_thresholds {
+                    let season_id = entry.character.0.pvp_season_id;
+                    if crate::arena::trophy_track::record_gift(
+                        &mut entry.server_state.0,
+                        entry.id,
+                        season_id,
+                        threshold,
+                        o.completed_at_secs,
+                    ) {
+                        log::info!(
+                            "arena trophy track: character {} reached {threshold} in season {season_id}; town gift minted",
+                            entry.id
+                        );
+                    }
                 }
 
                 // Ladder promotion chests (`rewards_once_reached`) plus any chest the

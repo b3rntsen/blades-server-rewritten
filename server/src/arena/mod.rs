@@ -28,6 +28,7 @@ pub mod season_rewards;
 pub mod season_store;
 pub mod top100_boards;
 pub mod top100_renames;
+pub mod trophy_track;
 pub mod udp;
 
 use serde::Serialize;

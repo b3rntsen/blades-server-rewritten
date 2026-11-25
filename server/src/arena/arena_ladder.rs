@@ -908,6 +908,10 @@ pub struct PromotionRewards {
     /// Trophy thresholds with fixed loot in `stackable_items`/`currencies`/`items`,
     /// retained for the server-only idempotency ledger.
     pub loot_thresholds: Vec<i64>,
+    /// 500-cup steps above 2500 crossed (HauDrauf #625, [`super::trophy_track`]):
+    /// each mints one town gift durably. Not on the card — the gift arrives in
+    /// town through `globalgifts`.
+    pub town_gift_thresholds: Vec<i64>,
     /// The tier the player ends up on, if it changed.
     pub new_tier: Option<ArenaTier>,
 }
@@ -955,10 +959,40 @@ pub fn promotion_rewards(
     new_high_water: i64,
     character_level: u16,
 ) -> PromotionRewards {
+    promotion_rewards_with_track(old_high_water, new_high_water, character_level, false)
+}
+
+/// [`promotion_rewards`] plus, when the season qualifies, the trophy track above
+/// 2500 (HauDrauf #625, [`super::trophy_track`]). What the match-end card and the
+/// durable write both call, with the character's `pvpSeasonId`, so they agree.
+pub fn promotion_rewards_in_season(
+    old_high_water: i64,
+    new_high_water: i64,
+    character_level: u16,
+    season_id: uuid::Uuid,
+) -> PromotionRewards {
+    promotion_rewards_with_track(
+        old_high_water,
+        new_high_water,
+        character_level,
+        super::trophy_track::active_for(season_id),
+    )
+}
+
+/// The shared body: the ladder rungs crossed, then (if `with_track`) the steps
+/// above 2500 — a copied rung's chest and fixed loot, or a 500-cup step's
+/// Legendary chest and town gift.
+pub fn promotion_rewards_with_track(
+    old_high_water: i64,
+    new_high_water: i64,
+    character_level: u16,
+    with_track: bool,
+) -> PromotionRewards {
+    use super::trophy_track::{self, StepReward};
     use std::collections::BTreeMap;
 
     let crossed = tiers_crossed(old_high_water, new_high_water);
-    let chests = crossed
+    let mut chests = crossed
         .iter()
         .flat_map(|t| {
             t.chests_once_reached
@@ -970,16 +1004,20 @@ pub fn promotion_rewards(
     let mut currencies = BTreeMap::new();
     let mut loot_thresholds = Vec::new();
     let mut items = Vec::new();
-    for tier in &crossed {
-        let fixed = super::arena_promotion_loot::stackables_for(tier.loot_table, character_level);
+    let mut add_fixed_loot = |threshold: i64, loot_table: &str, with_items: bool| {
+        let fixed = super::arena_promotion_loot::stackables_for(loot_table, character_level);
         let fixed_currencies =
-            super::arena_promotion_loot::currencies_for(tier.loot_table, character_level);
-        let fixed_items = PROMOTION_ITEMS
-            .iter()
-            .filter(|i| i.threshold == tier.required_trophies)
-            .collect::<Vec<_>>();
+            super::arena_promotion_loot::currencies_for(loot_table, character_level);
+        let fixed_items = if with_items {
+            PROMOTION_ITEMS
+                .iter()
+                .filter(|i| i.threshold == threshold)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         if !fixed.is_empty() || !fixed_currencies.is_empty() || !fixed_items.is_empty() {
-            loot_thresholds.push(tier.required_trophies);
+            loot_thresholds.push(threshold);
         }
         items.extend(fixed_items);
         for item in fixed {
@@ -996,6 +1034,30 @@ pub fn promotion_rewards(
             };
             *currencies.entry(item.currency_uuid).or_insert(0) += quantity;
         }
+    };
+    for tier in &crossed {
+        add_fixed_loot(tier.required_trophies, tier.loot_table, true);
+    }
+    let mut town_gift_thresholds = Vec::new();
+    if with_track {
+        for (threshold, reward) in trophy_track::steps_crossed(old_high_water, new_high_water) {
+            match reward {
+                // The copied rung's chest and fixed loot; never its Blades piece
+                // or a new-arena Gem row (rungs 2050-2400 carry neither).
+                StepReward::Copy(rung) => {
+                    chests.extend(
+                        rung.chests_once_reached
+                            .iter()
+                            .map(|&r| (r, character_level)),
+                    );
+                    add_fixed_loot(threshold, rung.loot_table, false);
+                }
+                StepReward::GiftStep => {
+                    chests.push((trophy_track::GIFT_STEP_CHEST_RARITY, character_level));
+                    town_gift_thresholds.push(threshold);
+                }
+            }
+        }
     }
     PromotionRewards {
         chests,
@@ -1003,6 +1065,7 @@ pub fn promotion_rewards(
         currencies: currencies.into_iter().collect(),
         items,
         loot_thresholds,
+        town_gift_thresholds,
         new_tier: crossed.last().copied().copied(),
     }
 }
