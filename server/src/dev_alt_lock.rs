@@ -523,6 +523,8 @@ struct Version {
     town: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     server_state: Value,
+    #[diesel(sql_type = BigInt)]
+    saved_at: i64,
 }
 
 #[derive(diesel::QueryableByName)]
@@ -604,7 +606,7 @@ pub(crate) async fn apply_lock_alt(
     }
 
     let version: Version = diesel::sql_query(
-        "SELECT id, \"character\", data, inventory, wallet, town, server_state \
+        "SELECT id, \"character\", data, inventory, wallet, town, server_state, saved_at \
            FROM character_versions \
           WHERE user_id = $1 AND source_alt_uuid = $2 \
           ORDER BY saved_at DESC, id DESC LIMIT 1",
@@ -666,6 +668,7 @@ pub(crate) async fn apply_lock_alt(
         wallet,
         town,
         mut server_state,
+        saved_at,
     } = version;
     let parked = take_parked_quests(&mut server_state);
     let parked_events = take_parked_events(&mut server_state);
@@ -673,6 +676,25 @@ pub(crate) async fn apply_lock_alt(
     // Shown as " (TST)" everywhere its name is read — HUD, profile, social —
     // because the label lives in the stored name, not in one renderer.
     relabel(&mut character, &mut data, true);
+    // The same XP-bank rule as a switch (#425): a version kept before the
+    // release goes live with its pre-release excess banked — under the PARENT's
+    // account and this alt, where the alt list reads it and the alt returns.
+    let parent_row = diesel::sql_query("SELECT id FROM characters WHERE user_id = $1")
+        .bind::<SqlUuid, _>(parent)
+        .get_result::<IdRow>(conn)
+        .await
+        .optional()
+        .map_err(internal)?
+        .map_or(Uuid::nil(), |r| r.id);
+    crate::xp_bank::bank_on_write(
+        conn,
+        crate::xp_bank::BankOwner::new(parent_row, parent, Some(alt)),
+        &mut character,
+        "dev-lock",
+        Some(saved_at),
+    )
+    .await
+    .map_err(internal)?;
     // The parent's version KEEPS its parked guild seat for the length of the
     // lock: it is what the standings, the in-game board and the h2h board read
     // the alt's guild from, and the child (which holds the live seat) is left

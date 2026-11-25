@@ -1467,6 +1467,20 @@ pub async fn import_character(
                 }
                 let imported_name = character.name.clone();
 
+                // Levels past 100 are earned here (#425): a transfer brings the
+                // capture's XP up to level 100 and banks the rest, so no import
+                // can buy a level the release banked. Inert before the release.
+                crate::xp_bank::bank_import(
+                    &mut conn,
+                    character_id,
+                    user_id,
+                    incoming_alt,
+                    created,
+                    &mut character,
+                    body.ai_copy,
+                )
+                .await?;
+
                 let entry = CharacterDbEntry {
                     id: character_id,
                     user_id,
@@ -6399,6 +6413,132 @@ mod tests {
             assert_eq!(version(&mut c, vid).await.source_alt_uuid, Some(alt));
         }
 
+        fn xp_table() -> blades_lib::features::level_up::LevelUpData {
+            blades_lib::features::level_up::LevelUpData::from_json(
+                &serde_json::from_str(include_str!("../../deploy/static/level_rewards.json"))
+                    .unwrap(),
+            )
+        }
+
+        async fn set_xp(c: &mut AsyncPgConnection, cid: Uuid, level: i64, xp: i64) {
+            diesel::sql_query(
+                "UPDATE characters SET character = character \
+                   || jsonb_build_object('level', $2::bigint, 'experience', $3::bigint) \
+                 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .bind::<diesel::sql_types::BigInt, _>(level)
+            .bind::<diesel::sql_types::BigInt, _>(xp)
+            .execute(c)
+            .await
+            .unwrap();
+        }
+
+        /// #425: restoring a version kept before levels past 100 were released
+        /// brings back its banked XP as banked — the client sees 0, not the
+        /// 30M it held then, so it cannot offer the level-up the server would
+        /// refuse.
+        #[tokio::test]
+        async fn restoring_a_pre_release_version_does_not_bring_back_banked_xp() {
+            let mut c = db!();
+            let alt = Uuid::new_v4();
+            let (cid, uid) = seed_character_on_alt(&mut c, "Swanne", 100, 1, Some(alt)).await;
+            let release_at = chrono_now_secs() + 100;
+            crate::xp_bank::apply_release(&mut c, &xp_table(), 150, release_at)
+                .await
+                .unwrap();
+            // A copy from before the release that the release did not see (the
+            // release banks every version in place; this is the belt to that).
+            set_xp(&mut c, cid, 100, 30_000_000).await;
+            let kept = snapshot_character(&mut c, cid, uid, Some(alt), "manual", false)
+                .await
+                .unwrap();
+            diesel::sql_query("UPDATE character_versions SET saved_at = $2 WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(kept)
+                .bind::<diesel::sql_types::BigInt, _>(release_at - 86_400)
+                .execute(&mut c)
+                .await
+                .unwrap();
+            // Played here since: 5,000 earned.
+            set_xp(&mut c, cid, 100, 5_000).await;
+
+            apply_restore(&mut c, kept).await.unwrap();
+            assert_eq!(live(&mut c, cid).await.character["experience"], 0);
+        }
+
+        /// #425: the same through switch-alt, for a version the release never
+        /// saw (written with an old timestamp after it): banked at write time.
+        #[tokio::test]
+        async fn switching_to_a_pre_release_version_banks_its_excess() {
+            let mut c = db!();
+            let (alt_a, alt_b) = (Uuid::new_v4(), Uuid::new_v4());
+            let (cid, uid) = seed_character_on_alt(&mut c, "Aran", 50, 1, Some(alt_b)).await;
+            set_xp(&mut c, cid, 100, 40_000_000).await;
+            let release_at = chrono_now_secs() + 100;
+            crate::xp_bank::apply_release(&mut c, &xp_table(), 150, release_at)
+                .await
+                .unwrap();
+            // B's pre-release copy arrives after the release ran.
+            set_xp(&mut c, cid, 100, 40_000_000).await;
+            let v = snapshot_character(&mut c, cid, uid, Some(alt_b), "import", false)
+                .await
+                .unwrap();
+            diesel::sql_query("UPDATE character_versions SET saved_at = $2 WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(v)
+                .bind::<diesel::sql_types::BigInt, _>(release_at - 86_400)
+                .execute(&mut c)
+                .await
+                .unwrap();
+            diesel::sql_query(
+                "UPDATE characters SET source_alt_uuid = $2, \
+                   character = '{\"name\":\"Aran\",\"level\":50,\"experience\":0}'::jsonb \
+                 WHERE id = $1",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(cid)
+            .bind::<diesel::sql_types::Uuid, _>(alt_a)
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            apply_switch_alt(&mut c, &switch(uid, alt_b, None))
+                .await
+                .unwrap();
+            assert_eq!(live(&mut c, cid).await.character["experience"], 0);
+            assert_eq!(live(&mut c, cid).await.character["level"], 100);
+            let banked = crate::xp_bank::banked_by_alt(&mut c, uid).await.unwrap();
+            assert_eq!(banked.get(&alt_b), Some(&40_000_000));
+        }
+
+        /// #425: an import after the release banks the capture's excess under
+        /// the alt the row holds — here the live row's own, since the import
+        /// names none.
+        #[tokio::test]
+        async fn an_import_after_the_release_banks_under_the_live_alt() {
+            let mut c = db!();
+            let alt = Uuid::new_v4();
+            let (cid, uid) = seed_character_on_alt(&mut c, "Retail", 100, 1, Some(alt)).await;
+            crate::xp_bank::apply_release(&mut c, &xp_table(), 150, chrono_now_secs())
+                .await
+                .unwrap();
+            let mut ch = blades_lib::user_data::CompleteCharacter::default();
+            ch.name = "Retail".into();
+            ch.level = 100;
+            ch.experience = 33_000_000;
+            let n = crate::xp_bank::bank_import(&mut c, cid, uid, None, false, &mut ch, false)
+                .await
+                .unwrap();
+            assert_eq!((n, ch.experience), (33_000_000, 0));
+            let banked = crate::xp_bank::banked_by_alt(&mut c, uid).await.unwrap();
+            assert_eq!(banked.get(&alt), Some(&33_000_000));
+        }
+
+        fn chrono_now_secs() -> i64 {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+        }
+
         /// The owner's sentence, as a test: switch away, and going back gives
         /// you the alt as you LEFT it, not as it was last transferred.
         #[tokio::test]
@@ -10160,6 +10300,20 @@ mod seasons_are_what_the_database_says {
     /// alt brought in between seasons kept its retail cups. That is how seven
     /// characters reached the leaderboard on 396–440 cups having never played a
     /// match here.
+    /// #425: an import banks the capture's XP past the level-100 threshold
+    /// BEFORE the row is written, so a transfer cannot bring back what the
+    /// release banked.
+    #[test]
+    fn an_import_banks_xp_past_100_before_writing() {
+        let body = handler_code("pub async fn import_character(");
+        let bank = body
+            .find("crate::xp_bank::bank_import(")
+            .expect("the import must call the XP bank");
+        let write = body.find("let entry = CharacterDbEntry {").unwrap();
+        assert!(bank < write, "banked before the entry is built");
+        assert!(body[bank..write].contains("&mut character,"));
+    }
+
     #[test]
     fn an_import_between_seasons_still_arrives_at_zero() {
         let body = handler_code("pub async fn import_character(");
@@ -10482,7 +10636,17 @@ pub(crate) async fn apply_restore(
     use crate::schema::character_versions::dsl as cv;
     use crate::schema::characters::dsl as ch;
 
-    let (user_id, source_alt_uuid, character, data, inventory, wallet, town, mut server_state): (
+    let (
+        user_id,
+        source_alt_uuid,
+        mut character,
+        data,
+        inventory,
+        wallet,
+        town,
+        mut server_state,
+        saved_at,
+    ): (
         Uuid,
         Option<Uuid>,
         serde_json::Value,
@@ -10491,6 +10655,7 @@ pub(crate) async fn apply_restore(
         serde_json::Value,
         Option<serde_json::Value>,
         serde_json::Value,
+        i64,
     ) = cv::character_versions
         .filter(cv::id.eq(version_id))
         .select((
@@ -10502,6 +10667,7 @@ pub(crate) async fn apply_restore(
             cv::wallet,
             cv::town,
             cv::server_state,
+            cv::saved_at,
         ))
         .first(conn)
         .await
@@ -10541,6 +10707,18 @@ pub(crate) async fn apply_restore(
         "restore",
         parked.is_some(),
         park_alt_rows,
+    )
+    .await
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
+
+    // A version kept before levels past 100 were released carries XP that was
+    // banked at the release (#425); it comes back banked, never spendable.
+    crate::xp_bank::bank_on_write(
+        conn,
+        crate::xp_bank::BankOwner::new(character_id, user_id, source_alt_uuid.or(live_alt)),
+        &mut character,
+        "restore",
+        Some(saved_at),
     )
     .await
     .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
@@ -10630,6 +10808,9 @@ pub struct AltSummary {
     /// The device this alt is locked to (`crate::dev_alt_lock`), if any. A
     /// locked alt cannot be switched to; unlock it first.
     pub locked_to_device: Option<String>,
+    /// Pre-release XP held in the bank for this alt (#425). Absent when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banked_xp: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -10709,6 +10890,10 @@ pub async fn list_alts(
         .await
         .unwrap_or_default();
 
+    let banked = crate::xp_bank::banked_by_alt(&mut conn, user_id)
+        .await
+        .unwrap_or_default();
+
     // The user's devices, including the ones locked to one of its alts.
     let devices = crate::dev_alt_lock::devices_with_locks(&mut conn, user_id)
         .await
@@ -10724,6 +10909,7 @@ pub async fn list_alts(
                     .iter()
                     .find(|d| d.locked_alt_uuid == Some(r.alt_uuid))
                     .map(|d| d.device_id.clone()),
+                banked_xp: banked.get(&r.alt_uuid).copied(),
                 alt_uuid: r.alt_uuid,
                 name: r.name,
                 level: r.level,
@@ -10839,6 +11025,7 @@ pub(crate) async fn apply_switch_alt(
         serde_json::Value,
         Option<serde_json::Value>,
         serde_json::Value,
+        i64,
     ) = cv::character_versions
         .filter(cv::user_id.eq(body.user_id))
         .filter(cv::source_alt_uuid.eq(body.alt_uuid))
@@ -10850,6 +11037,7 @@ pub(crate) async fn apply_switch_alt(
             cv::wallet,
             cv::town,
             cv::server_state,
+            cv::saved_at,
         ))
         .order(cv::saved_at.desc())
         .first(conn)
@@ -10875,7 +11063,19 @@ pub(crate) async fn apply_switch_alt(
     .await
     .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
 
-    let (restored_from, character, data, inventory, wallet, town, mut server_state) = target;
+    let (restored_from, mut character, data, inventory, wallet, town, mut server_state, saved_at) =
+        target;
+    // Same rule as a restore (#425): a version kept before the release comes
+    // back with its pre-release excess banked.
+    crate::xp_bank::bank_on_write(
+        conn,
+        crate::xp_bank::BankOwner::new(character_id, body.user_id, Some(body.alt_uuid)),
+        &mut character,
+        "switch-alt",
+        Some(saved_at),
+    )
+    .await
+    .map_err(|_| BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, IMPORT_SERVICE_ID, 8))?;
     let parked = take_parked_quests(&mut server_state);
     let parked_events = take_parked_events(&mut server_state);
     let parked_rows = take_parked_alt_rows(&mut server_state);
