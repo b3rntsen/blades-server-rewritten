@@ -109,6 +109,19 @@ pub struct CharacterRenameAuditEntry {
     pub exempt: bool,
 }
 
+/// One arena trophy-track town gift (HauDrauf, #625): earned by reaching a
+/// 500-cup step above 2500 in a season.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArenaTrophyGift {
+    /// The 500-cup step that earned it (3000, 3500, ... 10000).
+    pub threshold: i64,
+    /// The arena season it was earned in.
+    pub season_id: Uuid,
+    /// Unix seconds when it was earned.
+    pub created_at: i64,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ServerState {
@@ -195,6 +208,12 @@ pub struct ServerState {
     /// the first item suppressing the rest.
     #[serde(default)]
     pub arena_promotion_item_repairs: BTreeSet<String>,
+    /// Town gifts earned on the arena trophy track above 2500 (HauDrauf, #625):
+    /// one per 500-cup step, keyed by its `globalGiftId`. A gift is claimed when
+    /// its id is in `gift_claims`. Not cleared at a season rollover, so a gift
+    /// earned late in a season can still be claimed in the next.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arena_trophy_gifts: BTreeMap<Uuid, ArenaTrophyGift>,
     /// Number of chests already emitted by the Arena's eight-round-win meter.
     /// This is deliberately season-independent: the shipped PvP chest cycle keeps
     /// its position when a season rolls over. Existing rows default to the start of

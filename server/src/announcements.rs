@@ -90,6 +90,18 @@ pub async fn get_announcements(
         announcements.push(authored_gift_announcement(&gift, now));
     }
 
+    // The arena trophy track's town gifts (HauDrauf #625). ONE at a time, as the
+    // weapon gift: the oldest unclaimed for the alt playing now; the next
+    // appears once it is claimed.
+    match crate::arena::trophy_track::pending_for_character(&mut conn, character_id).await {
+        Ok(pending) => {
+            if let Some((id, gift)) = pending.into_iter().next() {
+                announcements.push(trophy_gift_announcement(id, &gift, now));
+            }
+        }
+        Err(e) => log::warn!("announcements: arena trophy gifts unavailable: {e}"),
+    }
+
     // The arena weapon gift (owner-approved #390/#391), for the same reason: its
     // id is only discoverable here. ONE at a time — the oldest unclaimed for the
     // alt playing now; the next appears once it is claimed. A failure (the table
@@ -111,6 +123,23 @@ pub async fn get_announcements(
     }
 
     Ok(Json(AnnouncementsResponse { announcements }))
+}
+
+/// The banner for one arena trophy-track town gift (HauDrauf #625). Gift-bearing
+/// through the edge's `gift/` namespace like the weapon gift; never closes, so
+/// the banner rolls a month ahead.
+fn trophy_gift_announcement(
+    gift_id: Uuid,
+    gift: &blades_lib::server_state::ArenaTrophyGift,
+    now: i64,
+) -> Announcement {
+    Announcement {
+        id: gift_id.to_string(),
+        r#type: "BASIC".into(),
+        start_time: gift.created_at.min(now),
+        ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
+        asset_url: format!("https://announcements.blades.bgs.services/gift/{gift_id}"),
+    }
 }
 
 /// The host every announcement's `assetUrl` was minted on, retail's own.

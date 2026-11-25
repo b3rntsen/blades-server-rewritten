@@ -2058,23 +2058,40 @@ impl MatchInstance {
                 -1
             };
             let tier = arena_ladder::tier_for_trophies(post_high_water);
-            let promo = arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
+            let promo = arena_ladder::promotion_rewards_in_season(
+                p.high_water,
+                post_high_water,
+                level,
+                f.loadout.pvp_season_id,
+            );
 
             // Promotion chests are assigned first, then the meter chest. Retail
             // s460 carries exactly that order (promotion ids 2/3, meter id 4) in
             // `inventory.treasury.chests`; the same ids also appear in
             // `rewardNewLevelArena` for the promotion subset.
             let mut next_chest_id = f.loadout.next_treasury_chest_id.max(1);
+            //
+            // Trophy-track chests above 2500 (#625) take their ids in the same
+            // order the durable write grants them, but the card lists at most
+            // `CARD_TRACK_CHESTS` of them and never in `rewardNewLevelArena`.
+            let (ladder_chest_count, card_track_chests) =
+                crate::arena::trophy_track::card_chest_counts(&promo);
             let mut promotion_chests = Vec::new();
-            for &(rarity, chest_level) in &promo.chests {
-                promotion_chests.push(messages::MatchEndChest {
+            let mut inventory_chests = Vec::new();
+            for (i, &(rarity, chest_level)) in promo.chests.iter().enumerate() {
+                let chest = messages::MatchEndChest {
                     id: next_chest_id.to_string(),
                     tier: rarity,
                     level: chest_level,
-                });
+                };
+                if i < ladder_chest_count {
+                    promotion_chests.push(chest.clone());
+                    inventory_chests.push(chest);
+                } else if i < ladder_chest_count + card_track_chests {
+                    inventory_chests.push(chest);
+                }
                 next_chest_id = next_chest_id.saturating_add(1);
             }
-            let mut inventory_chests = promotion_chests.clone();
             // The meter chest(s) alone — retail's `reward.chests` (#401).
             let mut meter_chests = Vec::new();
             let character_id = uuid::Uuid::parse_str(&f.loadout.character_uuid)
@@ -2159,7 +2176,13 @@ impl MatchInstance {
             // CHARACTER level as `level`, and `characterXp` is always 0 there (the
             // match XP rides the separate `reward` block). s460 proves fixed loot-
             // table items ride as `stackableItems` in this same object.
-            let reward_new_level_arena = promotion_reward_json(&promo, &promotion_chests);
+            //
+            // Only the LADDER's rungs: a match whose only crossing is a trophy-track
+            // step (#625) leaves the tier at arena 6 level 1 and sends `{}`, as
+            // retail does when no tier changes.
+            let ladder_promo =
+                arena_ladder::promotion_rewards(p.high_water, post_high_water, level);
+            let reward_new_level_arena = promotion_reward_json(&ladder_promo, &promotion_chests);
 
             let wallet_gold = f
                 .loadout
@@ -5730,13 +5753,34 @@ pub(in crate::arena::combat) mod tests {
         fights: [Option<i64>; 2],
         weapon_on_result_card: bool,
     ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        two_nil_cards_at(
+            meter,
+            fights,
+            weapon_on_result_card,
+            700,
+            2600,
+            uuid::Uuid::nil(),
+        )
+    }
+
+    /// [`two_nil_cards`] with both sides at `trophies` / high-water `high_water`
+    /// and stamped with `season`.
+    fn two_nil_cards_at(
+        meter: [i64; 2],
+        fights: [Option<i64>; 2],
+        weapon_on_result_card: bool,
+        trophies: i64,
+        high_water: i64,
+        season: uuid::Uuid,
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
         let now = Instant::now();
         let mk = |name: &str, uuid: &str, meter: i64, fights: Option<i64>| {
             let mut l = crate::arena::combat::loadout::starter();
             l.display_name = name.into();
             l.character_uuid = uuid.into();
+            l.pvp_season_id = season;
             l.profile_character_json = format!(
-                r#"{{"id":"{uuid}","name":"{name}","level":86,"pvpTrophies":700,"matchmakingPvpTrophies":2600,"pvpChestMeter":{meter}}}"#
+                r#"{{"id":"{uuid}","name":"{name}","level":86,"pvpTrophies":{trophies},"matchmakingPvpTrophies":{high_water},"pvpChestMeter":{meter}}}"#
             );
             l.profile_equipped_json = r#"{"equippedItems":{}}"#.into();
             l.backpack_version = 385_263;
@@ -5790,6 +5834,43 @@ pub(in crate::arena::combat) mod tests {
         }
         assert_eq!(cards.len(), 2, "one op49 per player");
         cards
+    }
+
+    /// #625: a match whose only crossing is a trophy-track step (2990 -> past
+    /// 3000) leaves the tier at arena 6 level 1, so `rewardNewLevelArena` is `{}`
+    /// as retail sends with no tier change; the step's Legendary chest rides only
+    /// the treasury change set, before the meter chest.
+    #[test]
+    fn a_trophy_track_step_sends_no_new_level_arena() {
+        let season4 = uuid::uuid!("3ee6c4e6-8f46-4a17-bba6-9c30b36bd179");
+        let cards = two_nil_cards_at([6, 6], [None, None], false, 2_990, 2_990, season4);
+        let win = &cards[&0];
+        let post = win["character"]["matchmakingPvpTrophies"].as_i64().unwrap();
+        assert!((3_000..3_500).contains(&post), "crossed 3000: {post}");
+        let promo =
+            crate::arena::arena_ladder::promotion_rewards_in_season(2_990, post, 86, season4);
+        assert!(promo.new_tier.is_none() && promo.track_chests >= 1);
+        assert_eq!(win["rewardNewLevelArena"], serde_json::json!({}));
+        let treasury = win["inventory"]["treasury"]["chests"].as_array().unwrap();
+        assert_eq!(
+            treasury.len(),
+            promo.track_chests + 1,
+            "step chests + the meter chest"
+        );
+        assert_eq!(treasury[0]["tier"], 5, "3000's Legendary chest");
+        assert_eq!(treasury[0]["id"], "47");
+        let meter_id = 47 + promo.chests.len() as u64;
+        assert_eq!(win["reward"]["chests"][0]["id"], meter_id.to_string());
+        assert_eq!(win["inventory"]["treasuryVersion"], 24_501);
+
+        // Control: the same match in season 3 pays no track chest.
+        let season3 = uuid::uuid!("f1f9ee77-023d-4abf-ba1a-8873980e9900");
+        let cards = two_nil_cards_at([6, 6], [None, None], false, 2_990, 2_990, season3);
+        let chests = cards[&0]["inventory"]["treasury"]["chests"]
+            .as_array()
+            .unwrap();
+        assert_eq!(chests.len(), 1, "the meter chest only");
+        assert_eq!(cards[&0]["rewardNewLevelArena"], serde_json::json!({}));
     }
 
     /// Report #401 (2): the chest the eight-round meter pays must be ON THE CARD, as

@@ -123,6 +123,29 @@ async fn arena_weapon_gift(
     }
 }
 
+/// Whether `gift_id` is an arena trophy-track gift of the alt playing
+/// `character_id` now (HauDrauf #625). Routing only; a failed read is "no".
+async fn trophy_gift_probe(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+    gift_id: Uuid,
+) -> bool {
+    use crate::schema::characters::dsl as c;
+    let key = gift_id.to_string();
+    let state: Option<serde_json::Value> = c::characters
+        .filter(c::id.eq(character_id))
+        .select(c::server_state)
+        .first(conn)
+        .await
+        .optional()
+        .unwrap_or(None);
+    state
+        .as_ref()
+        .and_then(|s| s.get("arenaTrophyGifts"))
+        .and_then(|g| g.get(&key))
+        .is_some()
+}
+
 fn gift_store_err(e: anyhow::Error) -> BladeApiError {
     log::error!("arena fight gift: {e}");
     BladeApiError::new(StatusCode::INTERNAL_SERVER_ERROR, GIFT_SERVICE_ID, 4)
@@ -286,6 +309,31 @@ pub async fn get_global_gift(
             global_gift: GiftView {
                 global_gift_id: gift_id,
                 claim_count,
+                global_gift_override: def.for_client(),
+            },
+        }));
+    }
+
+    // An arena trophy-track town gift (HauDrauf #625): held in the live alt's own
+    // server state, so another alt never sees it.
+    if entry
+        .server_state
+        .0
+        .arena_trophy_gifts
+        .contains_key(&gift_id)
+    {
+        let def = crate::arena::trophy_track::gift_def(
+            gift_id,
+            &app_state.static_data.global_shop_grants,
+        )
+        .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+        return Ok(Json(GiftViewResponse {
+            global_gift: GiftView {
+                global_gift_id: gift_id,
+                claim_count: u64::from(crate::arena::trophy_track::is_claimed(
+                    &entry.server_state.0,
+                    &gift_id,
+                )),
                 global_gift_override: def.for_client(),
             },
         }));
@@ -519,6 +567,80 @@ pub async fn claim_global_gift(
                             .await?;
                     }
 
+                    Ok::<_, BladeApiError>(Json(GiftClaimResponse {
+                        reward,
+                        global_gift: ClaimedGiftInfo {
+                            global_gift_id: gift_id,
+                            claim_count: 1,
+                        },
+                        inventory,
+                        wallet,
+                    }))
+                }
+                .scope_boxed()
+            })
+            .await;
+    }
+
+    // An arena trophy-track town gift (HauDrauf #625). The unlocked probe only
+    // routes; the character row is re-read under lock inside the transaction.
+    if trophy_gift_probe(&mut conn, character_id, gift_id).await {
+        let globals = app_state.get_ref().clone();
+        return conn
+            .transaction(move |mut conn| {
+                async move {
+                    let mut entry = {
+                        use crate::schema::characters;
+                        characters::table
+                            .filter(characters::id.eq(character_id))
+                            .filter(characters::user_id.eq(user_id))
+                            .select(CharacterDbEntryEconomy::as_select())
+                            .for_no_key_update()
+                            .first(&mut conn)
+                            .await
+                            .map_err(|_| BladeApiError::new(StatusCode::NOT_FOUND, 20000, 2))?
+                    };
+                    let state = &entry.server_state.0;
+                    let Some(gift) = state.arena_trophy_gifts.get(&gift_id).cloned() else {
+                        return Err(map_gift_err(GiftError::NotFound));
+                    };
+                    if crate::arena::trophy_track::is_claimed(state, &gift_id) {
+                        return Err(map_gift_err(GiftError::LimitReached));
+                    }
+                    let def = crate::arena::trophy_track::gift_def(gift_id, &globals.static_data.global_shop_grants)
+                        .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
+                    let reward = gifts::build_gift_reward(
+                        &def,
+                        &globals.game_data.items_template,
+                        &globals.repair_data,
+                    );
+                    let mut tracker = InventoryChangeTracker::default();
+                    apply_reward(
+                        &reward,
+                        &mut entry.wallet.0,
+                        &mut entry.inventory.0,
+                        &mut entry.character.0,
+                        &mut tracker,
+                    );
+                    if !reward.stackable_items.is_empty() || !reward.items.is_empty() {
+                        entry.inventory.0.backpack_version += 1;
+                    }
+                    entry.server_state.0.gift_claims.insert(gift_id, 1);
+
+                    let inventory = entry.inventory.0.generate_client_update(&tracker);
+                    let wallet = entry.wallet.0.clone();
+                    {
+                        use crate::schema::characters;
+                        diesel::update(characters::table.filter(characters::id.eq(entry.id)))
+                            .set(entry)
+                            .execute(&mut conn)
+                            .await?;
+                    }
+                    log::info!(
+                        "arena trophy track: gift {gift_id} ({} cups, season {}) claimed by character {character_id}",
+                        gift.threshold,
+                        gift.season_id
+                    );
                     Ok::<_, BladeApiError>(Json(GiftClaimResponse {
                         reward,
                         global_gift: ClaimedGiftInfo {
