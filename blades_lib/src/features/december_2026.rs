@@ -160,6 +160,10 @@ pub fn door_label(day: u32) -> String {
     }
 }
 
+/// The Arcane tier of every gifted armour piece: 2, "two guaranteed
+/// enchantments" (HauDrauf, #526, message 3960).
+pub const ARMOR_ARCANE_TIER: u64 = 2;
+
 fn line(item_template_id: Uuid, quantity: u64) -> GiftItem {
     GiftItem {
         item_template_id,
@@ -191,12 +195,14 @@ fn build() -> Vec<Door> {
                 items.push(line(GEMS, door.gems));
             }
             if door.armor_sets > 0 {
-                items.extend(
-                    raw.armor_set
-                        .pieces
-                        .iter()
-                        .map(|p| line(p.item_template_id, door.armor_sets)),
-                );
+                // Arcane II — "zwei garantierte Verzauberungen" (HauDrauf, #526,
+                // message 3960: the set "with two guaranteed enchantments, as
+                // for December"): blank, and the enchant then adds exactly two
+                // bonus enchantments, as the arena's monthly weapon is gifted.
+                items.extend(raw.armor_set.pieces.iter().map(|p| GiftItem {
+                    arcane_tier: Some(ARMOR_ARCANE_TIER),
+                    ..line(p.item_template_id, door.armor_sets)
+                }));
             }
             let opens_at_secs = DECEMBER_1_SECS + (i64::from(door.day) - 1) * SECS_PER_DAY;
             let closes_at_secs = opens_at_secs + DOOR_WINDOW_SECS;
@@ -793,7 +799,11 @@ mod tests {
                     assert_eq!(piece.item.durability, 325.0);
                     assert_eq!(piece.item.tempering_level, 0);
                     assert_eq!(piece.item.properties, ItemPropertiesAll::default());
-                    assert_eq!(piece.item.arcane_tier, None);
+                    assert_eq!(
+                        piece.item.arcane_tier,
+                        Some(2),
+                        "two guaranteed enchantments"
+                    );
                     assert_eq!(piece.item.grade, None);
                 }
             }
@@ -805,7 +815,7 @@ mod tests {
     }
 
     /// A gifted piece on the wire has exactly the keys of a Divine Dark
-    /// Seducer armour a player already holds in production.
+    /// Seducer armour a player already holds in production, plus its Arcane tier.
     #[test]
     fn a_gifted_piece_has_the_shape_of_a_held_one() {
         let held: Value = serde_json::from_str(
@@ -829,7 +839,14 @@ mod tests {
             k.sort();
             k
         };
-        assert_eq!(keys(&gifted), keys(&held));
+        // Plus `arcaneTier`: the piece is Arcane II (#526), carried exactly as
+        // the arena's monthly gift weapon and retail's Sigil Arcane02 grants
+        // carry it.
+        let mut expected = keys(&held);
+        expected.push("arcaneTier".into());
+        expected.sort();
+        assert_eq!(keys(&gifted), expected);
+        assert_eq!(gifted["arcaneTier"], 2);
         assert_eq!(keys(&gifted["properties"]), keys(&held["properties"]));
     }
 
