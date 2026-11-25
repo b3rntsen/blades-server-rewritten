@@ -20,8 +20,9 @@
 //!   Gems and no Blades armour piece at these steps.
 //! * otherwise: exactly what the rung `2000 + t % 500` pays — its
 //!   `rewards_once_reached` chest and its fixed loot-table stackables at the
-//!   character's level ([`template_rung`]). Retail has no rung at 2450, so the
-//!   copy of it (2950, 3450, ...) pays nothing, as 2450 does.
+//!   character's level ([`template_rung`]). Retail has no rung at 2450; its
+//!   copies (2950, 3450, ... 9950) pay what 2400 pays (HauDrauf, #625,
+//!   2026-11-25 21:15).
 //!
 //! The steps ride the existing promotion path (`arena_ladder::promotion_rewards_in_season`):
 //! a step pays once, when the season's high-water mark first crosses it, on the
@@ -130,12 +131,19 @@ pub enum StepReward {
     GiftStep,
 }
 
-/// The 2000-2500 rung a step copies: `2000 + t % 500`. `None` at a 500-cup
-/// step and at offset 450, where retail has no rung.
+/// Offset 450 has no retail rung; its copies pay the 2400 rung (#625).
+const RUNGLESS_OFFSET: i64 = 450;
+const RUNGLESS_OFFSET_PAYS_AS: i64 = 400;
+
+/// The 2000-2500 rung a step copies: `2000 + t % 500`, with offset 450 (no
+/// retail rung) paying as 2400. `None` at a 500-cup step.
 pub fn template_rung(threshold: i64) -> Option<&'static ArenaTier> {
-    let offset = threshold.rem_euclid(GIFT_STEP);
+    let mut offset = threshold.rem_euclid(GIFT_STEP);
     if offset == 0 {
         return None;
+    }
+    if offset == RUNGLESS_OFFSET {
+        offset = RUNGLESS_OFFSET_PAYS_AS;
     }
     ARENA_LADDER
         .iter()
@@ -143,7 +151,7 @@ pub fn template_rung(threshold: i64) -> Option<&'static ArenaTier> {
 }
 
 /// What the step at `threshold` pays, or `None` when it is not a step of the
-/// track or pays nothing (the 2450 copies).
+/// track.
 pub fn step_reward(threshold: i64) -> Option<StepReward> {
     if threshold <= TRACK_FLOOR || threshold > TRACK_CEILING || threshold % TRACK_STEP != 0 {
         return None;
@@ -295,7 +303,7 @@ mod tests {
     }
 
     /// 2550..=10000 in steps of 50 is 150 steps; 15 are 500-cup steps
-    /// (3000..=10000) and 15 are copies of the rung-less 2450, which pay nothing.
+    /// (3000..=10000); the 15 copies of the rung-less 2450 pay as 2400.
     #[test]
     fn the_track_has_a_step_every_50_cups_to_10000() {
         let steps = steps_crossed(0, 1_000_000);
@@ -307,10 +315,18 @@ mod tests {
             .map(|(t, _)| *t)
             .collect();
         assert_eq!(gifts, (3000..=10_000).step_by(500).collect::<Vec<_>>());
-        assert_eq!(steps.len(), 150 - 15);
+        assert_eq!(steps.len(), 150);
         for t in (2950..=9950).step_by(500) {
-            assert_eq!(step_reward(t), None, "{t} copies 2450, which has no rung");
+            let Some(StepReward::Copy(rung)) = step_reward(t) else {
+                panic!("{t} should pay");
+            };
+            assert_eq!(rung.required_trophies, 2400, "{t} pays as 2400");
         }
+        assert_eq!(
+            arena_ladder::promotion_rewards_with_track(2940, 2960, 86, true).stackable_items,
+            arena_ladder::promotion_rewards(2390, 2410, 86).stackable_items,
+            "2950 pays 2400's gemstones"
+        );
         assert_eq!(step_reward(10_050), None, "nothing past 10000");
         assert_eq!(step_reward(2500), None, "2500 stays retail's own rung");
         assert_eq!(step_reward(2525), None, "not a 50-cup step");
@@ -474,7 +490,7 @@ mod tests {
         assert_eq!(all.town_gift_thresholds.len(), 15);
         assert_eq!(all.chests.iter().filter(|c| c.0 == 5).count(), 15);
         assert_eq!(all.chests.iter().filter(|c| c.0 == 3).count(), 15 * 4);
-        assert_eq!(all.chests.iter().filter(|c| c.0 == 2).count(), 15 * 2);
+        assert_eq!(all.chests.iter().filter(|c| c.0 == 2).count(), 15 * 3);
     }
 
     /// Off for the current season, on for the next; and nothing changes below
