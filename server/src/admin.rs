@@ -71,6 +71,9 @@ use crate::{
 // real Blades service id (those are client-facing); picked to be obviously
 // out-of-band so import failures are easy to spot in logs.
 pub(crate) const IMPORT_SERVICE_ID: u64 = 9001;
+/// An import whose character name contains "(" or ")": reserved for the system
+/// labels (AI) and (TST) (`character_names::has_reserved_brackets`).
+pub(crate) const IMPORT_NAME_RESERVED_BRACKETS: u64 = 146;
 
 /// `bind-device` error codes inside `IMPORT_SERVICE_ID`. Named because the
 /// endpoint now distinguishes four failures where it used to distinguish two,
@@ -496,7 +499,7 @@ UPDATE arena_match_results r
    AND r.source_alt_uuid IS NULL
 "#;
 
-async fn snapshot_character(
+pub(crate) async fn snapshot_character(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
@@ -638,14 +641,14 @@ async fn park_quests_in_version(
 /// Take the parked quest rows out of a version's `server_state`, leaving the
 /// state that belongs on the live row. `None` for a version taken before quests
 /// were parked: it never knew its quests, so the caller must not pretend it did.
-fn take_parked_quests(server_state: &mut Value) -> Option<Value> {
+pub(crate) fn take_parked_quests(server_state: &mut Value) -> Option<Value> {
     server_state
         .as_object_mut()?
         .remove(PARKED_QUESTS_KEY)
         .filter(Value::is_array)
 }
 
-async fn unpark_quests(
+pub(crate) async fn unpark_quests(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     parked: Value,
@@ -758,12 +761,12 @@ async fn park_events_in_version(
 /// no event state at all — a fresh event, which is what it has actually played
 /// here as far as anyone can tell.
 #[derive(Default)]
-struct ParkedEvents {
+pub(crate) struct ParkedEvents {
     completions: Option<Value>,
     dungeons: Option<Value>,
 }
 
-fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
+pub(crate) fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
     let Some(obj) = server_state.as_object_mut() else {
         return ParkedEvents::default();
     };
@@ -777,7 +780,7 @@ fn take_parked_events(server_state: &mut Value) -> ParkedEvents {
     }
 }
 
-async fn unpark_events(
+pub(crate) async fn unpark_events(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     parked: ParkedEvents,
@@ -1076,7 +1079,7 @@ async fn park_alt_rows_in_version(
 /// A version's parked [`ALT_ROW_TABLES`] rows, taken out of its `server_state`
 /// so they never land on the live row. One entry per table, `None` for a table
 /// the version predates.
-struct ParkedAltRows(Vec<Option<Value>>);
+pub(crate) struct ParkedAltRows(Vec<Option<Value>>);
 
 impl ParkedAltRows {
     /// Did the version carry any alt-owned rows at all (i.e. was it taken
@@ -1086,7 +1089,7 @@ impl ParkedAltRows {
     }
 }
 
-fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
+pub(crate) fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
     let mut obj = server_state.as_object_mut();
     ParkedAltRows(
         ALT_ROW_TABLES
@@ -1102,7 +1105,7 @@ fn take_parked_alt_rows(server_state: &mut Value) -> ParkedAltRows {
 
 /// Write a version's parked rows back under the live ids. A table the version
 /// predates gets nothing: the live rows were the outgoing alt's and went with it.
-async fn unpark_alt_rows(
+pub(crate) async fn unpark_alt_rows(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     user_id: Uuid,
@@ -1340,6 +1343,10 @@ pub async fn import_character(
                     .await?
                     .into_iter()
                     .next();
+                // An alt locked to a developer's device lives on its child
+                // account; importing it here would make it live twice.
+                crate::dev_alt_lock::refuse_if_alt_locked(&mut conn, user_id, incoming_alt)
+                    .await?;
 
                 if body.new_alt {
                     let Some(alt_uuid) = incoming_alt else {
@@ -1425,6 +1432,17 @@ pub async fn import_character(
                 // generated name.
                 if body.ai_copy {
                     crate::character_names::mark_ai_copy_user(&mut conn, user_id).await?;
+                } else if crate::character_names::has_reserved_brackets(&character.name) {
+                    // "(" and ")" are reserved for system labels (AI) / (TST).
+                    log::warn!(
+                        "[import] user {user_id}: refused name {:?} — parentheses are reserved",
+                        character.name
+                    );
+                    return Err(BladeApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        IMPORT_SERVICE_ID,
+                        IMPORT_NAME_RESERVED_BRACKETS,
+                    ));
                 }
                 let settled = settle_import_name(
                     &mut conn,
@@ -2403,7 +2421,11 @@ fn normalise_current_character_name(raw: &str) -> Result<String, ()> {
     // "(AI)" is already outside the whitelist; checked by name anyway, because
     // the reservation is a policy of ours that must not hinge on the game's
     // character set.
-    if !is_game_name(&name) || is_reserved_ai_name(&name) || crate::testchar::is_test_name(&name) {
+    if !is_game_name(&name)
+        || is_reserved_ai_name(&name)
+        || crate::testchar::is_test_name(&name)
+        || crate::character_names::has_reserved_brackets(&name)
+    {
         return Err(());
     }
     Ok(name)
@@ -2495,7 +2517,7 @@ async fn rename_current_character_as(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    // An operator test character keeps its " (Test)" label: renaming would drop
+    // An operator test character keeps its " (TST)" label: renaming would drop
     // it, and the label is how players tell it is not a real one.
     // Only the label, not the whole reserved form: a player whose name reads
     // "Ravena AI" must be able to rename it away.
@@ -4945,22 +4967,22 @@ mod tests {
             assert_eq!(err.status_code(), StatusCode::CONFLICT);
         }
 
-        /// A test character keeps its label: renaming would drop " (Test)".
+        /// A test character keeps its label: renaming would drop " (TST)".
         #[actix_web::test]
         async fn a_test_character_cannot_be_renamed_away_from_its_label() {
             let mut conn = db!();
             let (character_id, user_id) =
-                seed_character(&mut conn, serde_json::json!({"name":"HauDrauf (Test)"})).await;
+                seed_character(&mut conn, serde_json::json!({"name":"HauDrauf (TST)"})).await;
             let err = rename_current_character(&mut conn, character_id, user_id, "HauDrauf".into())
                 .await
                 .unwrap_err();
             assert_eq!(err.status_code(), StatusCode::CONFLICT);
             assert_eq!(
                 stored(&mut conn, character_id).await.character["name"],
-                "HauDrauf (Test)"
+                "HauDrauf (TST)"
             );
             assert!(
-                normalise_current_character_name("Faker (Test)").is_err(),
+                normalise_current_character_name("Faker (TST)").is_err(),
                 "nor can a player take it"
             );
         }
@@ -5928,6 +5950,10 @@ mod tests {
             ),
             "\n",
             include_str!("../../migrations/2026-11-16-000002-0000_ai_copy_users/up.sql"),
+            "\n",
+            // Lock children out of the registry; "(TST)" exempt (2026-11-24). The
+            // table it reads comes from `testchar::apply_migration_for_tests`.
+            include_str!("../../migrations/2026-11-24-000001-0000_dev_alt_locks_names/up.sql"),
         );
 
         async fn fixture() -> Option<AsyncPgConnection> {
@@ -7563,8 +7589,8 @@ mod tests {
             let mut c = db!();
             seed_character(&mut c, "Ravena (AI)", 89, 0).await;
             seed_character(&mut c, "Ravena (AI)", 89, 0).await;
-            seed_character(&mut c, "Ravena (Test)", 89, 0).await;
-            seed_character(&mut c, "Ravena (Test)", 89, 0).await;
+            seed_character(&mut c, "Ravena (TST)", 89, 0).await;
+            seed_character(&mut c, "Ravena (TST)", 89, 0).await;
             flush(&mut c).await.unwrap();
             assert!(registry(&mut c).await.is_empty());
         }
@@ -9314,7 +9340,7 @@ mod tests {
                     cid,
                     uid,
                     alt_b,
-                    r#"{"name":"Bryn (Test)","pvpTrophies":900}"#,
+                    r#"{"name":"Bryn (TST)","pvpTrophies":900}"#,
                     alt_a,
                 )
                 .await;
@@ -9340,7 +9366,7 @@ mod tests {
                     .collect()
                 }
                 // The control: unmarked, the parked alt outranks the live one.
-                assert_eq!(board(&mut c).await, ["Bryn (Test)", "Aran"]);
+                assert_eq!(board(&mut c).await, ["Bryn (TST)", "Aran"]);
 
                 sql(&mut c, &format!(
                     "INSERT INTO test_characters (alt_uuid, user_id, marked_by) VALUES ('{alt_b}', '{uid}', 't')"
@@ -9355,7 +9381,7 @@ mod tests {
                 // Live: switch the test alt in.
                 sql(&mut c, &format!(
                     "UPDATE characters SET source_alt_uuid = '{alt_b}', \
-                         character = '{{\"name\":\"Bryn (Test)\",\"pvpTrophies\":900}}' WHERE id = '{cid}'"
+                         character = '{{\"name\":\"Bryn (TST)\",\"pvpTrophies\":900}}' WHERE id = '{cid}'"
                 ))
                 .await;
                 assert!(
@@ -9381,7 +9407,7 @@ mod tests {
                     cid,
                     uid,
                     alt_b,
-                    r#"{"name":"Bryn (Test)","level":90}"#,
+                    r#"{"name":"Bryn (TST)","level":90}"#,
                     alt_a,
                 )
                 .await;
@@ -10654,6 +10680,8 @@ pub(crate) async fn apply_restore(
         .first(conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
+    // A version of an alt locked to a developer's device would put it live twice.
+    crate::dev_alt_lock::refuse_if_alt_locked(conn, user_id, source_alt_uuid).await?;
 
     // A version that kept its quests brings them back, and the state being
     // replaced keeps its own. A version from before quests were kept leaves the
@@ -10777,6 +10805,9 @@ pub struct AltSummary {
     pub newest_saved_at: i64,
     /// True for the alt currently in the live character row.
     pub live: bool,
+    /// The device this alt is locked to (`crate::dev_alt_lock`), if any. A
+    /// locked alt cannot be switched to; unlock it first.
+    pub locked_to_device: Option<String>,
     /// Pre-release XP held in the bank for this alt (#425). Absent when none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banked_xp: Option<i64>,
@@ -10792,12 +10823,7 @@ pub struct AltsResponse {
     pub devices: Vec<DeviceAlt>,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeviceAlt {
-    pub device_id: String,
-    pub active_alt_uuid: Option<Uuid>,
-}
+pub use crate::dev_alt_lock::DeviceAlt;
 
 #[derive(diesel::QueryableByName)]
 struct AltRow {
@@ -10849,7 +10875,6 @@ pub async fn list_alts(
         })?;
 
     use crate::schema::characters::dsl as ch;
-    use crate::schema::device_bindings::dsl as db;
 
     let live_alt_uuid: Option<Uuid> = ch::characters
         .filter(ch::user_id.eq(user_id))
@@ -10869,10 +10894,8 @@ pub async fn list_alts(
         .await
         .unwrap_or_default();
 
-    let devices: Vec<(String, Option<Uuid>)> = db::device_bindings
-        .filter(db::user_id.eq(user_id))
-        .select((db::device_id, db::active_alt_uuid))
-        .load(&mut conn)
+    // The user's devices, including the ones locked to one of its alts.
+    let devices = crate::dev_alt_lock::devices_with_locks(&mut conn, user_id)
         .await
         .unwrap_or_default();
 
@@ -10882,6 +10905,10 @@ pub async fn list_alts(
             .into_iter()
             .map(|r| AltSummary {
                 live: Some(r.alt_uuid) == live_alt_uuid,
+                locked_to_device: devices
+                    .iter()
+                    .find(|d| d.locked_alt_uuid == Some(r.alt_uuid))
+                    .map(|d| d.device_id.clone()),
                 banked_xp: banked.get(&r.alt_uuid).copied(),
                 alt_uuid: r.alt_uuid,
                 name: r.name,
@@ -10890,13 +10917,7 @@ pub async fn list_alts(
                 newest_saved_at: r.newest_saved_at,
             })
             .collect(),
-        devices: devices
-            .into_iter()
-            .map(|(device_id, active_alt_uuid)| DeviceAlt {
-                device_id,
-                active_alt_uuid,
-            })
-            .collect(),
+        devices,
     }))
 }
 
@@ -10972,6 +10993,9 @@ pub(crate) async fn apply_switch_alt(
         .first(conn)
         .await
         .map_err(|_| BladeApiError::new(StatusCode::CONFLICT, IMPORT_SERVICE_ID, 7))?;
+
+    // Locked to a developer's device: the alt is live on its child account.
+    crate::dev_alt_lock::refuse_if_alt_locked(conn, body.user_id, Some(body.alt_uuid)).await?;
 
     if was_playing == Some(body.alt_uuid) {
         // Already there. Record the device's choice and change nothing else —

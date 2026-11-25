@@ -47,6 +47,7 @@ mod community_hunt;
 mod craft;
 mod credentials;
 mod daily_reward;
+mod dev_alt_lock;
 mod dungeon;
 mod dungeon_update;
 #[cfg(test)]
@@ -304,6 +305,9 @@ async fn main() -> Result<()> {
                 ))
                 .await
                 .unwrap();
+            // The developer lock table, in case the binary lands before the
+            // hand-applied migration: every ranking query names it.
+            dev_alt_lock::ensure_table(&db_pool).await;
 
             let mut game_data: GameData = {
                 let parsed_data_path = static_data.join("parsed.json");
@@ -794,6 +798,8 @@ async fn main() -> Result<()> {
                     .service(admin::restore_character_version)
                     .service(admin::list_alts)
                     .service(admin::switch_alt)
+                    .service(dev_alt_lock::lock_alt)
+                    .service(dev_alt_lock::unlock_alt)
                     .service(arena::fight_ai::get_fight_ai)
                     .service(arena::fight_ai::set_fight_ai_route)
                     .service(arena::gear_calc::gear_calc_catalogue)

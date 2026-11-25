@@ -139,13 +139,18 @@ struct MatchRow {
 }
 
 /// The season's matches, keyed and ordered as the season close replays them.
-const SEASON_ROWS_SQL: &str = "\
+/// A fight with a developer's (TST) character is left out on both sides: it
+/// moved no cups, and replaying it under another rule must not make it move
+/// some — nor zero the child's counter, which unlock carries to the parent.
+pub(crate) const SEASON_ROWS_SQL: &str = "\
     SELECT r.id, r.character_id, COALESCE(r.source_alt_uuid, c.source_alt_uuid) AS alt, \
            r.is_h2h, r.win, r.rounds_won, r.rounds_lost, r.trophy_delta, \
            COALESCE(r.classic_trophy_delta, r.trophy_delta) AS classic \
     FROM arena_match_results r \
     JOIN characters c ON c.id = r.character_id \
     WHERE r.recorded_at >= to_timestamp($1) AND r.recorded_at < to_timestamp($2) \
+      AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl \
+                       WHERE dl.child_character_id IN (r.character_id, r.opponent_character_id)) \
     ORDER BY r.recorded_at, r.id";
 
 /// A season counter that currently belongs to this season: the in-game board's

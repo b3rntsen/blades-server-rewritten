@@ -1300,6 +1300,12 @@ pub struct Loadout {
     /// show the every-25th-fight weapon (#390/#391, #401). `None` when unknown —
     /// bots, the starter loadout, or a failed read — and then the card shows none.
     pub account_arena_fights: Option<i64>,
+    /// The fighter is a developer's device-locked alt (`crate::dev_alt_lock`):
+    /// its account is a lock child. Set only by `matchmaker::mark_loadout_as_test`
+    /// from the ACCOUNT, never from the name; read through
+    /// `matchmaker::is_test_loadout`. A fight with such a fighter moves no cups
+    /// for either side and is never head-to-head.
+    pub dev_test: bool,
     /// The REST sequence echoed by retail's match-end card.
     pub current_request_index: i64,
     /// The client's own `HideHelmet` avatar toggle, as reported by its c2s op61
@@ -2458,6 +2464,10 @@ impl Fighter {
         next.hide_helmet = self.loadout.hide_helmet;
         // Read at queue time, not off the character row: the rebuilt loadout has none.
         next.account_arena_fights = self.loadout.account_arena_fights;
+        // A developer's (TST) fighter stays one for the whole match.
+        if self.loadout.dev_test {
+            crate::arena::matchmaker::mark_loadout_as_test(&mut next);
+        }
         let (max_health, max_stamina, max_magicka) = max_pools_for(&next);
         self.max_health = max_health;
         self.max_stamina = max_stamina;

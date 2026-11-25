@@ -703,9 +703,23 @@ async fn bind_linked_devices(
 
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link")]
 async fn bnet_link(
+    current_session: SessionLookedUpMaybe,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<BnetLinkRequest>,
 ) -> Result<web::Json<BnetLinkResponse>, BladeApiError> {
+    // A developer's lock child links nothing, forced or not: unlock instead.
+    if let Ok(current) = current_session.get_session_or_error() {
+        let caller = current.session.user_id;
+        let mut conn = app_state.db_pool.get().await.unwrap();
+        if crate::dev_alt_lock::refuses_account_link(&mut conn, caller).await {
+            log::warn!("account link: refused for lock child {caller} — unlock the device first");
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                3,
+                LINK_FROM_LOCK_CHILD,
+            ));
+        }
+    }
     let body = body.into_inner();
     let (user_id, secret_id, session) =
         resolve_link(&app_state, &body.username, &body.password).await?;
@@ -1058,6 +1072,10 @@ async fn apply_forced_link_changes(
     .await
 }
 
+/// An account link (forced or not) from a developer's lock child account
+/// (`crate::dev_alt_lock`).
+const LINK_FROM_LOCK_CHILD: u64 = 115;
+
 /// `POST /…/auth/bnet/link/force` — the player answered the conflict prompt.
 ///
 /// Same credential check either way; what changes is WHICH character the linked
@@ -1090,6 +1108,18 @@ async fn bnet_link_force(
 
     let (rebound, moved) = {
         let mut conn = app_state.db_pool.get().await.unwrap();
+        // A developer's device-locked alt plays on a lock child account. Linking
+        // it would move (or rebind) a copy of the parent's alt; unlock instead.
+        if crate::dev_alt_lock::refuses_account_link(&mut conn, source_user_id).await {
+            log::warn!(
+                "account link (forced): refused for lock child {source_user_id} — unlock the device first"
+            );
+            return Err(BladeApiError::new(
+                StatusCode::CONFLICT,
+                3,
+                LINK_FROM_LOCK_CHILD,
+            ));
+        }
         if let Some(device_id) = caller_device_id.as_deref()
             && let Err(error) =
                 move_throwaway_device_claim(&mut conn, source_user_id, user_id, device_id).await

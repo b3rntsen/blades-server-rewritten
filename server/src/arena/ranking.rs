@@ -1139,7 +1139,7 @@ pub(crate) const H2H_REPLAY_ROWS_CTE: &str = "\
 /// the alt itself is in: the live membership, or the one parked in its newest
 /// version while that guild exists. An operator test alt is never listed (the
 /// replay already gives it no rating; this keeps it off even if one existed).
-const H2H_BOARD_ENTRIES_SQL: &str = "\
+pub(crate) const H2H_BOARD_ENTRIES_SQL: &str = "\
     WITH entries AS ( \
          SELECT r.character_id, r.alt_key, r.rating, r.wins, r.losses, r.ties, r.matches, \
                 r.last_match_at, \
@@ -1175,6 +1175,7 @@ const H2H_BOARD_ENTRIES_SQL: &str = "\
          LEFT JOIN guilds pg ON pg.id::text = saved.parked_guild_id \
          WHERE r.matches >= $1 {SEASON_FILTER} \
            AND NOT EXISTS (SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = r.alt_key) \
+           AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl WHERE dl.child_character_id = c.id) \
      ) \
      SELECT row_number() OVER (ORDER BY rating DESC, matches DESC, last_match_at ASC NULLS LAST, \
                                         character_id, alt_key) AS rank, \
@@ -2886,7 +2887,7 @@ mod tests {
             let (row_t, test_alt) = (Uuid::from_u128(0x10), Uuid::from_u128(0x1a));
             let (row_r, real_alt) = (Uuid::from_u128(0x20), Uuid::from_u128(0x2a));
             let (row_o, other_alt) = (Uuid::from_u128(0x30), Uuid::from_u128(0x3a));
-            seed_alt_character(&mut conn, row_t, Some(test_alt), "Tester (Test)").await;
+            seed_alt_character(&mut conn, row_t, Some(test_alt), "Tester (TST)").await;
             seed_alt_character(&mut conn, row_r, Some(real_alt), "Real").await;
             seed_alt_character(&mut conn, row_o, Some(other_alt), "Other").await;
             // The test alt beats Real; Real beats Other.

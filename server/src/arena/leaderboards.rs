@@ -172,6 +172,11 @@ pub(crate) const RANKED_CTE: &str = "
         JOIN active_season s
           ON r.recorded_at >= to_timestamp(s.starts_at)
          AND r.recorded_at < to_timestamp(s.cutoff)
+        -- A fight with a developer's (TST) character is not a win for anyone.
+        WHERE NOT EXISTS (
+              SELECT 1 FROM dev_alt_lock_accounts dl
+              WHERE dl.child_character_id IN (r.character_id, r.opponent_character_id)
+        )
         GROUP BY r.character_id, COALESCE(r.source_alt_uuid, rc.source_alt_uuid)
     ),
     ranked AS (
@@ -218,6 +223,11 @@ pub(crate) const RANKED_CTE: &str = "
               -- An operator test character never ranks (`crate::testchar`).
               AND NOT EXISTS (
                     SELECT 1 FROM test_characters tc WHERE tc.alt_uuid = c.source_alt_uuid
+              )
+              -- A developer lock child holds a copy of a parent alt that the
+              -- parent still lists as a kept version (`crate::dev_alt_lock`).
+              AND NOT EXISTS (
+                    SELECT 1 FROM dev_alt_lock_accounts dl WHERE dl.child_character_id = c.id
               )
             UNION ALL
             -- A switched-out alt keeps its own wins and its own guild: the

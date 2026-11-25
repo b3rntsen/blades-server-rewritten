@@ -25,7 +25,7 @@ use actix_web::{
 };
 use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, SelectableHelper};
 use diesel_async::pooled_connection::bb8::PooledConnection;
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::{AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use futures_util::FutureExt;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
@@ -486,6 +486,23 @@ fn last_call_partner(
 ///
 /// Returns index pairs into `queue`, the first of each the older ticket.
 fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<(usize, usize)> {
+    pairing_round_avoiding(queue, now, &[])
+}
+
+/// [`pairing_round`], with pairs to put LAST (owner, 2026-11-24): a developer's
+/// test character (" (TST)") and an opponent it fought recently. Never a refusal —
+/// with nobody else it may meet, the repeat is still made rather than no match.
+fn pairing_round_avoiding(
+    queue: &[(Option<Skill>, Instant, Uuid)],
+    now: Instant,
+    avoid: &[(Uuid, Uuid)],
+) -> Vec<(usize, usize)> {
+    let repeat = |i: usize, j: usize| {
+        let (a, b) = (queue[i].2, queue[j].2);
+        avoid
+            .iter()
+            .any(|&(x, y)| (x, y) == (a, b) || (x, y) == (b, a))
+    };
     let gap = |i: usize, j: usize| match (queue[i].0, queue[j].0) {
         (Some(a), Some(b)) => (a.trophies - b.trophies).abs(),
         _ => i64::MAX,
@@ -505,7 +522,7 @@ fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<
     let first = free.iter().enumerate().find_map(|(pos, &o)| {
         free.iter()
             .filter(|&&j| j != o && may_meet(o, j))
-            .min_by_key(|&&j| (gap(o, j), queue[j].1))
+            .min_by_key(|&&j| (repeat(o, j), gap(o, j), queue[j].1))
             .map(|&j| (pos, o, j))
     });
     if let Some((_, o, j)) = first {
@@ -515,20 +532,20 @@ fn pairing_round(queue: &[(Option<Skill>, Instant, Uuid)], now: Instant) -> Vec<
 
     // 2. The rest by best match.
     loop {
-        let mut best: Option<(i64, Instant, usize, usize)> = None;
+        let mut best: Option<(bool, i64, Instant, usize, usize)> = None;
         for (x, &i) in free.iter().enumerate() {
             for &j in &free[x + 1..] {
                 if !may_meet(i, j) {
                     continue;
                 }
                 // `free` is in age order, so `i` is the older; ties go to the older pair.
-                let key = (gap(i, j), queue[i].1, i, j);
-                if best.is_none_or(|b| (key.0, key.1) < (b.0, b.1)) {
+                let key = (repeat(i, j), gap(i, j), queue[i].1, i, j);
+                if best.is_none_or(|b| (key.0, key.1, key.2) < (b.0, b.1, b.2)) {
                     best = Some(key);
                 }
             }
         }
-        let Some((_, _, i, j)) = best else { break };
+        let Some((_, _, _, i, j)) = best else { break };
         pairs.push((i, j));
         free.retain(|&k| k != i && k != j);
     }
@@ -979,7 +996,9 @@ pub(crate) async fn stage_live_match_loadout(
             return;
         }
     };
-    let lo = loadout_from_row(&row);
+    let mut lo = loadout_from_row(&row);
+    // A between-rounds reload replaces the fighter's loadout: keep the mark.
+    mark_if_test_account(&mut lo, user_id);
     let staged = registry.stage_between_rounds_loadout(&character_uuid, lo);
     info!("arena: between-rounds loadout for {character_uuid} staged={staged}");
 }
@@ -1420,6 +1439,59 @@ pub fn is_bot_loadout(lo: &crate::arena::combat::Loadout) -> bool {
     lo.display_name.ends_with(BOT_NAME_SUFFIX)
 }
 
+/// The suffix a developer's device-locked alt carries (owner, 2026-11-24): it
+/// meets real players, and they must be able to tell it is a test character.
+/// Parentheses are reserved for these system labels — no player name has one.
+pub(crate) const TEST_NAME_SUFFIX: &str = " (TST)";
+
+/// Whether this fighter is a developer's device-locked alt. The single source
+/// for "this fight moves no cups and is not head-to-head": the flag is set from
+/// the ACCOUNT ([`mark_loadout_as_test`]), so renaming a character cannot make
+/// it count, and stripping the label cannot make a test fight rank.
+pub fn is_test_loadout(lo: &crate::arena::combat::Loadout) -> bool {
+    lo.dev_test
+}
+
+/// Whether to fight as (TST). The account decides; when it cannot be read
+/// (pool or query failure) this FAILS CLOSED on the stored label: parentheses
+/// are reserved, so only a lock writes " (TST)" into a name, and a test
+/// character must never fight for cups because a read failed.
+fn is_test_fighter(by_account: Option<bool>, stored_name: &str) -> bool {
+    by_account.unwrap_or_else(|| {
+        stored_name
+            .trim_end()
+            .ends_with(TEST_NAME_SUFFIX.trim_start())
+    })
+}
+
+/// [`mark_loadout_as_test`] when `user_id` is a lock child (in-memory account
+/// list, falling back to the stored label when that is not loaded).
+fn mark_if_test_account(lo: &mut crate::arena::combat::Loadout, user_id: Uuid) {
+    if is_test_fighter(crate::dev_alt_lock::known_child(user_id), &lo.display_name) {
+        mark_loadout_as_test(lo);
+    }
+}
+
+/// Mark a loadout as a test character's: the account flag, and " (TST)" on both
+/// places the client reads a name (op50 `display_name`, op54 profile `name`).
+/// Idempotent — the lock already stores the suffix in the character's name.
+pub(crate) fn mark_loadout_as_test(lo: &mut crate::arena::combat::Loadout) {
+    lo.dev_test = true;
+    if lo.display_name.is_empty() {
+        lo.display_name = format!("{BOT_FALLBACK_NAME}{TEST_NAME_SUFFIX}");
+    } else if !lo.display_name.ends_with(TEST_NAME_SUFFIX) {
+        lo.display_name.push_str(TEST_NAME_SUFFIX);
+    }
+    if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&lo.profile_character_json) {
+        if let Some(name) = v.get_mut("name").and_then(|n| n.as_str().map(String::from)) {
+            if !name.ends_with(TEST_NAME_SUFFIX) {
+                v["name"] = serde_json::Value::String(format!("{name}{TEST_NAME_SUFFIX}"));
+                lo.profile_character_json = v.to_string();
+            }
+        }
+    }
+}
+
 fn mark_loadout_as_bot(lo: &mut crate::arena::combat::Loadout) {
     if lo.display_name.is_empty() {
         // The `starter()` fallback carries no name, and the engine substitutes
@@ -1641,6 +1713,12 @@ async fn pick_bot_loadout(
     // is not a copy and must not be drawn. Their mimic copies stay eligible.
     let logged_in = users_with_live_sessions(&mut conn).await;
     drop_rows_of_logged_in_users(&mut rows, &logged_in);
+    // Nor a developer's lock child: it would come out as "X (TST) (AI)", a copy
+    // of a test copy of a real alt.
+    let lock_children = crate::dev_alt_lock::lock_child_users(&mut conn)
+        .await
+        .unwrap_or_default();
+    drop_rows_of_logged_in_users(&mut rows, &lock_children);
     let ranking_config = ranking::load(db).await.config;
     apply_recent_bot_avoidance(
         &mut rows,
@@ -1678,6 +1756,7 @@ async fn pick_bot_loadout(
         let mut wide_rows = load_wide_pool(&mut conn, human_char_uuid).await;
         wide_rows.retain(|r| !busy.contains(&r.id.to_string().to_lowercase()));
         drop_rows_of_logged_in_users(&mut wide_rows, &logged_in);
+        drop_rows_of_logged_in_users(&mut wide_rows, &lock_children);
         apply_recent_bot_avoidance(
             &mut wide_rows,
             human_char_uuid,
@@ -4838,6 +4917,29 @@ async fn resolve_pair(
     }
 }
 
+/// (test account, recent opponent) pairs among `users`; empty on any failure,
+/// which only loses the preference, never a match.
+async fn recent_test_opponents(db: &Option<DbPool>, users: &[Uuid]) -> Vec<(Uuid, Uuid)> {
+    let Some(db) = db else { return Vec::new() };
+    let Ok(mut conn) = db.get().await else {
+        return Vec::new();
+    };
+    // This runs in the single matchmaker loop: bound it on the server side, in
+    // its own transaction so the limit cannot outlive it on a pooled connection.
+    let users = users.to_vec();
+    diesel_async::AsyncConnection::transaction::<_, diesel::result::Error, _>(&mut *conn, |conn| {
+        async move {
+            diesel::sql_query("SET LOCAL statement_timeout = '250ms'")
+                .execute(conn)
+                .await?;
+            crate::dev_alt_lock::recent_test_opponents(conn, &users).await
+        }
+        .scope_boxed()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 /// Run [`pairing_round`] over `waiting` and resolve every pair it returns. Returns the
 /// ticket ids that were paired.
 async fn run_pairing_round(
@@ -4853,7 +4955,13 @@ async fn run_pairing_round(
         .iter()
         .map(|(t, s)| (t.skill, *s, t.user_id))
         .collect();
-    let pairs = pairing_round(&shape, now);
+    // A test character's recent opponents, only when there is a choice to make.
+    let avoid = if shape.len() >= 3 {
+        recent_test_opponents(db, &shape.iter().map(|q| q.2).collect::<Vec<_>>()).await
+    } else {
+        Vec::new()
+    };
+    let pairs = pairing_round_avoiding(&shape, now, &avoid);
     if pairs.is_empty() {
         return Vec::new();
     }
@@ -4933,6 +5041,10 @@ async fn resolve(
                 crate::arena::combat::loadout::starter()
             }
         };
+        // A developer's device-locked alt fights as " (TST)" on EVERY path —
+        // the timed-out starter included — decided from memory, so no second
+        // database read sits inside the timeout above.
+        mark_if_test_account(&mut lo, t.user_id);
         lo.current_request_index = t.rms.current_request_index();
         loadouts.push(lo);
     }
@@ -8338,6 +8450,57 @@ mod humans_first_tests {
             vec![(0, 2)],
             "oldest takes its closest (410), 400 waits"
         );
+    }
+
+    /// The (TST) marker fails closed: an unreadable account falls back to the
+    /// stored label, and the account wins whenever it is known.
+    #[test]
+    fn the_test_marker_fails_closed_on_an_unreadable_account() {
+        assert!(is_test_fighter(None, "Pixelle (TST)"));
+        assert!(!is_test_fighter(None, "Pixelle"));
+        assert!(is_test_fighter(Some(true), "Pixelle"));
+        assert!(!is_test_fighter(Some(false), "Pixelle"));
+    }
+
+    /// A lock child is marked (TST) on the timed-out starter loadout too — the
+    /// path that used to fight unmarked for real cups.
+    #[test]
+    fn a_lock_child_is_marked_even_on_the_starter_loadout() {
+        let child = Uuid::new_v4();
+        crate::dev_alt_lock::remember_child_for_tests(child);
+        let mut starter = crate::arena::combat::loadout::starter();
+        mark_if_test_account(&mut starter, child);
+        assert!(is_test_loadout(&starter));
+        let mut normal = crate::arena::combat::loadout::starter();
+        mark_if_test_account(&mut normal, Uuid::new_v4());
+        assert!(!is_test_loadout(&normal));
+    }
+
+    /// Owner, 2026-11-24: a (TST) character avoids the same normal character
+    /// again when another opponent is available, and falls back to a repeat
+    /// rather than no match.
+    #[test]
+    fn a_test_character_prefers_a_new_opponent_but_still_repeats_when_alone() {
+        let now = Instant::now();
+        let ago = |s: u64| now - StdDuration::from_secs(s);
+        let (tst, rival, other) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        // The rival is the closer match.
+        let shape = vec![
+            (sk(500), ago(40), tst),
+            (sk(505), ago(20), rival),
+            (sk(560), ago(10), other),
+        ];
+        let avoid = [(rival, tst)];
+        assert_eq!(
+            pairing_round_avoiding(&shape, now, &avoid),
+            vec![(0, 2)],
+            "the test character meets someone new"
+        );
+        // Control: without the history the closest match wins.
+        assert_eq!(pairing_round_avoiding(&shape, now, &[]), vec![(0, 1)]);
+        // Only the rival is there: a repeat beats no match.
+        let two = vec![(sk(500), ago(40), tst), (sk(505), ago(20), rival)];
+        assert_eq!(pairing_round_avoiding(&two, now, &avoid), vec![(0, 1)]);
     }
 
     /// "If there are multiple (>3), then make the better match, as long as the longest

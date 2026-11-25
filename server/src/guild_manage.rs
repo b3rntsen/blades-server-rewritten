@@ -305,7 +305,7 @@ SELECT e ->> 'guild_id'                    AS guild_id,
 "#;
 
 #[derive(QueryableByName, Debug, Clone)]
-struct ParkedSeatRow {
+pub(crate) struct ParkedSeatRow {
     #[diesel(sql_type = Text)]
     guild_id: String,
     #[diesel(sql_type = SqlUuid)]
@@ -327,7 +327,7 @@ struct ParkedSeatRow {
 }
 
 #[derive(QueryableByName, Debug, Clone)]
-struct LiveSeatRow {
+pub(crate) struct LiveSeatRow {
     #[diesel(sql_type = Text)]
     guild_id: String,
     #[diesel(sql_type = SqlUuid)]
@@ -359,19 +359,25 @@ SELECT gm.guild_id, gm.character_id, c.source_alt_uuid AS alt_key,
   LEFT JOIN characters c ON c.id = gm.character_id
 "#;
 
-async fn live_seats_of_guild(
+pub(crate) async fn live_seats_of_guild(
     conn: &mut AsyncPgConnection,
     gid: &str,
 ) -> Result<Vec<LiveSeatRow>, diesel::result::Error> {
-    sql_query(format!("{LIVE_SEAT_COLUMNS} WHERE gm.guild_id = $1"))
-        .bind::<Text, _>(gid)
-        .get_results(conn)
-        .await
+    // A developer lock child's live seat is its parent alt's seat, which the
+    // parent's version still lists as parked (`crate::dev_alt_lock`): list it once.
+    sql_query(format!(
+        "{LIVE_SEAT_COLUMNS} WHERE gm.guild_id = $1 \
+           AND NOT EXISTS (SELECT 1 FROM dev_alt_lock_accounts dl \
+                            WHERE dl.child_character_id = gm.character_id)"
+    ))
+    .bind::<Text, _>(gid)
+    .get_results(conn)
+    .await
 }
 
 /// Parked seats in `gid`: candidates found by containment, then kept only when
 /// the alt's NEWEST version still carries the seat.
-async fn parked_seats_of_guild(
+pub(crate) async fn parked_seats_of_guild(
     conn: &mut AsyncPgConnection,
     gid: &str,
 ) -> Result<Vec<ParkedSeatRow>, diesel::result::Error> {

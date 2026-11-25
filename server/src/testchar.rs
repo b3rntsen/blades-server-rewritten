@@ -15,7 +15,7 @@
 //! | h2h ratings (all-time + per season), so the website's Top 100 per alt and its h2h guild board | `ranking::H2H_REPLAY_ROWS_CTE` (not rated), `ranking::H2H_BOARD_ENTRIES_SQL` (not listed), `arena_economy` live increment (not rated) |
 //! | `guilds.trophies` between recomputes | `arena_economy` per-match guild increment (adds nothing) |
 //!
-//! The name also carries " (Test)", so the character is visibly one in game and on
+//! The name also carries " (TST)", so the character is visibly one in game and on
 //! the website. That is the label; the table is the rule.
 //!
 //! **The routes** are dev-token gated (`X-Import-Token`, like every operator route)
@@ -71,7 +71,10 @@ const UNCLAIMED_LEGACY_AWARD: u64 = 11;
 const IMPORT_INTO_TEST_ALT: u64 = 12;
 
 /// The label every test character's name ends with.
-pub(crate) const TEST_NAME_SUFFIX: &str = "(Test)";
+/// "(TST)", like a developer's device-locked alt (2026-11-24); it replaced
+/// "(Test)" when parentheses became reserved for system labels. Nothing ever
+/// wrote "(Test)" in production (0 test characters).
+pub(crate) const TEST_NAME_SUFFIX: &str = "(TST)";
 
 fn refuse(status: StatusCode, code: u64) -> BladeApiError {
     BladeApiError::new(status, TEST_CHARACTER_SERVICE_ID, code)
@@ -599,6 +602,13 @@ pub(crate) async fn apply_migration_for_tests(conn: &mut AsyncPgConnection) {
     )
     .await
     .expect("test_characters migration applies");
+    // The other ranking exclusion: developer lock children (`crate::dev_alt_lock`).
+    diesel_async::SimpleAsyncConnection::batch_execute(
+        conn,
+        crate::dev_alt_lock::MIGRATION_FOR_TESTS,
+    )
+    .await
+    .expect("dev_alt_lock_accounts migration applies");
 }
 
 #[cfg(test)]
@@ -607,9 +617,9 @@ mod tests {
 
     #[test]
     fn the_label_is_added_once() {
-        assert_eq!(test_name("HauDrauf"), "HauDrauf (Test)");
-        assert_eq!(test_name(" HauDrauf (Test) "), "HauDrauf (Test)");
-        assert!(is_test_name("Anyone (Test)"));
+        assert_eq!(test_name("HauDrauf"), "HauDrauf (TST)");
+        assert_eq!(test_name(" HauDrauf (TST) "), "HauDrauf (TST)");
+        assert!(is_test_name("Anyone (TST)"));
         assert!(!is_test_name("Tester"));
     }
 
@@ -825,15 +835,15 @@ mod tests {
 
             let done = apply_mark(&mut c, &mark(user, alt), "ops").await.unwrap();
             assert!(done.newly_marked);
-            assert_eq!(done.name, "Tester (Test)");
-            assert_eq!(live(&mut c, id).await.name, "Tester (Test)");
+            assert_eq!(done.name, "Tester (TST)");
+            assert_eq!(live(&mut c, id).await.name, "Tester (TST)");
             assert!(any_test_alt(&mut c, &[alt]).await.unwrap());
             assert_eq!(audit_actions(&mut c).await, ["mark:ops"]);
 
             // Idempotent: a second mark writes nothing.
             let again = apply_mark(&mut c, &mark(user, alt), "ops").await.unwrap();
             assert!(!again.newly_marked);
-            assert_eq!(live(&mut c, id).await.name, "Tester (Test)");
+            assert_eq!(live(&mut c, id).await.name, "Tester (TST)");
             assert_eq!(audit_actions(&mut c).await.len(), 1);
         }
 
@@ -941,7 +951,7 @@ mod tests {
                 .map(|t| t.name.unwrap_or_default())
                 .collect();
             assert_eq!(marked.len(), 2, "only the two controls: {marked:?}");
-            assert!(marked.iter().all(|n| n.ends_with("(Test)")));
+            assert!(marked.iter().all(|n| n.ends_with("(TST)")));
         }
 
         #[actix_web::test]
@@ -989,7 +999,7 @@ mod tests {
                 ch.stamina_attribute_points + ch.magicka_attribute_points,
                 49
             );
-            assert_eq!(ch.name, "Tester (Test)");
+            assert_eq!(ch.name, "Tester (TST)");
 
             let e = apply_set_level(&mut c, alt, 0, "ops", &data)
                 .await
