@@ -125,6 +125,23 @@ pub async fn get_announcements(
     Ok(Json(AnnouncementsResponse { announcements }))
 }
 
+/// The banner for one arena trophy-track town gift (HauDrauf #625). Gift-bearing
+/// through the edge's `gift/` namespace like the weapon gift; never closes, so
+/// the banner rolls a month ahead.
+fn trophy_gift_announcement(
+    gift_id: Uuid,
+    gift: &blades_lib::server_state::ArenaTrophyGift,
+    now: i64,
+) -> Announcement {
+    Announcement {
+        id: gift_id.to_string(),
+        r#type: "BASIC".into(),
+        start_time: gift.created_at.min(now),
+        ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
+        asset_url: format!("https://announcements.blades.bgs.services/gift/{gift_id}"),
+    }
+}
+
 /// The host every announcement's `assetUrl` was minted on, retail's own.
 const RETAIL_ASSET_ORIGIN: &str = "https://announcements.blades.bgs.services";
 
@@ -257,23 +274,6 @@ fn arena_weapon_gift_announcement(
         start_time: gift.created_at.min(now),
         ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
         asset_url: format!("https://announcements.blades.bgs.services/gift/{}", gift.id),
-    }
-}
-
-/// The banner for one arena trophy-track town gift (HauDrauf #625). Gift-bearing
-/// through the edge's `gift/` namespace like the weapon gift; never closes, so
-/// the banner rolls a month ahead.
-fn trophy_gift_announcement(
-    gift_id: Uuid,
-    gift: &blades_lib::server_state::ArenaTrophyGift,
-    now: i64,
-) -> Announcement {
-    Announcement {
-        id: gift_id.to_string(),
-        r#type: "BASIC".into(),
-        start_time: gift.created_at.min(now),
-        ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
-        asset_url: format!("https://announcements.blades.bgs.services/gift/{gift_id}"),
     }
 }
 
