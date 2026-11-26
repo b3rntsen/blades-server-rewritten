@@ -5004,8 +5004,10 @@ async fn resolve(
 ) -> Option<Uuid> {
     let game_session_id = Uuid::new_v4();
     let paired = tickets.len() >= 2;
+    // #580: `cups_rule` resolved for the active season, so a season's rule is
+    // what its matches pay.
     let ranking_config = match db {
-        Some(pool) => ranking::load(pool).await.config,
+        Some(pool) => ranking::load_for_match(pool).await,
         None => RankingConfig::default(),
     };
     // playerSessionId shape (retail GameLift, capture-confirmed s506
