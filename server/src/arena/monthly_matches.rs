@@ -290,6 +290,13 @@ pub struct SeasonMatchesResponse {
     /// rounds lost, classic trophy change, pair h2h games earlier that UTC day]`,
     /// in match order.
     pub matches: Vec<[i64; 8]>,
+    /// #580: `arena_seasons.number` of `season` (None without a season).
+    pub season_number: Option<i32>,
+    /// #580: the cups rule `season` runs ([`ranking::RankingConfig::cups_rule_for_season`]),
+    /// so the website explains and replays the rule the game pays.
+    pub cups_rule: ranking::CupsRule,
+    /// #580: the next season's rule, when a later season runs a different one.
+    pub next_cups_rule: Option<ranking::SeasonCupsRule>,
 }
 
 /// Compact `rows` (already in match order): players once, matches by index.
@@ -323,7 +330,22 @@ pub fn season_payload(
         season,
         players,
         matches,
+        season_number: None,
+        cups_rule: ranking::CupsRule::default(),
+        next_cups_rule: None,
     }
+}
+
+/// Fill the #580 rule fields of `payload` for season `number` under `config`.
+pub fn with_cups_rule(
+    mut payload: SeasonMatchesResponse,
+    config: &ranking::RankingConfig,
+    number: Option<i32>,
+) -> SeasonMatchesResponse {
+    payload.season_number = number;
+    payload.cups_rule = config.cups_rule_for_season(number);
+    payload.next_cups_rule = number.and_then(|n| config.next_cups_rule_after(n));
+    payload
 }
 
 pub async fn load_season_rows(
@@ -397,10 +419,29 @@ pub async fn get_arena_season_matches(
             })?
         }
     };
-    let value = serde_json::to_value(season_payload(season, rows))
-        .map_err(BladeApiError::generic_internal_error)?;
+    let number = match &season {
+        None => None,
+        Some(s) => season_number(&mut conn, s.id).await,
+    };
+    let config = ranking::load(&app_state.db_pool).await.config;
+    let payload = with_cups_rule(season_payload(season, rows), &config, number);
+    let value = serde_json::to_value(payload).map_err(BladeApiError::generic_internal_error)?;
     store(key, &value);
     Ok(Json(value))
+}
+
+async fn season_number(conn: &mut diesel_async::AsyncPgConnection, id: Uuid) -> Option<i32> {
+    #[derive(diesel::QueryableByName)]
+    struct N {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        number: i32,
+    }
+    diesel::sql_query("SELECT number FROM arena_seasons WHERE id = $1")
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .get_result::<N>(conn)
+        .await
+        .ok()
+        .map(|n| n.number)
 }
 
 /// `[starts_at, ends_at)` of a season as timestamps.

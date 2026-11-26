@@ -74,12 +74,16 @@ pub fn replay_delta(
 ) -> i64 {
     match rule {
         CupsRule::Classic => classic,
-        CupsRule::Haudrauf2500 => {
+        CupsRule::Haudrauf2500 | CupsRule::Haudrauf2500V2 => {
             if !h2h && classic == 0 {
                 return 0;
             }
             let (base, award) = ranking::split_stored_classic(config, classic, h2h, outcome);
-            ranking::haudrauf_delta(base, award, h2h, outcome.win, before)
+            if rule == CupsRule::Haudrauf2500 {
+                ranking::haudrauf_delta(base, award, h2h, outcome.win, before)
+            } else {
+                ranking::haudrauf_v2_delta(base, award, h2h, outcome.win, before)
+            }
         }
     }
 }
@@ -243,7 +247,8 @@ impl From<diesel::result::Error> for RecalcError {
     }
 }
 
-/// Recalculate the ACTIVE season under `config.cups_rule`. Idempotent: a second
+/// Recalculate the ACTIVE season under the rule it runs
+/// ([`RankingConfig::cups_rule_for_season`]). Idempotent: a second
 /// run with the same rule changes nothing. `dry_run` computes the same report
 /// and writes nothing.
 pub async fn recalculate(
@@ -294,7 +299,8 @@ pub async fn recalculate_season(
     season: &SeasonRow,
     dry_run: bool,
 ) -> Result<RecalcReport, RecalcError> {
-    let rule = config.cups_rule;
+    // #580: the rule THIS season runs (a per-season override, else `cups_rule`).
+    let rule = config.cups_rule_for_season(Some(season.number));
     let cutoff = season.ends_at.min(super::arena_season::now_unix());
     let rows: Vec<MatchRow> = diesel::sql_query(SEASON_ROWS_SQL)
         .bind::<BigInt, _>(season.starts_at)
@@ -440,9 +446,9 @@ fn default_true() -> bool {
 
 /// `POST /api/dev/v1/arena-ranking/cups-rule/recalculate` (X-Import-Token).
 ///
-/// Body `{"dry_run": bool, "expect_rule": "classic"|"haudrauf_2500"}`. Reads the
-/// ACTIVE ranking config fresh (not the 30 s cache) and recalculates the active
-/// season under its `cups_rule`.
+/// Body `{"dry_run": bool, "expect_rule": "classic"|"haudrauf_2500"|"haudrauf_2500_v2"}`.
+/// Reads the ACTIVE ranking config fresh (not the 30 s cache) and recalculates
+/// the active season under the rule that season runs.
 #[post("/blades.bgs.services/api/dev/v1/arena-ranking/cups-rule/recalculate")]
 pub async fn post_cups_rule_recalculate(
     req: HttpRequest,
@@ -452,12 +458,14 @@ pub async fn post_cups_rule_recalculate(
     crate::admin::check_import_token(&app_state, &req)?;
     ranking::invalidate_cache();
     let config = ranking::load(&app_state.db_pool).await.config;
+    let active_rule =
+        config.cups_rule_for_season(ranking::active_season_number(&app_state.db_pool).await);
     if let Some(expected) = body.expect_rule
-        && expected != config.cups_rule
+        && expected != active_rule
     {
         return Ok(actix_web::HttpResponse::Conflict().json(serde_json::json!({
             "error": "rule_mismatch",
-            "active": config.cups_rule,
+            "active": active_rule,
             "expected": expected,
         })));
     }
@@ -664,6 +672,221 @@ mod tests {
         }
         assert_eq!(totals.values().max(), Some(&4689));
         assert_eq!(totals.values().filter(|t| **t >= 2500).count(), 9);
+    }
+
+    fn v2() -> RankingConfig {
+        RankingConfig {
+            cups_rule: CupsRule::Haudrauf2500V2,
+            ..RankingConfig::default()
+        }
+    }
+
+    /// #580: HauDrauf's second rule, case by case, live and replayed.
+    #[test]
+    fn haudrauf_v2_pays_half_ai_losses_and_a_20_award_below_2500() {
+        let input = |outcome, own, h2h, pair| ranking::TrophyDeltaInput {
+            outcome,
+            own_trophies: own,
+            opponent_trophies_for_pricing: own,
+            h2h,
+            h2h_pair_matches_today: pair,
+        };
+        let c = v2();
+        let cases = [
+            // (outcome, own before, h2h, pair games today, classic, v2)
+            // AI below 2500: wins as classic, losses half and positive
+            (o(2, 0), 0, false, 0, 32, 32),
+            (o(2, 1), 2499, false, 0, 28, 28),
+            (o(0, 2), 0, false, 0, -20, 10),
+            (o(1, 2), 2499, false, 0, -16, 8),
+            // h2h below 2500: sign dropped, +20 instead of +50 for the first 3
+            (o(2, 0), 0, true, 0, 90, 60),
+            (o(2, 1), 100, true, 2, 85, 55),
+            (o(1, 2), 100, true, 1, 40, 30),
+            (o(0, 2), 2499, true, 0, 35, 35),
+            // h2h after the daily cap: no award
+            (o(2, 0), 100, true, 3, 40, 40),
+            (o(0, 2), 100, true, 3, -15, 15),
+            (o(1, 2), 100, true, 5, -10, 10),
+            // from 2500: haudrauf_2500 unchanged
+            (o(2, 0), 2500, false, 0, 32, 1),
+            (o(0, 2), 9000, false, 0, -20, 0),
+            (o(1, 2), 2500, false, 0, -16, 0),
+            (o(2, 0), 2500, true, 0, 90, 20),
+            (o(2, 1), 2600, true, 0, 85, 17),
+            (o(1, 2), 2500, true, 0, 40, 5),
+            (o(0, 2), 2500, true, 3, -15, 7),
+        ];
+        for (outcome, own, h2h, pair, want_classic, want) in cases {
+            let i = input(outcome, own, h2h, pair);
+            assert_eq!(
+                ranking::trophy_delta(&c, i),
+                want,
+                "v2 {outcome:?} {own} h2h={h2h} pair={pair}"
+            );
+            assert_eq!(ranking::classic_trophy_delta(&c, i), want_classic);
+            assert_eq!(
+                replay_delta(
+                    &c,
+                    CupsRule::Haudrauf2500V2,
+                    want_classic,
+                    h2h,
+                    outcome,
+                    own
+                ),
+                want,
+                "replay {outcome:?} {own} h2h={h2h} pair={pair}"
+            );
+            // From 2500 the two HauDrauf rules agree; below they must not on
+            // every AI loss and every awarded h2h game.
+            if own >= ranking::HAUDRAUF_THRESHOLD {
+                assert_eq!(ranking::trophy_delta(&haudrauf(), i), want);
+            }
+        }
+        // Voided AI match: 0.
+        assert_eq!(
+            replay_delta(&c, CupsRule::Haudrauf2500V2, 0, false, o(0, 2), 0),
+            0
+        );
+    }
+
+    /// The season-3 replay under v2 equals hybrid.py (the comparison sent on
+    /// #580, msg 3970) alt for alt: HauDrauf 5263, 20 alts at 2500 or more.
+    /// One correction to hybrid.py: a 1-0 / 0-1 forfeit is read as the server
+    /// reads it (`FixedDeltas::delta`: 2-1 / 1-2 by `win`), which makes the
+    /// haudrauf_2500 column equal every stored delta (Ravena 4324 not 4339,
+    /// Ravena 3 3623 not 3648). `ticket-duty-files/2026-11-26/580/make_fixture.py`.
+    #[test]
+    fn v2_replay_of_season_3_equals_the_comparison_sent_to_haudrauf() {
+        let rows: Vec<ReplayInput<usize>> = include_str!("testdata/s580_season_matches.csv")
+            .lines()
+            .skip(1)
+            .map(|l| {
+                let f: Vec<i64> = l.split(',').map(|x| x.parse().unwrap()).collect();
+                ReplayInput {
+                    key: f[0] as usize,
+                    h2h: f[1] == 1,
+                    outcome: MatchOutcome {
+                        rounds_won: f[3] as u8,
+                        rounds_lost: f[4] as u8,
+                        win: f[2] == 1,
+                    },
+                    classic: f[5],
+                }
+            })
+            .collect();
+        assert_eq!(rows.len(), 5371);
+        let expected: BTreeMap<usize, (i64, i64)> =
+            include_str!("testdata/s580_season_expected.csv")
+                .lines()
+                .skip(1)
+                .map(|l| {
+                    let f: Vec<i64> = l.split(',').map(|x| x.parse().unwrap()).collect();
+                    (f[0] as usize, (f[1], f[2]))
+                })
+                .collect();
+        let (_, now) = replay(&haudrauf(), CupsRule::Haudrauf2500, &rows);
+        let (_, new) = replay(&v2(), CupsRule::Haudrauf2500V2, &rows);
+        assert_eq!(new.len(), expected.len());
+        for (alt, (want_now, want_new)) in &expected {
+            assert_eq!(now[alt], *want_now, "haudrauf_2500 alt {alt}");
+            assert_eq!(new[alt], *want_new, "haudrauf_2500_v2 alt {alt}");
+        }
+        assert_eq!(now.values().max(), Some(&5428));
+        assert_eq!(new.values().max(), Some(&5263));
+        assert_eq!(now.values().filter(|t| **t >= 2500).count(), 23);
+        assert_eq!(new.values().filter(|t| **t >= 2500).count(), 20);
+    }
+
+    /// The prod config as of 2026-11-26 plus what the #580 migration adds:
+    /// season 3 keeps haudrauf_2500 (nothing played is changed), 4 on is v2.
+    #[test]
+    fn the_season_schedule_leaves_season_3_alone_and_switches_season_4() {
+        let prod = serde_json::json!({
+            "cups_rule": "haudrauf_2500",
+            "human": {"mode": "flat", "fixed": {"tie": 0, "win_2_0": 40, "win_2_1": 35,
+                      "loss_0_2": -15, "loss_1_2": -10}, "flat_award": 50, "pair_daily_cap": 3},
+        });
+        let before: RankingConfig = serde_json::from_value(prod.clone()).unwrap();
+        assert!(before.cups_rule_from_season.is_empty());
+        assert_eq!(before.cups_rule_for_season(Some(4)), CupsRule::Haudrauf2500);
+        // The migration's jsonb `||`.
+        let mut after = prod;
+        after["cups_rule_from_season"] =
+            serde_json::json!([{"from_season": 4, "rule": "haudrauf_2500_v2"}]);
+        let c: RankingConfig = serde_json::from_value(after).unwrap();
+        assert!(c.validate().is_ok());
+        for (season, want) in [
+            (None, CupsRule::Haudrauf2500),
+            (Some(1), CupsRule::Haudrauf2500),
+            (Some(3), CupsRule::Haudrauf2500),
+            (Some(4), CupsRule::Haudrauf2500V2),
+            (Some(9), CupsRule::Haudrauf2500V2),
+        ] {
+            assert_eq!(c.cups_rule_for_season(season), want, "season {season:?}");
+            assert_eq!(c.for_season(season).cups_rule, want);
+        }
+        assert_eq!(
+            c.next_cups_rule_after(3),
+            Some(ranking::SeasonCupsRule {
+                from_season: 4,
+                rule: CupsRule::Haudrauf2500V2
+            })
+        );
+        assert_eq!(c.next_cups_rule_after(4), None);
+        // The live path pays the season's rule: an AI 0-2 at 100 cups.
+        let i = ranking::TrophyDeltaInput {
+            outcome: o(0, 2),
+            own_trophies: 100,
+            opponent_trophies_for_pricing: 100,
+            h2h: false,
+            h2h_pair_matches_today: 0,
+        };
+        assert_eq!(ranking::trophy_delta(&c.for_season(Some(3)), i), 20);
+        assert_eq!(ranking::trophy_delta(&c.for_season(Some(4)), i), 10);
+        // Round trip keeps the schedule; an empty one is not written at all.
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["cups_rule_from_season"][0]["rule"], "haudrauf_2500_v2");
+        assert!(
+            serde_json::to_value(&before)
+                .unwrap()
+                .get("cups_rule_from_season")
+                .is_none()
+        );
+        // A schedule out of order (or from season 0) does not validate.
+        let bad = RankingConfig {
+            cups_rule_from_season: vec![
+                ranking::SeasonCupsRule {
+                    from_season: 5,
+                    rule: CupsRule::Classic,
+                },
+                ranking::SeasonCupsRule {
+                    from_season: 4,
+                    rule: CupsRule::Haudrauf2500V2,
+                },
+            ],
+            ..RankingConfig::default()
+        };
+        assert!(bad.validate().is_err());
+        let zero = RankingConfig {
+            cups_rule_from_season: vec![ranking::SeasonCupsRule {
+                from_season: 0,
+                rule: CupsRule::Classic,
+            }],
+            ..RankingConfig::default()
+        };
+        assert!(zero.validate().is_err());
+    }
+
+    /// The migration's SQL literal is the JSON the test above uses.
+    #[test]
+    fn the_migration_schedules_v2_from_season_4() {
+        let sql = include_str!(
+            "../../../migrations/2026-11-26-000000-0000_cups_rule_haudrauf_v2_from_season_4/up.sql"
+        );
+        assert!(sql.contains(
+            r#"'{"cups_rule_from_season": [{"from_season": 4, "rule": "haudrauf_2500_v2"}]}'::jsonb"#
+        ));
     }
 
     mod db {

@@ -276,6 +276,12 @@ pub enum CupsRule {
     Classic,
     #[serde(rename = "haudrauf_2500")]
     Haudrauf2500,
+    /// HauDrauf's second rule (tracker #580, from season 4): [`Self::Haudrauf2500`]
+    /// with smaller rewards below 2500 — an AI loss pays HALF its classic value
+    /// (as a gain), and the h2h award is [`HAUDRAUF_V2_H2H_AWARD`] instead of
+    /// `flat_award`. From 2500 it is [`Self::Haudrauf2500`] unchanged.
+    #[serde(rename = "haudrauf_2500_v2")]
+    Haudrauf2500V2,
 }
 
 impl CupsRule {
@@ -283,8 +289,18 @@ impl CupsRule {
         match self {
             Self::Classic => "classic",
             Self::Haudrauf2500 => "haudrauf_2500",
+            Self::Haudrauf2500V2 => "haudrauf_2500_v2",
         }
     }
+}
+
+/// #580: "this rule from season N on". Seasons before the first entry run
+/// [`RankingConfig::cups_rule`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeasonCupsRule {
+    /// `arena_seasons.number` from which `rule` applies (inclusive).
+    pub from_season: i32,
+    pub rule: CupsRule,
 }
 
 /// The total from which [`CupsRule::Haudrauf2500`] stops paying full trophies.
@@ -305,12 +321,44 @@ pub fn haudrauf_delta(base: i64, award: i64, h2h: bool, win: bool, own_before: i
     }
 }
 
+/// The h2h award [`CupsRule::Haudrauf2500V2`] pays below 2500 for each of the
+/// pair's first `pair_daily_cap` games of the day (where classic pays `flat_award`).
+pub const HAUDRAUF_V2_H2H_AWARD: i64 = 20;
+
+/// One match under [`CupsRule::Haudrauf2500V2`] (tracker #580), from the same
+/// inputs as [`haudrauf_delta`]. Below 2500:
+///
+/// * AI win — the classic change (2-0 +32, 2-1 +28);
+/// * AI loss — half the classic change as a gain, rounded half up (0-2 +10,
+///   1-2 +8);
+/// * h2h — the classic change with its sign dropped, plus
+///   [`HAUDRAUF_V2_H2H_AWARD`] when classic paid an award.
+///
+/// From 2500 it is [`haudrauf_delta`].
+pub fn haudrauf_v2_delta(base: i64, award: i64, h2h: bool, win: bool, own_before: i64) -> i64 {
+    if own_before >= HAUDRAUF_THRESHOLD {
+        return haudrauf_delta(base, award, h2h, win, own_before);
+    }
+    if h2h {
+        base.abs() + if award > 0 { HAUDRAUF_V2_H2H_AWARD } else { 0 }
+    } else if win {
+        base.abs()
+    } else {
+        (base.abs() + 1) / 2
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RankingConfig {
     /// d54: default `classic`, so a config row written before this field
     /// existed (and every fresh database) keeps today's numbers.
     #[serde(default)]
     pub cups_rule: CupsRule,
+    /// #580: per-season overrides of `cups_rule`, ascending by `from_season`.
+    /// Empty (the default) = every season runs `cups_rule`. Resolve with
+    /// [`RankingConfig::cups_rule_for_season`] / [`RankingConfig::for_season`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cups_rule_from_season: Vec<SeasonCupsRule>,
     #[serde(default)]
     pub bot: BotConfig,
     #[serde(default)]
@@ -327,6 +375,7 @@ impl Default for RankingConfig {
     fn default() -> Self {
         Self {
             cups_rule: CupsRule::Classic,
+            cups_rule_from_season: Vec::new(),
             bot: BotConfig::default(),
             human: HumanConfig::default(),
             elo: EloConfig::default(),
@@ -343,8 +392,53 @@ fn default_h2h_reconcile_minutes() -> i64 {
 pub type ValidationErrors = BTreeMap<String, String>;
 
 impl RankingConfig {
+    /// The rule season `season` (`arena_seasons.number`) runs: the last
+    /// `cups_rule_from_season` entry at or below it, else `cups_rule`. No season
+    /// known (`None`) = `cups_rule`.
+    pub fn cups_rule_for_season(&self, season: Option<i32>) -> CupsRule {
+        let Some(n) = season else {
+            return self.cups_rule;
+        };
+        self.cups_rule_from_season
+            .iter()
+            .rev()
+            .find(|e| e.from_season <= n)
+            .map_or(self.cups_rule, |e| e.rule)
+    }
+
+    /// The first scheduled rule AFTER season `season`, when it differs from the
+    /// rule `season` runs — what the website announces as "from next season".
+    pub fn next_cups_rule_after(&self, season: i32) -> Option<SeasonCupsRule> {
+        let now = self.cups_rule_for_season(Some(season));
+        self.cups_rule_from_season
+            .iter()
+            .find(|e| e.from_season > season)
+            .filter(|e| e.rule != now)
+            .copied()
+    }
+
+    /// This config with `cups_rule` resolved for `season`, so everything that
+    /// reads `cups_rule` (the live match path, the recalculation) pays the
+    /// season's rule.
+    pub fn for_season(&self, season: Option<i32>) -> RankingConfig {
+        RankingConfig {
+            cups_rule: self.cups_rule_for_season(season),
+            ..self.clone()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = ValidationErrors::new();
+        let mut last_season = 0;
+        for (i, e) in self.cups_rule_from_season.iter().enumerate() {
+            if e.from_season <= last_season {
+                errors.insert(
+                    format!("cups_rule_from_season[{i}].from_season"),
+                    "must be positive and strictly ascending".into(),
+                );
+            }
+            last_season = e.from_season;
+        }
         validate_fixed("bot.fixed", &self.bot.fixed, &mut errors);
         validate_fixed("human.fixed", &self.human.fixed, &mut errors);
         if !(0..=1_000).contains(&self.bot.jitter) {
@@ -599,7 +693,49 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
             input.outcome.win,
             input.own_trophies,
         ),
+        CupsRule::Haudrauf2500V2 => haudrauf_v2_delta(
+            base,
+            award,
+            input.h2h,
+            input.outcome.win,
+            input.own_trophies,
+        ),
     }
+}
+
+/// `arena_seasons.number` of the ACTIVE season, if any (`None` on a database
+/// error too: the caller then pays the config's base `cups_rule`).
+pub async fn active_season_number(pool: &DbPool) -> Option<i32> {
+    #[derive(diesel::QueryableByName)]
+    struct N {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        number: i32,
+    }
+    let mut conn = pool.get().await.ok()?;
+    match diesel::sql_query(
+        "SELECT number FROM arena_seasons WHERE status = 'active' \
+         ORDER BY starts_at DESC LIMIT 1",
+    )
+    .get_result::<N>(&mut conn)
+    .await
+    .optional()
+    {
+        Ok(n) => n.map(|n| n.number),
+        Err(e) => {
+            log::warn!("arena ranking: active season lookup failed: {e}");
+            None
+        }
+    }
+}
+
+/// The ranking config a match allocated NOW pays under: [`load`] with
+/// `cups_rule` resolved for the active season (#580).
+pub async fn load_for_match(pool: &DbPool) -> RankingConfig {
+    let config = load(pool).await.config;
+    if config.cups_rule_from_season.is_empty() {
+        return config;
+    }
+    config.for_season(active_season_number(pool).await)
 }
 
 /// What the classic rule pays for this match, whatever rule is selected. Stored
