@@ -655,6 +655,7 @@ async fn load_uncached(pool: &DbPool) -> Result<Option<LoadedRankingConfig>, any
 
 pub fn invalidate_cache() {
     *CACHE.lock().unwrap() = None;
+    *SEASON_CACHE.lock().unwrap() = None;
 }
 
 #[derive(Debug, Clone)]
@@ -704,28 +705,71 @@ pub fn trophy_delta(config: &RankingConfig, input: TrophyDeltaInput) -> i64 {
 }
 
 /// `arena_seasons.number` of the ACTIVE season, if any (`None` on a database
-/// error too: the caller then pays the config's base `cups_rule`).
+/// error too: the caller then pays the config's base `cups_rule`). Uncached.
 pub async fn active_season_number(pool: &DbPool) -> Option<i32> {
+    query_active_season_number(pool).await.ok().flatten()
+}
+
+async fn query_active_season_number(pool: &DbPool) -> Result<Option<i32>, anyhow::Error> {
     #[derive(diesel::QueryableByName)]
     struct N {
         #[diesel(sql_type = diesel::sql_types::Integer)]
         number: i32,
     }
-    let mut conn = pool.get().await.ok()?;
-    match diesel::sql_query(
+    let mut conn = pool.get().await?;
+    Ok(diesel::sql_query(
         "SELECT number FROM arena_seasons WHERE status = 'active' \
          ORDER BY starts_at DESC LIMIT 1",
     )
     .get_result::<N>(&mut conn)
     .await
-    .optional()
+    .optional()?
+    .map(|n| n.number))
+}
+
+/// The active season number as of `fetched_at`, refreshed like the config.
+#[derive(Clone, Copy)]
+struct CachedSeason {
+    fetched_at: Instant,
+    number: Option<i32>,
+}
+
+static SEASON_CACHE: LazyLock<Mutex<Option<CachedSeason>>> = LazyLock::new(|| Mutex::new(None));
+
+/// How long the matchmaker waits for the season lookup — the loadout load's
+/// budget. Past it (pool exhausted, DB slow) the last known number is used.
+const SEASON_LOOKUP_TIMEOUT: Duration = Duration::from_millis(1500);
+
+/// [`active_season_number`] for the match path: cached for [`CACHE_TTL`], the
+/// refresh bounded by [`SEASON_LOOKUP_TIMEOUT`]; on timeout or error the last
+/// cached value (possibly stale, or `None` = base rule) stands, so a sick
+/// database never stalls matchmaking here.
+pub async fn active_season_number_cached(pool: &DbPool) -> Option<i32> {
+    let last = *SEASON_CACHE.lock().unwrap();
+    if let Some(c) = last
+        && c.fetched_at.elapsed() <= CACHE_TTL
     {
-        Ok(n) => n.map(|n| n.number),
-        Err(e) => {
-            log::warn!("arena ranking: active season lookup failed: {e}");
-            None
-        }
+        return c.number;
     }
+    let fetched =
+        tokio::time::timeout(SEASON_LOOKUP_TIMEOUT, query_active_season_number(pool)).await;
+    let number = match fetched {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            log::warn!("arena ranking: active season lookup failed; keeping last: {e}");
+            last.and_then(|c| c.number)
+        }
+        Err(_) => {
+            log::warn!("arena ranking: active season lookup timed out; keeping last");
+            last.and_then(|c| c.number)
+        }
+    };
+    // Re-stamp either way, so a failing DB is retried once per TTL, not per match.
+    *SEASON_CACHE.lock().unwrap() = Some(CachedSeason {
+        fetched_at: Instant::now(),
+        number,
+    });
+    number
 }
 
 /// The ranking config a match allocated NOW pays under: [`load`] with
@@ -735,7 +779,7 @@ pub async fn load_for_match(pool: &DbPool) -> RankingConfig {
     if config.cups_rule_from_season.is_empty() {
         return config;
     }
-    config.for_season(active_season_number(pool).await)
+    config.for_season(active_season_number_cached(pool).await)
 }
 
 /// What the classic rule pays for this match, whatever rule is selected. Stored
@@ -2082,6 +2126,35 @@ mod tests {
                 matches: 1
             }
         );
+    }
+
+    /// #580 review: the match path's season lookup never stalls matchmaking.
+    /// A database that cannot be reached answers within the 1.5 s budget with
+    /// the last known season, and the next call is served from the cache.
+    #[tokio::test]
+    async fn season_lookup_falls_back_to_the_last_value_within_its_budget() {
+        use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+        let pool: DbPool = bb8::Pool::builder()
+            .max_size(1)
+            .connection_timeout(Duration::from_secs(30))
+            .build_unchecked(AsyncDieselConnectionManager::<
+                diesel_async::AsyncPgConnection,
+            >::new("postgres://nobody@127.0.0.1:1/none"));
+        *SEASON_CACHE.lock().unwrap() = Some(CachedSeason {
+            fetched_at: Instant::now() - CACHE_TTL - Duration::from_secs(1),
+            number: Some(3),
+        });
+        let started = Instant::now();
+        assert_eq!(active_season_number_cached(&pool).await, Some(3));
+        assert!(
+            started.elapsed() < SEASON_LOOKUP_TIMEOUT + Duration::from_millis(500),
+            "took {:?}",
+            started.elapsed()
+        );
+        // Re-stamped: the next match does not try the database again.
+        let again = Instant::now();
+        assert_eq!(active_season_number_cached(&pool).await, Some(3));
+        assert!(again.elapsed() < Duration::from_millis(50));
     }
 
     mod db_reconcile_tests {
