@@ -392,11 +392,13 @@ pub enum GuildTabBoard {
     #[default]
     #[serde(rename = "guilds")]
     Guilds,
-    /// The human-vs-human Elo player board of the active season — the same rows
-    /// as the website's "Humans · Players" top 100 for that season.
+    /// The value to switch ON with (HauDrauf, #636: "always the current
+    /// season"): the human-vs-human player board of the active season — the
+    /// same rows, numbers and order as the website's "Humans · Players" board.
     #[serde(rename = "h2h_season")]
     H2hSeason,
     /// The same board over every season (the website's "all seasons" view).
+    /// Kept for completeness; not the intended setting.
     #[serde(rename = "h2h_all_time")]
     H2hAllTime,
 }

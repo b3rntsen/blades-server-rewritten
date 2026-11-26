@@ -1276,8 +1276,12 @@ pub async fn guild_leaderboard(
 // `RankingConfig.guild_tab_board` says so, `GET /guilds/leaderboard` answers the
 // human-vs-human player board in the guild shape:
 //
-// * `name` = the character's name, `pvpTrophies` = its Elo rating, `rank` = its
-//   place on the board (the website's "Humans · Players" numbering);
+// * `name` = the character's name, `pvpTrophies` = its h2h rating, `rank` = its
+//   place on the board — the number and order the website's "Humans · Players"
+//   board shows for the current season while its #444 formula is `elo` (it
+//   is: the web's `top100_board_formula` was never saved, 2026-11-26). That
+//   setting lives in the web's SQLite; if it is ever switched to `points`, the
+//   website re-orders and this tab does not follow;
 // * `id` = a synthetic 24-hex id per (character, alt), never a real guild's.
 //
 // Tapping a row opens the guild page via `GET /guilds/{id}` (il2cpp
@@ -1323,15 +1327,10 @@ fn elo_row_wire(e: &H2hBoardEntry, season_id: Uuid) -> GuildWire {
         name: e.name.clone(),
         tag_id: e.rating.to_string(),
         guild_type: GuildType::Closed.as_wire().to_string(),
-        short_description: format!(
-            "Elo {} - {}W {}L {}T in {} human matches",
-            e.rating, e.wins, e.losses, e.ties, e.matches
-        ),
-        long_description: format!(
-            "Head-to-head Elo ranking: human-vs-human matches only. \
-             Rank {}, level {}, guild: {}. This is a player, not a guild.",
-            e.rank, e.level, guild
-        ),
+        // HauDrauf (#636, 2026-11-26): name, total points, real guild, W/L —
+        // nothing more; the website has the details.
+        short_description: format!("{} points - {}W {}L", e.rating, e.wins, e.losses),
+        long_description: format!("Guild: {guild}"),
         badge_icon_index: 0,
         region_index: 0,
         member_count: 1,
@@ -4558,13 +4557,14 @@ mod elo_guild_tab_tests {
         assert_eq!(members[0]["guildId"], d["guild"]["id"]);
         assert_eq!(members[0]["rank"], "GRANDMASTER");
         let text = d["guild"]["shortDescription"].as_str().unwrap();
-        assert!(text.contains("1234") && text.contains("7W 2L 1T"), "{text}");
-        assert!(
-            d["guild"]["longDescription"]
-                .as_str()
-                .unwrap()
-                .contains("Shadowblades")
-        );
+        assert_eq!(text, "1234 points - 7W 2L");
+        assert_eq!(d["guild"]["longDescription"], "Guild: Shadowblades");
+        let none = H2hBoardEntry {
+            guild_name: None,
+            ..elo(5, 1100, 78)
+        };
+        let d = serde_json::to_value(elo_row_detail_from(&none, None, Uuid::nil())).unwrap();
+        assert_eq!(d["guild"]["longDescription"], "Guild: -");
     }
 }
 
