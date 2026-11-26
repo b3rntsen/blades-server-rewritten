@@ -369,6 +369,36 @@ pub struct RankingConfig {
     pub h2h_rating: H2hRatingConfig,
     #[serde(default = "default_h2h_reconcile_minutes")]
     pub h2h_reconcile_minutes: i64,
+    /// What the arena Leaderboard's GUILDS tab lists (HauDrauf, tracker #636).
+    /// Default `guilds` = retail. See [`GuildTabBoard`].
+    #[serde(default)]
+    pub guild_tab_board: GuildTabBoard,
+}
+
+/// What the in-game arena Leaderboard's second tab ("Top Guilds") shows.
+///
+/// The client's leaderboard menu has exactly two views, hard-wired in the APK
+/// (`PvpLeaderboardMenu._pvpLeaderboardMenuTopPlayersView` / `…TopGuildsView`),
+/// so a third board needs an app change. What the server CAN choose is what
+/// fills the guild view: a guild row only renders rank, name and the trophy
+/// number (`PvpLeaderboardTopGuildEntryContext.CanDisplayWins`/`CanDisplayGuild`
+/// both return false), which is exactly the shape of a player Elo row.
+///
+/// Off by default: retail's guild board. Flipping it back restores that exactly,
+/// because nothing is stored — the rows are built per request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GuildTabBoard {
+    /// Retail: guilds by guild trophies.
+    #[default]
+    #[serde(rename = "guilds")]
+    Guilds,
+    /// The human-vs-human Elo player board of the active season — the same rows
+    /// as the website's "Humans · Players" top 100 for that season.
+    #[serde(rename = "h2h_season")]
+    H2hSeason,
+    /// The same board over every season (the website's "all seasons" view).
+    #[serde(rename = "h2h_all_time")]
+    H2hAllTime,
 }
 
 impl Default for RankingConfig {
@@ -381,6 +411,7 @@ impl Default for RankingConfig {
             elo: EloConfig::default(),
             h2h_rating: H2hRatingConfig::default(),
             h2h_reconcile_minutes: default_h2h_reconcile_minutes(),
+            guild_tab_board: GuildTabBoard::Guilds,
         }
     }
 }
@@ -1648,6 +1679,32 @@ mod tests {
     /// The match log is the reconcile's replay, step by step: every match carries
     /// the ratings it moved, and each player's last `after` is the rating the
     /// season board stores for them.
+    /// #636: a config saved before the switch existed keeps retail's guild tab,
+    /// and the switch round-trips through the stored JSON.
+    #[test]
+    fn guild_tab_board_defaults_to_guilds_and_round_trips() {
+        let mut old = serde_json::to_value(RankingConfig::default()).unwrap();
+        old.as_object_mut().unwrap().remove("guild_tab_board");
+        let parsed: RankingConfig = serde_json::from_value(old).unwrap();
+        assert_eq!(parsed.guild_tab_board, GuildTabBoard::Guilds);
+
+        for (wire, want) in [
+            ("guilds", GuildTabBoard::Guilds),
+            ("h2h_season", GuildTabBoard::H2hSeason),
+            ("h2h_all_time", GuildTabBoard::H2hAllTime),
+        ] {
+            let mut v = serde_json::to_value(RankingConfig::default()).unwrap();
+            v["guild_tab_board"] = serde_json::Value::String(wire.into());
+            let cfg: RankingConfig = serde_json::from_value(v).unwrap();
+            assert_eq!(cfg.guild_tab_board, want);
+            assert_eq!(serde_json::to_value(&cfg).unwrap()["guild_tab_board"], wire);
+        }
+
+        let mut bad = serde_json::to_value(RankingConfig::default()).unwrap();
+        bad["guild_tab_board"] = serde_json::Value::String("elo".into());
+        assert!(serde_json::from_value::<RankingConfig>(bad).is_err());
+    }
+
     #[test]
     fn match_log_ends_at_the_season_board_ratings() {
         let cfg = H2hRatingConfig::default();
@@ -1731,7 +1788,8 @@ mod tests {
                 "max_loss": -1
             },
             "h2h_rating": { "start": 1000, "k": 32, "k_provisional": 48, "provisional_games": 10, "min_games_listed": 3 },
-            "h2h_reconcile_minutes": 15
+            "h2h_reconcile_minutes": 15,
+            "guild_tab_board": "guilds"
         });
         assert_eq!(got, expected);
     }

@@ -77,6 +77,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::arena::ranking::{GuildTabBoard, H2hBoardEntry, H2hKey};
 use crate::{
     BladeApiError, ServerGlobal,
     guild_policy::{
@@ -773,9 +774,18 @@ pub async fn get_guild(
     let mut conn = app_state.db_pool.get().await.unwrap();
     check_permission_for_character_and_get_it(&mut conn, &session.session, character_id).await?;
 
-    let g = load_guild(&mut conn, &gid)
-        .await?
-        .ok_or_else(guild_not_found)?;
+    let Some(g) = load_guild(&mut conn, &gid).await? else {
+        // #636: a tap on a row of the Elo board shown in the guild tab opens the
+        // guild page for that row's id. Answering 404 there makes the client say
+        // the guild service is down, so the row's player gets a read-only page.
+        if is_elo_row_id(&gid) {
+            return elo_row_detail(&app_state, &mut conn, &gid)
+                .await?
+                .map(Json)
+                .ok_or_else(guild_not_found);
+        }
+        return Err(guild_not_found());
+    };
     let members = load_members(&mut conn, &g.id).await?;
     let applications = application_count(&mut conn, &g.id).await?;
     let wire = GuildWire::from_row(&g, members.len() as i64);
@@ -1196,6 +1206,22 @@ pub async fn guild_leaderboard(
     let mut conn = app_state.db_pool.get().await.unwrap();
     check_permission_for_character_and_get_it(&mut conn, &session.session, character_id).await?;
 
+    // #636: the owner may fill this tab with the human-vs-human Elo player board.
+    let tab = crate::arena::ranking::load(&app_state.db_pool)
+        .await
+        .config
+        .guild_tab_board;
+    if tab != GuildTabBoard::Guilds {
+        let entries = elo_board_entries(&app_state, &mut conn, tab).await?;
+        let me = requester_h2h_key(&mut conn, character_id).await?;
+        return Ok(Json(elo_board_page(
+            &entries,
+            page,
+            me,
+            current_season_id(),
+        )));
+    }
+
     let rows = ranked_guild_rows(&mut conn).await?;
     let members = member_counts_by_guild(&mut conn).await?;
     let my_guild_id = find_membership(&mut conn, session.session.user_id)
@@ -1237,6 +1263,218 @@ pub async fn guild_leaderboard(
         },
         player_guild_leaderboard_entry,
     }))
+}
+
+// ---- Elo board in the guild tab (#636) -----------------------------------------
+//
+// HauDrauf (tracker #636): "can we show the Elo ranking instead of the guild
+// ranking?" The client's arena Leaderboard has exactly two tabs, players and
+// guilds, hard-wired in the APK, so a third board is an app change. The guild tab,
+// though, renders a row as rank + name + one number
+// (`PvpLeaderboardTopGuildEntryContext`: `CanDisplayWins` and `CanDisplayGuild`
+// are constant false), which is exactly an Elo row. So when
+// `RankingConfig.guild_tab_board` says so, `GET /guilds/leaderboard` answers the
+// human-vs-human player board in the guild shape:
+//
+// * `name` = the character's name, `pvpTrophies` = its Elo rating, `rank` = its
+//   place on the board (the website's "Humans · Players" numbering);
+// * `id` = a synthetic 24-hex id per (character, alt), never a real guild's.
+//
+// Tapping a row opens the guild page via `GET /guilds/{id}` (il2cpp
+// `PvpLeaderboardMenuTopGuildsView.OpenGuildInfoPage` -> `GuildMenu`
+// `GetGoDirectlyToGuildTask`). On a failed fetch the client shows "guild service
+// down" and closes the menu, so the synthetic id is answered with a read-only
+// page instead: a CLOSED "guild" named after the player, its Elo record in the
+// description, the player as its one member, applications marked full. Every
+// write to that id (join, apply, donate) still finds no guild and is refused.
+
+/// First three hex digits of every synthetic Elo-row id. `e10`, "Elo".
+const ELO_ROW_ID_PREFIX: &str = "e10";
+
+/// The synthetic guild id of one Elo board row: 24 hex digits, as retail's guild
+/// ids, built from the row's character and alt so the same row keeps its id.
+fn elo_row_id(key: H2hKey) -> String {
+    let c = key.character_id.simple().to_string();
+    let a = key.alt_key.simple().to_string();
+    format!("{ELO_ROW_ID_PREFIX}{}{}", &c[..10], &a[..11])
+}
+
+fn is_elo_row_id(gid: &str) -> bool {
+    gid.len() == 24
+        && gid.starts_with(ELO_ROW_ID_PREFIX)
+        && gid.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn current_season_id() -> Uuid {
+    crate::arena::arena_season::season_at(crate::arena::arena_season::now_unix())
+        .map(|s| s.id)
+        .unwrap_or_default()
+}
+
+/// One Elo board row in the guild object's shape.
+fn elo_row_wire(e: &H2hBoardEntry, season_id: Uuid) -> GuildWire {
+    let guild = e
+        .guild_name
+        .as_deref()
+        .filter(|g| !g.is_empty())
+        .unwrap_or("-");
+    GuildWire {
+        id: elo_row_id(H2hKey::new(e.character_id, e.alt_key)),
+        name: e.name.clone(),
+        tag_id: e.rating.to_string(),
+        guild_type: GuildType::Closed.as_wire().to_string(),
+        short_description: format!(
+            "Elo {} - {}W {}L {}T in {} human matches",
+            e.rating, e.wins, e.losses, e.ties, e.matches
+        ),
+        long_description: format!(
+            "Head-to-head Elo ranking: human-vs-human matches only. \
+             Rank {}, level {}, guild: {}. This is a player, not a guild.",
+            e.rank, e.level, guild
+        ),
+        badge_icon_index: 0,
+        region_index: 0,
+        member_count: 1,
+        guild_exchange_donation_count: 0,
+        pvp_trophies: e.rating as i64,
+        pvp_season_id: season_id,
+        grandmaster_since_secs: 0,
+    }
+}
+
+/// One page of the Elo board as `GET /guilds/leaderboard` answers it. `me` is the
+/// requester's row key; their own row comes back as the "your guild" entry, so
+/// the tab's banner shows their Elo rank.
+fn elo_board_page(
+    entries: &[H2hBoardEntry],
+    page: i64,
+    me: Option<H2hKey>,
+    season_id: Uuid,
+) -> LeaderboardResponse {
+    let total = entries.len() as i64;
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + LEADERBOARD_PAGE_SIZE - 1) / LEADERBOARD_PAGE_SIZE
+    };
+    let entry_for = |e: &H2hBoardEntry| LeaderboardEntry {
+        rank: e.rank,
+        guild: elo_row_wire(e, season_id),
+    };
+    let start =
+        usize::try_from((page - 1).saturating_mul(LEADERBOARD_PAGE_SIZE)).unwrap_or(usize::MAX);
+    LeaderboardResponse {
+        guild_leaderboard: LeaderboardPage {
+            current_page: page,
+            total_pages,
+            entries: entries
+                .iter()
+                .skip(start)
+                .take(LEADERBOARD_PAGE_SIZE as usize)
+                .map(entry_for)
+                .collect(),
+        },
+        player_guild_leaderboard_entry: me.and_then(|k| {
+            entries
+                .iter()
+                .find(|e| H2hKey::new(e.character_id, e.alt_key) == k)
+                .map(entry_for)
+        }),
+    }
+}
+
+/// The Elo board the switch selects: the active season's, or every season's.
+/// Same function and listing threshold as the website's Humans board.
+async fn elo_board_entries(
+    app_state: &ServerGlobal,
+    conn: &mut AsyncPgConnection,
+    tab: GuildTabBoard,
+) -> Result<Vec<H2hBoardEntry>, BladeApiError> {
+    let min_games = crate::arena::ranking::load(&app_state.db_pool)
+        .await
+        .config
+        .h2h_rating
+        .min_games_listed as i32;
+    let season = match tab {
+        GuildTabBoard::Guilds => return Ok(Vec::new()),
+        GuildTabBoard::H2hAllTime => None,
+        GuildTabBoard::H2hSeason => match crate::arena::top100_boards::active_season(conn).await? {
+            Some(s) => Some(s.id),
+            None => return Ok(Vec::new()),
+        },
+    };
+    Ok(crate::arena::ranking::h2h_board(conn, season, min_games, i64::MAX).await?)
+}
+
+/// The requester's key on the Elo board: the live alt, or the character id for a
+/// character that never had one (as [`H2hKey`] defines it).
+async fn requester_h2h_key(
+    conn: &mut AsyncPgConnection,
+    cid: Uuid,
+) -> Result<Option<H2hKey>, BladeApiError> {
+    use crate::schema::characters::dsl::*;
+    let alt: Option<Option<Uuid>> = characters
+        .filter(id.eq(cid))
+        .select(source_alt_uuid)
+        .first(conn)
+        .await
+        .optional()?;
+    Ok(alt.map(|a| H2hKey::new(cid, a.unwrap_or(cid))))
+}
+
+/// The read-only page behind an Elo row's synthetic id, whatever the switch says
+/// now (a client may still hold rows from before it was flipped back). `None`
+/// when no row on either board carries the id.
+async fn elo_row_detail(
+    app_state: &ServerGlobal,
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+) -> Result<Option<GuildDetailResponse>, BladeApiError> {
+    for tab in [GuildTabBoard::H2hSeason, GuildTabBoard::H2hAllTime] {
+        let entries = elo_board_entries(app_state, conn, tab).await?;
+        let Some(e) = entries
+            .iter()
+            .find(|e| elo_row_id(H2hKey::new(e.character_id, e.alt_key)) == gid)
+        else {
+            continue;
+        };
+        let owner: Option<Uuid> = {
+            use crate::schema::characters::dsl::*;
+            characters
+                .filter(id.eq(e.character_id))
+                .select(user_id)
+                .first(conn)
+                .await
+                .optional()?
+        };
+        return Ok(Some(elo_row_detail_from(e, owner, current_season_id())));
+    }
+    Ok(None)
+}
+
+fn elo_row_detail_from(
+    e: &H2hBoardEntry,
+    owner: Option<Uuid>,
+    season_id: Uuid,
+) -> GuildDetailResponse {
+    let wire = elo_row_wire(e, season_id);
+    let members = owner
+        .map(|u| MemberWire {
+            user_id: u,
+            guild_id: wire.id.clone(),
+            rank: GuildRank::Grandmaster.as_wire().to_string(),
+            join_date: 0,
+        })
+        .into_iter()
+        .collect();
+    GuildDetailResponse {
+        // Greys out Apply; the type CLOSED already says nobody may join.
+        application_status: ApplicationStatusWire {
+            max_applications_reached: true,
+        },
+        guild: Some(wire),
+        members,
+    }
 }
 
 // ---- Create / update -----------------------------------------------------------
@@ -4180,6 +4418,157 @@ pub async fn redeem_exchange(
 }
 
 #[cfg(test)]
+mod elo_guild_tab_tests {
+    //! #636: the Elo player board served in the guild tab's shape.
+    use super::*;
+
+    fn elo(rank: i64, rating: i32, alt: u128) -> H2hBoardEntry {
+        H2hBoardEntry {
+            rank,
+            character_id: Uuid::from_u128(0xc0ffee),
+            alt_key: Uuid::from_u128(alt),
+            name: format!("Player{rank}"),
+            level: 40,
+            guild_id: None,
+            guild_name: Some("Shadowblades".into()),
+            rating,
+            wins: 7,
+            losses: 2,
+            ties: 1,
+            matches: 10,
+            last_match_at: None,
+        }
+    }
+
+    fn board(n: i64) -> Vec<H2hBoardEntry> {
+        (1..=n)
+            .map(|r| elo(r, 1500 - r as i32, r as u128))
+            .collect()
+    }
+
+    #[test]
+    fn a_row_id_is_retail_shaped_stable_and_per_alt() {
+        let a = elo_row_id(H2hKey::new(Uuid::from_u128(1), Uuid::from_u128(2)));
+        assert_eq!(a.len(), 24);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(is_elo_row_id(&a));
+        assert_eq!(
+            a,
+            elo_row_id(H2hKey::new(Uuid::from_u128(1), Uuid::from_u128(2)))
+        );
+        // Two alts of one character are two rows, so two ids.
+        let b = elo_row_id(H2hKey::new(Uuid::from_u128(1), Uuid::from_u128(3 << 100)));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn only_synthetic_ids_take_the_elo_detail_path() {
+        assert!(!is_elo_row_id("e10"));
+        assert!(!is_elo_row_id("e10zzzzzzzzzzzzzzzzzzzzz"));
+        assert!(!is_elo_row_id(&guild_id_from_uuid(Uuid::from_u128(0xabc))));
+    }
+
+    #[test]
+    fn the_tab_lists_players_by_elo_with_the_guild_row_shape() {
+        let page = elo_board_page(&board(3), 1, None, Uuid::nil());
+        let v = serde_json::to_value(&page).unwrap();
+        let rows = v["guildLeaderboard"]["entries"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["rank"], 1);
+        assert_eq!(rows[0]["name"], "Player1");
+        // The number the tab shows is the Elo rating.
+        assert_eq!(rows[0]["pvpTrophies"], 1499);
+        assert_eq!(rows[0]["type"], "CLOSED");
+        assert_eq!(rows[0]["memberCount"], 1);
+        assert_eq!(v["guildLeaderboard"]["totalPages"], 1);
+        // Nobody asked for their own row: the key is omitted, as for a guildless player.
+        assert!(v.get("playerGuildLeaderboardEntry").is_none());
+    }
+
+    /// The client parses an Elo row with the same `GuildInfo` parser as a guild
+    /// row, so it must carry exactly the keys a real guild row carries.
+    #[test]
+    fn an_elo_row_has_exactly_the_keys_of_a_real_guild_row() {
+        let real = serde_json::to_value(LeaderboardEntry {
+            rank: 1,
+            guild: GuildWire::from_row(&super::create_wire::guild_row_for_shape(), 3),
+        })
+        .unwrap();
+        let fake = serde_json::to_value(&elo_board_page(&board(1), 1, None, Uuid::nil())).unwrap()
+            ["guildLeaderboard"]["entries"][0]
+            .clone();
+        let keys = |v: &Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(keys(&real), keys(&fake));
+    }
+
+    #[test]
+    fn the_requesters_own_row_fills_the_banner_entry_from_any_page() {
+        let all = board(250);
+        let me = H2hKey::new(all[191].character_id, all[191].alt_key);
+        let page = elo_board_page(&all, 1, Some(me), Uuid::nil());
+        assert_eq!(page.guild_leaderboard.entries.len(), 100);
+        assert_eq!(page.guild_leaderboard.total_pages, 3);
+        let mine = page.player_guild_leaderboard_entry.unwrap();
+        assert_eq!(mine.rank, 192);
+        assert_eq!(mine.guild.pvp_trophies, 1500 - 192);
+
+        let p3 = elo_board_page(&all, 3, None, Uuid::nil());
+        assert_eq!(p3.guild_leaderboard.entries.len(), 50);
+        assert_eq!(p3.guild_leaderboard.entries[0].rank, 201);
+        // Past the end: an empty page, not a panic.
+        assert!(
+            elo_board_page(&all, 99, None, Uuid::nil())
+                .guild_leaderboard
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unlisted_requester_gets_no_banner_entry_and_an_empty_board_one_page() {
+        let me = H2hKey::new(Uuid::from_u128(9), Uuid::from_u128(9));
+        let page = elo_board_page(&board(2), 1, Some(me), Uuid::nil());
+        assert!(page.player_guild_leaderboard_entry.is_none());
+        let empty = elo_board_page(&[], 1, Some(me), Uuid::nil());
+        assert!(empty.guild_leaderboard.entries.is_empty());
+        assert_eq!(empty.guild_leaderboard.total_pages, 1);
+    }
+
+    /// The tap-through: `GET /guilds/{row id}` must answer a page, because a
+    /// failed fetch makes the client report the guild service as down.
+    #[test]
+    fn a_tapped_row_opens_a_closed_one_member_page_for_that_player() {
+        let e = elo(4, 1234, 77);
+        let owner = Uuid::from_u128(0xfeed);
+        let d = serde_json::to_value(elo_row_detail_from(&e, Some(owner), Uuid::nil())).unwrap();
+        assert_eq!(
+            d["guild"]["id"],
+            elo_row_id(H2hKey::new(e.character_id, e.alt_key))
+        );
+        assert_eq!(d["guild"]["name"], "Player4");
+        assert_eq!(d["guild"]["type"], "CLOSED");
+        assert_eq!(d["applicationStatus"]["maxApplicationsReached"], true);
+        let members = d["members"].as_array().unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0]["userId"], owner.to_string());
+        assert_eq!(members[0]["guildId"], d["guild"]["id"]);
+        assert_eq!(members[0]["rank"], "GRANDMASTER");
+        let text = d["guild"]["shortDescription"].as_str().unwrap();
+        assert!(text.contains("1234") && text.contains("7W 2L 1T"), "{text}");
+        assert!(
+            d["guild"]["longDescription"]
+                .as_str()
+                .unwrap()
+                .contains("Shadowblades")
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4220,6 +4609,10 @@ mod tests {
 #[cfg(test)]
 mod create_wire {
     use super::*;
+
+    pub(super) fn guild_row_for_shape() -> GuildRow {
+        guild_row()
+    }
 
     fn guild_row() -> GuildRow {
         GuildRow {
