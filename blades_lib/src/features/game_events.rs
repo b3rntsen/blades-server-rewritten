@@ -542,6 +542,209 @@ fn hidden_span(first_day: i64, end_day: i64) -> (i64, i64) {
     )
 }
 
+/// A stretch of the calendar in which the day-slot rotation turns FASTER: a new
+/// event every `cadence_secs`, each open `window_secs`, instead of one a day
+/// open two days.
+///
+/// NOT retail's schedule — like [`EventTheme`] it is ours (tracker #499,
+/// HauDrauf's December plan, approved by the owner 2026-11-23). What it keeps
+/// from retail is the shape the client depends on: never more than two events
+/// open and never more than one announced, inside the stretch and across both
+/// of its edges. With a window of exactly two cadences, two are open at every
+/// moment of the steady state, as in retail's rotation.
+///
+/// # The edges
+///
+/// Both ends are UTC midnights, where the ordinary rotation opens its daily
+/// event, and no instance on either side is ever cut short:
+///
+/// * **Start.** The event that opened the day before is open until
+///   `start + 1 day`. So the first fast opening is at `start` itself, the
+///   second waits until `start + 1 day`, and the cadence runs from there.
+/// * **End.** The ordinary rotation resumes at `end` with its daily two-day
+///   opening. A fast opening is kept only if it has closed by `end + 1 day`,
+///   and only one may still be open at `end`.
+///
+/// Before `start` nothing is different at all — not the events open, not the
+/// one announced. The ordinary rotation's own openings inside the stretch are
+/// replaced; holiday (`annual`) and `preview` events keep their own windows,
+/// and the per-response caps apply on top as they always do.
+///
+/// A themed window is ignored while a fast rotation is in force: the two
+/// re-draw the same day-slots and are not meant to overlap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FastRotation {
+    /// First fast opening (UTC midnight).
+    pub start_secs: i64,
+    /// Where the ordinary rotation resumes (UTC midnight, exclusive).
+    pub end_secs: i64,
+    /// Seconds between two openings.
+    pub cadence_secs: i64,
+    /// How long each opening stays open.
+    pub window_secs: i64,
+    /// Where in the ordinary rotation's order the second opening starts.
+    ///
+    /// The first opening is always the event the ordinary rotation would have
+    /// opened at `start` — it is the one announced the day before. The rest
+    /// walk the ordinary order from `order_offset` places further on, and the
+    /// offset is what keeps an event from returning within days of its last
+    /// run: more openings than the ordinary rotation has means its events come
+    /// round sooner, before the stretch, inside it and after it (report #382).
+    pub order_offset: usize,
+}
+
+/// December 2026: from 1 December 00:00 UTC to 1 January 2027 00:00 UTC a new
+/// event every 16 hours, each open 32 hours (tracker #499).
+pub const DECEMBER_2026_ROTATION: FastRotation = FastRotation {
+    start_secs: 1_796_083_200,
+    end_secs: 1_798_761_600,
+    cadence_secs: 16 * 3_600,
+    window_secs: 32 * 3_600,
+    // With the 44 committed rotation events no event returns within 19 days of
+    // a run — in November, in December or in January. Measured by
+    // `no_event_returns_within_two_weeks`; offset 0 would bring the events of
+    // 22 December onwards back 10 days later, on 1 January.
+    order_offset: 15,
+};
+
+/// Every fast rotation the server knows. Compiled in rather than read from the
+/// static directory, so it ships with the code and cannot be half-deployed.
+pub const FAST_ROTATIONS: [FastRotation; 1] = [DECEMBER_2026_ROTATION];
+
+impl FastRotation {
+    /// When each fast opening begins, in order. See "The edges" above.
+    pub fn slot_starts(&self) -> Vec<i64> {
+        if self.cadence_secs <= 0 || self.window_secs <= 0 || self.end_secs <= self.start_secs {
+            return Vec::new();
+        }
+        let mut starts = vec![self.start_secs];
+        let mut at = self.start_secs + SECS_PER_DAY;
+        while at < self.end_secs {
+            starts.push(at);
+            at += self.cadence_secs;
+        }
+        // Closed by the time the ordinary rotation has two of its own open…
+        starts.retain(|s| s + self.window_secs <= self.end_secs + SECS_PER_DAY);
+        // …and at most one still open when it opens its first.
+        let mut spilled = false;
+        starts.retain(|s| {
+            let spills = s + self.window_secs > self.end_secs;
+            let keep = !(spills && spilled);
+            spilled |= spills;
+            keep
+        });
+        starts
+    }
+
+    /// Whether this rotation shapes what is served at `now`: from its first
+    /// opening until the last ordinary opening it replaced would have closed.
+    fn in_force(&self, now: i64) -> bool {
+        self.start_secs <= now && now < self.end_secs + ROTATION_WINDOW_SECS
+    }
+
+    /// Lay the openings out against a library: the ordinary rotation, in the
+    /// order it would have run from `start`, one event per opening. `None`
+    /// when the library has no rotating event.
+    fn plan<'a>(&self, library: &'a [EventDef]) -> Option<FastPlan<'a>> {
+        let mut walk: Vec<(i64, &EventDef)> = library
+            .iter()
+            .filter(|d| d.is_rotating())
+            .filter_map(|d| {
+                let at = match d.instance_start_at_or_before(self.start_secs) {
+                    Some(s) if s == self.start_secs => s,
+                    _ => d.next_instance_start_after(self.start_secs)?,
+                };
+                Some((at, d))
+            })
+            .collect();
+        if walk.is_empty() {
+            return None;
+        }
+        walk.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.event_id.cmp(&b.1.event_id)));
+        let openers = self
+            .slot_starts()
+            .into_iter()
+            .enumerate()
+            .map(|(i, start)| {
+                let place = match i {
+                    0 => 0,
+                    i => (i + self.order_offset) % walk.len(),
+                };
+                (start, walk[place].1)
+            })
+            .collect();
+        Some(FastPlan {
+            rotation: *self,
+            openers,
+        })
+    }
+}
+
+/// The fast rotation shaping what is served at `now`, laid out, if there is one.
+fn fast_plan_at<'a>(
+    rotations: &[FastRotation],
+    library: &'a [EventDef],
+    now: i64,
+) -> Option<FastPlan<'a>> {
+    rotations
+        .iter()
+        .find(|r| r.in_force(now))
+        .and_then(|r| r.plan(library))
+}
+
+/// A [`FastRotation`] laid out against a library: which event opens when.
+struct FastPlan<'a> {
+    rotation: FastRotation,
+    openers: Vec<(i64, &'a EventDef)>,
+}
+
+impl<'a> FastPlan<'a> {
+    /// Whether the rotation replaces this def's own instance beginning at
+    /// `start`: every ordinary rotation opening inside the stretch.
+    fn displaces(&self, def: &EventDef, start: i64) -> bool {
+        def.is_rotating() && self.rotation.start_secs <= start && start < self.rotation.end_secs
+    }
+
+    fn scheduled(&self, start: i64, def: &'a EventDef) -> Scheduled<'a> {
+        Scheduled {
+            start,
+            def,
+            window: self.rotation.window_secs,
+            recurrence: Recurrence {
+                recurrence_type: def.recurrence.recurrence_type.clone(),
+                start_time_secs: start,
+                duration_secs: self.rotation.window_secs,
+                recurrence_interval: def.recurrence.recurrence_interval,
+            },
+        }
+    }
+
+    /// The fast openings whose window covers `now`.
+    fn open_at(&self, now: i64) -> impl Iterator<Item = Scheduled<'a>> + '_ {
+        self.openers
+            .iter()
+            .filter(move |(start, _)| *start <= now && now < start + self.rotation.window_secs)
+            .map(|(start, def)| self.scheduled(*start, def))
+    }
+
+    /// The fast openings that begin after `now`, within `lead_secs`.
+    fn opening_within(&self, now: i64, lead_secs: i64) -> impl Iterator<Item = Scheduled<'a>> + '_ {
+        self.openers
+            .iter()
+            .filter(move |(start, _)| *start > now && start - now <= lead_secs)
+            .map(|(start, def)| self.scheduled(*start, def))
+    }
+}
+
+/// `(opening start, questId)` for every opening of a fast rotation against a
+/// library, for the tests and tools that want the calendar itself.
+pub fn fast_rotation_openings(rotation: &FastRotation, library: &[EventDef]) -> Vec<(i64, Uuid)> {
+    rotation
+        .plan(library)
+        .map(|p| p.openers.iter().map(|(s, d)| (*s, d.quest_id)).collect())
+        .unwrap_or_default()
+}
+
 /// One instance chosen to be on the wire, with the window it runs for.
 struct Scheduled<'a> {
     start: i64,
@@ -638,7 +841,24 @@ fn open_scheduled<'a>(
     theme: Option<&EventTheme>,
     now_secs: i64,
 ) -> Vec<Scheduled<'a>> {
-    let plan = theme.and_then(|t| t.plan(library));
+    open_scheduled_with(library, theme, &FAST_ROTATIONS, now_secs)
+}
+
+/// [`open_scheduled`] against an explicit set of fast rotations. Production
+/// always passes [`FAST_ROTATIONS`]; a test passes none to get the calendar
+/// the fast rotation is measured against.
+fn open_scheduled_with<'a>(
+    library: &'a [EventDef],
+    theme: Option<&EventTheme>,
+    rotations: &[FastRotation],
+    now_secs: i64,
+) -> Vec<Scheduled<'a>> {
+    let fast = fast_plan_at(rotations, library, now_secs);
+    // A themed window is ignored while a fast rotation is in force.
+    let plan = match fast {
+        Some(_) => None,
+        None => theme.and_then(|t| t.plan(library)),
+    };
     let mut out: Vec<Scheduled> = library
         .iter()
         .filter_map(|def| {
@@ -649,9 +869,15 @@ fn open_scheduled<'a>(
             {
                 return None;
             }
+            if fast.as_ref().is_some_and(|f| f.displaces(def, start)) {
+                return None;
+            }
             Some(Scheduled::natural(def, start))
         })
         .collect();
+    if let Some(fast) = &fast {
+        out.extend(fast.open_at(now_secs));
+    }
     if let Some(plan) = &plan {
         // A rotation opening lasts two days, so only today's and yesterday's can
         // cover `now`.
@@ -725,7 +951,23 @@ pub fn upcoming_events_themed(
     now_secs: i64,
     lead_secs: i64,
 ) -> Vec<GameEvent> {
-    let plan = theme.and_then(|t| t.plan(library));
+    upcoming_events_with(library, theme, &FAST_ROTATIONS, now_secs, lead_secs)
+}
+
+/// [`upcoming_events_themed`] against an explicit set of fast rotations; see
+/// [`open_scheduled_with`].
+fn upcoming_events_with(
+    library: &[EventDef],
+    theme: Option<&EventTheme>,
+    rotations: &[FastRotation],
+    now_secs: i64,
+    lead_secs: i64,
+) -> Vec<GameEvent> {
+    let fast = fast_plan_at(rotations, library, now_secs);
+    let plan = match fast {
+        Some(_) => None,
+        None => theme.and_then(|t| t.plan(library)),
+    };
     let mut out: Vec<GameEvent> = library
         .iter()
         .filter_map(|def| {
@@ -736,9 +978,15 @@ pub fn upcoming_events_themed(
             {
                 return None;
             }
+            if fast.as_ref().is_some_and(|f| f.displaces(def, start)) {
+                return None;
+            }
             (start - now_secs <= lead_secs).then(|| def.instance(start))
         })
         .collect();
+    if let Some(fast) = &fast {
+        out.extend(fast.opening_within(now_secs, lead_secs).map(|s| s.event()));
+    }
     if let Some(plan) = &plan {
         let today = now_secs.div_euclid(SECS_PER_DAY);
         for day in (today + 1)..=(today + 1 + lead_secs.max(0) / SECS_PER_DAY) {
@@ -1755,7 +2003,13 @@ mod themed_window {
             end_secs: utc_midnight(2026, 11, 2),
             quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
         };
-        let (from, to) = (theme.start_secs - 60 * DAY, theme.end_secs + 60 * DAY);
+        // Up to the December 2026 fast rotation, which opens more events than
+        // the rotation holds and has its own measure of this
+        // (`december_2026_tests::no_event_returns_within_two_weeks`).
+        let (from, to) = (
+            theme.start_secs - 60 * DAY,
+            (theme.end_secs + 60 * DAY).min(DECEMBER_2026_ROTATION.start_secs),
+        );
         let openings = |theme: Option<&EventTheme>| {
             let mut starts: BTreeMap<Uuid, BTreeSet<i64>> = BTreeMap::new();
             let mut t = from;
@@ -1796,5 +2050,430 @@ mod themed_window {
             rotating,
             "CONTROL: untouched rotation"
         );
+    }
+}
+
+#[cfg(test)]
+mod december_2026_tests {
+    //! The December 2026 fast rotation (tracker #499) against the committed
+    //! calendar: a new event every 16 hours, each open 32, never three open
+    //! and never two announced, and nothing different outside it.
+    use super::*;
+
+    const HOUR: i64 = 3_600;
+    const DEC_1: i64 = DECEMBER_2026_ROTATION.start_secs;
+    const JAN_1: i64 = DECEMBER_2026_ROTATION.end_secs;
+
+    fn committed() -> Vec<EventDef> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/game_events.json");
+        let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"));
+        serde_json::from_str(&raw).expect("valid game_events.json")
+    }
+
+    /// The rotation alone, without the two holiday events, where the question
+    /// is what the rotation itself does.
+    fn rotation_only() -> Vec<EventDef> {
+        committed()
+            .into_iter()
+            .filter(|d| d.is_rotating())
+            .collect()
+    }
+
+    fn open(lib: &[EventDef], rotations: &[FastRotation], now: i64) -> Vec<GameEvent> {
+        open_scheduled_with(lib, None, rotations, now)
+            .iter()
+            .map(Scheduled::event)
+            .collect()
+    }
+
+    fn soon(lib: &[EventDef], rotations: &[FastRotation], now: i64) -> Vec<GameEvent> {
+        upcoming_events_with(lib, None, rotations, now, WARNING_LEAD_SECS)
+    }
+
+    fn wire(events: &[GameEvent]) -> String {
+        serde_json::to_string(events).unwrap()
+    }
+
+    /// The window is the calendar month, to the second.
+    #[test]
+    fn the_window_is_december_2026_utc() {
+        assert_eq!(DEC_1, utc_midnight(2026, 12, 1));
+        assert_eq!(JAN_1, utc_midnight(2027, 1, 1));
+        assert_eq!(DECEMBER_2026_ROTATION.cadence_secs, 16 * HOUR);
+        assert_eq!(DECEMBER_2026_ROTATION.window_secs, 32 * HOUR);
+        assert_eq!(FAST_ROTATIONS, [DECEMBER_2026_ROTATION]);
+    }
+
+    /// The openings themselves: 1 December 00:00, then — once the event that
+    /// opened on 30 November has closed — every 16 hours from 2 December 00:00
+    /// to 31 December 08:00. 46 in the month against the ordinary 31.
+    #[test]
+    fn a_new_event_opens_every_16_hours() {
+        let starts = DECEMBER_2026_ROTATION.slot_starts();
+        assert_eq!(starts.len(), 46);
+        assert_eq!(starts[0], DEC_1);
+        assert_eq!(starts[1], DEC_1 + SECS_PER_DAY);
+        for pair in starts[1..].windows(2) {
+            assert_eq!(pair[1] - pair[0], 16 * HOUR);
+        }
+        assert_eq!(
+            *starts.last().unwrap(),
+            utc_midnight(2026, 12, 31) + 8 * HOUR
+        );
+        assert!(starts.iter().all(|s| (DEC_1..JAN_1).contains(s)));
+
+        // …and each is one of the ordinary rotation's events, in its usual
+        // order, starting with the one 1 December would have opened anyway.
+        let lib = committed();
+        let openings = fast_rotation_openings(&DECEMBER_2026_ROTATION, &lib);
+        assert_eq!(openings.len(), 46);
+        let baseline_dec_1 = open(&lib, &[], DEC_1)
+            .into_iter()
+            .find(|e| e.start_time_secs == DEC_1)
+            .expect("the ordinary rotation opens an event on 1 December");
+        assert_eq!(openings[0].1, baseline_dec_1.quest_id);
+        let rotating: Vec<Uuid> = rotation_only().iter().map(|d| d.quest_id).collect();
+        assert!(openings.iter().all(|(_, q)| rotating.contains(q)));
+        // 44 events over 46 openings: every one runs, none more than twice.
+        let mut runs: std::collections::BTreeMap<Uuid, u32> = Default::default();
+        for (_, q) in &openings {
+            *runs.entry(*q).or_default() += 1;
+        }
+        assert_eq!(runs.len(), 44);
+        assert!(runs.values().all(|n| (1..=2).contains(n)));
+    }
+
+    /// Report #382's complaint, measured on the served feed from 1 October to
+    /// the end of February: no event comes back within two weeks of a run —
+    /// not across the start of the window, not inside it, not after it.
+    #[test]
+    fn no_event_returns_within_two_weeks() {
+        let lib = rotation_only();
+        let mut starts: std::collections::BTreeMap<Uuid, std::collections::BTreeSet<i64>> =
+            Default::default();
+        let mut now = utc_midnight(2026, 10, 1);
+        while now < utc_midnight(2027, 3, 1) {
+            for e in open(&lib, &FAST_ROTATIONS, now) {
+                starts
+                    .entry(e.quest_id)
+                    .or_default()
+                    .insert(e.start_time_secs);
+            }
+            now += 4 * HOUR;
+        }
+        assert_eq!(starts.len(), 44, "every rotation event ran");
+        let shortest = starts
+            .values()
+            .flat_map(|s| s.iter().zip(s.iter().skip(1)).map(|(a, b)| b - a))
+            .min()
+            .unwrap();
+        assert!(
+            shortest >= 14 * SECS_PER_DAY,
+            "an event came back after {} hours",
+            shortest / HOUR
+        );
+    }
+
+    /// THE INVARIANT, at every hour from four days before the window to a week
+    /// after it, and one second either side of every opening and closing: never
+    /// more than two open, never more than one announced, never the same quest
+    /// twice, and every entry inside its own window. With the committed
+    /// calendar, holiday events included.
+    #[test]
+    fn never_three_open_and_never_two_announced() {
+        let lib = committed();
+        let mut moments: Vec<i64> = (DEC_1 - 4 * SECS_PER_DAY..=JAN_1 + 7 * SECS_PER_DAY)
+            .step_by(HOUR as usize)
+            .collect();
+        for start in DECEMBER_2026_ROTATION.slot_starts() {
+            let end = start + DECEMBER_2026_ROTATION.window_secs;
+            moments.extend([start - 1, start, start + 1, end - 1, end, end + 1]);
+        }
+        moments.extend([DEC_1 - 1, DEC_1, JAN_1 - 1, JAN_1, JAN_1 + 1]);
+        assert!(
+            moments.len() > 24 * 42,
+            "every hour of the month and its edges"
+        );
+
+        for now in moments {
+            let open = open(&lib, &FAST_ROTATIONS, now);
+            let soon = soon(&lib, &FAST_ROTATIONS, now);
+            assert!(
+                (1..=MAX_CONCURRENT_EVENTS).contains(&open.len()),
+                "t={now}: {} open",
+                open.len()
+            );
+            assert!(
+                soon.len() <= MAX_WARNING_EVENTS,
+                "t={now}: {} announced",
+                soon.len()
+            );
+            let mut quests: Vec<Uuid> = open.iter().chain(&soon).map(|e| e.quest_id).collect();
+            quests.sort();
+            quests.dedup();
+            assert_eq!(
+                quests.len(),
+                open.len() + soon.len(),
+                "t={now}: a quest is listed twice"
+            );
+            for e in &open {
+                assert!(
+                    e.start_time_secs <= now && now < e.end_time_secs,
+                    "t={now}: {} is listed open outside its window",
+                    e.game_event_instance_id
+                );
+                assert_eq!(
+                    e.game_event_instance_id,
+                    format!(
+                        "{}::{}",
+                        e.game_event_instance_id.split("::").next().unwrap(),
+                        e.start_time_secs
+                    )
+                );
+            }
+            for e in &soon {
+                assert!(
+                    e.start_time_secs > now && e.start_time_secs - now <= WARNING_LEAD_SECS,
+                    "t={now}: {} is announced outside the lead",
+                    e.game_event_instance_id
+                );
+            }
+        }
+    }
+
+    /// The steady state is retail's shape: exactly two open and exactly one
+    /// announced, at every hour from the second day's second opening until the
+    /// last opening of the month. (Before the holiday event of 18 December; the
+    /// rotation alone keeps it to the end.)
+    #[test]
+    fn two_are_open_and_one_is_announced_through_the_month() {
+        let lib = rotation_only();
+        let from = DEC_1 + SECS_PER_DAY + 16 * HOUR;
+        let to = utc_midnight(2026, 12, 31) + 8 * HOUR;
+        let mut now = from;
+        while now < to {
+            let open = open(&lib, &FAST_ROTATIONS, now);
+            assert_eq!(open.len(), 2, "t={now}");
+            assert!(
+                open.iter()
+                    .all(|e| e.end_time_secs - e.start_time_secs == 32 * HOUR),
+                "t={now}: an opening is not 32 hours long"
+            );
+            assert_eq!(soon(&lib, &FAST_ROTATIONS, now).len(), 1, "t={now}");
+            now += HOUR;
+        }
+    }
+
+    /// No instance is ever cut short: an event the feed shows open stays open,
+    /// hour after hour, until the end time it was served with — across both
+    /// edges. (The rotation alone: a holiday event holding one of the two slots
+    /// is the existing wire cap, not this rotation's doing.)
+    #[test]
+    fn no_event_is_withdrawn_before_its_end_time() {
+        let lib = rotation_only();
+        let mut previous: Vec<GameEvent> = Vec::new();
+        let mut now = DEC_1 - 4 * SECS_PER_DAY;
+        while now <= JAN_1 + 7 * SECS_PER_DAY {
+            let open = open(&lib, &FAST_ROTATIONS, now);
+            for was in &previous {
+                if was.end_time_secs > now {
+                    let still = open
+                        .iter()
+                        .find(|e| e.game_event_instance_id == was.game_event_instance_id);
+                    assert_eq!(
+                        still.map(|e| e.end_time_secs),
+                        Some(was.end_time_secs),
+                        "t={now}: {} was withdrawn or re-timed before its end",
+                        was.game_event_instance_id
+                    );
+                }
+            }
+            previous = open;
+            now += HOUR;
+        }
+    }
+
+    /// NOTHING CHANGES BEFORE 1 DECEMBER 00:00 UTC: every hour of November, and
+    /// the last second of it, serves byte for byte what a server without the
+    /// fast rotation serves — the events open and the one announced.
+    #[test]
+    fn nothing_is_different_before_the_window() {
+        let lib = committed();
+        let mut moments: Vec<i64> = (utc_midnight(2026, 11, 1)..DEC_1)
+            .step_by(HOUR as usize)
+            .collect();
+        moments.push(DEC_1 - 1);
+        for now in moments {
+            assert_eq!(
+                wire(&open(&lib, &FAST_ROTATIONS, now)),
+                wire(&open(&lib, &[], now)),
+                "t={now}: open"
+            );
+            assert_eq!(
+                wire(&soon(&lib, &FAST_ROTATIONS, now)),
+                wire(&soon(&lib, &[], now)),
+                "t={now}: announced"
+            );
+        }
+        // CONTROL: one second later it IS different, or the comparison above
+        // proves nothing.
+        assert_ne!(
+            wire(&open(&lib, &FAST_ROTATIONS, DEC_1)),
+            wire(&open(&lib, &[], DEC_1)),
+        );
+    }
+
+    /// The ordinary rotation resumes cleanly: on 1 January it opens its own
+    /// event for its own two days beside the last December one, and from
+    /// 2 January — for the next two months, hour by hour — the server serves
+    /// exactly what one without the fast rotation serves.
+    #[test]
+    fn the_ordinary_rotation_resumes_on_1_january() {
+        let lib = committed();
+        let at_new_year = open(&lib, &FAST_ROTATIONS, JAN_1);
+        let ordinary = open(&lib, &[], JAN_1)
+            .into_iter()
+            .find(|e| e.start_time_secs == JAN_1)
+            .expect("the ordinary rotation opens an event on 1 January");
+        let resumed = at_new_year
+            .iter()
+            .find(|e| e.start_time_secs == JAN_1)
+            .expect("…and so does this server");
+        assert_eq!(wire(&[resumed.clone()]), wire(&[ordinary]));
+        assert_eq!(resumed.end_time_secs - resumed.start_time_secs, 48 * HOUR);
+
+        let mut now = JAN_1 + SECS_PER_DAY;
+        while now < JAN_1 + 60 * SECS_PER_DAY {
+            assert_eq!(
+                wire(&open(&lib, &FAST_ROTATIONS, now)),
+                wire(&open(&lib, &[], now)),
+                "t={now}: open"
+            );
+            assert_eq!(
+                wire(&soon(&lib, &FAST_ROTATIONS, now)),
+                wire(&soon(&lib, &[], now)),
+                "t={now}: announced"
+            );
+            now += HOUR;
+        }
+    }
+
+    /// An announced event is the one that then opens, at the announced time.
+    #[test]
+    fn what_is_announced_is_what_opens() {
+        let lib = committed();
+        let mut now = DEC_1 - SECS_PER_DAY;
+        while now < JAN_1 {
+            for e in soon(&lib, &FAST_ROTATIONS, now) {
+                if now < DEC_1 && e.start_time_secs == DEC_1 {
+                    // Announced by the ordinary rotation the day before: the
+                    // same event at the same time, with the ordinary two-day
+                    // end, because nothing may differ before the window.
+                    let opened = open(&lib, &FAST_ROTATIONS, DEC_1);
+                    assert!(
+                        opened
+                            .iter()
+                            .any(|o| o.game_event_instance_id == e.game_event_instance_id)
+                    );
+                    continue;
+                }
+                let opened = open(&lib, &FAST_ROTATIONS, e.start_time_secs);
+                assert!(
+                    opened
+                        .iter()
+                        .any(|o| o.game_event_instance_id == e.game_event_instance_id
+                            && o.end_time_secs == e.end_time_secs),
+                    "t={now}: {} was announced and did not open as announced",
+                    e.game_event_instance_id
+                );
+            }
+            now += HOUR;
+        }
+    }
+
+    /// A fast opening on the wire: retail's object, with its own 32-hour window.
+    #[test]
+    fn a_fast_opening_has_the_wire_shape_of_any_other() {
+        let lib = rotation_only();
+        let now = utc_midnight(2026, 12, 10) + HOUR;
+        let fast = open(&lib, &FAST_ROTATIONS, now);
+        let ordinary = open(&lib, &[], now);
+        let keys = |e: &GameEvent| {
+            let v = serde_json::to_value(e).unwrap();
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.extend(v["recurrence"].as_object().unwrap().keys().cloned());
+            k.sort();
+            k
+        };
+        for e in &fast {
+            assert_eq!(keys(e), keys(&ordinary[0]));
+            assert_eq!(e.r#type, "quest");
+            assert_eq!(e.recurrence.recurrence_type, "daily");
+            assert_eq!(e.recurrence.start_time_secs, e.start_time_secs);
+            assert_eq!(e.recurrence.duration_secs, 32 * HOUR);
+            assert_eq!(e.end_time_secs - e.start_time_secs, 32 * HOUR);
+            assert!(e.important);
+        }
+    }
+
+    /// A themed window cannot add openings to a fast rotation: while one is in
+    /// force the theme is ignored, so the caps above hold whatever
+    /// `event_theme.json` says.
+    #[test]
+    fn a_themed_window_is_ignored_inside_the_fast_rotation() {
+        let lib = committed();
+        let theme = EventTheme {
+            start_secs: utc_midnight(2026, 12, 5),
+            end_secs: utc_midnight(2026, 12, 20),
+            quest_ids: HALLOWEEN_THEME_QUESTS.to_vec(),
+        };
+        let mut now = DEC_1;
+        while now < JAN_1 {
+            assert_eq!(
+                wire(&active_events_themed(&lib, Some(&theme), now)),
+                wire(&active_events(&lib, now)),
+                "t={now}"
+            );
+            assert_eq!(
+                wire(&upcoming_events_themed(
+                    &lib,
+                    Some(&theme),
+                    now,
+                    WARNING_LEAD_SECS
+                )),
+                wire(&upcoming_events(&lib, now, WARNING_LEAD_SECS)),
+                "t={now}"
+            );
+            now += 6 * HOUR;
+        }
+    }
+
+    /// A rotation whose length does not divide evenly still closes its last
+    /// opening in time: never two fast openings open when the ordinary
+    /// rotation resumes, none open a day later.
+    #[test]
+    fn the_end_edge_holds_for_any_length() {
+        for days in 2..40 {
+            for (cadence, window) in [(16, 32), (12, 24), (10, 20), (7, 14)] {
+                let r = FastRotation {
+                    start_secs: DEC_1,
+                    end_secs: DEC_1 + days * SECS_PER_DAY,
+                    cadence_secs: cadence * HOUR,
+                    window_secs: window * HOUR,
+                    order_offset: 0,
+                };
+                let starts = r.slot_starts();
+                let open_at = |t: i64| {
+                    starts
+                        .iter()
+                        .filter(|s| **s <= t && t < **s + r.window_secs)
+                        .count()
+                };
+                assert!(open_at(r.end_secs) <= 1, "{days}d {cadence}h");
+                assert_eq!(open_at(r.end_secs + SECS_PER_DAY), 0, "{days}d {cadence}h");
+                assert!(open_at(r.start_secs + SECS_PER_DAY - 1) <= 1);
+            }
+        }
     }
 }
