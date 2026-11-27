@@ -1,0 +1,15 @@
+# Python 3.9+ (tested on 3.14). Install into a virtualenv:
+#   python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+#
+# Versions are the ones the tools were last run with. astc-encoder-py is pinned
+# EXACTLY: astc_real.py depends on its context/encode API, which has changed
+# between releases.
+UnityPy==1.25.0
+Pillow==12.1.1
+numpy==2.4.4
+lz4==4.4.5
+astc-encoder-py==0.1.12
+# Only patch_common.py, patch_inventory_capacity.py and newcontent.py need it
+# (MonoBehaviour typetrees generated from your APK's libil2cpp.so +
+# global-metadata.dat). Last tested 0.0.10 under Python 3.11.
+TypeTreeGeneratorAPI==0.0.10
