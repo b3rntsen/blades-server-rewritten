@@ -90,11 +90,11 @@ jobs:
     timeout-minutes: 30
     steps:
       # `ref: main`, not the event SHA — see the concurrency note above.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
       - run: sudo apt-get update && sudo apt-get install -y pkg-config
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry/index
@@ -114,7 +114,7 @@ jobs:
       # `ref: main`, not the event SHA — see the concurrency note above. The
       # image is tagged from the checked-out HEAD below, so the sha- tag and the
       # revision label describe what was actually built.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
 
@@ -145,6 +145,11 @@ jobs:
           echo "### Published" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`$IMAGE:$SHA_TAG\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`$IMAGE:main\` (what the box tracks)" >> "$GITHUB_STEP_SUMMARY"
+          # The immutable reference. `:main` and even `sha-…` are tags anyone with
+          # packages:write can move; the digest cannot. Recorded so a rollback or
+          # an audit can name the exact bytes (security review M11).
+          DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$SHA_TAG")"
+          echo "- digest: \`$DIGEST\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "The box picks this up within ~5 min via blades-arena-deploy.timer." >> "$GITHUB_STEP_SUMMARY"
           echo "To roll back, pin the previous \`sha-…\` tag — see docs/the-loop.md." >> "$GITHUB_STEP_SUMMARY"

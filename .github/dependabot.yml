@@ -1,0 +1,26 @@
+# Dependency update PRs (security review 2026-11-24, M11). Weekly, small
+# batches; every PR goes through the normal checks and the owner's merge.
+# PRs touching .github/workflows trip the workflow-change guard by design.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule: { interval: weekly }
