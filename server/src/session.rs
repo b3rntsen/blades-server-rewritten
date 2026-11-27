@@ -771,10 +771,36 @@ impl SessionStore {
         doomed
     }
 
+    /// The smallest id any session created in second `secs` can have: the
+    /// time prefix followed by an all-zero random half. Comparing against it
+    /// orders by the second alone.
+    fn first_uuid_of_second(secs: u64) -> Uuid {
+        let t = secs.to_be_bytes();
+        Uuid::new_v8([
+            t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], 0, 0, 0, 0, 0, 0, 0, 0,
+        ])
+    }
+
+    /// Ids below this are older than the TTL; `None` while the store itself is
+    /// younger than the TTL, when nothing can be.
+    ///
+    /// It used to be `get_uuid_for_instant(now - ttl)`. That saturates to
+    /// second 0 while the store is younger than the TTL and carries a RANDOM
+    /// second half, so a session stored during the store's first second
+    /// (also second 0) was compared on its random bytes and pruned the moment
+    /// it was stored about half the time — the CI flake in
+    /// `account_login_still_moves_the_binding_the_proxy_vouches_for`, and a
+    /// real if narrow edge in the first second after a server restart.
+    fn prune_threshold(&self, now: Instant) -> Option<Uuid> {
+        let age = now
+            .checked_sub(self.ttl)?
+            .checked_duration_since(self.time_base)?;
+        Some(Self::first_uuid_of_second(age.as_secs()))
+    }
+
     pub fn store_new_session(&self, session: Arc<Session>) -> Uuid {
         let now_instant = Instant::now();
-        let clear_before_instant = now_instant - self.ttl;
-        let uuid_to_clear_before = self.get_uuid_for_instant(&clear_before_instant);
+        let uuid_to_clear_before = self.prune_threshold(now_instant);
 
         let mut id = self.get_uuid_for_instant(&now_instant);
         {
@@ -785,10 +811,12 @@ impl SessionStore {
             }
             locked.insert(id.clone(), session);
 
-            while let Some((k, _v)) = locked.first_key_value()
-                && k < &uuid_to_clear_before
-            {
-                locked.pop_first();
+            if let Some(threshold) = uuid_to_clear_before {
+                while let Some((k, _v)) = locked.first_key_value()
+                    && k < &threshold
+                {
+                    locked.pop_first();
+                }
             }
         }
         return id;
@@ -1006,15 +1034,8 @@ mod one_device_owns_the_account {
     }
 
     /// Sessions are inserted under ids we choose rather than through
-    /// `store_new_session`, on purpose.
-    ///
-    /// That function derives the id from `now - time_base` and prunes anything
-    /// older than `now - ttl`. In a test the store is created microseconds
-    /// before the session, so both encode second 0 and the comparison falls
-    /// through to the random half of the uuid — a session can prune itself the
-    /// moment it is stored. (That is a real, if narrow, edge for the first
-    /// second after a server restart; it is not what these tests are about, and
-    /// fixing it is a separate change.)
+    /// `store_new_session`: these tests are about eviction by user, not about
+    /// how ids are minted (see `store_new_session_keeps_a_session_from_the_first_second`).
     fn add(s: &SessionStore, id: Uuid, user: Uuid) -> Uuid {
         s.insert_existing(
             id,
@@ -1025,6 +1046,36 @@ mod one_device_owns_the_account {
             )),
         );
         id
+    }
+
+    /// A session stored in the store's first second must still be there. The
+    /// old prune threshold compared it on random bytes and dropped about half
+    /// of them, so 64 fresh stores all keeping theirs is a 2^-64 fluke at most.
+    #[test]
+    fn store_new_session_keeps_a_session_from_the_first_second() {
+        for _ in 0..64 {
+            let s = store();
+            let id = s.store_new_session(Arc::new(Session::new(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Duration::from_secs(3600),
+            )));
+            assert!(s.contains(id), "a fresh session was pruned on insert");
+        }
+    }
+
+    /// Control: past the TTL the prune still runs, and only by the second.
+    #[test]
+    fn the_prune_threshold_orders_by_the_second_alone() {
+        let s = SessionStore::new(Duration::from_secs(10));
+        let base = s.time_base;
+        assert_eq!(s.prune_threshold(base + Duration::from_secs(5)), None);
+        let t = s.prune_threshold(base + Duration::from_secs(25)).unwrap();
+        let at = |secs: u64| s.get_uuid_for_instant(&(base + Duration::from_secs(secs)));
+        for _ in 0..64 {
+            assert!(at(14) < t, "a session from second 14 is older than the TTL");
+            assert!(at(15) >= t, "a session from second 15 is not");
+        }
     }
 
     /// Tracker #8: `/auth/bnet/login` from a device that already holds a session for
