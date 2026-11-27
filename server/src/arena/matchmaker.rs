@@ -642,6 +642,15 @@ fn humans_matching_until(
     Some(valve.map_or(until, |v| until.min(v)))
 }
 
+/// Whether this ticket may be handed an AI opponent at `unix_secs`: its alt's
+/// "Fight AI" setting, and never while an arena event window is open (tracker
+/// #526, HauDrauf: "komplett ohne KI Gegner"). Inside a window every ticket
+/// behaves exactly like a Fight-AI-off ticket — it waits for a human, past every
+/// fallback and valve; after the window the ordinary fallback applies again.
+fn ticket_fights_ai(t: &TicketRequest, unix_secs: i64) -> bool {
+    t.fights_ai && !crate::arena::arena_event::ai_off_at(unix_secs)
+}
+
 /// **Fight AI off** (per alt, [`crate::arena::fight_ai`]): the queue's next deadline
 /// when its oldest ticket refuses an AI.
 ///
@@ -774,6 +783,23 @@ async fn load_loadout(
         lo.fight_sigil_rehearsal = crate::testchar::live_alt_is_test(&mut conn, id)
             .await
             .unwrap_or(false);
+    }
+    // An arena event open or about to open (tracker #526): the account's event
+    // count, so the result card can show the event Sigil. Unknown on a failed
+    // read — the card then shows none and the writer still credits it.
+    if !lo.character_uuid.is_empty()
+        && let Some(event) =
+            crate::arena::arena_event::event_near(crate::arena::arena_fight_gift::unix_now())
+        && let Some(db) = db
+        && let Ok(mut conn) = db.get().await
+    {
+        match crate::arena::arena_event::account_event_fights(&mut conn, event, user_id).await {
+            Ok(n) => lo.arena_event_fights = Some(n),
+            Err(e) => warn!(
+                "matchmaker: arena event count for user {user_id} unreadable ({e}); \
+                 the card shows no event Sigil"
+            ),
+        }
     }
     // Only the result-card delivery needs the count (#401); while it is off the
     // milestone is decided by the writer alone, as in #539.
@@ -4590,7 +4616,9 @@ async fn matchmaker_loop(
             } else {
                 floor
             };
-            let oldest_fights_ai = oldest_ticket.map(|(t, _)| t.fights_ai).unwrap_or(true);
+            let oldest_fights_ai = oldest_ticket
+                .map(|(t, _)| ticket_fights_ai(t, crate::arena::arena_event::now_secs()))
+                .unwrap_or(true);
             // A Fight-AI-off ticket alone never reaches the deadline branch, where a gone
             // client is noticed — so notice it here, or a player who closed the app keeps
             // a ticket (and its reservation) that a later search would be handed.
@@ -4679,7 +4707,7 @@ async fn matchmaker_loop(
                 // Fight AI off for this alt: nobody to pair, so back in the queue — no
                 // valve, no tier ever hands this player an AI. No spin: with nobody
                 // else waiting, the next pass's deadline is `no_ai_deadline`'s re-check.
-                if !lone.fights_ai {
+                if !ticket_fights_ai(&lone, crate::arena::arena_event::now_secs()) {
                     waiting.push((lone, since));
                     continue;
                 }
@@ -8976,6 +9004,49 @@ mod fight_ai_off_tests {
             resolved(&mut rx, StdDuration::from_millis(3000)).await,
             "default (Fight AI on) behaviour changed: no AI fallback"
         );
+    }
+
+    /// ARENA EVENT (tracker #526): inside the Happy Hour window a DEFAULT player —
+    /// Fight AI on — is handed no AI under the very config that hands one at
+    /// once outside it; two players inside the window still pair with each other.
+    #[tokio::test]
+    async fn no_ai_for_anyone_inside_an_arena_event_window() {
+        use crate::arena::arena_event::{HAPPY_HOUR_2026_11_28 as E, TEST_CLOCK};
+        TEST_CLOCK.with(|c| c.set(Some(E.opens_at_secs + 600)));
+        let tx = spawn(config(0, 0), MatchRegistry::new(8));
+        let (a, mut rx_a) = ticket(true, 50, 400);
+        tx.send(MatchmakerCommand::Enqueue(a)).unwrap();
+        assert!(
+            !resolved(&mut rx_a, StdDuration::from_millis(3000)).await,
+            "a default player was handed an AI during the event"
+        );
+        let (b, mut rx_b) = ticket(true, 50, 400);
+        tx.send(MatchmakerCommand::Enqueue(b)).unwrap();
+        assert!(
+            resolved(&mut rx_b, StdDuration::from_millis(3000)).await,
+            "B not paired"
+        );
+        assert!(
+            resolved(&mut rx_a, StdDuration::from_millis(500)).await,
+            "A not paired"
+        );
+        TEST_CLOCK.with(|c| c.set(None));
+    }
+
+    /// CONTROL for the test above: one second after the window closes, the same
+    /// default player gets the AI at once again.
+    #[tokio::test]
+    async fn the_ai_is_back_the_second_the_event_window_closes() {
+        use crate::arena::arena_event::{HAPPY_HOUR_2026_11_28 as E, TEST_CLOCK};
+        TEST_CLOCK.with(|c| c.set(Some(E.closes_at_secs)));
+        let tx = spawn(config(0, 0), MatchRegistry::new(8));
+        let (t, mut rx) = ticket(true, 50, 400);
+        tx.send(MatchmakerCommand::Enqueue(t)).unwrap();
+        assert!(
+            resolved(&mut rx, StdDuration::from_millis(3000)).await,
+            "no AI after the event window"
+        );
+        TEST_CLOCK.with(|c| c.set(None));
     }
 
     /// Past every fallback tier AND the humans-first safety valve (1 s here, with a

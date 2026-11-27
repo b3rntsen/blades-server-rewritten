@@ -805,18 +805,30 @@ pub struct FightGiftRow {
 }
 
 impl FightGiftRow {
-    /// The gift as a `globalGiftOverride`: one weapon, claimable once, no window.
+    /// The gift as a `globalGiftOverride`: one weapon (or, for an arena event's
+    /// participation gift, its list of lines), claimable once, no window.
     pub fn gift_def(&self) -> Option<GiftDef> {
-        let item: GiftItem = serde_json::from_value(self.item.clone()).ok()?;
+        let items = super::arena_event::gift_lines(&self.item)?;
+        let description = match self.event() {
+            Some((event, seq)) => event.gift_description(seq),
+            None => WEAPON_GIFT_DESCRIPTION.into(),
+        };
         Some(GiftDef {
             global_gift_id: self.id,
-            items: vec![item],
+            items,
             chests: Vec::new(),
             start_time: 0,
             end_time: 0,
             claim_count_limit: 1,
-            description: Some(WEAPON_GIFT_DESCRIPTION.into()),
+            description: Some(description),
         })
+    }
+
+    /// The arena event (and its sequence number) this gift was earned in, for a
+    /// row with a negative milestone (tracker #526); `None` for the
+    /// every-25th-fight weapon.
+    pub fn event(&self) -> Option<(&'static super::arena_event::ArenaEvent, i64)> {
+        super::arena_event::event_of_milestone(self.milestone)
     }
 
     pub fn claim_count(&self) -> u64 {

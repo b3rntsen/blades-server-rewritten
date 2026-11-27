@@ -507,6 +507,10 @@ pub struct MatchInstance {
     /// so a test pins it; a test build starts outside the window, so no card
     /// assertion depends on the day the suite runs.
     fight_sigil_clock: Option<i64>,
+    /// Wall clock (unix seconds) at which this match was PAIRED — what an arena
+    /// event's window is read against (tracker #526: a fight counts when it
+    /// begins inside the window). 0 in a test build, outside every window.
+    paired_at_secs: i64,
     /// The slot that ended the match by conceding — the exit button or an ENet
     /// departure — if one did. That side abandoned the fight: it keeps the
     /// recorded loss but is paid no arena Gems and the fight does not count
@@ -583,6 +587,11 @@ impl MatchInstance {
             staged_loadouts: vec![None; capacity],
             weapon_on_result_card: crate::arena::arena_fight_gift::weapon_on_result_card(),
             fight_sigil_clock: cfg!(test).then_some(0),
+            paired_at_secs: if cfg!(test) {
+                0
+            } else {
+                crate::arena::arena_fight_gift::unix_now()
+            },
             conceded_slot: None,
         }
     }
@@ -2312,10 +2321,30 @@ impl MatchInstance {
                     self.fight_sigil_clock.unwrap_or(completed_at_secs),
                 )
             };
-            let wallet_sigil = (sigil > 0).then(|| {
+            // An arena event (tracker #526): a finished fight against a human,
+            // paired inside the window, counts toward the account's event tally.
+            // Its Sigil is shown here from the count read at queue time; the
+            // writer recounts in the database and credits what that says.
+            let versus_human = opponent.is_some() && !versus_bot && !is_bot_slot[slot];
+            // Anti-farming (#526 review): an idle or instant-quit fight does not
+            // count — BOTH sides must have sent input in a live round, the same
+            // "sent input" notion the bot-void rule uses.
+            let both_played = !never_arrived
+                && opponent.is_some_and(|o| self.saw_in_round_c2s.get(o).copied().unwrap_or(false));
+            let event = crate::arena::arena_event::counted_event(
+                self.paired_at_secs,
+                finish.is_finished() && both_played,
+                versus_human,
+            );
+            let event_sigil = match (event, f.loadout.arena_event_fights) {
+                (Some(e), Some(before)) => e.sigils_for_fight(before + 1),
+                _ => 0,
+            };
+            let card_sigil = sigil.saturating_add(event_sigil);
+            let wallet_sigil = (card_sigil > 0).then(|| {
                 f.loadout
                     .wallet_sigil
-                    .saturating_add(sigil)
+                    .saturating_add(card_sigil)
                     .min(i64::MAX as u64) as i64
             });
 
@@ -2325,7 +2354,7 @@ impl MatchInstance {
                 wallet_gold,
                 gems: gems as i64,
                 wallet_gems,
-                sigil: sigil as i64,
+                sigil: card_sigil as i64,
                 wallet_sigil,
                 character_experience,
                 backpack_version,
@@ -2478,6 +2507,7 @@ impl MatchInstance {
                     character_xp: payout.character_xp,
                     gems: gems as i64,
                     sigil: sigil as i64,
+                    event_paired_at_secs: event.map(|_| self.paired_at_secs),
                     finished_fight: finish.is_finished(),
                     card_weapon: card_weapon.clone(),
                     trophy_delta: if void_result { 0 } else { trophy_delta },
@@ -5799,6 +5829,98 @@ pub(in crate::arena::combat) mod tests {
         assert_eq!(card_sigil(&cards[&0]), Some(1), "the survivor");
         assert_eq!(card_sigil(&cards[&1]), None, "the leaver");
         assert_eq!(card_sigil_balance(&cards[&1]), None);
+    }
+
+    /// A 2-0 human match paired at `paired_at`, each side holding 41 Sigil and
+    /// `event_fights` counted event fights before it; the two result cards.
+    fn event_cards(
+        paired_at: i64,
+        event_fights: [Option<i64>; 2],
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        event_cards_with_input(paired_at, event_fights, [true, true])
+    }
+
+    /// As [`event_cards`], with `played[slot]` saying whether that side sent
+    /// input in a live round.
+    fn event_cards_with_input(
+        paired_at: i64,
+        event_fights: [Option<i64>; 2],
+        played: [bool; 2],
+    ) -> std::collections::BTreeMap<usize, serde_json::Value> {
+        let (mut m, _t0, live) = live_inst_at(2);
+        m.paired_at_secs = paired_at;
+        m.saw_in_round_c2s = played;
+        for (slot, before) in event_fights.into_iter().enumerate() {
+            m.combat.fighters[slot].loadout.wallet_sigil = 41;
+            m.combat.fighters[slot].loadout.arena_event_fights = before;
+        }
+        let (_d1, t1) = swing_until_death(&mut m, 0, live);
+        let (_s1, live2) = drive_interround_to_live(&mut m, t1);
+        let (_d2, t) = swing_until_death(&mut m, 0, live2);
+        cards_to_the_end(&mut m, t)
+    }
+
+    /// ARENA EVENT (tracker #526): the result card shows the event Sigil from the
+    /// queue-time count — nothing for fights 1–4, five on the 5th, one after —
+    /// for the winner and the loser alike; and nothing for a fight paired one
+    /// second outside the window.
+    #[test]
+    fn the_event_sigil_rides_the_card_from_the_fifth_fight() {
+        use crate::arena::arena_event::HAPPY_HOUR_2026_11_28 as E;
+        let inside = E.opens_at_secs + 900;
+        let cards = event_cards(inside, [Some(4), Some(0)]);
+        assert_eq!(card_sigil(&cards[&0]), Some(5), "winner's 5th fight");
+        assert_eq!(card_sigil_balance(&cards[&0]), Some(46));
+        assert_eq!(
+            card_sigil(&cards[&1]),
+            None,
+            "loser's 1st fight: nothing yet"
+        );
+        let cards = event_cards(inside, [Some(7), Some(5)]);
+        assert_eq!(card_sigil(&cards[&0]), Some(1));
+        assert_eq!(card_sigil(&cards[&1]), Some(1), "the loser is paid too");
+        for paired in [E.opens_at_secs - 1, E.closes_at_secs] {
+            let cards = event_cards(paired, [Some(4), Some(9)]);
+            assert_eq!(card_sigil(&cards[&0]), None, "paired at {paired}");
+            assert_eq!(card_sigil(&cards[&1]), None, "paired at {paired}");
+        }
+        // An unknown count shows nothing (the writer still credits it).
+        let cards = event_cards(inside, [None, None]);
+        assert_eq!(card_sigil(&cards[&0]), None);
+    }
+
+    /// ANTI-FARMING (#526 review): a fight in which either side sent no input
+    /// in a live round counts for NEITHER side — an idle partner cannot be
+    /// farmed. CONTROL: both sides playing, the same counts pay.
+    #[test]
+    fn an_idle_side_makes_the_fight_count_for_nobody() {
+        use crate::arena::arena_event::HAPPY_HOUR_2026_11_28 as E;
+        let inside = E.opens_at_secs + 900;
+        // Slot 0 swings (its input is seen); slot 1 never sends a byte.
+        let cards = event_cards_with_input(inside, [Some(4), Some(4)], [true, false]);
+        assert_eq!(card_sigil(&cards[&0]), None, "the player facing an idle side");
+        assert_eq!(card_sigil(&cards[&1]), None, "the idle side");
+        let cards = event_cards_with_input(inside, [Some(4), Some(4)], [true, true]);
+        assert_eq!(card_sigil(&cards[&0]), Some(5));
+        assert_eq!(card_sigil(&cards[&1]), Some(5));
+    }
+
+    /// An instant quit — the leaver never sent input — pays the survivor no
+    /// event Sigil either.
+    #[test]
+    fn an_instant_quit_counts_for_nobody() {
+        use crate::arena::arena_event::HAPPY_HOUR_2026_11_28 as E;
+        let (mut m, t0) = live_inst(2);
+        m.paired_at_secs = E.opens_at_secs + 900;
+        m.saw_in_round_c2s = [true, false];
+        for slot in [0, 1] {
+            m.combat.fighters[slot].loadout.arena_event_fights = Some(4);
+        }
+        let leave = t0 + Duration::from_secs(3);
+        m.concede_by_departure(1, leave);
+        let cards = cards_to_the_end(&mut m, leave);
+        assert_eq!(card_sigil(&cards[&0]), None, "the survivor");
+        assert_eq!(card_sigil(&cards[&1]), None, "the leaver");
     }
 
     /// The rehearsal pays a marked test character outside the window, and
