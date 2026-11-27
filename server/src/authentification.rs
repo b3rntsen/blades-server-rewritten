@@ -776,22 +776,22 @@ async fn reclaim_device_logged(
             from: Some(from),
             from_kind: "account",
         }) => log::info!(
-            "device binding TAKEN from another account by password sign-in: device {tag} from \
+            "device binding TAKEN from another account by credential sign-in: device {tag} from \
              user {from} to user {to} (path: {path}; recorded in device_binding_moves)"
         ),
         Ok(DeviceReclaim::Moved { from, from_kind }) => log::info!(
-            "device binding moved by password sign-in: device {tag} from {from_kind} {from:?} to \
+            "device binding moved by credential sign-in: device {tag} from {from_kind} {from:?} to \
              user {to} (path: {path}; recorded in device_binding_moves)"
         ),
         Ok(DeviceReclaim::Refused { holder }) => log::warn!(
-            "device binding NOT moved by password sign-in: device {tag} is held by user {holder}, \
+            "device binding NOT moved by credential sign-in: device {tag} is held by user {holder}, \
              which is neither user {to} nor the account this client's session belongs to \
              (user {}); the session is stale — a relaunch and a new sign-in will move it \
              (path: {path})",
             device.session_user_id
         ),
         Err(error) => log::warn!(
-            "device binding could not be moved by password sign-in: device {tag} to user {to} \
+            "device binding could not be moved by credential sign-in: device {tag} to user {to} \
              (path: {path}): {error}"
         ),
     }
