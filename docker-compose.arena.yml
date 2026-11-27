@@ -6,7 +6,7 @@
 # Build the image OFF the 1.9 GB box (it OOMs a release build); this box only runs it.
 services:
   arena-db:
-    image: postgres:16-alpine
+    image: postgres:19-alpine
     container_name: arena-db
     restart: always
     environment:
@@ -48,7 +48,7 @@ services:
   # One-shot: apply the diesel migrations' up.sql on a FRESH db (idempotent — it
   # skips if the `users` table already exists), so the server finds its tables.
   arena-migrate:
-    image: postgres:16-alpine
+    image: postgres:19-alpine
     depends_on:
       arena-db:
         condition: service_healthy
