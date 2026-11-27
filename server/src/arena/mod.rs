@@ -30,6 +30,7 @@ pub mod top100_boards;
 pub mod top100_renames;
 pub mod trophy_track;
 pub mod udp;
+pub mod ws_transport;
 
 use serde::Serialize;
 use uuid::Uuid;
