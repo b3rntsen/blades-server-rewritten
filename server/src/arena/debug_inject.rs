@@ -80,7 +80,7 @@ fn check_token(app: &ServerGlobal, req: &HttpRequest) -> Result<(), BladeApiErro
         ));
     };
     match extract_token(req) {
-        Some(provided) if provided == expected => Ok(()),
+        Some(provided) if crate::admin::dev_token_eq(&provided, expected) => Ok(()),
         Some(_) => Err(BladeApiError::new(
             StatusCode::FORBIDDEN,
             DEBUG_SERVICE_ID,

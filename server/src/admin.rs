@@ -388,6 +388,47 @@ fn extract_import_token(req: &HttpRequest) -> Option<String> {
 
 /// Validate the dev token against the one captured at startup. Returns the
 /// appropriate `BladeApiError` on failure so the caller can `?` it.
+/// Body limit for a character transfer, the one route that needs more than the
+/// app-wide [`crate::DEFAULT_JSON_LIMIT`]. A transfer POSTs the whole
+/// CompleteCharacter: a level-28 import measured 3,094,666 bytes (2026-08-21),
+/// so 16 MiB is ~5x the largest payload seen.
+pub(crate) const IMPORT_JSON_LIMIT: usize = 16 * 1024 * 1024;
+
+/// `web::Json` with [`IMPORT_JSON_LIMIT`] instead of the app-wide limit.
+///
+/// The limit used to be 16 MiB for EVERY route, including the unauthenticated
+/// sign-in routes (M5, security review 2026-11-24): any client could make the
+/// server buffer 16 MiB per request. Only this route is allowed that much now.
+pub struct ImportJson<T>(pub T);
+
+impl<T> ImportJson<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T: serde::de::DeserializeOwned + 'static> actix_web::FromRequest for ImportJson<T> {
+    type Error = actix_web::Error;
+    type Future = futures_util::future::LocalBoxFuture<'static, Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, payload: &mut actix_web::dev::Payload) -> Self::Future {
+        let req = req.clone();
+        let body = web::JsonBody::<T>::new(&req, payload, None, true).limit(IMPORT_JSON_LIMIT);
+        Box::pin(async move {
+            match body.await {
+                Ok(value) => Ok(ImportJson(value)),
+                Err(err) => Err(crate::log_rejected_json_body(err, &req)),
+            }
+        })
+    }
+}
+
+/// Constant-time token comparison for the dev/import/debug bearer tokens.
+pub(crate) fn dev_token_eq(provided: &str, expected: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    provided.as_bytes().ct_eq(expected.as_bytes()).into()
+}
+
 pub(crate) fn check_import_token(
     app_state: &ServerGlobal,
     req: &HttpRequest,
@@ -415,8 +456,11 @@ pub(crate) fn check_dev_token(
     };
 
     match extract_import_token(req) {
-        // constant-time-ish: lengths differ -> mismatch; otherwise compare.
-        Some(provided) if provided == expected => Ok(()),
+        // Constant time over the bytes (M4, security review 2026-11-24): `==` on
+        // str returns at the first differing byte, which leaks how much of a
+        // guess was right to anyone who can time the response. Only the length
+        // is still observable.
+        Some(provided) if dev_token_eq(&provided, expected) => Ok(()),
         Some(_) => Err(BladeApiError::new(
             StatusCode::FORBIDDEN,
             IMPORT_SERVICE_ID,
@@ -1225,7 +1269,7 @@ fn import_parks_quests(live_alt: Option<Uuid>, incoming_alt: Option<Uuid>) -> bo
 pub async fn import_character(
     req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
-    body: web::Json<ImportCharacterRequest>,
+    body: ImportJson<ImportCharacterRequest>,
 ) -> Result<Json<ImportCharacterResponse>, BladeApiError> {
     check_import_token(&app_state, &req)?;
 
@@ -11535,4 +11579,64 @@ async fn apply_new_alt(
         name,
         level,
     })
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+    use actix_web::{App, http::StatusCode as S, test as atest, web as aweb};
+
+    #[test]
+    fn dev_token_eq_accepts_only_the_exact_token() {
+        assert!(dev_token_eq("s3cret-token", "s3cret-token"));
+        assert!(!dev_token_eq("s3cret-tokeN", "s3cret-token"));
+        assert!(!dev_token_eq("s3cret", "s3cret-token"));
+        assert!(!dev_token_eq("", "s3cret-token"));
+        assert!(!dev_token_eq("s3cret-token-and-more", "s3cret-token"));
+    }
+
+    async fn echo_import(body: ImportJson<Value>) -> HttpResponse {
+        HttpResponse::Ok().body(body.into_inner().to_string().len().to_string())
+    }
+
+    async fn echo_default(body: aweb::Json<Value>) -> HttpResponse {
+        HttpResponse::Ok().body(body.into_inner().to_string().len().to_string())
+    }
+
+    fn big_json(bytes: usize) -> String {
+        format!("{{\"pad\":\"{}\"}}", "x".repeat(bytes))
+    }
+
+    /// The failing case first: a 3 MiB body (the size of a real transfer) is
+    /// refused by the app-wide limit but accepted by the import extractor.
+    #[actix_web::test]
+    async fn import_extractor_takes_a_body_the_default_limit_refuses() {
+        let app = atest::init_service(
+            App::new()
+                .app_data(aweb::JsonConfig::default().limit(crate::DEFAULT_JSON_LIMIT))
+                .route("/import", aweb::post().to(echo_import))
+                .route("/other", aweb::post().to(echo_default)),
+        )
+        .await;
+        let body = big_json(3 * 1024 * 1024);
+        for (path, want) in [("/other", S::PAYLOAD_TOO_LARGE), ("/import", S::OK)] {
+            let req = atest::TestRequest::post()
+                .uri(path)
+                .insert_header(("content-type", "application/json"))
+                .set_payload(body.clone())
+                .to_request();
+            let res = atest::call_service(&app, req).await;
+            assert_eq!(res.status(), want, "{path}");
+        }
+        // And the import route still has a ceiling.
+        let req = atest::TestRequest::post()
+            .uri("/import")
+            .insert_header(("content-type", "application/json"))
+            .set_payload(big_json(IMPORT_JSON_LIMIT + 1))
+            .to_request();
+        assert_eq!(
+            atest::call_service(&app, req).await.status(),
+            S::PAYLOAD_TOO_LARGE
+        );
+    }
 }

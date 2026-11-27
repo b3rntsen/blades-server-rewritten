@@ -37,4 +37,12 @@ COPY --from=build /src/migrations /opt/blades/migrations
 # HTTP REST (blades.bgs.services API) + the arena UDP/ENet host.
 EXPOSE 8080
 EXPOSE 7777/udp
+# Not root (M1, security review 2026-11-24). Nothing here needs it: both ports
+# are above 1024, /data/static is a read-only bind mount of world-readable files,
+# and the only thing the server writes is the optional combat trace directory
+# (ARENA_TRACE_DIR, a bind mount the host chowns to this uid). A fixed numeric
+# uid so the host side can chown that mount without knowing image internals.
+RUN groupadd --system --gid 10001 arena \
+ && useradd --system --uid 10001 --gid 10001 --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin arena
+USER 10001:10001
 ENTRYPOINT ["blades-server"]

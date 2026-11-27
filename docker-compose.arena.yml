@@ -25,6 +25,13 @@ services:
     volumes:
       - arena-db-data:/var/lib/postgresql/data
     mem_limit: 256m
+    # M1 (security review 2026-11-24). No cap_drop here: the postgres entrypoint
+    # starts as root and needs CHOWN/FOWNER/DAC_OVERRIDE/SETUID/SETGID to fix the
+    # data dir and drop to the postgres user, and pinning that cap list buys
+    # little. no-new-privileges still applies (su-exec calls setuid(), it does
+    # not rely on a setuid binary).
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 200
     # Same reasoning as arena-server: a connection or schema error raised during a
     # deploy is precisely the log a recreate would erase.
     logging:
@@ -47,9 +54,15 @@ services:
         condition: service_healthy
     environment:
       PGPASSWORD: ${ARENA_DB_PASSWORD:?set ARENA_DB_PASSWORD in arena.env}
+      # The password arena-server's own login role (arena_runtime) gets. Set
+      # here, on every deploy, by the ROLES step at the end of the entrypoint.
+      ARENA_RUNTIME_DB_PASSWORD: ${ARENA_RUNTIME_DB_PASSWORD:?set ARENA_RUNTIME_DB_PASSWORD in arena.env}
     volumes:
       - ./migrations:/migrations:ro
     networks: [arena_net]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 50
     # A real ledger, replacing "skip everything if the users table exists".
     #
     # The old rule meant this container did nothing on every deployment after
@@ -72,6 +85,79 @@ services:
       - |
         set -e
         PSQL="psql -h arena-db -U blades -d blades -v ON_ERROR_STOP=1 -tA"
+
+        # ROLES (H2, security review 2026-11-24). arena-server used to log in as
+        # `blades`, the cluster SUPERUSER: one SQL injection or a compromised
+        # process meant `COPY ... PROGRAM` (a shell in arena-db), reading files,
+        # and every database on the cluster. It now logs in as arena_runtime:
+        #
+        #   arena_owner    NOLOGIN. Owns every object in public.
+        #   arena_runtime  LOGIN, no superuser/createdb/createrole/replication/
+        #                  bypassrls. Member of arena_owner and runs AS it
+        #                  (ALTER ROLE ... SET role), so the startup DDL the
+        #                  server does (CREATE TABLE IF NOT EXISTS, CREATE INDEX
+        #                  on its own tables, CREATE OR REPLACE FUNCTION) keeps
+        #                  working, and what it creates is owned by arena_owner.
+        #
+        # `blades` stays the superuser for this migrator and for backups
+        # (pg_dump over the local socket). Converged on EVERY deploy, so a rebuilt
+        # box or a restored dump ends up the same; objects created by hand as
+        # `blades` are handed to arena_owner here too. The password comes in
+        # through the environment (\getenv), never argv.
+        converge_roles() {
+        psql -h arena-db -U blades -d blades -v ON_ERROR_STOP=1 -q <<'SQL'
+        \getenv runtime_pw ARENA_RUNTIME_DB_PASSWORD
+        SET lock_timeout = '10s';
+        DO $$roles$$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arena_owner') THEN
+            CREATE ROLE arena_owner NOLOGIN;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arena_runtime') THEN
+            CREATE ROLE arena_runtime LOGIN;
+          END IF;
+        END
+        $$roles$$;
+        ALTER ROLE arena_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        ALTER ROLE arena_runtime LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        ALTER ROLE arena_runtime PASSWORD :'runtime_pw';
+        GRANT arena_owner TO arena_runtime;
+        ALTER ROLE arena_runtime SET role = 'arena_owner';
+        GRANT CONNECT, TEMPORARY ON DATABASE blades TO arena_owner;
+        GRANT USAGE, CREATE ON SCHEMA public TO arena_owner;
+        DO $$own$$
+        DECLARE r record;
+        BEGIN
+          FOR r IN SELECT c.oid::regclass AS obj, c.relkind FROM pg_class c
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'public' AND c.relowner = 'blades'::regrole
+                     AND c.relkind IN ('r', 'p', 'v', 'm', 'f') LOOP
+            EXECUTE format('ALTER %s %s OWNER TO arena_owner',
+              CASE r.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW'
+                             WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END, r.obj);
+          END LOOP;
+          -- Sequences a column owns moved with their table above.
+          FOR r IN SELECT c.oid::regclass AS obj FROM pg_class c
+                   JOIN pg_namespace n ON n.oid = c.relnamespace
+                   WHERE n.nspname = 'public' AND c.relowner = 'blades'::regrole AND c.relkind = 'S'
+                     AND NOT EXISTS (SELECT 1 FROM pg_depend d
+                                     WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                                       AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')) LOOP
+            EXECUTE format('ALTER SEQUENCE %s OWNER TO arena_owner', r.obj);
+          END LOOP;
+          FOR r IN SELECT p.oid::regprocedure AS fn, p.prokind FROM pg_proc p
+                   JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public' AND p.proowner = 'blades'::regrole LOOP
+            EXECUTE format('ALTER %s %s OWNER TO arena_owner',
+              CASE r.prokind WHEN 'p' THEN 'PROCEDURE' WHEN 'a' THEN 'AGGREGATE' ELSE 'FUNCTION' END, r.fn);
+          END LOOP;
+        END
+        $$own$$;
+        ALTER DEFAULT PRIVILEGES FOR ROLE blades IN SCHEMA public GRANT ALL ON TABLES TO arena_owner;
+        ALTER DEFAULT PRIVILEGES FOR ROLE blades IN SCHEMA public GRANT ALL ON SEQUENCES TO arena_owner;
+        SQL
+        echo "[arena-migrate] roles converged (arena-server logs in as arena_runtime)"
+        }
         $$PSQL -c "CREATE TABLE IF NOT EXISTS schema_migrations (
                      version    text PRIMARY KEY,
                      applied_at timestamptz NOT NULL DEFAULT now())"
@@ -91,6 +177,7 @@ services:
             $$PSQL -c "INSERT INTO schema_migrations(version) VALUES ('$$v') ON CONFLICT DO NOTHING"
             echo "  adopted $$v"
           done
+          converge_roles
           exit 0
         fi
 
@@ -107,6 +194,8 @@ services:
           n=$$((n + 1))
         done
         echo "[arena-migrate] done ($$n newly applied)"
+
+        converge_roles
     restart: "no"
 
   arena-server:
@@ -166,6 +255,11 @@ services:
       ARENA_ACTIVE_MIN_H2H: ${ARENA_ACTIVE_MIN_H2H:-10}
       ARENA_ACTIVE_WINDOW_DAYS: ${ARENA_ACTIVE_WINDOW_DAYS:-28}
       ARENA_BOT_USER_IDS: ${ARENA_BOT_USER_IDS:-}
+      # WireGuard peers allowed to vouch for a client's device IP via the
+      # X-Newblades-Device-Ip header (d129/d133). Empty = trust nobody. It was
+      # hand-added to the box's root compose only; carried here so installing
+      # this file does not silently drop it.
+      ARENA_DEVICE_IP_TRUSTED_PEERS: ${ARENA_DEVICE_IP_TRUSTED_PEERS:-}
       # Dev override: pin EVERY anon login to this user (a Transfer'd character),
       # since there's no Bethesda/Google identity. Empty/unset = normal behaviour.
       ARENA_DEV_LOGIN_USER_ID: ${ARENA_DEV_LOGIN_USER_ID:-}
@@ -176,7 +270,7 @@ services:
       # Per-match key submission to the capture platform so OUR-server arena
       # matches become decryptable (POSTs each admitted peer's ChaCha20 key+nonce
       # to /api/arena/submit-key, reaching newblades-web by service name over the
-      # shared edge_net). ARENA_SUBMIT_KEYS=0 disables it; ARENA_SUBMIT_TOKEN is a
+      # shared nb_edge). ARENA_SUBMIT_KEYS=0 disables it; ARENA_SUBMIT_TOKEN is a
       # frida_submit_tokens bearer (REQUIRED for submission to actually happen —
       # mint one for a designated user; empty = submission silently off).
       ARENA_SUBMIT_KEYS: ${ARENA_SUBMIT_KEYS:-1}
@@ -216,7 +310,10 @@ services:
       # unprivileged local account can read via `ps aux`. This box also hosts
       # other services, so that was a real exposure rather than a theoretical
       # one.
-      ARENA_DATABASE_URL: postgres://blades:${ARENA_DB_PASSWORD:?set ARENA_DB_PASSWORD in arena.env}@arena-db:5432/blades
+      #
+      # arena_runtime, not the `blades` superuser (H2): see the ROLES step in
+      # arena-migrate, which creates the role and sets this password.
+      ARENA_DATABASE_URL: postgres://arena_runtime:${ARENA_RUNTIME_DB_PASSWORD:?set ARENA_RUNTIME_DB_PASSWORD in arena.env}@arena-db:5432/blades
       # Per-player arena combat tracing (reports #152/#163/#164: desync and the
       # end-of-match freeze). Writes one file per session under this directory.
       # Bounded in the binary -- 32 MiB per session, 512 MiB total -- so it cannot
@@ -244,7 +341,7 @@ services:
       - /var/lib/newblades/arena-traces:/data/arena-traces
     ports:
       # HTTP REST — bound to localhost; the newblades-web container reaches it
-      # over edge_net by service name (http://arena-server:8080), not this port.
+      # over nb_edge by service name (http://arena-server:8080), not this port.
       - "127.0.0.1:8087:8080"
       # Arena UDP/ENet — clients dial this. Firewall it to just you for now
       # (security-group / iptables), since the handshake is not yet authenticated.
@@ -277,13 +374,29 @@ services:
       driver: ${ARENA_LOG_DRIVER:-journald}
       options:
         tag: arena-server
-    networks: [arena_net, edge_net]
+    networks: [arena_net, nb_edge]
+    # M1 (security review 2026-11-24). The image runs as uid 10001; both ports
+    # are above 1024, so it needs no capabilities at all. Root filesystem
+    # read-only: the server writes only ARENA_TRACE_DIR (a bind mount the host
+    # chowns to 10001) and /tmp, a small tmpfs.
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    pids_limit: 512
 
 volumes:
   arena-db-data:
 
 networks:
   arena_net:
-  # Shared with newblades-web so it can POST imports to http://arena-server:8080.
-  edge_net:
+  # Newblades' side of the edge (H5, security review 2026-11-24): edge-nginx and
+  # newblades-web reach http://arena-server:8080 here. It replaces `edge_net`,
+  # which twitter's nginx is also on. Created by the web repo's
+  # edge/docker-compose.yml (172.30.0.0/24); it must exist before this file is
+  # used.
+  nb_edge:
     external: true
+    name: nb_edge
