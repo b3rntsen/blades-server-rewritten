@@ -68,6 +68,10 @@ pub struct MatchEconomyOutcome {
     /// owner-approved deviation from retail (#390/#391, 2026-10-16); see
     /// [`crate::arena::arena_bonus_rewards`]. 0 for an abandoned or voided match.
     pub gems: i64,
+    /// The December 2026 Sigil-per-fight for this match — identical to the value
+    /// on the op49 card (tracker #499, `arena_bonus_rewards::match_sigil`). 0
+    /// outside the window and for an abandoned or voided match.
+    pub sigil: i64,
     /// Whether this side FINISHED the fight (won or lost it; did not concede and
     /// was not voided as a no-show). Only a finished fight counts toward the
     /// per-account weapon gift ([`crate::arena::arena_fight_gift`]).
@@ -232,8 +236,68 @@ fn match_reward_grant(o: &MatchEconomyOutcome) -> RewardGrant {
             .entry(blades_lib::economy::GEMS)
             .or_insert(0) += o.gems as u64;
     }
+    // The December Sigil-per-fight (tracker #499), in the same transaction.
+    if o.sigil > 0 {
+        *reward
+            .currencies
+            .entry(blades_lib::economy::SIGIL)
+            .or_insert(0) += o.sigil as u64;
+    }
     reward.character_xp = o.character_xp.max(0) as u64;
     reward
+}
+
+/// Whether this fight's Sigil may still be credited, recording the fight if so.
+///
+/// A fight's result reaches the writer once: the engine queues it at the single
+/// step that sends the result card. This is the durable half of that promise —
+/// the character remembers the last fight a Sigil was credited for, so the same
+/// fight arriving again (a replayed queue entry, a second writer) credits
+/// nothing. One id is enough: a character's fights are sequential, so a repeat
+/// of a fight is a repeat of the latest one.
+///
+/// A match with no `gameSessionId` (a dev or harness match) has nothing to be
+/// recognised by and is credited as queued.
+fn claim_fight_sigil(
+    state: &mut blades_lib::server_state::ServerState,
+    game_session_id: Option<Uuid>,
+) -> bool {
+    match game_session_id {
+        Some(id) if state.arena_last_sigil_fight == Some(id) => false,
+        Some(id) => {
+            state.arena_last_sigil_fight = Some(id);
+            true
+        }
+        None => true,
+    }
+}
+
+/// Drop the fight Sigil from `reward` when this fight has already been
+/// credited one. Returns the Sigil the reward still carries.
+fn settle_fight_sigil(
+    reward: &mut RewardGrant,
+    o: &MatchEconomyOutcome,
+    state: &mut blades_lib::server_state::ServerState,
+) -> u64 {
+    if o.sigil <= 0 {
+        return 0;
+    }
+    if claim_fight_sigil(state, o.game_session_id) {
+        return o.sigil as u64;
+    }
+    let sigil = blades_lib::economy::SIGIL;
+    let left = reward
+        .currencies
+        .get(&sigil)
+        .copied()
+        .unwrap_or(0)
+        .saturating_sub(o.sigil as u64);
+    if left == 0 {
+        reward.currencies.remove(&sigil);
+    } else {
+        reward.currencies.insert(sigil, left);
+    }
+    0
 }
 
 fn promotion_needs_loot_marker(promo: &arena_ladder::PromotionRewards) -> bool {
@@ -352,6 +416,13 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                     ch.pvp_season_id,
                 );
                 let mut reward = match_reward_grant(&o);
+                let fight_sigil = settle_fight_sigil(&mut reward, &o, &mut entry.server_state.0);
+                if o.sigil > 0 && fight_sigil == 0 {
+                    warn!(
+                        "arena economy: fight {:?} already paid character {} its Sigil; not credited again",
+                        o.game_session_id, o.character_id
+                    );
+                }
                 let promotion_stackables = add_promotion_stackables(&mut reward, &promo);
                 let promotion_currencies = add_promotion_currencies(&mut reward, &promo);
                 let promotion_items = add_promotion_items(
@@ -563,6 +634,7 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 Ok(Some(AppliedOutcome {
                     fight_tally,
                     giveaway_gems: giveaway.map(|(_, g)| g).unwrap_or(0),
+                    fight_sigil,
                     character_id,
                     pre_trophies,
                     post_trophies,
@@ -646,6 +718,13 @@ async fn persist(pool: &DbPool, outcome: &MatchEconomyOutcome) -> Result<(), any
                 tally.fights
             ),
         }
+    }
+
+    if a.fight_sigil > 0 {
+        info!(
+            "arena fight sigil: character {} earned {} Sigil for finishing fight {:?}",
+            a.character_id, a.fight_sigil, outcome.game_session_id
+        );
     }
 
     if a.giveaway_gems > 0 {
@@ -1059,6 +1138,8 @@ struct AppliedOutcome {
     promotion_items: u64,
     /// Gems paid by an open Arena Giveaway window, 0 when none was running.
     giveaway_gems: i64,
+    /// The December Sigil-per-fight actually credited (tracker #499).
+    fight_sigil: u64,
     /// The account's fight count after this match and any weapon gift it minted;
     /// `None` when the fight did not count or could not be counted.
     fight_tally: Option<arena_fight_gift::FightTally>,
@@ -1087,6 +1168,7 @@ mod tests {
             gold: 14961,
             character_xp: 691,
             gems: 6,
+            sigil: 0,
             finished_fight: true,
             card_weapon: None,
             trophy_delta: 30,
@@ -1330,6 +1412,7 @@ mod tests {
             gold: 1_000,
             character_xp: 50,
             gems,
+            sigil: 0,
             finished_fight: gems > 0,
             card_weapon: None,
             trophy_delta: 0,
@@ -1374,6 +1457,88 @@ mod tests {
         // CONTROL: an abandoned match grants no Gems at all, not a zero entry.
         let reward = match_reward_grant(&plain_outcome(false, 0));
         assert!(!reward.currencies.contains_key(&GEMS));
+    }
+
+    /// The December Sigil-per-fight (tracker #499): the Sigil the engine priced
+    /// reaches the wallet through the same grant as the gold — one for the
+    /// winner, one for the loser, none when the engine priced none.
+    #[test]
+    fn a_priced_fight_sigil_is_credited_with_the_match_reward() {
+        use blades_lib::economy::{GEMS, SIGIL};
+        for win in [true, false] {
+            let mut o = plain_outcome(win, if win { 6 } else { 3 });
+            o.sigil = 1;
+            let reward = match_reward_grant(&o);
+            assert_eq!(reward.currencies.get(&SIGIL), Some(&1));
+            assert_eq!(
+                reward.currencies.get(&GEMS),
+                Some(&if win { 6 } else { 3 }),
+                "the Gems are untouched"
+            );
+            assert_eq!(
+                reward.currencies.get(&ARENA_GOLD_CURRENCY_UUID_PARSED),
+                Some(&1_000),
+                "the gold is untouched"
+            );
+        }
+        // CONTROL: no Sigil priced — every fight outside December — no entry.
+        let reward = match_reward_grant(&plain_outcome(true, 6));
+        assert!(!reward.currencies.contains_key(&SIGIL));
+    }
+
+    /// IDEMPOTENT PER FIGHT. The same fight reaching the writer again — a
+    /// replayed queue entry — credits no second Sigil, while the next fight
+    /// does, and so does the one after it.
+    #[test]
+    fn a_fight_is_credited_its_sigil_once() {
+        use blades_lib::economy::SIGIL;
+        use blades_lib::server_state::ServerState;
+        let mut state = ServerState::default();
+        let fight = |n: u128| {
+            let mut o = plain_outcome(true, 6);
+            o.sigil = 1;
+            o.game_session_id = Some(Uuid::from_u128(n));
+            o
+        };
+        let mut credited = 0u64;
+        // Fight 1, fight 1 again (twice), fight 2, fight 2 again, fight 3.
+        for n in [1, 1, 1, 2, 2, 3] {
+            let o = fight(n);
+            let mut reward = match_reward_grant(&o);
+            let paid = settle_fight_sigil(&mut reward, &o, &mut state);
+            assert_eq!(reward.currencies.get(&SIGIL).copied().unwrap_or(0), paid);
+            assert!(
+                reward
+                    .currencies
+                    .contains_key(&ARENA_GOLD_CURRENCY_UUID_PARSED),
+                "only the Sigil is withheld from a repeat"
+            );
+            credited += paid;
+        }
+        assert_eq!(credited, 3, "three fights, three Sigils");
+        assert_eq!(state.arena_last_sigil_fight, Some(Uuid::from_u128(3)));
+    }
+
+    /// A fight that pays no Sigil leaves the remembered fight alone, so it
+    /// cannot open a gap a repeat slips through.
+    #[test]
+    fn a_fight_without_a_sigil_does_not_touch_the_record() {
+        use blades_lib::server_state::ServerState;
+        let mut state = ServerState::default();
+        let mut o = plain_outcome(true, 6);
+        o.game_session_id = Some(Uuid::from_u128(9));
+        let mut reward = match_reward_grant(&o);
+        assert_eq!(settle_fight_sigil(&mut reward, &o, &mut state), 0);
+        assert_eq!(state.arena_last_sigil_fight, None);
+        // …and rows written before the field existed load with none recorded
+        // and do not carry the key.
+        let old: ServerState = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.arena_last_sigil_fight, None);
+        assert!(
+            !serde_json::to_string(&old)
+                .unwrap()
+                .contains("arenaLastSigilFight")
+        );
     }
 
     async fn h2h_fixture() -> Option<AsyncPgConnection> {
@@ -1461,6 +1626,7 @@ mod tests {
             promotion_currencies: 0,
             promotion_items: 0,
             giveaway_gems: 0,
+            fight_sigil: 0,
             fight_tally: None,
         }
     }
@@ -1478,6 +1644,7 @@ mod tests {
             gold: 0,
             character_xp: 0,
             gems: 0,
+            sigil: 0,
             finished_fight: true,
             card_weapon: None,
             trophy_delta: if win { 24 } else { -24 },

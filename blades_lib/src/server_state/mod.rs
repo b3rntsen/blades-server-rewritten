@@ -230,6 +230,12 @@ pub struct ServerState {
     pub arena_last_elder_two_chest_at_secs: i64,
     #[serde(default)]
     pub arena_last_legendary_chest_at_secs: i64,
+    /// The `gameSessionId` of the last arena fight this character was credited
+    /// the December 2026 Sigil-per-fight for (tracker #499). Server-only
+    /// idempotency state: the same fight reaching the writer again credits
+    /// nothing. Rows written before the field load `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arena_last_sigil_fight: Option<Uuid>,
     /// Previous names for support-driven live-character renames.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_character_renames: Vec<CharacterRenameAuditEntry>,

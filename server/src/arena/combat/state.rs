@@ -1279,6 +1279,13 @@ pub struct Loadout {
     /// Pre-match Gems balance, so the op49 wallet can show the credited Gems
     /// (owner-approved arena Gems, #390/#391).
     pub wallet_gems: u64,
+    /// Pre-match Sigil balance, so the op49 wallet can show the December
+    /// Sigil-per-fight credit (tracker #499).
+    pub wallet_sigil: u64,
+    /// This fighter is a marked TEST character rehearsing the Sigil-per-fight
+    /// (`arena_bonus_rewards::fight_sigil_rehearsal_enabled`): paid outside the
+    /// December window. False for everyone unless the rehearsal switch is on.
+    pub fight_sigil_rehearsal: bool,
     pub character_experience: u64,
     pub backpack_version: u64,
     pub treasury_version: u64,
