@@ -191,20 +191,30 @@ async fn bnet_log_in(
         .get_session_or_error()
         .ok()
         .map(|s| (s.session_id, s.session.user_id));
+    // The device this client's own session was opened with — the only device a
+    // password sign-in may re-bind. Never the `deviceId` in this body.
+    let session_device = current_session
+        .get_session_or_error()
+        .ok()
+        .and_then(SessionDevice::of);
     let mut conn = app_state.db_pool.get().await.unwrap();
 
+    // Set only on the username + password branch. The persisted-token branch is
+    // a bearer, not a password, and never re-binds a device held by a real
+    // account.
+    let mut password_proof: Option<PasswordProof> = None;
     let (user_id, log_name) = if let (Some(username_raw), Some(password)) =
         (body.username.as_deref(), body.password.as_deref())
     {
         // One 401 for "no such user", "wrong password" and "not a credential
-        // at all"; see `credentials::check_login` for what keeps them
-        // indistinguishable and off the async workers.
-        let Some(user_id) =
-            crate::credentials::check_login(&mut conn, username_raw, password).await
-        else {
+        // at all"; see `credentials::check_login` (behind `PasswordProof::verify`)
+        // for what keeps them indistinguishable and off the async workers.
+        let Some(proof) = PasswordProof::verify(&mut conn, username_raw, password).await else {
             return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
         };
         let username = crate::credentials::normalise_username(username_raw);
+        let user_id = proof.user_id();
+        password_proof = Some(proof);
         (user_id, Some(username))
     } else if let Some(login_token) = body.login_token.as_deref() {
         // This is the normal cold-start request after a successful BNet link:
@@ -241,6 +251,10 @@ async fn bnet_log_in(
             .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 111))?
     };
 
+    if let (Some(proof), Some(device)) = (password_proof.as_ref(), session_device.as_ref()) {
+        reclaim_device_logged(&mut conn, proof, device, "bnet/login").await;
+    }
+
     if let (Some((_, source_user_id)), Some(device_id)) =
         (caller_session, caller_device_id.as_deref())
     {
@@ -256,11 +270,12 @@ async fn bnet_log_in(
         }
     }
 
-    let session = Arc::new(Session::new(
-        user.id,
-        user.secret_id,
-        app_state.session_store.ttl,
-    ));
+    // Same client, same device: the new session inherits the device key of the
+    // one it was made under.
+    let session = Arc::new(
+        Session::new(user.id, user.secret_id, app_state.session_store.ttl)
+            .with_device_id(session_device.map(|d| d.device_id)),
+    );
     let session_id = app_state.session_store.store_new_session(session.clone());
     crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
     // The caller's own session is the same device, not "another device": keep it
@@ -362,14 +377,15 @@ async fn resolve_link(
     app_state: &Arc<ServerGlobal>,
     username_raw: &str,
     password: &str,
-) -> Result<(Uuid, Uuid, Arc<Session>), BladeApiError> {
+    session_device: Option<&SessionDevice>,
+) -> Result<(PasswordProof, Uuid, Arc<Session>), BladeApiError> {
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     // The same check as bnet_log_in, by construction.
-    let Some(user_id) = crate::credentials::check_login(&mut conn, username_raw, password).await
-    else {
+    let Some(proof) = PasswordProof::verify(&mut conn, username_raw, password).await else {
         return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 112));
     };
+    let user_id = proof.user_id();
 
     let user: UserDBEntry = {
         use crate::schema::users::dsl as u;
@@ -381,12 +397,11 @@ async fn resolve_link(
             .map_err(|_| BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 113))?
     };
 
-    let session = Arc::new(Session::new(
-        user.id,
-        user.secret_id,
-        app_state.session_store.ttl,
-    ));
-    Ok((user.id, user.secret_id, session))
+    let session = Arc::new(
+        Session::new(user.id, user.secret_id, app_state.session_store.ttl)
+            .with_device_id(session_device.map(|d| d.device_id.clone())),
+    );
+    Ok((proof, user.secret_id, session))
 }
 
 /// Is the account the client is already signed in as the same one the
@@ -419,12 +434,21 @@ fn is_same_account(selected: Option<&str>, public_id: Uuid, secret_id: Uuid) -> 
 /// The ownership predicate is the safety rail: link may claim an unowned row or
 /// move one owned by the authenticated source account, but it can never take a
 /// device that is already bound to a third account.
+///
+/// And it only sweeps for a source that is somebody's anonymous installation.
+/// Since d124 the source may legitimately be another member's REAL account (a
+/// phone that was bound to them by mistake, #607): the one device in the
+/// player's hand moves through `reclaim_device_for_password_login`, and that
+/// member's other phones must stay theirs. So a source that has a login of its
+/// own is never swept here, and `bind_linked_devices` refuses a Discord-owned
+/// one before this statement runs.
 const LINK_DEVICE_BIND_SQL: &str = "UPDATE device_bindings AS d \
      SET user_id = $2, bound_at = now(), last_seen = now() \
      FROM users AS source \
      WHERE source.id = $1 \
        AND COALESCE(source.data->'gp_deviceids', '[]'::jsonb) ? d.device_id \
-       AND (d.user_id IS NULL OR d.user_id = $1)";
+       AND (d.user_id IS NULL OR d.user_id = $1) \
+       AND NOT EXISTS (SELECT 1 FROM arena_credentials ac WHERE ac.user_id = $1)";
 
 /// Record a device id on an account that just PROVED it owns itself.
 ///
@@ -475,6 +499,303 @@ const MOVE_THROWAWAY_DEVICE_CLAIM_SQL: &str = "WITH throwaway AS ( \
       WHERE d.user_id = throwaway.user_id \
         AND d.device_id = $3 \
       RETURNING d.device_id";
+
+/// The binding lookup of `auth/anon`: which account does this device land on?
+/// A constant so the tests of the password re-bind can ask the question the
+/// next cold start will ask, with the statement it will ask it with.
+const BOUND_USER_FOR_DEVICE_SQL: &str =
+    "SELECT user_id FROM device_bindings WHERE device_id = $1 AND user_id IS NOT NULL";
+
+/// A device id worth keying a binding on, or `None`.
+///
+/// One rule with the login paths (security review M7): a client id must pass
+/// [`device_id_is_plausible`] — the same test `client_device_id` applies to a
+/// body `deviceId` — so an id many devices could send (all zeros, short,
+/// repeated, a spelled-out null) never keys one account. The only other
+/// accepted shape is a network address, which reaches a session solely through
+/// [`request_source_wg_ip`], i.e. vouched for by our own proxy.
+fn usable_device_id(raw: Option<&str>) -> Option<String> {
+    let id = raw?.trim();
+    if let Ok(addr) = id.parse::<std::net::IpAddr>() {
+        return (!addr.is_unspecified() && !addr.is_loopback() && !addr.is_multicast())
+            .then(|| id.to_string());
+    }
+    if !device_id_is_plausible(id) || id.to_ascii_lowercase().contains("null") {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+/// The device the calling client's session was opened with, and the account
+/// that session is signed in as. Built only from an authenticated session
+/// (`SessionDevice::of`) — there is no constructor that takes a device id from
+/// a request body or a header.
+#[derive(Clone, Debug)]
+struct SessionDevice {
+    session_user_id: Uuid,
+    device_id: String,
+}
+
+impl SessionDevice {
+    fn of(caller: &crate::session::SessionLookedUp) -> Option<Self> {
+        Some(Self {
+            session_user_id: caller.session.user_id,
+            device_id: usable_device_id(caller.session.device_id.as_deref())?,
+        })
+    }
+}
+
+mod password_proof {
+    use super::*;
+
+    /// Evidence that THIS request carried the right password for `user_id`.
+    ///
+    /// The field is private to this module and `verify` is the only thing that
+    /// builds one, so "a device binding moved without a verified password" is
+    /// not a mistake a later edit can make by accident: the function that moves
+    /// a binding takes a `&PasswordProof` and nothing else will do.
+    pub(super) struct PasswordProof {
+        user_id: Uuid,
+    }
+
+    impl PasswordProof {
+        /// `None` for an unknown username, a wrong password AND an
+        /// out-of-bounds credential, all through `credentials::check_login`:
+        /// the same PBKDF2 work either way, on the blocking pool, so answering
+        /// faster for an unknown username cannot enumerate who plays here.
+        pub(super) async fn verify(
+            conn: &mut diesel_async::AsyncPgConnection,
+            username_raw: &str,
+            password: &str,
+        ) -> Option<Self> {
+            crate::credentials::check_login(conn, username_raw, password)
+                .await
+                .map(|user_id| Self { user_id })
+        }
+
+        pub(super) fn user_id(&self) -> Uuid {
+            self.user_id
+        }
+    }
+}
+use password_proof::PasswordProof;
+
+/// What a password sign-in did to the binding of the device it was made on.
+#[derive(Debug, PartialEq, Eq)]
+enum DeviceReclaim {
+    /// The device was already this account's. Nothing changed but `last_seen`;
+    /// in particular its `active_alt_uuid` is kept — that is this account's own
+    /// choice of alt on this phone.
+    AlreadyBound,
+    /// The holder changed, and `device_binding_moves` says so.
+    Moved {
+        from: Option<Uuid>,
+        from_kind: &'static str,
+    },
+    /// The device is held by an account that is neither the one signing in nor
+    /// the one this client's session belongs to. Nothing changed.
+    Refused { holder: Uuid },
+}
+
+/// The binding row as it stands, locked, with the holder classified.
+/// `holder_is_throwaway` uses the same definition as
+/// `MOVE_THROWAWAY_DEVICE_CLAIM_SQL`: no login of its own and no captured or
+/// renamed character. It only labels the audit row — it decides nothing.
+const LOCK_DEVICE_BINDING_SQL: &str = "SELECT d.user_id, \
+         (d.user_id IS NOT NULL \
+          AND NOT EXISTS (SELECT 1 FROM arena_credentials ac WHERE ac.user_id = d.user_id) \
+          AND NOT EXISTS (SELECT 1 FROM characters c \
+                           WHERE c.user_id = d.user_id \
+                             AND (c.source_alt_uuid IS NOT NULL \
+                                  OR COALESCE(c.character->>'name', '') <> $2))) \
+             AS holder_is_throwaway \
+       FROM device_bindings d \
+      WHERE d.device_id = $1 \
+        FOR UPDATE OF d";
+
+/// The audit row, copied from the binding BEFORE it changes, so `prior_*` are
+/// the values an undo needs.
+const RECORD_DEVICE_MOVE_SQL: &str = "INSERT INTO device_binding_moves \
+         (device_id, from_user_id, from_kind, to_user_id, session_user_id, path, \
+          prior_bound_at, prior_active_alt_uuid, source_wg_ip) \
+     SELECT d.device_id, d.user_id, $2, $3, $4, $5, d.bound_at, d.active_alt_uuid, d.source_wg_ip \
+       FROM device_bindings d \
+      WHERE d.device_id = $1";
+
+/// Re-point the one row. `active_alt_uuid` is cleared because it names one of
+/// the PREVIOUS holder's alts and means nothing on the new account (the web
+/// alt switcher only ever writes it for the row's own user). `source_wg_ip`
+/// and `platform` describe the handset, not the account, and stay.
+///
+/// `user_id IS NOT DISTINCT FROM $3` is a compare-and-swap on the holder that
+/// was read under the lock: belt and braces, since the row is locked.
+const MOVE_DEVICE_BINDING_SQL: &str = "UPDATE device_bindings \
+        SET user_id = $2, bound_at = now(), last_seen = now(), active_alt_uuid = NULL \
+      WHERE device_id = $1 AND user_id IS NOT DISTINCT FROM $3";
+
+#[derive(diesel::QueryableByName)]
+struct LockedBinding {
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    user_id: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    holder_is_throwaway: bool,
+}
+
+/// A correct password, typed on a device, makes that device the account's
+/// (owner decision d124, tracker #607).
+///
+/// BEFORE: a device held by a real account could not be moved by anything but a
+/// hand-written UPDATE. A phone claimed by the wrong member — in #607, picked
+/// from the website's device list — therefore stayed theirs: its owner's
+/// password login worked for one session and the next cold start went back to
+/// the other member's character.
+///
+/// NOW: holding the device and knowing the password outranks an earlier claim.
+///
+/// What keeps that from being a way to take somebody's phone:
+///
+///   - `proof` exists only if this request's password was verified.
+///   - `device` exists only as a property of the caller's authenticated
+///     session, recorded when that session was opened (`Session::device_id`),
+///     and only if it is a real id (`usable_device_id`). No request names the
+///     device to move.
+///   - The current holder must be nobody, the account signing in, or the
+///     account the caller's session is signed in AS. An anonymous cold start
+///     resolves a bound device to its holder, so on the device itself the last
+///     is always true; a session that says otherwise is stale (the device was
+///     re-claimed since) and is refused rather than believed.
+///   - Exactly one row changes. The previous holder's characters, alts, guild
+///     seat, sessions and other devices are not read, let alone written.
+///   - The audit row and the move are one transaction: there is no move
+///     without its record.
+async fn reclaim_device_for_password_login(
+    conn: &mut diesel_async::AsyncPgConnection,
+    proof: &PasswordProof,
+    device: &SessionDevice,
+    path: &'static str,
+) -> Result<DeviceReclaim, diesel::result::Error> {
+    let target = proof.user_id();
+    let device_id = device.device_id.clone();
+    let session_user_id = device.session_user_id;
+    conn.transaction(move |conn| {
+        Box::pin(async move {
+            let locked: Option<LockedBinding> = diesel::sql_query(LOCK_DEVICE_BINDING_SQL)
+                .bind::<diesel::sql_types::Text, _>(device_id.clone())
+                .bind::<diesel::sql_types::Text, _>(crate::character::STARTER_NAME)
+                .get_result(conn)
+                .await
+                .optional()?;
+
+            let (holder, from_kind) = match locked {
+                // `auth/anon` writes a row for every device it sees, so a
+                // session with a device normally has one. If it does not, make
+                // it — and if another request made it first, change nothing.
+                None => {
+                    let created = diesel::sql_query(
+                        "INSERT INTO device_bindings (device_id, last_seen) VALUES ($1, now()) \
+                         ON CONFLICT (device_id) DO NOTHING",
+                    )
+                    .bind::<diesel::sql_types::Text, _>(device_id.clone())
+                    .execute(conn)
+                    .await?;
+                    if created == 0 {
+                        return Err(diesel::result::Error::RollbackTransaction);
+                    }
+                    (None, "unclaimed")
+                }
+                Some(row) => match row.user_id {
+                    Some(holder) if holder == target => {
+                        diesel::sql_query(
+                            "UPDATE device_bindings SET last_seen = now() WHERE device_id = $1",
+                        )
+                        .bind::<diesel::sql_types::Text, _>(device_id.clone())
+                        .execute(conn)
+                        .await?;
+                        return Ok(DeviceReclaim::AlreadyBound);
+                    }
+                    Some(holder) if holder != session_user_id => {
+                        return Ok(DeviceReclaim::Refused { holder });
+                    }
+                    Some(holder) if row.holder_is_throwaway => (Some(holder), "throwaway"),
+                    Some(holder) => (Some(holder), "account"),
+                    None => (None, "unclaimed"),
+                },
+            };
+
+            diesel::sql_query(RECORD_DEVICE_MOVE_SQL)
+                .bind::<diesel::sql_types::Text, _>(device_id.clone())
+                .bind::<diesel::sql_types::Text, _>(from_kind)
+                .bind::<diesel::sql_types::Uuid, _>(target)
+                .bind::<diesel::sql_types::Uuid, _>(session_user_id)
+                .bind::<diesel::sql_types::Text, _>(path)
+                .execute(conn)
+                .await?;
+            let moved = diesel::sql_query(MOVE_DEVICE_BINDING_SQL)
+                .bind::<diesel::sql_types::Text, _>(device_id.clone())
+                .bind::<diesel::sql_types::Uuid, _>(target)
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(holder)
+                .execute(conn)
+                .await?;
+            if moved != 1 {
+                // Not reachable while the row is locked; if it ever is, the
+                // audit row must not survive a move that did not happen.
+                return Err(diesel::result::Error::RollbackTransaction);
+            }
+            Ok(DeviceReclaim::Moved {
+                from: holder,
+                from_kind,
+            })
+        })
+    })
+    .await
+}
+
+/// Only enough of a device key to recognise it in a log: it is a stable
+/// per-device identifier, and the full value is in `device_binding_moves`.
+fn device_log_tag(device_id: &str) -> String {
+    let head: String = device_id.chars().take(8).collect();
+    format!("{head}…")
+}
+
+/// `reclaim_device_for_password_login`, with the outcome written to the log and
+/// a failure reduced to a warning. Best-effort on purpose, like every other
+/// device-binding step on these paths: the password was right, so the sign-in
+/// must succeed even if the binding could not be moved — and a failed
+/// transaction has moved nothing.
+async fn reclaim_device_logged(
+    conn: &mut diesel_async::AsyncPgConnection,
+    proof: &PasswordProof,
+    device: &SessionDevice,
+    path: &'static str,
+) {
+    let tag = device_log_tag(&device.device_id);
+    let to = proof.user_id();
+    match reclaim_device_for_password_login(conn, proof, device, path).await {
+        Ok(DeviceReclaim::AlreadyBound) => {}
+        Ok(DeviceReclaim::Moved {
+            from: Some(from),
+            from_kind: "account",
+        }) => log::info!(
+            "device binding TAKEN from another account by credential sign-in: device {tag} from \
+             user {from} to user {to} (path: {path}; recorded in device_binding_moves)"
+        ),
+        Ok(DeviceReclaim::Moved { from, from_kind }) => log::info!(
+            "device binding moved by credential sign-in: device {tag} from {from_kind} {from:?} to \
+             user {to} (path: {path}; recorded in device_binding_moves)"
+        ),
+        Ok(DeviceReclaim::Refused { holder }) => log::warn!(
+            "device binding NOT moved by credential sign-in: device {tag} is held by user {holder}, \
+             which is neither user {to} nor the account this client's session belongs to \
+             (user {}); the session is stale — a relaunch and a new sign-in will move it \
+             (path: {path})",
+            device.session_user_id
+        ),
+        Err(error) => log::warn!(
+            "device binding could not be moved by credential sign-in: device {tag} to user {to} \
+             (path: {path}): {error}"
+        ),
+    }
+}
 
 /// Peers allowed to vouch for a device with `X-Newblades-Device-Ip`.
 ///
@@ -732,7 +1053,7 @@ async fn bind_linked_devices(
     source_user_id: Uuid,
     linked_user_id: Uuid,
 ) -> Result<usize, diesel::result::Error> {
-    if source_user_id == linked_user_id {
+    if source_user_id == linked_user_id || is_discord_owned(source_user_id) {
         return Ok(0);
     }
 
@@ -763,8 +1084,18 @@ async fn bnet_link(
         }
     }
     let body = body.into_inner();
-    let (user_id, secret_id, session) =
-        resolve_link(&app_state, &body.username, &body.password).await?;
+    let session_device = current_session
+        .get_session_or_error()
+        .ok()
+        .and_then(SessionDevice::of);
+    let (proof, secret_id, session) = resolve_link(
+        &app_state,
+        &body.username,
+        &body.password,
+        session_device.as_ref(),
+    )
+    .await?;
+    let user_id = proof.user_id();
 
     // The client names the account it is currently signed in as by its public
     // session `userId` on current builds. Older payloads may still carry the
@@ -819,6 +1150,15 @@ async fn bnet_link(
                 login_token,
             },
         }));
+    }
+
+    // The link completes here (no picker, no `/force` to follow), and the
+    // password has been verified: this is the same proof as the other two
+    // doors, so it settles the device the same way. The conflict branch above
+    // returned before this on purpose — nothing moves until the player answers.
+    if let Some(device) = session_device.as_ref() {
+        let mut conn = app_state.db_pool.get().await.unwrap();
+        reclaim_device_logged(&mut conn, &proof, device, "bnet/link").await;
     }
 
     let session_id = app_state.session_store.store_new_session(session.clone());
@@ -896,8 +1236,13 @@ fn forced_link_may_park(
     if is_unplayed_starter(displaced_name, displaced_level) {
         return true;
     }
-    let discord_owned = |id: Uuid| id.get_version_num() == 5;
-    !(discord_owned(played_user_id) && discord_owned(linked_user_id))
+    !(is_discord_owned(played_user_id) && is_discord_owned(linked_user_id))
+}
+
+/// A website account: its id is a v5 UUID derived from the Discord id, where a
+/// device/anonymous account gets a random v4.
+fn is_discord_owned(id: Uuid) -> bool {
+    id.get_version_num() == 5
 }
 
 fn is_unplayed_starter(name: Option<&str>, level: i32) -> bool {
@@ -1137,12 +1482,20 @@ async fn bnet_link_force(
     // The body names both profiles, but `selectedUserId` is client-controlled
     // and may be either side of the conflict. The authenticated session is the
     // authoritative source account whose installation is being linked.
-    let source_user_id = current_session.get_session_or_error()?.session.user_id;
+    let caller = current_session.get_session_or_error()?;
+    let source_user_id = caller.session.user_id;
+    let session_device = SessionDevice::of(caller);
     let body = body.into_inner();
     let caller_device_id =
         caller_device_identity(&req, "account link (forced)", body.device_id.as_deref());
-    let (user_id, secret_id, session) =
-        resolve_link(&app_state, &body.username, &body.password).await?;
+    let (proof, secret_id, session) = resolve_link(
+        &app_state,
+        &body.username,
+        &body.password,
+        session_device.as_ref(),
+    )
+    .await?;
+    let user_id = proof.user_id();
 
     // The player's answer, which this endpoint used to discard (#185).
     let keep_played =
@@ -1161,6 +1514,9 @@ async fn bnet_link_force(
                 3,
                 LINK_FROM_LOCK_CHILD,
             ));
+        }
+        if let Some(device) = session_device.as_ref() {
+            reclaim_device_logged(&mut conn, &proof, device, "bnet/link/force").await;
         }
         if let Some(device_id) = caller_device_id.as_deref()
             && let Err(error) =
@@ -1369,6 +1725,11 @@ async fn anon_login_inner(
     let source_wg_ip: Option<String> = request_source_wg_ip(&req);
     let effective_device_id: Option<String> =
         info.0.device_id.clone().or_else(|| source_wg_ip.clone());
+    // What the sessions minted below remember as "the device I was opened
+    // with". It is the same key the binding lookup uses, so a later password
+    // sign-in under this session re-binds exactly the row the NEXT cold start
+    // will read. `None` for a null/empty/placeholder id: nothing to re-bind.
+    let session_device: Option<String> = usable_device_id(effective_device_id.as_deref());
     // ONE line per anon login saying how (and whether) this client can be
     // recognised. Without it a player reporting "it gives me a new character
     // every launch" is indistinguishable from one whose game never reached us at
@@ -1433,14 +1794,12 @@ async fn anon_login_inner(
             user_id: Uuid,
         }
         // Primary lookup: by the effective device key (stable hash or WG IP).
-        let bound: Option<BoundUser> = diesel::sql_query(
-            "SELECT user_id FROM device_bindings WHERE device_id = $1 AND user_id IS NOT NULL",
-        )
-        .bind::<diesel::sql_types::Text, _>(device_id_val.clone())
-        .get_result(&mut conn)
-        .await
-        .optional()
-        .unwrap_or(None);
+        let bound: Option<BoundUser> = diesel::sql_query(BOUND_USER_FOR_DEVICE_SQL)
+            .bind::<diesel::sql_types::Text, _>(device_id_val.clone())
+            .get_result(&mut conn)
+            .await
+            .optional()
+            .unwrap_or(None);
         // Secondary lookup (Fix 1): when the effective key is a WG IP and the
         // primary lookup found nothing, try to find a stable-hash binding whose
         // `source_wg_ip` matches this IP. This fires when a device was bound
@@ -1487,11 +1846,10 @@ async fn anon_login_inner(
                 .await
                 .unwrap();
             if let Some(user) = result.get(0) {
-                let session = Arc::new(Session::new(
-                    user.id,
-                    user.secret_id,
-                    app_state.session_store.ttl,
-                ));
+                let session = Arc::new(
+                    Session::new(user.id, user.secret_id, app_state.session_store.ttl)
+                        .with_device_id(session_device.clone()),
+                );
                 let session_id = app_state.session_store.store_new_session(session.clone());
                 crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref())
                     .await;
@@ -1605,11 +1963,10 @@ async fn anon_login_inner(
         }
 
         //TODO: some actual form of authentification.
-        let session = Arc::new(Session::new(
-            user.id,
-            user.secret_id,
-            app_state.session_store.ttl,
-        ));
+        let session = Arc::new(
+            Session::new(user.id, user.secret_id, app_state.session_store.ttl)
+                .with_device_id(session_device.clone()),
+        );
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         crate::session::claim_account_for_this_device(
@@ -1703,11 +2060,10 @@ async fn anon_login_inner(
                     crate::log_redact::device_for_log(this_device),
                     user.id
                 );
-                let session = Arc::new(Session::new(
-                    user.id,
-                    user.secret_id,
-                    app_state.session_store.ttl,
-                ));
+                let session = Arc::new(
+                    Session::new(user.id, user.secret_id, app_state.session_store.ttl)
+                        .with_device_id(session_device.clone()),
+                );
                 let session_id = app_state.session_store.store_new_session(session.clone());
                 crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref())
                     .await;
@@ -1774,11 +2130,10 @@ async fn anon_login_inner(
             .await
             .unwrap();
 
-        let session = Arc::new(Session::new(
-            new_user_id,
-            new_user_secret_id,
-            app_state.session_store.ttl,
-        ));
+        let session = Arc::new(
+            Session::new(new_user_id, new_user_secret_id, app_state.session_store.ttl)
+                .with_device_id(session_device.clone()),
+        );
         let session_id = app_state.session_store.store_new_session(session.clone());
         crate::session::persist_session(&app_state.db_pool, session_id, session.as_ref()).await;
         crate::session::claim_account_for_this_device(
@@ -1996,6 +2351,11 @@ mod link_tests {
             LINK_DEVICE_BIND_SQL.contains("d.user_id IS NULL OR d.user_id = $1"),
             "a link must never steal a device already owned by somebody else"
         );
+        assert!(
+            LINK_DEVICE_BIND_SQL
+                .contains("NOT EXISTS (SELECT 1 FROM arena_credentials ac WHERE ac.user_id = $1)"),
+            "a source account with its own login keeps its other devices (d124)"
+        );
     }
 
     /// Run the exact production UPDATE against Postgres. CI supplies
@@ -2027,6 +2387,12 @@ mod link_tests {
             .execute(&mut conn)
             .await
             .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE arena_credentials (username TEXT PRIMARY KEY, user_id UUID NOT NULL)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
         diesel::sql_query(
             "CREATE TABLE device_bindings ( \
                  device_id TEXT PRIMARY KEY, \
@@ -2222,7 +2588,14 @@ mod device_identity_claim_tests {
             .await
             .unwrap();
         for stmt in [
-            "CREATE TABLE users (id UUID PRIMARY KEY)",
+            "CREATE TABLE users (id UUID PRIMARY KEY, data JSONB NOT NULL DEFAULT '{}')",
+            "CREATE TABLE sessions (
+                 session_id UUID PRIMARY KEY,
+                 user_id UUID NOT NULL,
+                 secret_user_id UUID NOT NULL,
+                 extra_secret UUID NOT NULL,
+                 expires_at TIMESTAMPTZ NOT NULL,
+                 authenticated_at TIMESTAMPTZ NOT NULL DEFAULT now())",
             "CREATE TABLE arena_credentials (
                  username TEXT PRIMARY KEY,
                  user_id UUID NOT NULL REFERENCES users(id),
@@ -2243,8 +2616,16 @@ mod device_identity_claim_tests {
         ] {
             diesel::sql_query(stmt).execute(&mut conn).await.unwrap();
         }
+        // The audit table and `sessions.device_id` come from the migration that
+        // ships them, so a typo there fails here rather than on the box.
+        diesel_async::SimpleAsyncConnection::batch_execute(&mut conn, MOVES_MIGRATION)
+            .await
+            .expect("migration 2026-11-23 device_binding_moves must apply");
         Some(conn)
     }
+
+    const MOVES_MIGRATION: &str =
+        include_str!("../../migrations/2026-11-23-000000-0000_device_binding_moves/up.sql");
 
     async fn add_user(conn: &mut AsyncPgConnection) -> Uuid {
         let id = Uuid::new_v4();
@@ -2373,6 +2754,726 @@ mod device_identity_claim_tests {
             0
         );
         assert_eq!(owner_of(&mut conn, "phone").await, Some(source));
+    }
+
+    // ---------------------------------------------------------------- d124
+    // A password sign-in on a device makes that device the account's.
+
+    const PASSWORD: &str = "correct horse battery";
+
+    /// An account with a login of its own. Returns its user id.
+    async fn add_account(conn: &mut AsyncPgConnection, username: &str) -> Uuid {
+        let id = add_user(conn).await;
+        diesel::sql_query(
+            "INSERT INTO arena_credentials (username, user_id, password_hash) VALUES ($1, $2, $3)",
+        )
+        .bind::<diesel::sql_types::Text, _>(username.to_string())
+        .bind::<diesel::sql_types::Uuid, _>(id)
+        .bind::<diesel::sql_types::Text, _>(crate::credentials::hash_password(PASSWORD))
+        .execute(conn)
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn add_character(conn: &mut AsyncPgConnection, owner: Uuid, name: &str, alt: bool) {
+        diesel::sql_query(
+            "INSERT INTO characters (id, user_id, character, source_alt_uuid)
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(Uuid::new_v4())
+        .bind::<diesel::sql_types::Uuid, _>(owner)
+        .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"name": name, "level": 48}))
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(alt.then(Uuid::new_v4))
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    async fn bind(conn: &mut AsyncPgConnection, device: &str, owner: Option<Uuid>) {
+        diesel::sql_query(
+            "INSERT INTO device_bindings (device_id, user_id, bound_at, source_wg_ip)
+             VALUES ($1, $2, now() - interval '50 days', '10.9.0.7')",
+        )
+        .bind::<diesel::sql_types::Text, _>(device.to_string())
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(owner)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    /// The client's session, as `auth/anon` would have opened it on `device`.
+    fn session_on(device: Option<&str>, signed_in_as: Uuid) -> Option<SessionDevice> {
+        let session = Session::new(
+            signed_in_as,
+            Uuid::new_v4(),
+            std::time::Duration::from_secs(3600),
+        )
+        .with_device_id(device.map(str::to_string));
+        SessionDevice::of(&crate::session::SessionLookedUp {
+            session_id: Uuid::new_v4(),
+            session: Arc::new(session),
+        })
+    }
+
+    async fn proof_for(conn: &mut AsyncPgConnection, username: &str) -> PasswordProof {
+        PasswordProof::verify(conn, username, PASSWORD)
+            .await
+            .expect("the right password must verify")
+    }
+
+    /// What the NEXT anonymous cold start on this device resolves to, asked
+    /// with the statement `auth/anon` itself runs.
+    async fn cold_start_lands_on(conn: &mut AsyncPgConnection, device: &str) -> Option<Uuid> {
+        #[derive(diesel::QueryableByName)]
+        struct Bound {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            user_id: Uuid,
+        }
+        diesel::sql_query(BOUND_USER_FOR_DEVICE_SQL)
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .get_result::<Bound>(conn)
+            .await
+            .optional()
+            .unwrap()
+            .map(|b| b.user_id)
+    }
+
+    #[derive(diesel::QueryableByName, Debug)]
+    struct MoveRow {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        device_id: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        from_user_id: Option<Uuid>,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        from_kind: String,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        to_user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        session_user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        path: String,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        has_prior_bound_at: bool,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        prior_active_alt_uuid: Option<Uuid>,
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        is_recent: bool,
+    }
+
+    async fn moves(conn: &mut AsyncPgConnection) -> Vec<MoveRow> {
+        diesel::sql_query(
+            "SELECT device_id, from_user_id, from_kind, to_user_id, session_user_id, path,
+                    prior_bound_at IS NOT NULL AS has_prior_bound_at, prior_active_alt_uuid,
+                    moved_at > now() - interval '1 minute' AS is_recent
+               FROM device_binding_moves ORDER BY id",
+        )
+        .load(conn)
+        .await
+        .unwrap()
+    }
+
+    async fn active_alt(conn: &mut AsyncPgConnection, device: &str) -> Option<Uuid> {
+        #[derive(diesel::QueryableByName)]
+        struct Alt {
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+            active_alt_uuid: Option<Uuid>,
+        }
+        diesel::sql_query("SELECT active_alt_uuid FROM device_bindings WHERE device_id = $1")
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .get_result::<Alt>(conn)
+            .await
+            .unwrap()
+            .active_alt_uuid
+    }
+
+    async fn set_active_alt(conn: &mut AsyncPgConnection, device: &str, alt: Uuid) {
+        diesel::sql_query("UPDATE device_bindings SET active_alt_uuid = $2 WHERE device_id = $1")
+            .bind::<diesel::sql_types::Text, _>(device.to_string())
+            .bind::<diesel::sql_types::Uuid, _>(alt)
+            .execute(conn)
+            .await
+            .unwrap();
+    }
+
+    /// Everything about an account that a device move must leave alone, as one
+    /// comparable string.
+    async fn fingerprint(conn: &mut AsyncPgConnection, user: Uuid) -> String {
+        #[derive(diesel::QueryableByName)]
+        struct Fp {
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            fp: String,
+        }
+        diesel::sql_query(
+            "SELECT concat_ws(' | ',
+                (SELECT string_agg(c::text, ',' ORDER BY c.id) FROM characters c WHERE c.user_id = $1),
+                (SELECT string_agg(ac::text, ',' ORDER BY ac.username)
+                   FROM arena_credentials ac WHERE ac.user_id = $1),
+                (SELECT string_agg(concat_ws('/', d.device_id, d.bound_at, d.active_alt_uuid,
+                                             d.source_wg_ip, d.platform), ',' ORDER BY d.device_id)
+                   FROM device_bindings d WHERE d.user_id = $1 AND d.device_id <> $2),
+                (SELECT u::text FROM users u WHERE u.id = $1)) AS fp",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(user)
+        .bind::<diesel::sql_types::Text, _>("this-phone-8e01c08f72dd")
+        .get_result::<Fp>(conn)
+        .await
+        .unwrap()
+        .fp
+    }
+
+    /// Tracker #607, the case d124 was decided for: the phone is bound to
+    /// ANOTHER member's real account, and its owner signs in with their own
+    /// password. Before this change the binding stayed and the next launch went
+    /// back to the other member's character.
+    #[tokio::test]
+    async fn a_password_sign_in_takes_the_device_from_another_real_account() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let other_member = add_account(&mut conn, "other").await;
+        add_character(&mut conn, other_member, "Glow Brisk Hare", true).await;
+        let owner = add_account(&mut conn, "owner").await;
+        add_character(&mut conn, owner, "Legoless", true).await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(other_member)).await;
+        let their_alt = Uuid::new_v4();
+        set_active_alt(&mut conn, "this-phone-8e01c08f72dd", their_alt).await;
+        // The other member's own handsets, one of them with an alt chosen.
+        bind(&mut conn, "their-phone", Some(other_member)).await;
+        bind(&mut conn, "their-tablet", Some(other_member)).await;
+        set_active_alt(&mut conn, "their-tablet", Uuid::new_v4()).await;
+        let before = fingerprint(&mut conn, other_member).await;
+        assert_eq!(
+            cold_start_lands_on(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(other_member),
+            "control: the phone opens the other member's account before the sign-in"
+        );
+
+        // The phone booted anonymously, so its session is the holder's.
+        let device = session_on(Some("this-phone-8e01c08f72dd"), other_member).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        let outcome = reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/login")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            DeviceReclaim::Moved {
+                from: Some(other_member),
+                from_kind: "account"
+            }
+        );
+        assert_eq!(
+            cold_start_lands_on(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(owner),
+            "the next anonymous cold start must open the account whose password was typed"
+        );
+        assert_eq!(
+            active_alt(&mut conn, "this-phone-8e01c08f72dd").await,
+            None,
+            "the previous holder's alt choice means nothing on the new account"
+        );
+        assert_eq!(
+            fingerprint(&mut conn, other_member).await,
+            before,
+            "the other member's characters, login, user row and OTHER devices are untouched"
+        );
+        assert_eq!(owner_of(&mut conn, "their-phone").await, Some(other_member));
+        assert_eq!(
+            owner_of(&mut conn, "their-tablet").await,
+            Some(other_member)
+        );
+
+        let log = moves(&mut conn).await;
+        assert_eq!(log.len(), 1, "exactly one audit row: {log:?}");
+        let row = &log[0];
+        assert_eq!(row.device_id, "this-phone-8e01c08f72dd");
+        assert_eq!(row.from_user_id, Some(other_member));
+        assert_eq!(row.from_kind, "account");
+        assert_eq!(row.to_user_id, owner);
+        assert_eq!(row.session_user_id, other_member);
+        assert_eq!(row.path, "bnet/login");
+        assert!(row.has_prior_bound_at, "the undo needs the old bound_at");
+        assert_eq!(row.prior_active_alt_uuid, Some(their_alt));
+        assert!(row.is_recent);
+    }
+
+    #[tokio::test]
+    async fn signing_in_again_on_a_device_that_is_already_yours_changes_nothing() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let owner = add_account(&mut conn, "owner").await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(owner)).await;
+        let my_alt = Uuid::new_v4();
+        set_active_alt(&mut conn, "this-phone-8e01c08f72dd", my_alt).await;
+
+        let device = session_on(Some("this-phone-8e01c08f72dd"), owner).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        for _ in 0..2 {
+            assert_eq!(
+                reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/link")
+                    .await
+                    .unwrap(),
+                DeviceReclaim::AlreadyBound
+            );
+        }
+        assert_eq!(
+            owner_of(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(owner)
+        );
+        assert_eq!(
+            active_alt(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(my_alt),
+            "this account's own alt choice on this phone survives a repeat sign-in"
+        );
+        assert!(moves(&mut conn).await.is_empty(), "no holder changed");
+    }
+
+    /// The in-game flow sends the credential twice — `/auth/bnet/login`, then
+    /// `/link/force` under the ORIGINAL session. The second must be a no-op,
+    /// not a second audit row.
+    #[tokio::test]
+    async fn the_force_step_after_the_login_step_is_a_no_op() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let other_member = add_account(&mut conn, "other").await;
+        add_account(&mut conn, "owner").await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(other_member)).await;
+        let device = session_on(Some("this-phone-8e01c08f72dd"), other_member).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+
+        reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/login")
+            .await
+            .unwrap();
+        assert_eq!(
+            reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/link/force")
+                .await
+                .unwrap(),
+            DeviceReclaim::AlreadyBound
+        );
+        assert_eq!(moves(&mut conn).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unclaimed_device_is_bound_to_the_account_that_signed_in() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let owner = add_account(&mut conn, "owner").await;
+        let anonymous = add_user(&mut conn).await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", None).await;
+        assert_eq!(
+            cold_start_lands_on(&mut conn, "this-phone-8e01c08f72dd").await,
+            None
+        );
+
+        let device = session_on(Some("this-phone-8e01c08f72dd"), anonymous).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        assert_eq!(
+            reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/link/force")
+                .await
+                .unwrap(),
+            DeviceReclaim::Moved {
+                from: None,
+                from_kind: "unclaimed"
+            }
+        );
+        assert_eq!(
+            cold_start_lands_on(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(owner)
+        );
+        let log = moves(&mut conn).await;
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].from_user_id, None);
+        assert_eq!(log[0].session_user_id, anonymous);
+        assert_eq!(log[0].path, "bnet/link/force");
+    }
+
+    /// `auth/anon` writes a row for every device it sees, so this is the
+    /// unusual case — but a session with a device and no row must still end
+    /// bound, and audited.
+    #[tokio::test]
+    async fn a_device_with_no_row_yet_is_bound_and_recorded() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let owner = add_account(&mut conn, "owner").await;
+        let anonymous = add_user(&mut conn).await;
+        let device = session_on(Some("brand-new-phone-3f2504e0"), anonymous).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        assert_eq!(
+            reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/login")
+                .await
+                .unwrap(),
+            DeviceReclaim::Moved {
+                from: None,
+                from_kind: "unclaimed"
+            }
+        );
+        assert_eq!(
+            cold_start_lands_on(&mut conn, "brand-new-phone-3f2504e0").await,
+            Some(owner)
+        );
+        assert_eq!(moves(&mut conn).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_device_on_a_throwaway_account_moves_and_is_labelled_as_such() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let owner = add_account(&mut conn, "owner").await;
+        let throwaway = add_user(&mut conn).await;
+        add_character(&mut conn, throwaway, "Adventurer", false).await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(throwaway)).await;
+        bind(&mut conn, "other-phone", Some(throwaway)).await;
+
+        let device = session_on(Some("this-phone-8e01c08f72dd"), throwaway).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        assert_eq!(
+            reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/login")
+                .await
+                .unwrap(),
+            DeviceReclaim::Moved {
+                from: Some(throwaway),
+                from_kind: "throwaway"
+            }
+        );
+        assert_eq!(
+            cold_start_lands_on(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(owner)
+        );
+        assert_eq!(
+            owner_of(&mut conn, "other-phone").await,
+            Some(throwaway),
+            "only the device the sign-in was made on moves"
+        );
+    }
+
+    /// A wrong password yields no `PasswordProof`, and without one there is no
+    /// way to call the function that moves a binding.
+    #[tokio::test]
+    async fn a_wrong_password_or_an_unknown_username_proves_nothing() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let other_member = add_account(&mut conn, "other").await;
+        let owner = add_account(&mut conn, "owner").await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(other_member)).await;
+
+        assert!(
+            PasswordProof::verify(&mut conn, "owner", "not the password")
+                .await
+                .is_none()
+        );
+        assert!(
+            PasswordProof::verify(&mut conn, "owner", "")
+                .await
+                .is_none()
+        );
+        assert!(
+            PasswordProof::verify(&mut conn, "nobody", PASSWORD)
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            PasswordProof::verify(&mut conn, "owner", PASSWORD)
+                .await
+                .map(|p| p.user_id()),
+            Some(owner),
+            "control: the same call with the right password does verify"
+        );
+        assert_eq!(
+            owner_of(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(other_member)
+        );
+        assert!(moves(&mut conn).await.is_empty());
+    }
+
+    /// A proof can only come from `PasswordProof::verify`, a device only from
+    /// an authenticated session, and neither the anonymous login nor the
+    /// conflict preview moves anything.
+    #[test]
+    fn a_binding_can_only_move_behind_a_verified_password_and_a_session_device() {
+        let src = include_str!("authentification.rs");
+        let production = &src[..src.find("\n#[cfg(test)]").unwrap()];
+
+        let proof_mod_start = production.find("mod password_proof {").unwrap();
+        let proof_mod_end = production
+            .find("use password_proof::PasswordProof;")
+            .unwrap();
+        let outside_proof_mod = format!(
+            "{}{}",
+            &production[..proof_mod_start],
+            &production[proof_mod_end..]
+        );
+        assert!(
+            !outside_proof_mod.contains("PasswordProof {"),
+            "a PasswordProof must only be built by PasswordProof::verify"
+        );
+        assert_eq!(
+            production[proof_mod_start..proof_mod_end]
+                .matches("Self { user_id }")
+                .count(),
+            1,
+            "one constructor, behind the password check"
+        );
+        assert_eq!(
+            production.matches("Some(Self {").count(),
+            1,
+            "SessionDevice::of is the one constructor"
+        );
+        assert_eq!(
+            production.matches("SessionDevice {").count(),
+            // The struct and its impl block — never a literal.
+            production.matches("struct SessionDevice {").count()
+                + production.matches("impl SessionDevice {").count(),
+            "a SessionDevice must only be built from an authenticated session"
+        );
+        assert!(
+            production
+                .contains("device_id: usable_device_id(caller.session.device_id.as_deref())?"),
+            "the device to move comes from the session, filtered for placeholders"
+        );
+
+        let link_start = production.find("async fn bnet_link(").unwrap();
+        let force_start = production.find("async fn bnet_link_force").unwrap();
+        let anon_start = production.find("async fn anon_log_in").unwrap();
+        let link = &production[link_start..force_start];
+        let conflict_return = link.find("conflict: true,").unwrap();
+        assert!(
+            link.find("reclaim_device_logged(").unwrap() > conflict_return,
+            "the conflict preview must return before any device moves"
+        );
+        assert!(
+            !production[anon_start..].contains("reclaim_device"),
+            "an anonymous login carries no password and must never move a binding"
+        );
+
+        // The persisted-token branch of bnet/login is a bearer, not a password.
+        let login = &production[production.find("async fn bnet_log_in").unwrap()..link_start];
+        let token_branch = &login[login.find("body.login_token.as_deref()").unwrap()..];
+        let token_branch = &token_branch[..token_branch.find("} else {").unwrap()];
+        assert!(!token_branch.contains("password_proof = "));
+    }
+
+    #[test]
+    fn a_null_empty_or_placeholder_device_id_is_no_device() {
+        for bad in [
+            None,
+            Some(""),
+            Some("   "),
+            Some("null"),
+            Some("NULL"),
+            Some("(null)"),
+            Some("nullnull"),
+            Some("undefined"),
+            Some("unknown"),
+            Some("0"),
+            Some("abc"),
+            Some("00000000000000000000000000000000"),
+            Some("00000000-0000-0000-0000-000000000000"),
+            Some("ffffffffffffffffffffffffffffffff"),
+            Some("0.0.0.0"),
+        ] {
+            assert_eq!(usable_device_id(bad), None, "{bad:?} must not be a device");
+            assert!(
+                session_on(bad, Uuid::new_v4()).is_none(),
+                "a session opened with {bad:?} must not be able to move a binding"
+            );
+        }
+        let too_long = "a1".repeat(80);
+        assert_eq!(usable_device_id(Some(&too_long)), None);
+
+        // The shapes production actually holds: 32-hex install hashes, UUIDs,
+        // and WireGuard peer addresses.
+        for good in [
+            "8e01c08f72ddb7414178d28cf1c5a3b2",
+            "3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+            "10.9.0.7",
+            "10.13.13.201",
+        ] {
+            assert_eq!(usable_device_id(Some(good)).as_deref(), Some(good));
+            assert!(session_on(Some(good), Uuid::new_v4()).is_some());
+        }
+    }
+
+    /// The device row changed hands after this session was opened (a website
+    /// claim, or another sign-in). The session no longer speaks for the device,
+    /// so nothing moves.
+    #[tokio::test]
+    async fn a_stale_session_cannot_take_a_device_from_a_third_account() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let third = add_account(&mut conn, "third").await;
+        add_account(&mut conn, "owner").await;
+        let was_signed_in_as = add_user(&mut conn).await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(third)).await;
+
+        let device = session_on(Some("this-phone-8e01c08f72dd"), was_signed_in_as).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        assert_eq!(
+            reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/login")
+                .await
+                .unwrap(),
+            DeviceReclaim::Refused { holder: third }
+        );
+        assert_eq!(
+            owner_of(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(third)
+        );
+        assert!(moves(&mut conn).await.is_empty());
+    }
+
+    /// The move and its record are one transaction: if the record cannot be
+    /// written, the binding does not move.
+    #[tokio::test]
+    async fn no_audit_row_means_no_move() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let other_member = add_account(&mut conn, "other").await;
+        add_account(&mut conn, "owner").await;
+        bind(&mut conn, "this-phone-8e01c08f72dd", Some(other_member)).await;
+        let device = session_on(Some("this-phone-8e01c08f72dd"), other_member).unwrap();
+        let proof = proof_for(&mut conn, "owner").await;
+        diesel::sql_query("DROP TABLE device_binding_moves")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        assert!(
+            reclaim_device_for_password_login(&mut conn, &proof, &device, "bnet/login")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            owner_of(&mut conn, "this-phone-8e01c08f72dd").await,
+            Some(other_member),
+            "an unrecorded move must roll back"
+        );
+    }
+
+    /// The forced-link sweep moves every device the SOURCE account remembers.
+    /// That is right for a throwaway and wrong for a member's real account,
+    /// which since d124 can be the source: their other phones stay theirs.
+    #[tokio::test]
+    async fn the_forced_link_sweep_leaves_a_real_source_accounts_devices_alone() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        let linked = add_account(&mut conn, "owner").await;
+        let with_login = add_account(&mut conn, "other").await;
+        let anonymous = add_user(&mut conn).await;
+        // A website account: v5, as derived from a Discord id.
+        let discord_owned = Uuid::parse_str("6d283c5c-cc32-5242-b775-100768fc6131").unwrap();
+        diesel::sql_query("INSERT INTO users (id) VALUES ($1)")
+            .bind::<diesel::sql_types::Uuid, _>(discord_owned)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        for (user, device) in [
+            (with_login, "login-phone"),
+            (discord_owned, "discord-phone"),
+            (anonymous, "anon-phone"),
+        ] {
+            diesel::sql_query("UPDATE users SET data = $2 WHERE id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(user)
+                .bind::<diesel::sql_types::Jsonb, _>(serde_json::json!({"gp_deviceids": [device]}))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            bind(&mut conn, device, Some(user)).await;
+        }
+
+        assert_eq!(
+            bind_linked_devices(&mut conn, with_login, linked)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            bind_linked_devices(&mut conn, discord_owned, linked)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(owner_of(&mut conn, "login-phone").await, Some(with_login));
+        assert_eq!(
+            owner_of(&mut conn, "discord-phone").await,
+            Some(discord_owned)
+        );
+        assert_eq!(
+            bind_linked_devices(&mut conn, anonymous, linked)
+                .await
+                .unwrap(),
+            1,
+            "control: an anonymous installation's devices still follow the link"
+        );
+        assert_eq!(owner_of(&mut conn, "anon-phone").await, Some(linked));
+    }
+
+    /// A restored session must load whether or not `sessions.device_id` exists
+    /// yet, and must bring its device back when it does.
+    #[tokio::test]
+    async fn a_persisted_session_loads_with_and_without_the_device_column() {
+        let Some(mut conn) = identity_tables().await else {
+            return;
+        };
+        #[derive(diesel::QueryableByName)]
+        struct Loaded {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            user_id: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            device_id: Option<String>,
+        }
+        let (with_device, without_device, user) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        for (id, device) in [(with_device, Some("phone-1234")), (without_device, None)] {
+            diesel::sql_query(
+                "INSERT INTO sessions
+                     (session_id, user_id, secret_user_id, extra_secret, expires_at, device_id)
+                 VALUES ($1, $2, $2, $2, now() + interval '1 hour', $3)",
+            )
+            .bind::<diesel::sql_types::Uuid, _>(id)
+            .bind::<diesel::sql_types::Uuid, _>(user)
+            .bind::<diesel::sql_types::Nullable<diesel::sql_types::Text>, _>(device)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        let load = |id: Uuid| {
+            diesel::sql_query(crate::session::LOAD_SESSION_SQL)
+                .bind::<diesel::sql_types::Uuid, _>(id)
+        };
+        let row: Loaded = load(with_device).get_result(&mut conn).await.unwrap();
+        assert_eq!(row.user_id, user);
+        assert_eq!(row.device_id.as_deref(), Some("phone-1234"));
+        let row: Loaded = load(without_device).get_result(&mut conn).await.unwrap();
+        assert_eq!(row.device_id, None);
+
+        // A database the migration has not reached.
+        diesel::sql_query("ALTER TABLE sessions DROP COLUMN device_id")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let row: Loaded = load(with_device).get_result(&mut conn).await.unwrap();
+        assert_eq!(row.user_id, user);
+        assert_eq!(row.device_id, None);
+    }
+
+    #[test]
+    fn a_refreshed_session_keeps_the_device_it_was_opened_with() {
+        let old = Session::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            std::time::Duration::from_secs(60),
+        )
+        .with_device_id(Some("phone-1234".to_string()));
+        let new = refreshed_session(Some(&old), std::time::Duration::from_secs(3600)).unwrap();
+        assert_eq!(new.device_id.as_deref(), Some("phone-1234"));
     }
 }
 
@@ -2637,6 +3738,12 @@ mod report185_link_choice_tests {
                  id UUID PRIMARY KEY, \
                  secret_id UUID NOT NULL UNIQUE, \
                  data JSONB NOT NULL)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "CREATE TABLE arena_credentials (username TEXT PRIMARY KEY, user_id UUID NOT NULL)",
         )
         .execute(&mut conn)
         .await

@@ -40,6 +40,16 @@ pub struct Session {
     /// sender: when it last lost one, and the `MatchmakingSucceeded` it may not have
     /// read yet. See [`RmsFeedState`] (#375).
     pub rms_feed: std::sync::Mutex<RmsFeedState>,
+    /// The device key this session was established FROM: the identity
+    /// `auth/anon` resolved the client by (its `deviceId`, or the WireGuard peer
+    /// address the edge stamped), or the one inherited from the session a
+    /// password login was made under. `None` when the client presented nothing
+    /// usable — such a session can never move a device binding.
+    ///
+    /// It is the only device a password sign-in may re-bind (d124): the server
+    /// recorded it when the client proved it could sign in with it, so a later
+    /// request cannot name some other device in its body.
+    pub device_id: Option<String>,
 }
 
 /// The rms WebSocket is not a stable pipe: the client reconnects it roughly once a
@@ -114,6 +124,7 @@ impl Session {
             matchmaking_ws: Mutex::new(None),
             client_gear_ratings: Default::default(),
             rms_feed: Default::default(),
+            device_id: None,
         }
     }
 
@@ -130,7 +141,15 @@ impl Session {
         }
         let mut next = Session::new(self.user_id, self.secret_user_id, ttl);
         next.authenticated_at_unix = self.authenticated_at_unix;
+        next.device_id = self.device_id.clone();
         Some(next)
+    }
+
+    /// Record the device key this session was established from. See
+    /// [`Session::device_id`].
+    pub fn with_device_id(mut self, device_id: Option<String>) -> Self {
+        self.device_id = device_id;
+        self
     }
 
     /// Remember the gear rating the client reported for `character_id`.
@@ -788,7 +807,16 @@ struct SessionRow {
     expires_at_secs: i64,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     authenticated_at_secs: i64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    device_id: Option<String>,
 }
+
+/// Reads `sessions.device_id` through `to_jsonb` rather than by column name, so
+/// this query also runs against a `sessions` table that predates the column
+/// (migration 2026-11-23). Naming the column would turn "migration not applied
+/// yet" into "no persisted session loads", which logs every player out; this
+/// way the worst case is a restored session that cannot move a device binding.
+pub(crate) const LOAD_SESSION_SQL: &str = "SELECT s.user_id, s.secret_user_id, s.extra_secret,      CAST(EXTRACT(epoch FROM s.expires_at) AS BIGINT) AS expires_at_secs,      to_jsonb(s)->>'device_id' AS device_id,      CAST(EXTRACT(epoch FROM s.authenticated_at) AS BIGINT) AS authenticated_at_secs      FROM sessions s WHERE s.session_id = $1 AND s.expires_at > now()";
 
 /// Persist a freshly-created session so it survives an arena-server restart (the
 /// `sessions` migration). Best-effort: a DB hiccup must NOT fail login — the session
@@ -834,6 +862,22 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
             crate::log_redact::opaque_tag(&session_id.to_string())
         );
     }
+    // A separate statement on purpose: folding the column into the INSERT above
+    // would fail the whole insert on a database that has not had migration
+    // 2026-11-23 applied, and then no session would survive a restart.
+    if let Some(device_id) = session.device_id.as_deref()
+        && let Err(e) =
+            diesel::sql_query("UPDATE sessions SET device_id = $2 WHERE session_id = $1")
+                .bind::<diesel::sql_types::Uuid, _>(session_id)
+                .bind::<diesel::sql_types::Text, _>(device_id)
+                .execute(&mut conn)
+                .await
+    {
+        log::warn!(
+            "sessions: could not record the device of session {}: {e}",
+            crate::log_redact::opaque_tag(&session_id.to_string())
+        );
+    }
 }
 
 /// Reconstruct a session from the `sessions` table on a cold lookup (after a restart
@@ -842,16 +886,11 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
 async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session> {
     use diesel_async::RunQueryDsl; // scoped (see persist_session)
     let mut conn = db.get().await.ok()?;
-    let row: SessionRow = diesel::sql_query(
-        "SELECT user_id, secret_user_id, extra_secret, \
-         CAST(EXTRACT(epoch FROM expires_at) AS BIGINT) AS expires_at_secs, \
-         CAST(EXTRACT(epoch FROM authenticated_at) AS BIGINT) AS authenticated_at_secs \
-         FROM sessions WHERE session_id = $1 AND expires_at > now()",
-    )
-    .bind::<diesel::sql_types::Uuid, _>(session_id)
-    .get_result(&mut conn)
-    .await
-    .ok()?;
+    let row: SessionRow = diesel::sql_query(LOAD_SESSION_SQL)
+        .bind::<diesel::sql_types::Uuid, _>(session_id)
+        .get_result(&mut conn)
+        .await
+        .ok()?;
     Some(Session {
         user_id: row.user_id,
         secret_user_id: row.secret_user_id,
@@ -862,6 +901,7 @@ async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session
         matchmaking_ws: Mutex::new(None),
         client_gear_ratings: Default::default(),
         rms_feed: Default::default(),
+        device_id: row.device_id.filter(|d| !d.is_empty()),
     })
 }
 
