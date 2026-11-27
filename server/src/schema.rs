@@ -378,6 +378,7 @@ diesel::table! {
         secret_user_id -> Uuid,
         extra_secret -> Uuid,
         expires_at -> Timestamptz,
+        authenticated_at -> Timestamptz,
     }
 }
 

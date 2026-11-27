@@ -24,6 +24,10 @@ pub struct Session {
     pub secret_user_id: Uuid,
     pub extra_secret: Uuid, // a UUIDv4 just for added randomness
     pub expire_unix_timestamp: u64,
+    /// When the player last actually signed in (anon/BNet login or a link), as
+    /// unix seconds. A token refresh copies it instead of resetting it, so a chain
+    /// of refreshes cannot outlive [`MAX_SESSION_AGE`] (security review M7).
+    pub authenticated_at_unix: u64,
     // incremented each (connected) request by the middleware
     pub request_count: AtomicU64,
     pub matchmaking_ws: Mutex<Option<UnboundedSender<MatchmakingMessage>>>,
@@ -72,9 +76,27 @@ pub struct PendingMatch {
     pub sent_on: Option<UnboundedSender<MatchmakingMessage>>,
 }
 
+/// How long one sign-in may be stretched by token refreshes (security review M7).
+///
+/// Before this a refresh minted a fresh 24 h session from any live one, so a
+/// token taken once could be refreshed forever. Past this age a refresh gets
+/// retail's 401/201 and the client goes back through its ordinary sign-in
+/// (device id or stored `loginToken`), which re-checks that the account still
+/// accepts it. A token issued just before the limit still lives its normal TTL,
+/// so the hard ceiling is this plus one TTL.
+pub const MAX_SESSION_AGE: Duration = Duration::from_secs(30 * 24 * 3600);
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 impl Session {
     pub fn new(user_id: Uuid, secret_user_id: Uuid, ttl: Duration) -> Self {
         Self {
+            authenticated_at_unix: now_unix_secs(),
             user_id,
             secret_user_id,
             expire_unix_timestamp: match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -93,6 +115,22 @@ impl Session {
             client_gear_ratings: Default::default(),
             rms_feed: Default::default(),
         }
+    }
+
+    /// The session a token refresh may hand out: same account, new bearer, a full
+    /// TTL, and the ORIGINAL sign-in time. `None` once the sign-in is older than
+    /// [`MAX_SESSION_AGE`].
+    pub fn refreshed(&self, ttl: Duration) -> Option<Session> {
+        self.refreshed_at(ttl, now_unix_secs())
+    }
+
+    fn refreshed_at(&self, ttl: Duration, now_unix: u64) -> Option<Session> {
+        if now_unix.saturating_sub(self.authenticated_at_unix) >= MAX_SESSION_AGE.as_secs() {
+            return None;
+        }
+        let mut next = Session::new(self.user_id, self.secret_user_id, ttl);
+        next.authenticated_at_unix = self.authenticated_at_unix;
+        Some(next)
     }
 
     /// Remember the gear rating the client reported for `character_id`.
@@ -288,6 +326,56 @@ impl Session {
     /// gates on).
     pub async fn has_matchmaking_ws(&self) -> bool {
         self.matchmaking_ws.lock().await.is_some()
+    }
+}
+
+#[cfg(test)]
+mod session_age_tests {
+    use super::{MAX_SESSION_AGE, Session};
+    use std::time::Duration;
+    use uuid::Uuid;
+
+    const DAY: u64 = 24 * 3600;
+
+    /// M7: a chain of daily refreshes may not outlive the sign-in it came from.
+    #[test]
+    fn daily_refreshes_stop_at_the_maximum_age() {
+        let ttl = Duration::from_secs(DAY);
+        let first = Session::new(Uuid::new_v4(), Uuid::new_v4(), ttl);
+        let signed_in = first.authenticated_at_unix;
+        let mut current = first;
+        let mut refreshes = 0;
+        while let Some(next) = current.refreshed_at(ttl, signed_in + (refreshes + 1) * DAY) {
+            assert_eq!(next.authenticated_at_unix, signed_in);
+            current = next;
+            refreshes += 1;
+            assert!(refreshes < 1000, "refreshes never stopped");
+        }
+        assert_eq!(refreshes, MAX_SESSION_AGE.as_secs() / DAY - 1);
+    }
+
+    #[test]
+    fn a_fresh_sign_in_starts_a_new_clock() {
+        let ttl = Duration::from_secs(DAY);
+        let mut old = Session::new(Uuid::new_v4(), Uuid::new_v4(), ttl);
+        old.authenticated_at_unix = 0;
+        assert!(old.refreshed(ttl).is_none());
+        let fresh = Session::new(old.user_id, old.secret_user_id, ttl);
+        assert!(fresh.refreshed(ttl).is_some());
+    }
+
+    /// The column must round-trip through the restart-survival table, or a
+    /// restart would hand every session a fresh clock.
+    #[test]
+    fn the_sign_in_time_is_persisted_and_restored() {
+        let src = include_str!("session.rs");
+        let insert = src.find("INSERT INTO sessions").unwrap();
+        assert!(src[insert..insert + 400].contains("authenticated_at"));
+        let select = src.find("AS authenticated_at_secs").unwrap();
+        assert!(src[select..select + 200].contains("FROM sessions"));
+        let up =
+            include_str!("../../migrations/2026-11-24-100000-0000_session_authenticated_at/up.sql");
+        assert!(up.contains("ADD COLUMN IF NOT EXISTS authenticated_at"));
     }
 }
 
@@ -698,6 +786,8 @@ struct SessionRow {
     extra_secret: Uuid,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     expires_at_secs: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    authenticated_at_secs: i64,
 }
 
 /// Persist a freshly-created session so it survives an arena-server restart (the
@@ -725,14 +815,17 @@ pub async fn persist_session(db: &DbPool, session_id: Uuid, session: &Session) {
         error!("sessions: expired-row cleanup failed: {e}");
     }
     if let Err(e) = diesel::sql_query(
-        "INSERT INTO sessions (session_id, user_id, secret_user_id, extra_secret, expires_at) \
-         VALUES ($1, $2, $3, $4, to_timestamp($5)) ON CONFLICT (session_id) DO NOTHING",
+        "INSERT INTO sessions \
+         (session_id, user_id, secret_user_id, extra_secret, expires_at, authenticated_at) \
+         VALUES ($1, $2, $3, $4, to_timestamp($5), to_timestamp($6)) \
+         ON CONFLICT (session_id) DO NOTHING",
     )
     .bind::<diesel::sql_types::Uuid, _>(session_id)
     .bind::<diesel::sql_types::Uuid, _>(session.user_id)
     .bind::<diesel::sql_types::Uuid, _>(session.secret_user_id)
     .bind::<diesel::sql_types::Uuid, _>(session.extra_secret)
     .bind::<diesel::sql_types::BigInt, _>(session.expire_unix_timestamp as i64)
+    .bind::<diesel::sql_types::BigInt, _>(session.authenticated_at_unix as i64)
     .execute(&mut conn)
     .await
     {
@@ -751,7 +844,8 @@ async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session
     let mut conn = db.get().await.ok()?;
     let row: SessionRow = diesel::sql_query(
         "SELECT user_id, secret_user_id, extra_secret, \
-         CAST(EXTRACT(epoch FROM expires_at) AS BIGINT) AS expires_at_secs \
+         CAST(EXTRACT(epoch FROM expires_at) AS BIGINT) AS expires_at_secs, \
+         CAST(EXTRACT(epoch FROM authenticated_at) AS BIGINT) AS authenticated_at_secs \
          FROM sessions WHERE session_id = $1 AND expires_at > now()",
     )
     .bind::<diesel::sql_types::Uuid, _>(session_id)
@@ -763,6 +857,7 @@ async fn load_persisted_session(db: &DbPool, session_id: Uuid) -> Option<Session
         secret_user_id: row.secret_user_id,
         extra_secret: row.extra_secret,
         expire_unix_timestamp: row.expires_at_secs.max(0) as u64,
+        authenticated_at_unix: row.authenticated_at_secs.max(0) as u64,
         request_count: AtomicU64::new(1),
         matchmaking_ws: Mutex::new(None),
         client_gear_ratings: Default::default(),

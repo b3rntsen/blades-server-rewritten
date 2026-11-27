@@ -366,8 +366,7 @@ async fn resolve_link(
     let mut conn = app_state.db_pool.get().await.unwrap();
 
     // The same check as bnet_log_in, by construction.
-    let Some(user_id) =
-        crate::credentials::check_login(&mut conn, username_raw, password).await
+    let Some(user_id) = crate::credentials::check_login(&mut conn, username_raw, password).await
     else {
         return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 112));
     };
@@ -602,7 +601,50 @@ fn client_device_id(route: &str, device_id: Option<&str>) -> Option<String> {
         );
         return None;
     }
+    if !device_id_is_plausible(device_id) {
+        log::warn!(
+            "{route}: ignored a deviceId that cannot identify one device ({} chars); treated as missing",
+            device_id.chars().count()
+        );
+        return None;
+    }
     Some(device_id.to_string())
+}
+
+/// Shortest client device id that can key an account (security review M7).
+const MIN_CLIENT_DEVICE_ID_LEN: usize = 16;
+/// Longest one; real ids are 32–42 characters.
+const MAX_CLIENT_DEVICE_ID_LEN: usize = 128;
+/// Fewest distinct characters a real id has; a 32-hex id has about 16.
+const MIN_CLIENT_DEVICE_ID_DISTINCT: usize = 6;
+
+/// Could this body `deviceId` belong to exactly one device?
+///
+/// A client device id is a bearer: whoever sends it is logged in as the
+/// account bound to it. So a value many devices could send — an all-zero UUID
+/// (what an iOS vendor id reads as when unavailable), a short or repeated
+/// string — must never key one, or every such device shares that account.
+/// Measured on prod 2026-11-24: every client-supplied id on record is 16–42
+/// characters of `[A-Za-z0-9_-]` with plenty of distinct characters; the only
+/// short or low-variety ids are WireGuard addresses, which come from our proxy
+/// and never pass through here.
+fn device_id_is_plausible(device_id: &str) -> bool {
+    let len = device_id.chars().count();
+    if !(MIN_CLIENT_DEVICE_ID_LEN..=MAX_CLIENT_DEVICE_ID_LEN).contains(&len) {
+        return false;
+    }
+    if !device_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return false;
+    }
+    let distinct: std::collections::HashSet<char> = device_id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    distinct.len() >= MIN_CLIENT_DEVICE_ID_DISTINCT
 }
 
 /// The WireGuard peer address our proxy vouches for, if this request came
@@ -1171,13 +1213,20 @@ async fn bnet_link_force(
 /// No live session (expired, evicted by another device, or a token from before
 /// a restart that never got persisted) is retail's
 /// `{"httpErrorCode":401,"serviceId":1,"errorCode":201}`, which sends the client
-/// back through its ordinary sign-in.
+/// back through its ordinary sign-in. So is a sign-in older than
+/// [`crate::session::MAX_SESSION_AGE`]: refreshes no longer extend one forever.
 fn refreshed_session(
     current: Option<&Session>,
     ttl: std::time::Duration,
 ) -> Result<Session, BladeApiError> {
     let current = current.ok_or_else(|| BladeApiError::new(StatusCode::UNAUTHORIZED, 1, 201))?;
-    Ok(Session::new(current.user_id, current.secret_user_id, ttl))
+    current.refreshed(ttl).ok_or_else(|| {
+        log::info!(
+            "token refresh refused: sign-in for user {} is past the maximum session age",
+            current.user_id
+        );
+        BladeApiError::new(StatusCode::UNAUTHORIZED, 1, 201)
+    })
 }
 
 /// `POST /…/auth/refresh` — the client's scheduled token renewal (tracker #497).
@@ -3179,6 +3228,38 @@ mod token_refresh {
         );
     }
 
+    /// M7: refreshes used to extend one sign-in forever. Past the maximum age a
+    /// refresh is retail's 401/201, which sends the client back to sign in.
+    #[test]
+    fn a_refresh_of_a_sign_in_past_the_maximum_age_is_a_retail_401() {
+        let mut old = Session::new(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Duration::from_secs(60),
+        );
+        old.authenticated_at_unix = now_secs() - crate::session::MAX_SESSION_AGE.as_secs() - 1;
+        let err = refreshed_session(Some(&old), Duration::from_secs(24 * 3600))
+            .err()
+            .expect("an over-age sign-in must not be refreshed");
+        assert_eq!(
+            actix_web::ResponseError::status_code(&err),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(err.error_code(), 201);
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_original_sign_in_time() {
+        let mut old = Session::new(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Duration::from_secs(60),
+        );
+        old.authenticated_at_unix = now_secs() - 7 * 24 * 3600;
+        let new = refreshed_session(Some(&old), Duration::from_secs(24 * 3600)).unwrap();
+        assert_eq!(new.authenticated_at_unix, old.authenticated_at_unix);
+    }
+
     /// The client's next refresh is due at 0.67 of the remaining life; it must
     /// land in the future, or the client would refresh in a tight loop.
     #[test]
@@ -3518,14 +3599,45 @@ mod device_identity_tests {
             "0123456789abcdef0123456789abcdef",
             "D3ADBEEF0123456789ABCDEF01234567",
             "6f9619ff-8b86-d011-b42d-00c04fc964ff",
-            "install-hash",
             "12345678901234567890123456789012",
+            "AbCdEf0123456789",
+            "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1",
         ] {
             assert_eq!(client_device_id("test", Some(real)).as_deref(), Some(real));
         }
         assert_eq!(client_device_id("test", Some("")), None);
         assert_eq!(client_device_id("test", Some("  ")), None);
         assert_eq!(client_device_id("test", None), None);
+    }
+
+    /// M7: a device id many devices could send must not key an account, or
+    /// they all log in as whoever it is bound to.
+    #[test]
+    fn a_device_id_many_devices_could_send_is_treated_as_missing() {
+        for shared in [
+            "00000000-0000-0000-0000-000000000000",
+            "ffffffffffffffffffffffffffffffff",
+            "abababababababababababababababab",
+            "install-hash",
+            "0123456789abcde",
+            "unknown",
+            "null",
+        ] {
+            assert_eq!(
+                client_device_id("test", Some(shared)),
+                None,
+                "{shared:?} must not become a device key"
+            );
+        }
+        let too_long = "a1b2c3d4e5".repeat(13);
+        assert_eq!(client_device_id("test", Some(&too_long)), None);
+        for odd in [
+            "0123456789abcdef 0123456789abcdef",
+            "0123456789abcdef'; DROP TABLE x--",
+            "0123456789abcdéf0123456789abcdef",
+        ] {
+            assert_eq!(client_device_id("test", Some(odd)), None, "{odd:?}");
+        }
     }
 
     #[test]
