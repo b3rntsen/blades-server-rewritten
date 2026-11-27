@@ -48,6 +48,7 @@ mod craft;
 mod credentials;
 mod daily_reward;
 mod dev_alt_lock;
+mod december;
 mod dungeon;
 mod dungeon_update;
 #[cfg(test)]

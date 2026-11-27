@@ -107,11 +107,11 @@ pub struct GearCapRule {
 
 /// The rule a gift carries, if it carries one.
 ///
-/// No gift does yet: this is the mechanism only, and an authored, static or
-/// season gift is paid exactly as before. The December 2026 calendar registers
-/// its armour gifts here.
-pub fn rule_for(_gift_id: Uuid) -> Option<GearCapRule> {
-    None
+/// Only the two armour gifts of the December 2026 calendar do
+/// ([`crate::features::december_2026`]). An authored, static or season gift
+/// carries none and is paid exactly as before.
+pub fn rule_for(gift_id: Uuid) -> Option<GearCapRule> {
+    crate::features::december_2026::gear_cap_rule(gift_id)
 }
 
 /// How many more gear items fit while the backpack stays at or below
@@ -724,10 +724,15 @@ mod tests {
         assert_eq!(back.deferred_gift_gear, owing(2, 0));
     }
 
-    /// No gift carries the rule yet: merging this changes no gift.
+    /// CONTROL: a gift that is not one of the calendar's armour gifts carries
+    /// no rule — the payout gift itself, an authored gift, the Sunset Gift.
     #[test]
-    fn no_gift_is_capped_until_one_registers() {
+    fn an_ordinary_gift_carries_no_rule() {
         assert_eq!(rule_for(DEFERRED_GEAR_GIFT_ID), None);
         assert_eq!(rule_for(Uuid::nil()), None);
+        assert_eq!(
+            rule_for(Uuid::from_u128(0x32d4f977_5438_457d_9b48_69e5eaf70eb0)),
+            None
+        );
     }
 }

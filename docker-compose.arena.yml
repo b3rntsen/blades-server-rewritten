@@ -304,6 +304,11 @@ services:
       # lobby returns, items in inventory, clean relaunch). Recreate to apply.
       ARENA_WEAPON_ON_RESULT_CARD: ${ARENA_WEAPON_ON_RESULT_CARD:-}
       ARENA_PROMOTION_ITEMS_ON_CARD: ${ARENA_PROMOTION_ITEMS_ON_CARD:-}
+      # Rehearsal of the December 2026 gift calendar (tracker #499): the clock the
+      # calendar runs on for marked TEST characters only — unix seconds or
+      # RFC 3339, e.g. 2026-12-06T10:00:00Z. Empty/unset = the real clock for
+      # everyone. Recreate to apply; unset it afterwards.
+      DECEMBER_REHEARSAL_NOW: ${DECEMBER_REHEARSAL_NOW:-}
       RUST_LOG: ${RUST_LOG:-info}
       # The DB password reaches the server through the ENVIRONMENT, never as a
       # command-line argument: argv lands in /proc/<pid>/cmdline, which any

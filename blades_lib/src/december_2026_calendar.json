@@ -1,0 +1,655 @@
+{
+ "_meta": {
+  "what": "The December 2026 gift calendar (tracker #499, HauDrauf's proposal, message 3687; approved by the owner 2026-11-23).",
+  "decorations": "number = his numbered list (messages 3168/3172); itemTemplateId re-derived from the game definitions by English name; en/de are the APK's en-US/de-DE strings for nameKey.",
+  "packs": "contents copied from deploy/static/global_shop_offer_contents.json (offerId), in the bundle's own order.",
+  "armorSet": "the four Divine (tier 10, level 45) Dark Seducer pieces; the Divine set has no shield.",
+  "neverOwned": "no player has ever held this decoration; check it on a device before its day."
+ },
+ "packs": {
+  "incredibleTreasure": {
+   "offerId": "c18127a3-57f0-4b5f-aa7d-54b3095e97ff",
+   "editorName": "IAP_GemPack02_c",
+   "en": "Incredible Treasure Pack",
+   "de": "Wahnsinniges Schatzpaket",
+   "items": [
+    {
+     "itemTemplateId": "91c40a5d-36b8-4ed9-9c07-209b52ebc732",
+     "quantity": 3,
+     "en": "Firebreath Opal"
+    },
+    {
+     "itemTemplateId": "c1abc963-c03c-4cd9-84d7-433ed8ab3877",
+     "quantity": 5,
+     "en": "Arentine"
+    },
+    {
+     "itemTemplateId": "32ef7be4-88aa-4a0b-a198-fa88d484a41d",
+     "quantity": 5,
+     "en": "Pyrine"
+    },
+    {
+     "itemTemplateId": "70f2c013-813e-4f63-8b29-7a54a13b5e58",
+     "quantity": 10,
+     "en": "Faerite"
+    },
+    {
+     "itemTemplateId": "ab97efe1-bae9-4d16-8fd9-e05bad9ecb95",
+     "quantity": 10,
+     "en": "Atronite"
+    },
+    {
+     "itemTemplateId": "16e102fb-b1c0-42de-8106-0aa27e77f7f0",
+     "quantity": 10,
+     "en": "Diamond"
+    },
+    {
+     "itemTemplateId": "71bb8562-07ad-4f18-855a-96f9156b8e6b",
+     "quantity": 20,
+     "en": "Gold Ingot"
+    },
+    {
+     "itemTemplateId": "42d91529-c88b-4c5b-815b-b55508b4e7ef",
+     "quantity": 150,
+     "en": "Copper"
+    },
+    {
+     "itemTemplateId": "d94bab85-53d5-4c9c-a637-acd94fc66c98",
+     "quantity": 5,
+     "en": "Transcendent Soul Gem"
+    },
+    {
+     "itemTemplateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 20,
+     "en": "Glorious Soul Gem"
+    },
+    {
+     "itemTemplateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 25,
+     "en": "Grand Soul Gem"
+    },
+    {
+     "itemTemplateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 50,
+     "en": "Petty Soul Gem"
+    },
+    {
+     "itemTemplateId": "f8d27767-a85e-4fd6-a5bb-bf8a13d0daa2",
+     "quantity": 50000,
+     "en": "Gold"
+    },
+    {
+     "itemTemplateId": "05a7d501-f096-41e9-8443-fd6a090d8425",
+     "quantity": 8,
+     "en": "Scroll of Revival"
+    }
+   ]
+  },
+  "heroicEnchanter": {
+   "offerId": "6ec8f67f-2cef-41aa-a7fc-f46237ae809c",
+   "editorName": "IAP_GemPack05_d_HeroicEnchanter",
+   "en": "Heroic Enchanter Pack",
+   "de": "Paket des heroischen Verzauberers",
+   "items": [
+    {
+     "itemTemplateId": "bafe6ed5-6473-4a4c-aef5-421d3af5c8cb",
+     "quantity": 12,
+     "en": "Glorious Soul Gem"
+    },
+    {
+     "itemTemplateId": "68d7941e-8c8d-47bf-9f66-becb058f1817",
+     "quantity": 24,
+     "en": "Grand Soul Gem"
+    },
+    {
+     "itemTemplateId": "a3351353-f613-4368-bac7-05783f857b07",
+     "quantity": 48,
+     "en": "Elevated Soul Gem"
+    },
+    {
+     "itemTemplateId": "19ce1a65-057f-4f34-a0ed-27de7c085662",
+     "quantity": 40,
+     "en": "Petty Soul Gem"
+    },
+    {
+     "itemTemplateId": "f1c5c03c-5297-48fb-a9d2-5f32bffb467c",
+     "quantity": 100,
+     "en": "Fire Salts"
+    },
+    {
+     "itemTemplateId": "10c54e43-a2a1-4833-9491-4c19149f43b5",
+     "quantity": 100,
+     "en": "Void Salts"
+    },
+    {
+     "itemTemplateId": "07f380dd-f123-4ef7-9b12-8b9fdb03c3e1",
+     "quantity": 100,
+     "en": "Imp Stool"
+    },
+    {
+     "itemTemplateId": "8b7d0044-3a38-4ee0-af45-d2892b0f508d",
+     "quantity": 100,
+     "en": "Deathbell"
+    },
+    {
+     "itemTemplateId": "05b4dd6b-796f-4088-a772-0e33ea3db976",
+     "quantity": 50,
+     "en": "Frost Salts"
+    },
+    {
+     "itemTemplateId": "9687d83c-aa7b-4cf3-a69f-0bba8204fa61",
+     "quantity": 50,
+     "en": "Glow Dust"
+    },
+    {
+     "itemTemplateId": "7116a2a8-ac2d-4cd9-8b7c-b80c397d3f50",
+     "quantity": 50,
+     "en": "Honeycomb"
+    }
+   ]
+  }
+ },
+ "armorSet": {
+  "en": "Dark Seducer set (Divine)",
+  "de": "Set der Dunklen Verführer (Göttlich)",
+  "pieces": [
+   {
+    "itemTemplateId": "1063c3f9-1bbf-4962-b80d-fb9832075c1c",
+    "nameKey": "Items.Name.DarkSeducerArmor",
+    "editorName": "Divine Dark Seducer Armor",
+    "en": "Dark Seducer Armor",
+    "de": "Rüstung der Dunklen Verführer"
+   },
+   {
+    "itemTemplateId": "2c9ac3da-4a90-4fcb-bb59-4202fdecffe0",
+    "nameKey": "Items.Name.DarkSeducerBoots",
+    "editorName": "Divine Dark Seducer Boots",
+    "en": "Dark Seducer Boots",
+    "de": "Stiefel der Dunklen Verführer"
+   },
+   {
+    "itemTemplateId": "15f9963e-059c-464c-86ad-3a7eaa7cea9d",
+    "nameKey": "Items.Name.DarkSeducerGauntlets",
+    "editorName": "Divine Dark Seducer Gauntlets",
+    "en": "Dark Seducer Gauntlets",
+    "de": "Schutzhandschuhe der Dunklen Verführer"
+   },
+   {
+    "itemTemplateId": "0c2869fb-3a95-45c6-8dcc-706d43f0fab0",
+    "nameKey": "Items.Name.DarkSeducerHelmet",
+    "editorName": "Divine Dark Seducer Helmet 03",
+    "en": "Dark Seducer Helmet",
+    "de": "Helm der Dunklen Verführer"
+   }
+  ]
+ },
+ "doors": [
+  {
+   "day": 1,
+   "date": "2026-12-01",
+   "decorations": [
+    {
+     "number": 93,
+     "itemTemplateId": "3bedef8a-2a4b-4953-81fa-0d38a8b97634",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon",
+     "en": "Beacon",
+     "de": "Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 2,
+   "date": "2026-12-02",
+   "decorations": [
+    {
+     "number": 19,
+     "itemTemplateId": "85164324-f536-40b6-ad86-559932529ae8",
+     "quantity": 2,
+     "nameKey": "Items.Name.Medium_LifeTree_01",
+     "en": "Saturalia Tree",
+     "de": "Saturalia-Baum"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 3,
+   "date": "2026-12-03",
+   "decorations": [
+    {
+     "number": 66,
+     "itemTemplateId": "5b6ec37e-e969-4832-a1c4-9bb84a4227a7",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_02",
+     "en": "Peridot Beacon",
+     "de": "Peridot-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 4,
+   "date": "2026-12-04",
+   "decorations": [
+    {
+     "number": 7,
+     "itemTemplateId": "eded85b4-554f-4746-a27a-d624bc1da7cf",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_SnowTree_01",
+     "en": "Grand Saturalia Tree",
+     "de": "Mächtiger Saturalia-Baum"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 5,
+   "date": "2026-12-05",
+   "decorations": [
+    {
+     "number": 45,
+     "itemTemplateId": "04d05817-08f3-4368-8f95-64d617699b19",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_01",
+     "en": "Garnet Beacon",
+     "de": "Granat-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 6,
+   "date": "2026-12-06",
+   "decorations": [
+    {
+     "number": 53,
+     "itemTemplateId": "b53d6051-48a4-410a-a4f6-e9edc3e624f6",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Ice_UniCorn",
+     "en": "Ice Unicorn",
+     "de": "Eiseinhorn"
+    },
+    {
+     "number": 50,
+     "itemTemplateId": "ccf16487-e58c-44d5-91e4-d4b33029e1fa",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Ice_Goat",
+     "en": "Ice Goat",
+     "de": "Eisziege",
+     "neverOwned": true
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 600,
+   "armorSets": 1
+  },
+  {
+   "day": 7,
+   "date": "2026-12-07",
+   "decorations": [
+    {
+     "number": 24,
+     "itemTemplateId": "8841cbbd-c404-4713-9f98-73b6c9730f13",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_03",
+     "en": "Amethyst Beacon",
+     "de": "Amethyst-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 8,
+   "date": "2026-12-08",
+   "decorations": [
+    {
+     "number": 75,
+     "itemTemplateId": "20d2232a-4d86-4f52-be53-fb84179b53bc",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_CuteFountain",
+     "en": "Small Fountain",
+     "de": "Kleine Fontäne"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 9,
+   "date": "2026-12-09",
+   "decorations": [
+    {
+     "number": 45,
+     "itemTemplateId": "04d05817-08f3-4368-8f95-64d617699b19",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_01",
+     "en": "Garnet Beacon",
+     "de": "Granat-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 10,
+   "date": "2026-12-10",
+   "decorations": [
+    {
+     "number": 17,
+     "itemTemplateId": "a53e20cb-16e4-4fd5-b2e9-0e33a0a43fde",
+     "quantity": 2,
+     "nameKey": "Items.Name.Medium_Iceheart_Fountain",
+     "en": "Frozen Heart Fountain",
+     "de": "Brunnen des gefrorenen Herzens"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 11,
+   "date": "2026-12-11",
+   "decorations": [
+    {
+     "number": 40,
+     "itemTemplateId": "f075e3ea-df65-4a65-afb4-9776ba0e35cf",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_04",
+     "en": "Emerald Beacon",
+     "de": "Smaragd-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 12,
+   "date": "2026-12-12",
+   "decorations": [
+    {
+     "number": 1,
+     "itemTemplateId": "8c8c1e22-c08f-48bf-a817-180e3143e345",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_Pine_Tree_01",
+     "en": "Birdsong Tree",
+     "de": "Vogelsangbaum"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 13,
+   "date": "2026-12-13",
+   "decorations": [
+    {
+     "number": 24,
+     "itemTemplateId": "8841cbbd-c404-4713-9f98-73b6c9730f13",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_03",
+     "en": "Amethyst Beacon",
+     "de": "Amethyst-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 14,
+   "date": "2026-12-14",
+   "decorations": [
+    {
+     "number": 9,
+     "itemTemplateId": "708e0da9-d609-4b86-8ecb-4569961946ee",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_SnowTree_02",
+     "en": "Saturalia Grove",
+     "de": "Saturalia-Hain"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 15,
+   "date": "2026-12-15",
+   "decorations": [
+    {
+     "number": 66,
+     "itemTemplateId": "5b6ec37e-e969-4832-a1c4-9bb84a4227a7",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_02",
+     "en": "Peridot Beacon",
+     "de": "Peridot-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 16,
+   "date": "2026-12-16",
+   "decorations": [
+    {
+     "number": 11,
+     "itemTemplateId": "c064e1c9-69da-4235-80c4-7771f2d8e8bc",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_Pine_Fountain",
+     "en": "Sylvan Fountain",
+     "de": "Waldbrunnen",
+     "neverOwned": true
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 17,
+   "date": "2026-12-17",
+   "decorations": [
+    {
+     "number": 93,
+     "itemTemplateId": "3bedef8a-2a4b-4953-81fa-0d38a8b97634",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon",
+     "en": "Beacon",
+     "de": "Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 18,
+   "date": "2026-12-18",
+   "decorations": [
+    {
+     "number": 92,
+     "itemTemplateId": "ea5b4d2c-61cc-49e6-acaa-e41d6dd4adc9",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_Tree1",
+     "en": "Large Elm Tree",
+     "de": "Große Ulme"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 19,
+   "date": "2026-12-19",
+   "decorations": [
+    {
+     "number": 40,
+     "itemTemplateId": "f075e3ea-df65-4a65-afb4-9776ba0e35cf",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_04",
+     "en": "Emerald Beacon",
+     "de": "Smaragd-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 20,
+   "date": "2026-12-20",
+   "decorations": [
+    {
+     "number": 24,
+     "itemTemplateId": "8841cbbd-c404-4713-9f98-73b6c9730f13",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_03",
+     "en": "Amethyst Beacon",
+     "de": "Amethyst-Leuchtfeuer"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 21,
+   "date": "2026-12-21",
+   "decorations": [
+    {
+     "number": 66,
+     "itemTemplateId": "5b6ec37e-e969-4832-a1c4-9bb84a4227a7",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_02",
+     "en": "Peridot Beacon",
+     "de": "Peridot-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 22,
+   "date": "2026-12-22",
+   "decorations": [
+    {
+     "number": 40,
+     "itemTemplateId": "f075e3ea-df65-4a65-afb4-9776ba0e35cf",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_04",
+     "en": "Emerald Beacon",
+     "de": "Smaragd-Leuchtfeuer"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 23,
+   "date": "2026-12-23",
+   "decorations": [
+    {
+     "number": 4,
+     "itemTemplateId": "56a1ce35-e3c7-47e7-993f-b63ff14e05b1",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_DragonSnowGlobe",
+     "en": "Dragon Snow Globe",
+     "de": "Drachenschneekugel"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  },
+  {
+   "day": 24,
+   "date": "2026-12-24",
+   "decorations": [
+    {
+     "number": 52,
+     "itemTemplateId": "c8e8e85c-2f1c-46f8-a047-9c328de69d20",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Ice_Mammoth",
+     "en": "Ice Mammoth",
+     "de": "Eismammut"
+    },
+    {
+     "number": 51,
+     "itemTemplateId": "46d4de4d-2a4b-43c4-8623-14b305376d56",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Ice_Kajit",
+     "en": "Ice Khajiit",
+     "de": "Eiskhajiit"
+    },
+    {
+     "number": 49,
+     "itemTemplateId": "b3c128e2-d811-4f85-a9b9-62aefdde092d",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Ice_Elk",
+     "en": "Ice Elk",
+     "de": "Eiselch"
+    }
+   ],
+   "pack": "heroicEnchanter",
+   "gems": 1200,
+   "armorSets": 3
+  },
+  {
+   "day": 31,
+   "date": "2026-12-31",
+   "decorations": [
+    {
+     "number": 92,
+     "itemTemplateId": "ea5b4d2c-61cc-49e6-acaa-e41d6dd4adc9",
+     "quantity": 1,
+     "nameKey": "Items.Name.Large_Tree1",
+     "en": "Large Elm Tree",
+     "de": "Große Ulme"
+    },
+    {
+     "number": 93,
+     "itemTemplateId": "3bedef8a-2a4b-4953-81fa-0d38a8b97634",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon",
+     "en": "Beacon",
+     "de": "Leuchtfeuer"
+    },
+    {
+     "number": 45,
+     "itemTemplateId": "04d05817-08f3-4368-8f95-64d617699b19",
+     "quantity": 3,
+     "nameKey": "Items.Name.Small_Beacon_01",
+     "en": "Garnet Beacon",
+     "de": "Granat-Leuchtfeuer"
+    }
+   ],
+   "pack": "incredibleTreasure",
+   "gems": 0,
+   "armorSets": 0
+  }
+ ]
+}

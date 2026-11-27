@@ -115,6 +115,27 @@ pub async fn get_announcements(
         Err(e) => log::warn!("announcements: arena weapon gifts unavailable: {e}"),
     }
 
+    // The December 2026 gift calendar (tracker #499): today's door, if this
+    // character can open it and has not. Compiled in, so before 1 December
+    // 00:00 UTC this adds nothing and touches no table. `calendar_now` is the
+    // real clock for everyone but a rehearsing test character. This request is
+    // where the account's first character of the day is bound to the door
+    // (`crate::december`); the account's other alts are shown no banner.
+    let calendar_now = crate::december::clock_for(&mut conn, character_id, now).await;
+    if let Some((_, holds_today)) =
+        crate::december::todays_door(&mut conn, character_id, calendar_now, now).await
+    {
+        let advertised: std::collections::HashSet<String> =
+            announcements.iter().map(|a| a.id.clone()).collect();
+        announcements.extend(crate::december::door_announcements(
+            &owner.server_state.0.gift_claims,
+            &advertised,
+            calendar_now,
+            now,
+            holds_today,
+        ));
+    }
+
     // Gifted gear that did not fit when its gift was claimed (tracker #499): its
     // payout is discoverable only here, like every other gift. Advertised only
     // while a claim would hand something over — a piece is due and there is
@@ -122,7 +143,7 @@ pub async fn get_announcements(
     // inventory is read only for a character that is owed something.
     if !owner.server_state.0.deferred_gift_gear.is_empty() {
         if let Some((_, owed)) =
-            crate::global_gift::deferred_payout(&mut conn, character_id, now).await
+            crate::global_gift::deferred_payout(&mut conn, character_id, calendar_now).await
         {
             announcements.push(deferred_gear_announcement(owed, now));
         }

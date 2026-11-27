@@ -437,7 +437,8 @@ pub async fn get_global_gift(
     // The deferred-gear payout (tracker #499): one fixed id, its contents this
     // character's own — the owed pieces that are due and fit right now.
     if gift_id == gift_capacity::DEFERRED_GEAR_GIFT_ID {
-        let def = deferred_payout_def(&mut conn, character_id, now_secs())
+        let now = crate::december::clock_for(&mut conn, character_id, now_secs()).await;
+        let def = deferred_payout_def(&mut conn, character_id, now)
             .await
             .ok_or_else(|| map_gift_err(GiftError::NotFound))?;
         return Ok(Json(GiftViewResponse {
@@ -506,8 +507,17 @@ pub async fn claim_global_gift(
     let user_id = session.session.user_id;
     let (character_id, gift_id) = path.into_inner();
 
-    let now = now_secs();
     let mut conn = app_state.db_pool.get().await.unwrap();
+    // The December calendar's doors and its armour payout run on the calendar
+    // clock: the real one, except for a rehearsing test character
+    // (`crate::december`). Every other gift is on the real clock always.
+    let real_now = now_secs();
+    let calendar_door = blades_lib::features::december_2026::door(gift_id);
+    let now = if calendar_door.is_some() || gift_id == gift_capacity::DEFERRED_GEAR_GIFT_ID {
+        crate::december::clock_for(&mut conn, character_id, real_now).await
+    } else {
+        real_now
+    };
 
     use crate::schema::arena_seasons::dsl as s;
     let season: Option<season_store::SeasonRow> = s::arena_seasons
@@ -940,6 +950,24 @@ pub async fn claim_global_gift(
                 .unwrap_or(0);
             gifts::can_claim(&def, current, now).map_err(map_gift_err)?;
 
+            // One door a day per account (tracker #499, HauDrauf 2026-11-24):
+            // only the account's first character of the day may open it. Bound
+            // here too if `/announcements` has not bound it yet, inside the
+            // transaction holding the row so the live alt cannot switch under
+            // it. Another alt is answered as for a door that is not open.
+            if let Some(door) = calendar_door {
+                let rehearsal = now != real_now;
+                if !crate::december::holds_door(&mut conn, character_id, door.day, rehearsal, real_now)
+                    .await?
+                {
+                    log::info!(
+                        "[december] door {}: character {character_id} is not its account's holder today",
+                        door.day
+                    );
+                    return Err(map_gift_err(GiftError::NotActive));
+                }
+            }
+
             let mut reward = gifts::build_gift_reward(
                 &def,
                 &globals.game_data.items_template,
@@ -1204,6 +1232,66 @@ mod deferred_gear_tests {
         let (reward, still_owed) = pay_deferred_gear(&mut full, DEC_25, &repair(), counter());
         assert!(reward.is_empty());
         assert_eq!(still_owed, 5);
+    }
+
+    /// The claim path on the real 24 December gift (tracker #499): built as the
+    /// handler builds it, a backpack at 107 of 120 is handed seven of the twelve
+    /// pieces — to exactly 95 % — with the Gems and every stackable in full,
+    /// and the other five are on the character's file, payable from the 25th.
+    #[test]
+    fn claiming_the_24th_into_a_nearly_full_backpack_defers_the_rest() {
+        use blades_lib::features::december_2026::{DEFERRED_ARMOR_FROM_SECS, door_gift_id, gift};
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("parsed.json")).unwrap()).unwrap();
+        let items = serde_json::from_value(parsed["items_template"].clone()).unwrap();
+
+        let gift_id = door_gift_id(24);
+        let def = gift(gift_id).unwrap();
+        let mut e = entry(107, 0);
+        let mut reward = gifts::build_gift_reward(def, &items, &repair());
+        let mut next = counter();
+        for item in &mut reward.items {
+            item.id = next();
+        }
+        assert_eq!(reward.items.len(), 12);
+        let stackables = reward.stackable_items.clone();
+
+        let held = cap_claimed_gear(&mut reward, gift_id, &mut e);
+        assert_eq!(held, 5);
+        assert_eq!(reward.items.len(), 7);
+        assert_eq!(reward.currencies[&blades_lib::economy::GEMS], 1_200);
+        assert_eq!(reward.stackable_items, stackables);
+
+        let mut tracker = InventoryChangeTracker::default();
+        apply_reward(
+            &reward,
+            &mut e.wallet.0,
+            &mut e.inventory.0,
+            &mut e.character.0,
+            &mut tracker,
+        );
+        assert_eq!(e.inventory.0.backpack.items.0.len(), 114, "95 % of 120");
+        assert_eq!(e.wallet.0.balance(blades_lib::economy::GEMS), 1_200);
+        let filed = &e.server_state.0.deferred_gift_gear;
+        assert_eq!(filed.iter().map(|d| d.quantity).sum::<u64>(), 5);
+        assert!(
+            filed
+                .iter()
+                .all(|d| d.gift_id == gift_id && d.payable_from_secs == DEFERRED_ARMOR_FROM_SECS)
+        );
+
+        // Not on the 24th, however much room there is…
+        e.inventory.0.backpack.items.0.clear();
+        let (early, owed) =
+            pay_deferred_gear(&mut e, DEFERRED_ARMOR_FROM_SECS - 1, &repair(), counter());
+        assert!(early.is_empty());
+        assert_eq!(owed, 5);
+        // …and all five from the first second of the 25th.
+        let (paid, owed) =
+            pay_deferred_gear(&mut e, DEFERRED_ARMOR_FROM_SECS, &repair(), counter());
+        assert_eq!(paid.items.len(), 5);
+        assert_eq!(owed, 0);
     }
 
     /// CONTROL: a gift without a backpack rule — every gift there is today —
