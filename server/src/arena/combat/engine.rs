@@ -1000,6 +1000,15 @@ impl MatchInstance {
         // drop them. No damage, no phase change. Works in any live-ish phase.
         if messages::is_play_emote(user_data) {
             let emote_id = messages::play_emote_id(user_data).unwrap_or_default();
+            // Tracker #638: Guffaw is switched off for everyone. Neither the emoter nor
+            // the opponent is sent the relay, so it plays on neither screen; the item
+            // itself stays with its owners. See `global_shop::DISABLE_GUFFAW_EMOTE_638`.
+            if crate::global_shop::emote_is_disabled(&emote_id) {
+                info!(
+                    "combat c2s: slot {sender} op72 PlayEmote (\"{emote_id}\") dropped: Guffaw is disabled (#638)"
+                );
+                return out;
+            }
             if let Some(emoter) = self.combat.fighters.get(sender) {
                 let relay = messages::play_emote_relay(emoter.net_object_id, &emote_id);
                 // Echo to the emoter first (its own animation), then relay to the opponent.
@@ -7223,6 +7232,38 @@ pub(in crate::arena::combat) mod tests {
             FlowState::StateTimeout,
             "emote doesn't change the match phase"
         );
+    }
+
+    /// Tracker #638: Guffaw is switched off. A `PlayEmote` carrying the Guffaw template
+    /// reaches nobody (no echo, so the emoter's client plays nothing either), while any
+    /// other emote, the Heart included, still goes to both players.
+    #[test]
+    fn guffaw_emote_is_dropped_but_other_emotes_still_relay() {
+        let (mut m, t0) = live_inst(2);
+        let emote = |m: &MatchInstance, id: &str| {
+            let mut w = arena_proto::NetDataWriter::new();
+            w.int(0, m.combat.fighters[0].net_object_id)
+                .byte(1, 55)
+                .byte(2, 3)
+                .byte(3, 72) // PlayEmote
+                .string(4, id);
+            let mut f = messages::frame_for_test(w.finish());
+            f[0] = 0x84; // c2s marker
+            f
+        };
+        let guffaw = crate::global_shop::GUFFAW_EMOTE_TEMPLATE.to_string();
+        assert!(crate::global_shop::DISABLE_GUFFAW_EMOTE_638);
+        let frame = emote(&m, &guffaw);
+        assert!(
+            m.on_c2s(0, &frame, t0).is_empty(),
+            "Guffaw must be relayed to neither the emoter nor the opponent"
+        );
+        let heart = crate::global_shop::HEART_EMOTE_TEMPLATE.to_string();
+        let frame = emote(&m, &heart);
+        let out = m.on_c2s(0, &frame, t0);
+        let viewers: Vec<usize> = out.iter().map(|(v, _)| *v).collect();
+        assert_eq!(viewers, vec![0, 1], "the Heart still reaches both players");
+        assert_eq!(m.phase(), FlowState::StateTimeout);
     }
 
     /// DEBUG-HOLD (`ARENA_DEBUG_HOLD`): the FULL round-start burst still goes out
