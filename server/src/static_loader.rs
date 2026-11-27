@@ -161,12 +161,20 @@ pub fn load(dir: &Path) -> StaticData {
     if global_shop_windows.is_null() {
         global_shop_windows = json!({ "globalShopWindows": {} });
     }
+    // Tracker #638: the Heart emote takes Guffaw's place in both calendars.
+    crate::global_shop::swap_guffaw_for_heart(&mut global_shop_overrides, "globalShopOverrides");
+    crate::global_shop::swap_guffaw_for_heart(&mut global_shop_windows, "globalShopWindows");
     let mut iap: Value = read_json(&dir.join("iap.json"));
     if iap.is_null() {
         iap = json!({ "fulfillmentOverrides": {} });
     }
-    let global_shop_grants: HashMap<Uuid, RewardGrant> =
+    let mut global_shop_grants: HashMap<Uuid, RewardGrant> =
         read_json(&dir.join("global_shop_grants.json"));
+    if crate::global_shop::HEART_REPLACES_GUFFAW_638 {
+        global_shop_grants
+            .entry(crate::global_shop::HEART_EMOTE_OFFER)
+            .or_insert_with(crate::global_shop::heart_offer_grant);
+    }
     // Missing is fail-closed: without an authoritative price table, paid
     // purchases are rejected instead of falling back to the request's price.
     let global_shop_prices: HashMap<Uuid, Vec<Price>> =

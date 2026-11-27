@@ -178,6 +178,11 @@ async fn create_characters(
     Ok(web::Json(created))
 }
 
+/// HauDrauf's rule (tracker #638, 2026-11-26): a fresh character starts with
+/// one Heart emote in its backpack. REVERT SWITCH: `false` starts it with none,
+/// as retail did.
+pub(crate) const STARTER_HEART_EMOTE_638: bool = true;
+
 /// The four parts of a brand-new level-1 character, before it has a row.
 pub(crate) struct FreshCharacter {
     pub character: CompleteCharacter,
@@ -283,8 +288,18 @@ pub(crate) fn fresh_character(
         },
     );
 
+    // HauDrauf's rule (#638): every new character starts with the Heart emote.
+    // NOT RETAIL (retail level-1 characters held no emote). Revert with
+    // `STARTER_HEART_EMOTE_638`. Characters that already exist are untouched.
+    let mut backpack = Backpack::default();
+    if STARTER_HEART_EMOTE_638 {
+        backpack
+            .stackable_items
+            .add(crate::global_shop::HEART_EMOTE_TEMPLATE, 1);
+    }
+
     let inventory = CompleteInventory {
-        backpack: Backpack::default(),
+        backpack,
         loadout: Loadout {
             equipped_items: EquippedItems(equipped_items),
             equipped_consumables: Vec::new(),
@@ -761,6 +776,25 @@ fn base64_utf8(value: &str) -> String {
 #[cfg(test)]
 mod starter_character_tests {
     use super::*;
+
+    /// #638: every fresh character starts with exactly one Heart emote, and
+    /// nothing else in its backpack.
+    #[test]
+    fn a_fresh_character_starts_with_the_heart_emote() {
+        let fresh = fresh_character(&Value::Null, "Heart".to_string(), json!({}));
+        let stackables = &fresh.inventory.backpack.stackable_items;
+        assert_eq!(
+            stackables.count(crate::global_shop::HEART_EMOTE_TEMPLATE),
+            1
+        );
+        assert_eq!(
+            stackables.counts().count(),
+            1,
+            "the Heart is the only stackable"
+        );
+        assert!(fresh.inventory.backpack.items.is_empty(), "no extra gear");
+        assert_eq!(fresh.inventory.loadout.equipped_items.0.len(), 4);
+    }
 
     #[test]
     fn generated_player_data_is_loadable_and_retail_shaped() {

@@ -666,6 +666,78 @@ pub(crate) const TOWN_LEVEL_UP_OFFERS: &[(u64, Uuid)] = &[
     (10, uuid::uuid!("bb5631a5-e68d-4455-a01e-bc3080bcf054")),
 ];
 
+/// HauDrauf's rule (tracker #638, 2026-11-26, pre-approved as a reversible
+/// common-good rule): the Guffaw emote leaves the shop and the Heart emote is sold
+/// in its place.
+///
+/// NOT RETAIL. Retail's own Heart offer ([`HEART_EMOTE_OFFER`],
+/// `EmoteOffer_Heart`, Jan-Feb 2020) was free; here it inherits Guffaw's slot
+/// exactly: the same replayed windows, the same 1-Gem farewell price, once per
+/// character. Players who already bought Guffaw keep it: only the offer goes.
+///
+/// The product id is the APK catalogue's, so the client already knows the
+/// offer and its bundle; the Heart template is one 66 production characters
+/// already hold in their backpack. In code, not `deploy/static`, because merging
+/// ships code and not the static data (same reason as [`TOWN_LEVEL_UP_OFFERS`]).
+///
+/// REVERT SWITCH: `false` serves Guffaw again and stops selling the Heart.
+pub(crate) const HEART_REPLACES_GUFFAW_638: bool = true;
+
+/// `IAP_Emote_Guffaw` / `EmoteOffer_Guffaw`, the product the replay serves.
+pub(crate) const GUFFAW_EMOTE_OFFER: Uuid = uuid::uuid!("23931dab-b680-4eb4-900e-1e0e5180bc55");
+
+/// `EmoteOffer_Heart` in the APK catalogue (bundle `8f79819a-…`).
+pub(crate) const HEART_EMOTE_OFFER: Uuid = uuid::uuid!("bf389986-faf9-4bdf-a7fe-c2a311f0d8fd");
+
+/// The Heart emote template ("Heart Emote", `UI.Emote.Additional.008`), the one
+/// retail's `EmoteOffer_Heart` granted. Its twin `cacfab02-…` is the
+/// GrandChampion copy and nobody on production holds it.
+pub(crate) const HEART_EMOTE_TEMPLATE: Uuid = uuid::uuid!("63f67d8a-88cb-4540-b7e9-78695b727cd2");
+
+/// What buying [`HEART_EMOTE_OFFER`] grants: one Heart, as a backpack stackable,
+/// in the shape every captured emote purchase has (`global_shop_grants.json`).
+/// The loader adds it to `global_shop_grants`, since the Heart offer has no
+/// capture and no offer-contents entry.
+pub(crate) fn heart_offer_grant() -> RewardGrant {
+    RewardGrant {
+        stackable_items: HashMap::from([(HEART_EMOTE_TEMPLATE, 1)]),
+        ..RewardGrant::default()
+    }
+}
+
+/// Hand Guffaw's catalogue rows to the Heart (#638), once, as the static data
+/// loads: the key under `wrapper` (`globalShopWindows` holds a list of windows
+/// per product, `globalShopOverrides` one entry), and every string inside the
+/// moved rows that names Guffaw, i.e. the top-level and `maxPurchaseLimits`
+/// tracking ids, so the caps count Heart purchases and never Guffaw's.
+///
+/// At load rather than per request so the calendar the replay reads and the
+/// calendar every check compares against are the same one, and so nothing
+/// clones the 1.5 MB calendar on each store open.
+pub(crate) fn swap_guffaw_for_heart(catalog: &mut Value, wrapper: &str) {
+    if !HEART_REPLACES_GUFFAW_638 {
+        return;
+    }
+    let Some(map) = catalog.get_mut(wrapper).and_then(Value::as_object_mut) else {
+        return;
+    };
+    let guffaw = GUFFAW_EMOTE_OFFER.to_string();
+    let heart = HEART_EMOTE_OFFER.to_string();
+    let Some(mut rows) = map.remove(&guffaw) else {
+        return;
+    };
+    fn rename(v: &mut Value, from: &str, to: &str) {
+        match v {
+            Value::String(s) if s.contains(from) => *s = s.replace(from, to),
+            Value::Array(a) => a.iter_mut().for_each(|x| rename(x, from, to)),
+            Value::Object(o) => o.values_mut().for_each(|x| rename(x, from, to)),
+            _ => {}
+        }
+    }
+    rename(&mut rows, &guffaw, &heart);
+    map.insert(heart, rows);
+}
+
 /// The town level-up offer a town reaching `level` stamps, if any.
 pub(crate) fn town_level_up_offer(level: u64) -> Option<Uuid> {
     TOWN_LEVEL_UP_OFFERS
@@ -6683,5 +6755,117 @@ mod last_chance_tests {
             src.contains("/globalshops/current/lastchance\"\n)]\npub async fn update_last_chance(")
         );
         assert_eq!(super::last_chance_ack(), serde_json::json!({}));
+    }
+}
+
+/// Tracker #638 (HauDrauf): Guffaw leaves the shop and the Heart takes its slot.
+/// Every assertion on the served catalogue is paired with a control on the
+/// unswapped replay, so none can pass because the probe looked at the wrong time.
+#[cfg(test)]
+mod report638_heart_emote_tests {
+    use super::*;
+
+    /// One hour into Guffaw's first replayed window (2026-05-22 16:00 UTC, 3 days).
+    const GUFFAW_LIVE: i64 = 1_779_465_600 + 3_600;
+
+    fn shipped() -> blades_lib::static_data::StaticData {
+        crate::static_loader::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static"
+        )))
+    }
+
+    fn offers(catalog: &Value) -> &serde_json::Map<String, Value> {
+        catalog["globalShopOverrides"].as_object().unwrap()
+    }
+
+    fn one_gem() -> Vec<Price> {
+        serde_json::from_value(serde_json::json!([
+            { "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139", "quantity": 1 }
+        ]))
+        .unwrap()
+    }
+
+    #[test]
+    fn control_the_unswapped_replay_serves_guffaw_at_this_time() {
+        let raw: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../deploy/static/global_shop_windows.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let replayed = replay_calendar(&raw, GUFFAW_LIVE).unwrap();
+        let guffaw = &offers(&replayed)[&GUFFAW_EMOTE_OFFER.to_string()];
+        let (s, e) = window_of(guffaw).unwrap();
+        assert!(
+            s <= GUFFAW_LIVE && GUFFAW_LIVE <= e,
+            "Guffaw must be live here"
+        );
+        assert!(!offers(&replayed).contains_key(&HEART_EMOTE_OFFER.to_string()));
+    }
+
+    #[test]
+    fn the_shop_serves_the_heart_and_not_guffaw() {
+        let served = served_catalog(&shipped(), GUFFAW_LIVE);
+        let map = offers(&served);
+        assert!(
+            !map.contains_key(&GUFFAW_EMOTE_OFFER.to_string()),
+            "Guffaw must be out of the shop"
+        );
+        let heart = map
+            .get(&HEART_EMOTE_OFFER.to_string())
+            .expect("the Heart is on sale in Guffaw's window");
+        assert_eq!(heart["maxPurchases"], 1, "once per character, like Guffaw");
+        let text = heart.to_string();
+        assert!(
+            !text.contains(&GUFFAW_EMOTE_OFFER.to_string()),
+            "no tracking id may still count Guffaw purchases: {text}"
+        );
+        assert_eq!(heart["purchaseTrackingId"], HEART_EMOTE_OFFER.to_string());
+    }
+
+    #[test]
+    fn guffaw_is_out_of_the_shop_for_a_whole_replay_cycle() {
+        let sd = shipped();
+        let mut heart_days = 0;
+        for day in 0..REPLAY_PERIOD_DAYS {
+            let now = CALENDAR_START + day * DAY + 12 * 3_600;
+            let served = served_catalog(&sd, now);
+            assert!(!offers(&served).contains_key(&GUFFAW_EMOTE_OFFER.to_string()));
+            heart_days += offers(&served).contains_key(&HEART_EMOTE_OFFER.to_string()) as i32;
+        }
+        assert!(heart_days > 0, "the Heart must appear in the cycle");
+    }
+
+    #[test]
+    fn the_heart_costs_one_gem_and_grants_one_heart() {
+        let sd = shipped();
+        assert_eq!(
+            authoritative_prices(&sd, HEART_EMOTE_OFFER, GUFFAW_LIVE),
+            Some(one_gem())
+        );
+        assert!(validate_purchase_prices(&sd, HEART_EMOTE_OFFER, &one_gem(), GUFFAW_LIVE).is_ok());
+        assert_eq!(
+            lifetime_purchase_cap(&sd, HEART_EMOTE_OFFER, GUFFAW_LIVE),
+            Some(1)
+        );
+        let reward = purchase_reward(&sd, &repair_data(), item_table(), HEART_EMOTE_OFFER, 0)
+            .expect("the Heart offer must grant");
+        assert_eq!(
+            reward.stackable_items,
+            HashMap::from([(HEART_EMOTE_TEMPLATE, 1)])
+        );
+        assert!(reward.items.is_empty() && reward.currencies.is_empty());
+    }
+
+    #[test]
+    fn the_heart_template_is_a_real_emote_in_the_game_data() {
+        let item = item_table()
+            .get(&HEART_EMOTE_TEMPLATE)
+            .expect("parsed.json names the Heart");
+        assert_eq!(item.name, "UI.Emote.Additional.008.Name");
+        assert_eq!(item.r#type, 14, "type 14 is an emote, as Guffaw's is");
     }
 }
