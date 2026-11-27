@@ -191,22 +191,20 @@ async fn bnet_log_in(
         .get_session_or_error()
         .ok()
         .map(|s| (s.session_id, s.session.user_id));
-    let mut conn = app_state.db_pool.get().await.unwrap();
 
-    let (user_id, log_name) = if let (Some(username_raw), Some(password)) =
+    let (user_id, log_name, mut conn) = if let (Some(username_raw), Some(password)) =
         (body.username.as_deref(), body.password.as_deref())
     {
-        // One 401 for "no such user", "wrong password" and "not a credential
-        // at all"; see `credentials::check_login` for what keeps them
-        // indistinguishable and off the async workers.
-        let Some(user_id) =
-            crate::credentials::check_login(&mut conn, username_raw, password).await
-        else {
-            return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
-        };
+        // One 401 for "no such user", "wrong password", "not a credential at
+        // all" and "locked out"; see `login_guard` for what keeps them
+        // indistinguishable, limited, and off the pool while the hash runs.
+        // The connection is taken only after the check.
+        let user_id = password_login(&app_state, &req, username_raw, password, 110).await?;
         let username = crate::credentials::normalise_username(username_raw);
-        (user_id, Some(username))
+        let conn = app_state.db_pool.get().await.unwrap();
+        (user_id, Some(username), conn)
     } else if let Some(login_token) = body.login_token.as_deref() {
+        let mut conn = app_state.db_pool.get().await.unwrap();
         // This is the normal cold-start request after a successful BNet link:
         // capture 145996 is exactly {loginToken, deviceId, platform}. The old
         // required username/password struct rejected it during deserialization,
@@ -226,7 +224,7 @@ async fn bnet_log_in(
         let Some(user_id) = found else {
             return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
         };
-        (user_id, None)
+        (user_id, None, conn)
     } else {
         return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 110));
     };
@@ -353,6 +351,31 @@ struct BnetLinkResponse {
     account_link_result: AccountLinkResult,
 }
 
+/// The password check every sign-in path uses: the login limits, the bound on
+/// concurrent verifications, and the generic answer.
+///
+/// `refused_code` keeps each route's existing 401 error code. A busy server is
+/// a 503 decided before the account is read, so it says nothing about it.
+async fn password_login(
+    app_state: &Arc<ServerGlobal>,
+    req: &HttpRequest,
+    username_raw: &str,
+    password: &str,
+    refused_code: u64,
+) -> Result<Uuid, BladeApiError> {
+    use crate::login_guard::{LoginOutcome, check_login, login_source};
+    let source = login_source(req);
+    match check_login(&app_state.db_pool, source, username_raw, password).await {
+        LoginOutcome::Accepted(user_id) => Ok(user_id),
+        LoginOutcome::Refused => Err(BladeApiError::new(
+            StatusCode::UNAUTHORIZED,
+            3,
+            refused_code,
+        )),
+        LoginOutcome::Busy => Err(BladeApiError::new(StatusCode::SERVICE_UNAVAILABLE, 3, 115)),
+    }
+}
+
 /// Verify the credential and mint a session for the account it names.
 ///
 /// Shared by link and link/force so the two cannot drift: the only difference
@@ -360,17 +383,14 @@ struct BnetLinkResponse {
 /// authenticated or how.
 async fn resolve_link(
     app_state: &Arc<ServerGlobal>,
+    req: &HttpRequest,
     username_raw: &str,
     password: &str,
 ) -> Result<(Uuid, Uuid, Arc<Session>), BladeApiError> {
+    // The same check as bnet_log_in, by construction, and before the
+    // connection is taken.
+    let user_id = password_login(app_state, req, username_raw, password, 112).await?;
     let mut conn = app_state.db_pool.get().await.unwrap();
-
-    // The same check as bnet_log_in, by construction.
-    let Some(user_id) =
-        crate::credentials::check_login(&mut conn, username_raw, password).await
-    else {
-        return Err(BladeApiError::new(StatusCode::UNAUTHORIZED, 3, 112));
-    };
 
     let user: UserDBEntry = {
         use crate::schema::users::dsl as u;
@@ -552,12 +572,13 @@ async fn bind_linked_devices(
 
 #[post("/blades.bgs.services/api/authentication/v1/public/auth/bnet/link")]
 async fn bnet_link(
+    req: HttpRequest,
     app_state: web::Data<Arc<ServerGlobal>>,
     body: web::Json<BnetLinkRequest>,
 ) -> Result<web::Json<BnetLinkResponse>, BladeApiError> {
     let body = body.into_inner();
     let (user_id, secret_id, session) =
-        resolve_link(&app_state, &body.username, &body.password).await?;
+        resolve_link(&app_state, &req, &body.username, &body.password).await?;
 
     // The client names the account it is currently signed in as by its public
     // session `userId` on current builds. Older payloads may still carry the
@@ -930,7 +951,7 @@ async fn bnet_link_force(
     let body = body.into_inner();
     let caller_device_id = caller_device_identity(&req, body.device_id.as_deref());
     let (user_id, secret_id, session) =
-        resolve_link(&app_state, &body.username, &body.password).await?;
+        resolve_link(&app_state, &req, &body.username, &body.password).await?;
 
     // The player's answer, which this endpoint used to discard (#185).
     let keep_played =
