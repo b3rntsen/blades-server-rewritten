@@ -16,6 +16,7 @@ pub mod decoration_prestige;
 pub mod event_materials;
 pub mod free_for_all;
 pub mod game_events;
+pub mod gift_capacity;
 pub mod gifts;
 pub mod high_level_materials;
 pub mod global_shop;

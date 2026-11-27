@@ -44,7 +44,7 @@ pub async fn get_announcements(
             .load(&mut conn)
             .await?
     };
-    get_only_single_character_and_check_permission(owners, &session.session)?;
+    let owner = get_only_single_character_and_check_permission(owners, &session.session)?;
 
     // One indexed existence probe per ended season. The award unique index
     // starts `(season_id, character_id)`, so this remains cheap without adding
@@ -113,6 +113,19 @@ pub async fn get_announcements(
             }
         }
         Err(e) => log::warn!("announcements: arena weapon gifts unavailable: {e}"),
+    }
+
+    // Gifted gear that did not fit when its gift was claimed (tracker #499): its
+    // payout is discoverable only here, like every other gift. Advertised only
+    // while a claim would hand something over — a piece is due and there is
+    // room — so the banner never arms a Claim that answers "not active". The
+    // inventory is read only for a character that is owed something.
+    if !owner.server_state.0.deferred_gift_gear.is_empty() {
+        if let Some((_, owed)) =
+            crate::global_gift::deferred_payout(&mut conn, character_id, now).await
+        {
+            announcements.push(deferred_gear_announcement(owed, now));
+        }
     }
 
     // Last, and for every source at once: put the asset on a host the client can
@@ -277,6 +290,26 @@ fn arena_weapon_gift_announcement(
     }
 }
 
+/// The banner for the deferred-gear payout (tracker #499).
+///
+/// GIFT-BEARING through the `gift/` namespace, pointing at the payout's fixed
+/// gift id. The banner's OWN id carries the number of pieces still owed, so a
+/// second payout — after a first one that left pieces on file — is a new
+/// announcement to the client rather than one it has already shown.
+fn deferred_gear_announcement(owed: u64, now: i64) -> Announcement {
+    let gift_id = blades_lib::features::gift_capacity::DEFERRED_GEAR_GIFT_ID;
+    let id = uuid::Uuid::from_u128(
+        (gift_id.as_u128() & !0xFFFF_FFFF) | u128::from(owed.min(0xFFFF_FFFF)),
+    );
+    Announcement {
+        id: id.to_string(),
+        r#type: "BASIC".into(),
+        start_time: now,
+        ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
+        asset_url: format!("https://announcements.blades.bgs.services/gift/{gift_id}"),
+    }
+}
+
 fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement {
     let start = season.ended_at.unwrap_or(season.ends_at);
     Announcement {
@@ -379,6 +412,26 @@ mod tests {
             format!("{DEFAULT_ASSET_ORIGIN}/gift/{id}"),
             "moved to the reachable host with the gift id intact"
         );
+    }
+
+    /// The deferred-gear banner arms the payout gift's Claim, and a later payout
+    /// is a different announcement from the one before it.
+    #[test]
+    fn the_deferred_gear_banner_points_at_the_payout_gift() {
+        let gift_id = blades_lib::features::gift_capacity::DEFERRED_GEAR_GIFT_ID;
+        let first = deferred_gear_announcement(12, 5_000);
+        let second = deferred_gear_announcement(4, 6_000);
+        for a in [&first, &second] {
+            assert!(
+                a.asset_url.ends_with(&format!("/gift/{gift_id}")),
+                "{}",
+                a.asset_url
+            );
+            assert!(uuid::Uuid::parse_str(&a.id).is_ok(), "{} is a uuid", a.id);
+            assert!(a.start_time <= 6_000 && a.ttl > 6_000, "live now");
+        }
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.id, deferred_gear_announcement(12, 9_000).id);
     }
 
     /// CONTROL: the Free for All banner is deliberately NOT gift-bearing, and
