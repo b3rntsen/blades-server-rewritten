@@ -4477,6 +4477,38 @@ pub(crate) mod jobs_gen {
         rng.pick(list)?.as_str().map(|s| s.to_string())
     }
 
+    /// The name a Duel's title and description give its champion, by `duelBossId`
+    /// (tracker #641: "the named arena opponent in the title never matches the
+    /// actual opponent").
+    ///
+    /// The champion the job fields is `duelBossId` (its body, dialogue and, since
+    /// #431, its family), but the name was a separate [`pick_npc`] draw, so the
+    /// title named one of ten Duelists and the fight brought another: 1 in 10 by
+    /// chance.
+    ///
+    /// MEASURED: 50 distinct Duels in the 2026-06-07 capture snapshot (173
+    /// `/quests` bodies). Each champion is always named the same, in the title and
+    /// the description: 9 champions, 9 names, 0 exceptions. `NPC.Duelist3.Name`
+    /// belongs to no champion retail ever fielded, so it is never named.
+    pub(super) const DUEL_BOSS_NAMES: &[(&str, &str)] = &[
+        ("01d82726-527f-4601-929c-182acd3fa9b7", "NPC.Duelist1.Name"), // 5/5
+        ("024b4f81-c7ef-4322-a547-ee863b4c02ad", "NPC.Duelist2.Name"), // 12/12
+        ("dadd4e4e-7544-4680-9a73-84208c8ab7a2", "NPC.Duelist4.Name"), // 1/1
+        ("ad5bf23a-2899-40e1-b77b-dd0cb3555176", "NPC.Duelist5.Name"), // 9/9
+        ("68a30f8a-dd30-4a41-a014-200f16a8ff89", "NPC.Duelist6.Name"), // 7/7
+        ("33bbefc6-abb3-48e1-a233-96002d9ca98c", "NPC.Duelist7.Name"), // 3/3
+        ("2f85c042-ab17-47f2-a4b2-385f8626034c", "NPC.Duelist8.Name"), // 4/4
+        ("ea48eb54-672c-4b28-9c92-60463314ee0d", "NPC.Duelist9.Name"), // 5/5
+        ("282b51da-b334-4cab-90fd-ba7fbdea00f1", "NPC.Duelist10.Name"), // 4/4
+    ];
+
+    pub(super) fn duel_boss_name(duel_boss: &str) -> Option<&'static str> {
+        DUEL_BOSS_NAMES
+            .iter()
+            .find(|(boss, _)| *boss == duel_boss)
+            .map(|(_, name)| *name)
+    }
+
     /// Re-point a Defeat's primary family, or an Explore's dungeon template, at
     /// one the localization table can name.
     ///
@@ -4605,9 +4637,15 @@ pub(crate) mod jobs_gen {
                 (els.clone(), els)
             }
             5 => {
-                let (Some(npc), Some(loc)) = (pick_npc(rng), pick_location(rng, &dungeon)) else {
+                // The drawn name only holds its place in the stream, so the location
+                // rolled after it does not move; the champion fielded names the job
+                // (#641).
+                let (Some(drawn), Some(loc)) = (pick_npc(rng), pick_location(rng, &dungeon)) else {
                     return empty;
                 };
+                let npc = duel_boss_name(&s("duelBossId"))
+                    .map(str::to_string)
+                    .unwrap_or(drawn);
                 (vec![loc_elem(&npc), loc_elem(&loc)], vec![loc_elem(&npc)])
             }
             _ => empty,
@@ -10114,9 +10152,11 @@ mod report_237_duel_arena {
         assert_eq!(js["rewardXp"], 1476); // retail's for difficulty 70 (#337); prod: 1543 at 76
         assert_eq!(js["rewardItemCount"], 0);
         assert_eq!(js["questName"]["key"], "UI.Jobs.Names.Duel.002");
+        // #641: prod named this Breton champion `NPC.Duelist3.Name`, a Duelist who
+        // never fights; retail names `024b4f81…` Duelist2 in 12 of 12 Duels.
         assert_eq!(
             js["questName"]["dynamicElements"][0]["localizationValue"],
-            "NPC.Duelist3.Name"
+            "NPC.Duelist2.Name"
         );
     }
 
@@ -12380,5 +12420,99 @@ mod report_521_dialogue_quests_listed {
         // MQ13 "Lost in Translation" is played in a dungeon.
         let mq13 = Uuid::from_u128(0xf4a9bc81_e652_45d0_ab1c_dc184c06ecd6);
         assert!(!is_dialogue_quest(&gd, mq13));
+    }
+}
+
+/// Report #641 (SpaceMunk, 2026-11-27): "In jobs, named arena opponent in the
+/// title never matches actual opponent in the job." A Duel fields the champion in
+/// `duelBossId`, but its title and description named a Duelist drawn separately,
+/// so they agreed one time in ten.
+///
+/// Retail, 50 of 50 distinct Duels in the 2026-06-07 capture snapshot (173
+/// `/quests` bodies): every champion is always named the same, in both places.
+#[cfg(test)]
+mod report_641_duel_title_names_the_champion {
+    use super::jobs_gen;
+    use serde_json::Value;
+    use std::collections::{BTreeMap, BTreeSet};
+    use uuid::Uuid;
+
+    const NOW: u64 = 1_795_737_600; // 2026-11-27 00:00 UTC
+
+    /// Copied out of the capture snapshot independently of the table under test:
+    /// (champion, the name retail gave it).
+    const RETAIL: [(&str, &str); 9] = [
+        ("01d82726-527f-4601-929c-182acd3fa9b7", "NPC.Duelist1.Name"),
+        ("024b4f81-c7ef-4322-a547-ee863b4c02ad", "NPC.Duelist2.Name"),
+        ("282b51da-b334-4cab-90fd-ba7fbdea00f1", "NPC.Duelist10.Name"),
+        ("2f85c042-ab17-47f2-a4b2-385f8626034c", "NPC.Duelist8.Name"),
+        ("33bbefc6-abb3-48e1-a233-96002d9ca98c", "NPC.Duelist7.Name"),
+        ("68a30f8a-dd30-4a41-a014-200f16a8ff89", "NPC.Duelist6.Name"),
+        ("ad5bf23a-2899-40e1-b77b-dd0cb3555176", "NPC.Duelist5.Name"),
+        ("dadd4e4e-7544-4680-9a73-84208c8ab7a2", "NPC.Duelist4.Name"),
+        ("ea48eb54-672c-4b28-9c92-60463314ee0d", "NPC.Duelist9.Name"),
+    ];
+
+    fn duels() -> Vec<Value> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+        let pools: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("job_pools.json")).unwrap())
+                .unwrap();
+        let mut out = Vec::new();
+        for c in 1..=60u128 {
+            for week in 0..6u64 {
+                let now = NOW + week * 7 * 86_400;
+                let boundary = jobs_gen::current_reset_boundary(&pools, now);
+                for level in [12u16, 50, 100] {
+                    out.extend(
+                        jobs_gen::generate(
+                            &pools,
+                            Uuid::from_u128(c * 0x9E37_79B9),
+                            level,
+                            0,
+                            boundary,
+                            now,
+                        )
+                        .0
+                        .into_iter()
+                        .filter(|j| j["jobSetup"]["jobType"] == 5),
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_title_and_description_name_the_champion_who_fights() {
+        let retail: BTreeMap<&str, &str> = RETAIL.into_iter().collect();
+        let all = duels();
+        assert!(all.len() >= 500, "only {} Duels", all.len());
+        let mut seen = BTreeSet::new();
+        for duel in &all {
+            let s = &duel["jobSetup"];
+            let boss = s["duelBossId"].as_str().expect("duelBossId");
+            let want = retail[boss];
+            assert_eq!(
+                s["questName"]["dynamicElements"][0]["localizationValue"], want,
+                "title names the wrong Duelist for {boss}: {duel}"
+            );
+            assert_eq!(
+                s["questDescription"]["dynamicElements"][0]["localizationValue"], want,
+                "description names the wrong Duelist for {boss}"
+            );
+            seen.insert(boss);
+        }
+        // Discriminating: every champion was rolled, so a lucky draw cannot pass.
+        assert_eq!(seen.len(), RETAIL.len(), "{seen:?}");
+    }
+
+    /// The shipped table is retail's, entry for entry.
+    #[test]
+    fn every_champion_has_a_name_and_the_table_matches_retail() {
+        for (boss, name) in RETAIL {
+            assert_eq!(jobs_gen::duel_boss_name(boss), Some(name));
+        }
+        assert_eq!(jobs_gen::DUEL_BOSS_NAMES.len(), RETAIL.len());
     }
 }
