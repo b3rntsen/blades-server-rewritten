@@ -694,6 +694,30 @@ pub(crate) const HEART_EMOTE_OFFER: Uuid = uuid::uuid!("bf389986-faf9-4bdf-a7fe-
 /// GrandChampion copy and nobody on production holds it.
 pub(crate) const HEART_EMOTE_TEMPLATE: Uuid = uuid::uuid!("63f67d8a-88cb-4540-b7e9-78695b727cd2");
 
+/// HauDrauf's follow-up rule (tracker #638, 2026-11-27, reversible common-good
+/// rule): Guffaw is switched OFF for everyone without taking it from anyone. The
+/// item stays in every backpack; the arena simply stops relaying it.
+///
+/// The arena is where an emote becomes visible: the server is authoritative over
+/// actor state, and the client plays an emote, its own included, only when the
+/// server sends it back (`MatchInstance::on_c2s`, op72 `PlayEmote`). Dropping the
+/// frame therefore deactivates Guffaw on BOTH screens. Nothing else on the server
+/// plays emotes; town and shop only hold or sell them.
+///
+/// NOT RETAIL. REVERT SWITCH: `false` relays Guffaw again.
+pub(crate) const DISABLE_GUFFAW_EMOTE_638: bool = true;
+
+/// The Guffaw emote template ("Guffaw", `UI.Emote.Legendary.001`), what
+/// `IAP_Emote_Guffaw` granted and the id a client's op72 `PlayEmote` carries when
+/// a player presses it (33 such presses in the 14 days of arena logs before #638).
+pub(crate) const GUFFAW_EMOTE_TEMPLATE: Uuid = uuid::uuid!("4b3e079c-cb7a-4f12-bee6-9bacbfaf87ab");
+
+/// Whether the arena must swallow a `PlayEmote` carrying `emote_id` (#638).
+pub(crate) fn emote_is_disabled(emote_id: &str) -> bool {
+    DISABLE_GUFFAW_EMOTE_638
+        && Uuid::parse_str(emote_id.trim()).is_ok_and(|id| id == GUFFAW_EMOTE_TEMPLATE)
+}
+
 /// What buying [`HEART_EMOTE_OFFER`] grants: one Heart, as a backpack stackable,
 /// in the shape every captured emote purchase has (`global_shop_grants.json`).
 /// The loader adds it to `global_shop_grants`, since the Heart offer has no
@@ -6784,6 +6808,32 @@ mod report638_heart_emote_tests {
             { "currencyId": "470c8f58-a8dd-4c07-8c92-843b785e1139", "quantity": 1 }
         ]))
         .unwrap()
+    }
+
+    /// The id the arena drops is the one the Guffaw offer grants, so blocking it
+    /// switches off exactly what players bought, and only that (#638 follow-up).
+    #[test]
+    fn the_disabled_emote_is_the_one_the_guffaw_offer_grants() {
+        let contents: Value = serde_json::from_str(
+            &std::fs::read_to_string(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../deploy/static/global_shop_offer_contents.json"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let offer = &contents["offers"][GUFFAW_EMOTE_OFFER.to_string()];
+        assert_eq!(offer["editorName"], "IAP_Emote_Guffaw");
+        assert_eq!(
+            offer["contents"][0]["itemTemplateId"],
+            GUFFAW_EMOTE_TEMPLATE.to_string()
+        );
+        assert!(emote_is_disabled(&GUFFAW_EMOTE_TEMPLATE.to_string()));
+        assert!(emote_is_disabled(
+            &GUFFAW_EMOTE_TEMPLATE.to_string().to_uppercase()
+        ));
+        assert!(!emote_is_disabled(&HEART_EMOTE_TEMPLATE.to_string()));
+        assert!(!emote_is_disabled(""), "an undecodable emote still relays");
     }
 
     #[test]
