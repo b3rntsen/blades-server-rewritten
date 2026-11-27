@@ -368,7 +368,11 @@ const PINNED_BELOW_45: [(&str, u64); 9] = [
     ("event_dungeons", 0xa38a_4214_0438_3fdf),
     // #431 re-pins jobs in the 2026-11-10 batch: a Duel's champion is +8 over the
     // job and capped at 70 (was 0x1455_a9aa_6819_838d with a 4-8 delta).
-    ("jobs", 0xeba3_7100_b29b_cbc6),
+    // #641 re-pins jobs (2026-11-27): a Duel's title and description now name the
+    // champion in `duelBossId`. Diffed pre/post over levels 1-44: only those two
+    // `dynamicElements[0]` names moved, in all 132 Duels; no other field of any job
+    // or job dungeon changed (was 0xeba3_7100_b29b_cbc6).
+    ("jobs", 0xc175_8e7b_a846_24ee),
     ("store", 0x46d6_4f30_3642_1ea7),
     ("treasury", 0xa1c5_590f_12ec_5edf),
 ];
