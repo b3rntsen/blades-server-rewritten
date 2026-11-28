@@ -918,6 +918,9 @@ mod tests {
             for ddl in [
                 include_str!("../../../migrations/2026-06-20-010000-0000_add_guilds/up.sql"),
                 include_str!(
+                    "../../../migrations/2026-11-23-000000-0000_alts_stay_in_guilds/up.sql"
+                ),
+                include_str!(
                     "../../../migrations/2026-07-25-000000-0000_add_arena_match_results/up.sql"
                 ),
                 include_str!(

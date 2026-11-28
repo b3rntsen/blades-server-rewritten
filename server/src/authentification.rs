@@ -1283,8 +1283,9 @@ async fn update_guild_membership_owner(
     conn: &mut diesel_async::AsyncPgConnection,
     character_id: Uuid,
     new_user_id: Uuid,
+    old_user_id: Uuid,
 ) -> Result<usize, diesel::result::Error> {
-    diesel::sql_query(
+    let moved = diesel::sql_query(
         "UPDATE guild_members gm
             SET user_id = $2
           WHERE gm.character_id = $1
@@ -1299,7 +1300,64 @@ async fn update_guild_membership_owner(
     .bind::<diesel::sql_types::Uuid, _>(character_id)
     .bind::<diesel::sql_types::Uuid, _>(new_user_id)
     .execute(conn)
-    .await
+    .await?;
+    // Everything of the character's alts (2026-11-23) moves with it: their
+    // kept versions (by character — what a link moves IS this character row),
+    // their seats, the member ids the game knows them by, and the board
+    // entries filed under those ids. Same collision rule as above: a pair the
+    // new owner already holds is left where it is.
+    diesel::sql_query(
+        "UPDATE character_versions SET user_id = $2 WHERE character_id = $1 AND user_id = $3",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(new_user_id)
+    .bind::<diesel::sql_types::Uuid, _>(old_user_id)
+    .execute(conn)
+    .await?;
+    diesel::sql_query(
+        "UPDATE guild_alt_seats s SET user_id = $2
+          WHERE s.character_id = $1 AND s.user_id <> $2
+            AND NOT EXISTS (SELECT 1 FROM guild_alt_seats o
+                             WHERE o.user_id = $2 AND o.alt_key = s.alt_key)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(new_user_id)
+    .execute(conn)
+    .await?;
+    #[derive(diesel::QueryableByName)]
+    struct Moved {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        alt_key: Uuid,
+    }
+    let moved_alts: Vec<Uuid> = diesel::sql_query(
+        "UPDATE alt_member_ids r SET user_id = $2
+          WHERE r.character_id = $1 AND r.user_id = $3
+            AND NOT EXISTS (SELECT 1 FROM alt_member_ids o
+                             WHERE o.user_id = $2 AND o.alt_key = r.alt_key)
+         RETURNING r.alt_key",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(new_user_id)
+    .bind::<diesel::sql_types::Uuid, _>(old_user_id)
+    .load::<Moved>(conn)
+    .await?
+    .into_iter()
+    .map(|m| m.alt_key)
+    .collect();
+    for sql in [
+        "UPDATE guild_messages SET alt_account = $2
+          WHERE alt_account = $3 AND alt_key = ANY($1)",
+        "UPDATE guild_messages SET target_account = $2
+          WHERE target_account = $3 AND target_alt_key = ANY($1)",
+    ] {
+        diesel::sql_query(sql)
+            .bind::<diesel::sql_types::Array<diesel::sql_types::Uuid>, _>(&moved_alts)
+            .bind::<diesel::sql_types::Uuid, _>(new_user_id)
+            .bind::<diesel::sql_types::Uuid, _>(old_user_id)
+            .execute(conn)
+            .await?;
+    }
+    Ok(moved)
 }
 
 /// Hand the played character to the linked account, and park the account's
@@ -1356,7 +1414,7 @@ async fn swap_character_ownership(
             .set(ch::user_id.eq(linked_user_id))
             .execute(conn)
             .await?;
-        update_guild_membership_owner(conn, played, linked_user_id).await?;
+        update_guild_membership_owner(conn, played, linked_user_id, played_user_id).await?;
         return Ok((adopted, 0));
     };
 
@@ -1422,12 +1480,12 @@ async fn swap_character_ownership(
         .set(ch::user_id.eq(linked_user_id))
         .execute(conn)
         .await?;
-    update_guild_membership_owner(conn, played, linked_user_id).await?;
+    update_guild_membership_owner(conn, played, linked_user_id, played_user_id).await?;
     let moved_aside = diesel::update(ch::characters.filter(ch::id.eq(displaced)))
         .set(ch::user_id.eq(played_user_id))
         .execute(conn)
         .await?;
-    update_guild_membership_owner(conn, displaced, played_user_id).await?;
+    update_guild_membership_owner(conn, displaced, played_user_id, linked_user_id).await?;
     diesel::delete(u::users.filter(u::id.eq(parking_user_id)))
         .execute(conn)
         .await?;
@@ -3779,6 +3837,16 @@ mod report185_link_choice_tests {
         .execute(&mut conn)
         .await
         .unwrap();
+        for ddl in [
+            crate::guild::ALT_SEATS_TEST_DDL,
+            crate::guild::ALT_IDS_TEST_DDL,
+            "CREATE TABLE character_versions (id UUID PRIMARY KEY, character_id UUID NOT NULL,
+                 user_id UUID NOT NULL, source_alt_uuid UUID)",
+            "CREATE TABLE guild_messages (message_id TEXT PRIMARY KEY, alt_account UUID,
+                 alt_key UUID, target_account UUID, target_alt_key UUID)",
+        ] {
+            diesel::sql_query(ddl).execute(&mut conn).await.unwrap();
+        }
 
         let source = Uuid::new_v4();
         let linked = Uuid::new_v4();
@@ -3978,6 +4046,16 @@ mod report185_link_choice_tests {
         .execute(&mut conn)
         .await
         .unwrap();
+        for ddl in [
+            crate::guild::ALT_SEATS_TEST_DDL,
+            crate::guild::ALT_IDS_TEST_DDL,
+            "CREATE TABLE character_versions (id UUID PRIMARY KEY, character_id UUID NOT NULL,
+                 user_id UUID NOT NULL, source_alt_uuid UUID)",
+            "CREATE TABLE guild_messages (message_id TEXT PRIMARY KEY, alt_account UUID,
+                 alt_key UUID, target_account UUID, target_alt_key UUID)",
+        ] {
+            diesel::sql_query(ddl).execute(&mut conn).await.unwrap();
+        }
 
         let old_user = Uuid::from_u128(0x101);
         let new_user = Uuid::from_u128(0x202);
@@ -3999,10 +4077,96 @@ mod report185_link_choice_tests {
             .unwrap();
         }
 
-        let changed = update_guild_membership_owner(&mut conn, moved_character, new_user)
+        // The moved character's other alt holds a seat elsewhere (2026-11-23):
+        // it and its member id follow the character to its new owner.
+        let (alt, member) = (Uuid::from_u128(0x505), Uuid::from_u128(0x606));
+        diesel::sql_query(
+            "INSERT INTO alt_member_ids (member_id, user_id, alt_key, character_id)
+                 VALUES ($1, $2, $3, $4);
+             ",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(member)
+        .bind::<diesel::sql_types::Uuid, _>(old_user)
+        .bind::<diesel::sql_types::Uuid, _>(alt)
+        .bind::<diesel::sql_types::Uuid, _>(moved_character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO guild_alt_seats (user_id, alt_key, member_id, guild_id, character_id)
+                 VALUES ($1, $2, $3, 'guild-b', $4)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(old_user)
+        .bind::<diesel::sql_types::Uuid, _>(alt)
+        .bind::<diesel::sql_types::Uuid, _>(member)
+        .bind::<diesel::sql_types::Uuid, _>(moved_character)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        // Its kept version and a board entry filed under that alt follow too.
+        diesel::sql_query(
+            "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid)
+                 VALUES ('00000000-0000-0000-0000-000000000707', $1, $2, $3)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(moved_character)
+        .bind::<diesel::sql_types::Uuid, _>(old_user)
+        .bind::<diesel::sql_types::Uuid, _>(alt)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO guild_messages (message_id, alt_account, alt_key) VALUES ('m1', $1, $2)",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(old_user)
+        .bind::<diesel::sql_types::Uuid, _>(alt)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        let changed = update_guild_membership_owner(&mut conn, moved_character, new_user, old_user)
             .await
             .unwrap();
         assert_eq!(changed, 0, "the PK guard should skip the conflicting row");
+        #[derive(diesel::QueryableByName)]
+        struct AltOwners {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            seat: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            id: Uuid,
+        }
+        let owners: AltOwners = diesel::sql_query(
+            "SELECT (SELECT user_id FROM guild_alt_seats WHERE member_id = $1) AS seat,
+                    (SELECT user_id FROM alt_member_ids WHERE member_id = $1) AS id",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(member)
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            (owners.seat, owners.id),
+            (new_user, new_user),
+            "an alt seat and its member id follow the moved character"
+        );
+        #[derive(diesel::QueryableByName)]
+        struct Moved {
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            version: Uuid,
+            #[diesel(sql_type = diesel::sql_types::Uuid)]
+            entry: Uuid,
+        }
+        let moved: Moved = diesel::sql_query(
+            "SELECT (SELECT user_id FROM character_versions) AS version,
+                    (SELECT alt_account FROM guild_messages) AS entry",
+        )
+        .get_result(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            (moved.version, moved.entry),
+            (new_user, new_user),
+            "its versions and the board entries filed under it follow as well"
+        );
 
         #[derive(diesel::QueryableByName)]
         struct Owner {

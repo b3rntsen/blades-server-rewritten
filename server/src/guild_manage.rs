@@ -16,16 +16,17 @@
 //! POST /api/dev/v1/guilds/{guild_id}/co-masters       appoint or remove a co-guild master
 //! ```
 //!
-//! # Seats are per ALT, and an alt may be parked
+//! # Seats are per ALT, played or not
 //!
-//! A user's alts take turns on one `characters` row. Switching parks the
-//! outgoing alt's guild seat in its newest `character_versions.server_state`
-//! (`parkedGuildMembers`, admin.rs `ALT_ROW_TABLES`) and deletes the live
-//! `guild_members` row. The guild score still counts that alt
-//! (`season_store::FREEZE_STANDINGS_SQL` reads the newest version's parked
-//! guild), so the roster lists parked seats too, flagged, and the kick can
-//! remove one — from every version carrying it, so it cannot come back on the
-//! next switch.
+//! A user's alts take turns on one `characters` row. The played alt's seat is
+//! in `guild_members`; every other alt's stays in its guild as a row of
+//! `guild_alt_seats` (owner decision 2026-11-23: "If I play another alt,
+//! everything in guilds stay the same. I can manage things on web for all alts
+//! that are guild masters"). The roster lists both, the "parked" flag meaning
+//! "not the alt being played"; the score counts both; the game lists both (an
+//! alt not played under its alt key). Any seat of an account that is the Grand
+//! Master's — or any seat of a co-guild master's account — manages the guild
+//! here, played or not.
 //!
 //! # Who may kick
 //!
@@ -71,7 +72,7 @@ use actix_web::{
     post,
     web::{self, Json},
 };
-use diesel::sql_types::{Array, BigInt, Bool, Int4, Nullable, Text, Uuid as SqlUuid};
+use diesel::sql_types::{Array, BigInt, Int4, Nullable, Text, Uuid as SqlUuid};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::{
     AsyncConnection, AsyncPgConnection, RunQueryDsl, scoped_futures::ScopedFutureExt,
@@ -84,7 +85,10 @@ use crate::{
     BladeApiError, ServerGlobal,
     admin::check_import_token,
     arena::season_store,
-    guild::{SeatRemover, decide_application_for_website, remove_seat_for_website},
+    guild::{
+        SeatRemover, decide_application_for_website, remove_alt_seat_for_website,
+        remove_seat_for_website,
+    },
     guild_policy::{GuildRank, MAX_MEMBERS, can_approve_applications, can_kick},
 };
 
@@ -191,7 +195,8 @@ pub enum KickRefusal {
     LastMember,
 }
 
-/// May `actor` remove `target`? `live_members` counts the guild's live seats.
+/// May `actor` remove `target`? `live_members` counts the guild's seats — the
+/// played alts' and the others' (the name predates alts staying in guilds).
 pub fn plan_kick(
     actor: KickActor,
     target: KickTarget,
@@ -220,7 +225,10 @@ pub fn plan_kick(
             Err(KickRefusal::NotPermitted)
         }
         KickActor::Operator => {
-            if !target.parked && live_members <= 1 {
+            // Every seat counts, played alt or not: removing the last one would
+            // delete the guild (a leave's teardown).
+            let _ = target.parked;
+            if live_members <= 1 {
                 return Err(KickRefusal::LastMember);
             }
             Ok(())
@@ -265,43 +273,39 @@ pub fn plan_appointment(actor: KickActor) -> Result<ActorRole, KickRefusal> {
     }
 }
 
-/// Which seat of a user may manage its guild on the website: a Grand Master's.
-/// A parked Grand Master seat counts only while the guild has no live one — a
-/// returning alt never makes two (`ALT_ROW_TABLES` restore).
-pub fn seat_can_manage(rank: &str, parked: bool, guild_has_live_grandmaster: bool) -> bool {
+/// Which seat of a user may manage its guild on the website: a Grand Master's,
+/// whether or not that alt is the one being played. A guild has exactly one
+/// Grand Master seat now that seats never leave on a switch.
+pub fn seat_can_manage(rank: &str) -> bool {
     GuildRank::from_wire(rank) == Some(GuildRank::Grandmaster)
-        && (!parked || !guild_has_live_grandmaster)
 }
 
 // ---------------------------------------------------------------------------
 // SQL
 // ---------------------------------------------------------------------------
 
-/// Newest version per parked alt of the characters in `$1`, one row per parked
-/// guild seat. The same "newest version" rule the standings use.
+/// Seats of alts that are not being played (`guild_alt_seats`), named from the
+/// alt's newest version. Filtered by the caller's `WHERE`.
 const PARKED_SEATS_SQL: &str = r#"
-SELECT e ->> 'guild_id'                    AS guild_id,
-       v.character_id,
-       v.source_alt_uuid                   AS alt_key,
-       COALESCE(c.user_id, v.user_id)      AS user_id,
-       COALESCE(e ->> 'rank', 'MEMBER')    AS rank,
-       COALESCE((e ->> 'join_date')::bigint, 0) AS join_date,
+SELECT s.guild_id,
+       s.character_id,
+       s.alt_key                           AS alt_key,
+       s.member_id,
+       s.user_id,
+       s.rank,
+       s.join_date,
        COALESCE(NULLIF(v.name, ''), v."character" ->> 'name', '') AS name,
-       v.level,
-       v.saved_at
-  FROM characters c
-  JOIN LATERAL (
-        SELECT DISTINCT ON (x.source_alt_uuid) x.*
+       COALESCE(v.level, 0)                AS level,
+       s.parked_at                         AS saved_at
+  FROM guild_alt_seats s
+  LEFT JOIN LATERAL (
+        SELECT x.name, x.level, x."character"
           FROM character_versions x
-         WHERE x.character_id = c.id AND x.source_alt_uuid IS NOT NULL
-         ORDER BY x.source_alt_uuid, x.saved_at DESC
+         WHERE x.user_id = s.user_id
+           AND (x.source_alt_uuid = s.alt_key OR x.id = s.alt_key)
+         ORDER BY x.saved_at DESC, x.id DESC
+         LIMIT 1
        ) v ON true
-  CROSS JOIN LATERAL jsonb_array_elements(
-        CASE WHEN jsonb_typeof(v.server_state -> 'parkedGuildMembers') = 'array'
-             THEN v.server_state -> 'parkedGuildMembers' ELSE '[]'::jsonb END) e
- WHERE c.id = ANY($1)
-   AND v.source_alt_uuid IS DISTINCT FROM c.source_alt_uuid
-   AND e ->> 'guild_id' IS NOT NULL
 "#;
 
 #[derive(QueryableByName, Debug, Clone)]
@@ -312,6 +316,9 @@ pub(crate) struct ParkedSeatRow {
     character_id: Uuid,
     #[diesel(sql_type = Nullable<SqlUuid>)]
     alt_key: Option<Uuid>,
+    /// The id the game lists this seat under (`alt_member_ids`).
+    #[diesel(sql_type = SqlUuid)]
+    member_id: Uuid,
     #[diesel(sql_type = SqlUuid)]
     user_id: Uuid,
     #[diesel(sql_type = Text)]
@@ -381,36 +388,10 @@ pub(crate) async fn parked_seats_of_guild(
     conn: &mut AsyncPgConnection,
     gid: &str,
 ) -> Result<Vec<ParkedSeatRow>, diesel::result::Error> {
-    #[derive(QueryableByName)]
-    struct Cand {
-        #[diesel(sql_type = SqlUuid)]
-        character_id: Uuid,
-    }
-    let cands: Vec<Cand> = sql_query(
-        "SELECT DISTINCT character_id FROM character_versions
-          WHERE server_state -> 'parkedGuildMembers'
-                @> jsonb_build_array(jsonb_build_object('guild_id', $1::text))",
-    )
-    .bind::<Text, _>(gid)
-    .get_results(conn)
-    .await?;
-    if cands.is_empty() {
-        return Ok(Vec::new());
-    }
-    let ids: Vec<Uuid> = cands.into_iter().map(|c| c.character_id).collect();
-    let rows: Vec<ParkedSeatRow> = sql_query(PARKED_SEATS_SQL)
-        .bind::<Array<SqlUuid>, _>(ids)
+    sql_query(format!("{PARKED_SEATS_SQL} WHERE s.guild_id = $1"))
+        .bind::<Text, _>(gid)
         .get_results(conn)
-        .await?;
-    Ok(rows.into_iter().filter(|r| r.guild_id == gid).collect())
-}
-
-fn effective_rank(stored: &str, parked: bool, guild_has_live_gm: bool) -> String {
-    if parked && stored == GuildRank::Grandmaster.as_wire() && guild_has_live_gm {
-        GuildRank::Member.as_wire().to_string()
-    } else {
-        stored.to_string()
-    }
+        .await
 }
 
 /// The accounts appointed co-guild master of `gid`. A row is a ROLE, not a
@@ -441,27 +422,74 @@ fn is_co_master(co_masters: &[Uuid], user_id: Uuid, rank: &str) -> bool {
     rank != GuildRank::Grandmaster.as_wire() && co_masters.contains(&user_id)
 }
 
-/// Who `actor_user_id` is to this guild. Absent = an operator.
-fn resolve_actor<'a>(
-    live: &'a [LiveSeatRow],
+/// The seat a player acts from, and how the board names them: the account for
+/// the alt being played, the alt key for any other alt (the id the game lists
+/// that member under).
+#[derive(Debug, Clone)]
+struct ActorSeat {
+    name: String,
+    author_user: Uuid,
+    author_character: Uuid,
+}
+
+/// Who `actor_user_id` is to this guild. Absent = an operator. An account acts
+/// from its STRONGEST seat here — played alt or not, a Grand Master's before
+/// anything else, the played alt's on a tie (owner decision 2026-11-23: "I can
+/// manage things on web for all alts that are guild masters"). An account may
+/// hold several seats in one guild (one per alt).
+fn resolve_actor(
+    live: &[LiveSeatRow],
+    parked: &[ParkedSeatRow],
     co_masters: &[Uuid],
     actor_user_id: Option<Uuid>,
-) -> Result<(KickActor, Option<&'a LiveSeatRow>), BladeApiError> {
+) -> Result<(KickActor, Option<ActorSeat>), BladeApiError> {
     let Some(actor_user) = actor_user_id else {
         return Ok((KickActor::Operator, None));
     };
-    match live.iter().find(|s| s.user_id == actor_user) {
-        Some(s) => match GuildRank::from_wire(&s.rank) {
-            Some(rank) => Ok((
+    // (rank, played-first, join date) — smallest wins.
+    let mut candidates: Vec<((u8, u8, i64), String, ActorSeat)> = Vec::new();
+    for s in live.iter().filter(|s| s.user_id == actor_user) {
+        let Some(rank) = GuildRank::from_wire(&s.rank) else {
+            return Err(err(StatusCode::CONFLICT, 48));
+        };
+        candidates.push((
+            (rank as u8, 0, s.join_date),
+            s.rank.clone(),
+            ActorSeat {
+                name: s.name.clone(),
+                author_user: actor_user,
+                author_character: s.character_id,
+            },
+        ));
+    }
+    for s in parked.iter().filter(|s| s.user_id == actor_user) {
+        let Some(rank) = GuildRank::from_wire(&s.rank) else {
+            return Err(err(StatusCode::CONFLICT, 48));
+        };
+        candidates.push((
+            (rank as u8, 1, s.join_date),
+            s.rank.clone(),
+            ActorSeat {
+                name: s.name.clone(),
+                author_user: s.member_id,
+                author_character: s.member_id,
+            },
+        ));
+    }
+    candidates.sort_by_key(|c| c.0);
+    match candidates.into_iter().next() {
+        Some((_, rank_wire, seat)) => {
+            let rank =
+                GuildRank::from_wire(&rank_wire).ok_or_else(|| err(StatusCode::CONFLICT, 48))?;
+            Ok((
                 KickActor::Member {
                     user_id: actor_user,
                     rank,
-                    co_master: is_co_master(co_masters, actor_user, &s.rank),
+                    co_master: is_co_master(co_masters, actor_user, &rank_wire),
                 },
-                Some(s),
-            )),
-            None => Err(err(StatusCode::CONFLICT, 48)),
-        },
+                Some(seat),
+            ))
+        }
         None => Ok((KickActor::Outsider, None)),
     }
 }
@@ -579,26 +607,10 @@ pub(crate) async fn seats_of_user(
     .bind::<SqlUuid, _>(user_id)
     .get_results(conn)
     .await?;
-    #[derive(QueryableByName)]
-    struct Id {
-        #[diesel(sql_type = SqlUuid)]
-        id: Uuid,
-    }
-    let chars: Vec<Uuid> = sql_query("SELECT id FROM characters WHERE user_id = $1")
+    let parked: Vec<ParkedSeatRow> = sql_query(format!("{PARKED_SEATS_SQL} WHERE s.user_id = $1"))
         .bind::<SqlUuid, _>(user_id)
-        .get_results::<Id>(conn)
-        .await?
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    let parked: Vec<ParkedSeatRow> = if chars.is_empty() {
-        Vec::new()
-    } else {
-        sql_query(PARKED_SEATS_SQL)
-            .bind::<Array<SqlUuid>, _>(chars)
-            .get_results(conn)
-            .await?
-    };
+        .get_results(conn)
+        .await?;
 
     let mut guild_ids: Vec<String> = live.iter().map(|s| s.guild_id.clone()).collect();
     guild_ids.extend(parked.iter().map(|s| s.guild_id.clone()));
@@ -610,18 +622,11 @@ pub(crate) async fn seats_of_user(
         id: String,
         #[diesel(sql_type = Text)]
         name: String,
-        #[diesel(sql_type = Bool)]
-        has_gm: bool,
     }
-    let heads: Vec<GuildHead> = sql_query(
-        "SELECT g.id, g.name,
-                EXISTS (SELECT 1 FROM guild_members m
-                         WHERE m.guild_id = g.id AND m.rank = 'GRANDMASTER') AS has_gm
-           FROM guilds g WHERE g.id = ANY($1)",
-    )
-    .bind::<Array<Text>, _>(guild_ids)
-    .get_results(conn)
-    .await?;
+    let heads: Vec<GuildHead> = sql_query("SELECT g.id, g.name FROM guilds g WHERE g.id = ANY($1)")
+        .bind::<Array<Text>, _>(guild_ids)
+        .get_results(conn)
+        .await?;
     let head = |gid: &str| heads.iter().find(|h| h.id == gid);
     #[derive(QueryableByName)]
     struct Co {
@@ -647,7 +652,7 @@ pub(crate) async fn seats_of_user(
         out.push(SeatView {
             co_master,
             can_moderate: co_master || s.rank == GuildRank::Grandmaster.as_wire(),
-            can_manage: seat_can_manage(&s.rank, false, h.has_gm),
+            can_manage: seat_can_manage(&s.rank),
             guild_id: s.guild_id,
             guild_name: h.name.clone(),
             character_id: s.character_id,
@@ -658,15 +663,14 @@ pub(crate) async fn seats_of_user(
         });
     }
     for s in parked {
-        // A guild deleted while the alt was away: the restore skips it, so do we.
         let Some(h) = head(&s.guild_id) else { continue };
-        let rank = effective_rank(&s.rank, true, h.has_gm);
+        let co_master = co(&s.guild_id, &s.rank);
         out.push(SeatView {
-            // A parked seat keeps the role but holds no live power.
-            co_master: co(&s.guild_id, &rank),
-            can_moderate: false,
-            can_manage: seat_can_manage(&s.rank, true, h.has_gm),
-            rank,
+            // A seat whose alt is not played holds its full rank and role.
+            co_master,
+            can_moderate: co_master || s.rank == GuildRank::Grandmaster.as_wire(),
+            can_manage: seat_can_manage(&s.rank),
+            rank: s.rank,
             guild_id: s.guild_id,
             guild_name: h.name.clone(),
             character_id: s.character_id,
@@ -763,6 +767,10 @@ pub struct RosterResponse {
     /// `OPEN` / `APPLY_ONLY` / `CLOSED` — only an apply-only guild gets requests.
     pub guild_type: String,
     pub max_members: i64,
+    /// Whether seats of alts that are not played count towards `max_members`
+    /// (`guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP`), so the website's "full"
+    /// follows the same switch as the game.
+    pub alt_seats_count_towards_cap: bool,
     /// Pending join requests, oldest first.
     pub applications: Vec<ApplicationView>,
     /// The newest website management actions (`guild_manage_log`). The web
@@ -914,9 +922,6 @@ pub(crate) async fn build_roster(
     };
 
     let live = live_seats_of_guild(conn, gid).await?;
-    let has_gm = live
-        .iter()
-        .any(|s| s.rank == GuildRank::Grandmaster.as_wire());
     let parked = parked_seats_of_guild(conn, gid).await?;
     let co_masters = co_masters_of_guild(conn, gid).await?;
     let applications = applications_of_guild(conn, gid).await?;
@@ -943,7 +948,7 @@ pub(crate) async fn build_roster(
         })
         .collect();
     seats.extend(parked.into_iter().map(|s| Seat {
-        rank: effective_rank(&s.rank, true, has_gm),
+        rank: s.rank,
         character_id: s.character_id,
         alt_key: s.alt_key,
         user_id: s.user_id,
@@ -1157,6 +1162,7 @@ pub(crate) async fn build_roster(
             .collect(),
         guild_type: head.guild_type,
         max_members: MAX_MEMBERS,
+        alt_seats_count_towards_cap: crate::guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP,
         applications,
         log,
     }))
@@ -1295,22 +1301,21 @@ pub(crate) async fn kick(
     if found.is_none_or(|f| f.id != gid) {
         return Err(err(StatusCode::NOT_FOUND, 41));
     }
-    let has_gm = live
-        .iter()
-        .any(|s| s.rank == GuildRank::Grandmaster.as_wire());
+    let parked = parked_seats_of_guild(conn, gid).await?;
 
     // The target seat.
     let (target, live_target, parked_alt) = if body.parked {
         let alt = body
             .alt_key
             .ok_or_else(|| err(StatusCode::BAD_REQUEST, 42))?;
-        let parked = parked_seats_of_guild(conn, gid).await?;
+        // Alt key AND character: an alt label is shared by an original and its
+        // numbered copies, so the label alone may match two accounts' seats.
         let seat = parked
-            .into_iter()
-            .find(|s| s.character_id == body.character_id && s.alt_key == Some(alt))
+            .iter()
+            .find(|s| s.alt_key == Some(alt) && s.character_id == body.character_id)
+            .cloned()
             .ok_or_else(|| err(StatusCode::NOT_FOUND, 43))?;
-        let rank = effective_rank(&seat.rank, true, has_gm);
-        ((seat.user_id, rank, seat.name), None, Some(alt))
+        ((seat.user_id, seat.rank, seat.name), None, Some(alt))
     } else {
         let seat = live
             .iter()
@@ -1328,7 +1333,7 @@ pub(crate) async fn kick(
         GuildRank::from_wire(&target_rank_wire).ok_or_else(|| err(StatusCode::CONFLICT, 48))?;
 
     let co_masters = co_masters_of_guild(conn, gid).await?;
-    let (actor, actor_seat) = resolve_actor(&live, &co_masters, body.actor_user_id)?;
+    let (actor, actor_seat) = resolve_actor(&live, &parked, &co_masters, body.actor_user_id)?;
     plan_kick(
         actor,
         KickTarget {
@@ -1337,7 +1342,7 @@ pub(crate) async fn kick(
             parked: body.parked,
             co_master: is_co_master(&co_masters, target_user, &target_rank_wire),
         },
-        live.len(),
+        live.len() + parked.len(),
     )
     .map_err(refusal_error)?;
     // `plan_kick` passed, so the actor has a managing capacity.
@@ -1359,10 +1364,10 @@ pub(crate) async fn kick(
     }
 
     let (remover, actor_name) = match (actor, actor_seat) {
-        (KickActor::Member { user_id, .. }, Some(seat)) => (
+        (KickActor::Member { .. }, Some(seat)) => (
             SeatRemover::Manager {
-                user_id,
-                character_id: seat.character_id,
+                user_id: seat.author_user,
+                character_id: seat.author_character,
             },
             seat.name.clone(),
         ),
@@ -1394,17 +1399,18 @@ pub(crate) async fn kick(
                         .await?
                     }
                     (None, Some(alt)) => {
-                        remove_parked_seat(conn, &gid_owned, character_id, alt, ts).await?;
-                        // The role goes with the seat, as it does for a live one
-                        // (`guild::remove_member_and_succeed`).
-                        sql_query(
-                            "DELETE FROM guild_co_masters WHERE guild_id = $1 AND user_id = $2",
+                        // The game lists this member, so the board says it
+                        // went, exactly as for a played alt.
+                        remove_alt_seat_for_website(
+                            conn,
+                            &gid_owned,
+                            target_user,
+                            alt,
+                            target_rank,
+                            remover,
+                            ts,
                         )
-                        .bind::<Text, _>(&gid_owned)
-                        .bind::<SqlUuid, _>(target_user)
-                        .execute(conn)
-                        .await?;
-                        None
+                        .await?
                     }
                     (None, None) => return Err(err(StatusCode::NOT_FOUND, 43)),
                 };
@@ -1497,12 +1503,13 @@ pub(crate) async fn decide_application(
     body: &DecideRequest,
 ) -> Result<DecideResponse, BladeApiError> {
     let live = live_seats_of_guild(conn, gid).await?;
-    if live.is_empty() {
-        // No guild, or one with nobody live in it: nobody can decide for it.
+    let parked = parked_seats_of_guild(conn, gid).await?;
+    if live.is_empty() && parked.is_empty() {
+        // No guild, or one with nobody in it: nobody can decide for it.
         return Err(err(StatusCode::NOT_FOUND, 41));
     }
     let co_masters = co_masters_of_guild(conn, gid).await?;
-    let (actor, actor_seat) = resolve_actor(&live, &co_masters, Some(body.actor_user_id))?;
+    let (actor, actor_seat) = resolve_actor(&live, &parked, &co_masters, Some(body.actor_user_id))?;
     let role = plan_moderation(actor).map_err(refusal_error)?;
     let actor_seat = actor_seat.ok_or_else(|| err(StatusCode::FORBIDDEN, 44))?;
 
@@ -1514,11 +1521,13 @@ pub(crate) async fn decide_application(
 
     let ts = now_unix();
     let gid_owned = gid.to_string();
+    // The board entry is authored the way the game names the actor's seat.
     let (actor_user, actor_character, actor_name) = (
-        body.actor_user_id,
-        actor_seat.character_id,
+        actor_seat.author_user,
+        actor_seat.author_character,
         actor_seat.name.clone(),
     );
+    let log_actor = body.actor_user_id;
     let approve = body.approve;
     let (applicant_user, applicant_character, applicant_name) = (
         application.user_id,
@@ -1542,7 +1551,7 @@ pub(crate) async fn decide_application(
                     gid: &gid_owned,
                     action: if approve { "APPROVE" } else { "DENY" },
                     role,
-                    actor_user_id: Some(actor_user),
+                    actor_user_id: Some(log_actor),
                     actor_name: &actor_name,
                     target_user_id: applicant_user,
                     target_character_id: Some(applicant_character),
@@ -1568,7 +1577,7 @@ pub(crate) async fn decide_application(
         character_id: application.character_id,
         name: application.name,
         approved: approve,
-        member_count: live.len() as i64 + i64::from(approve),
+        member_count: (live.len() + parked.len()) as i64 + i64::from(approve),
         guild_trophies,
     })
 }
@@ -1582,6 +1591,10 @@ pub(crate) async fn decide_application(
 pub struct CoMasterRequest {
     /// The member's character, as the roster lists it.
     pub character_id: Uuid,
+    /// The seat's alt, as the roster lists it — tells apart the seats one
+    /// account's alts hold in the guild. Optional: absent matches any.
+    #[serde(default)]
+    pub alt_key: Option<Uuid>,
     /// `true` appoints, `false` removes the role.
     pub appoint: bool,
     /// The PUBLIC arena user id of the Grand Master. Absent = an operator (the
@@ -1640,21 +1653,55 @@ pub(crate) async fn set_co_master(
     body: &CoMasterRequest,
 ) -> Result<CoMasterResponse, BladeApiError> {
     let live = live_seats_of_guild(conn, gid).await?;
-    if live.is_empty() {
+    let parked = parked_seats_of_guild(conn, gid).await?;
+    if live.is_empty() && parked.is_empty() {
         return Err(err(StatusCode::NOT_FOUND, 41));
     }
     let co_masters = co_masters_of_guild(conn, gid).await?;
-    let (actor, actor_seat) = resolve_actor(&live, &co_masters, body.actor_user_id)?;
+    let (actor, actor_seat) = resolve_actor(&live, &parked, &co_masters, body.actor_user_id)?;
     let role = plan_appointment(actor).map_err(refusal_error)?;
 
-    // The role is given to a member who is here: a LIVE seat. (Removing it
-    // works on the same seat; a co-guild master who left has no row to remove —
-    // the departure deleted it.)
+    // The role is given to a member who is here — any seat of theirs, played
+    // alt or not (2026-11-23): a co-guild master who switched alts can still
+    // be stripped, and an alt that is not played can be appointed. The role
+    // belongs to the ACCOUNT. A seat whose alt is not played is matched by its
+    // character AND label (labels are shared with numbered copies).
+    struct Target {
+        user_id: Uuid,
+        character_id: Uuid,
+        name: String,
+        rank: String,
+    }
     let target = live
         .iter()
-        .find(|s| s.character_id == body.character_id)
+        .find(|s| {
+            s.character_id == body.character_id && body.alt_key.is_none_or(|a| s.alt_key == Some(a))
+        })
+        .map(|s| Target {
+            user_id: s.user_id,
+            character_id: s.character_id,
+            name: s.name.clone(),
+            rank: s.rank.clone(),
+        })
+        .or_else(|| {
+            parked
+                .iter()
+                .filter(|s| s.character_id == body.character_id)
+                .filter(|s| body.alt_key.is_none_or(|a| s.alt_key == Some(a)))
+                .min_by_key(|s| {
+                    GuildRank::from_wire(&s.rank)
+                        .map(|r| r as u8)
+                        .unwrap_or(u8::MAX)
+                })
+                .map(|s| Target {
+                    user_id: s.user_id,
+                    character_id: s.character_id,
+                    name: s.name.clone(),
+                    rank: s.rank.clone(),
+                })
+        })
         .ok_or_else(|| err(StatusCode::NOT_FOUND, 43))?;
-    if target.rank == GuildRank::Grandmaster.as_wire() {
+    if body.appoint && target.rank == GuildRank::Grandmaster.as_wire() {
         // The Grand Master already holds everything the role grants.
         return Err(err(StatusCode::CONFLICT, 50));
     }
@@ -1729,42 +1776,6 @@ pub(crate) async fn set_co_master(
         .await?;
     resp.changed = changed;
     Ok(resp)
-}
-
-/// Strip a parked seat from every version of that alt that carries it, and
-/// arm the re-join cooldown the alt brings back with it (`parkedGuildRemovals`,
-/// only on versions that already park removals — a key added to an older
-/// version would change what its restore does). No board entry: the switch
-/// already posted the alt's LEAVE (#439).
-pub(crate) async fn remove_parked_seat(
-    conn: &mut AsyncPgConnection,
-    gid: &str,
-    character_id: Uuid,
-    alt: Uuid,
-    ts: i64,
-) -> Result<usize, diesel::result::Error> {
-    sql_query(
-        r#"
-UPDATE character_versions v
-   SET server_state = jsonb_set(v.server_state, '{parkedGuildMembers}',
-         COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(v.server_state -> 'parkedGuildMembers') e
-                    WHERE e ->> 'guild_id' IS DISTINCT FROM $1), '[]'::jsonb))
-       || CASE WHEN jsonb_typeof(v.server_state -> 'parkedGuildRemovals') = 'array'
-               THEN jsonb_build_object('parkedGuildRemovals',
-                      COALESCE((SELECT jsonb_agg(r) FROM jsonb_array_elements(v.server_state -> 'parkedGuildRemovals') r
-                                 WHERE r ->> 'guild_id' IS DISTINCT FROM $1), '[]'::jsonb)
-                      || jsonb_build_array(jsonb_build_object('guild_id', $1::text, 'removed_at', $4::bigint, 'banned', false)))
-               ELSE '{}'::jsonb END
- WHERE v.character_id = $2 AND v.source_alt_uuid = $3
-   AND v.server_state -> 'parkedGuildMembers'
-       @> jsonb_build_array(jsonb_build_object('guild_id', $1::text))"#,
-    )
-    .bind::<Text, _>(gid)
-    .bind::<SqlUuid, _>(character_id)
-    .bind::<SqlUuid, _>(alt)
-    .bind::<BigInt, _>(ts)
-    .execute(conn)
-    .await
 }
 
 /// Recompute the guild ladder for the active season and read this guild's
@@ -1895,24 +1906,25 @@ mod tests {
             plan_kick(KickActor::Operator, target(GuildRank::Member, false), 1),
             Err(KickRefusal::LastMember)
         );
-        // A parked seat is not a live member: removing it never empties the guild.
+        // A seat whose alt is not played is a member too: the last seat is the
+        // last seat.
         assert_eq!(
             plan_kick(KickActor::Operator, target(GuildRank::Member, true), 1),
+            Err(KickRefusal::LastMember)
+        );
+        assert_eq!(
+            plan_kick(KickActor::Operator, target(GuildRank::Member, true), 2),
             Ok(())
         );
     }
 
     #[test]
-    fn only_a_grandmaster_seat_manages_and_a_parked_one_only_while_leaderless() {
-        assert!(seat_can_manage("GRANDMASTER", false, true));
-        assert!(!seat_can_manage("MASTER", false, true));
-        assert!(!seat_can_manage("ELDER", false, false));
-        assert!(
-            !seat_can_manage("LEADER", false, false),
-            "unknown ranks never manage"
-        );
-        assert!(seat_can_manage("GRANDMASTER", true, false));
-        assert!(!seat_can_manage("GRANDMASTER", true, true));
+    fn only_a_grandmaster_seat_manages_played_or_not() {
+        assert!(seat_can_manage("GRANDMASTER"));
+        assert!(!seat_can_manage("MASTER"));
+        assert!(!seat_can_manage("ELDER"));
+        assert!(!seat_can_manage("MEMBER"));
+        assert!(!seat_can_manage("LEADER"), "unknown ranks never manage");
     }
 
     // ---- co-guild masters: the pure rules ---------------------------------
@@ -2141,6 +2153,7 @@ mod tests {
             p_user: Uuid,
             p_char: Uuid,
             pa_alt: Uuid,
+            pa_member: Uuid,
         }
 
         async fn seed(c: &mut AsyncPgConnection) -> World {
@@ -2154,6 +2167,7 @@ mod tests {
                 p_user: Uuid::new_v4(),
                 p_char: Uuid::new_v4(),
                 pa_alt: Uuid::new_v4(),
+                pa_member: Uuid::new_v4(),
             };
             let (b_user, b_char) = (w.b_user, w.b_char);
             let (gm_alt, a_alt, b_alt, pb_alt) = (
@@ -2186,6 +2200,12 @@ mod tests {
                    (gen_random_uuid(), '{pc}', '{pu}', '{pa}', 'PeeAy', 50, '{{}}', '{{}}', '{{}}', '{{}}',
                     '{{\"parkedGuildMembers\":[{{\"guild_id\":\"{G}\",\"rank\":\"MEMBER\",\"join_date\":15}}],\"parkedGuildRemovals\":[]}}',
                     'switch', 200);
+                 -- PA's seat as the 2026-11-23 migration leaves it: still in the guild.
+                 INSERT INTO alt_member_ids (member_id, user_id, alt_key, character_id)
+                     VALUES ('{pm}', '{pu}', '{pa}', '{pc}');
+                 INSERT INTO guild_alt_seats (user_id, alt_key, member_id, guild_id, character_id,
+                     rank, join_date, parked_at)
+                     VALUES ('{pu}', '{pa}', '{pm}', '{G}', '{pc}', 'MEMBER', 15, 200);
                  INSERT INTO device_bindings (device_id, user_id, last_seen) VALUES
                    ('dev-a', '{au}', to_timestamp(5000));",
                 gu = w.gm_user,
@@ -2197,6 +2217,7 @@ mod tests {
                 bc = b_char,
                 pc = w.p_char,
                 pa = w.pa_alt,
+                pm = w.pa_member,
             );
             // Wins worth 30/20/10/40 cups (GM, A, B, parked PA).
             for (cid, alt, d, t) in [
@@ -2360,7 +2381,7 @@ mod tests {
             r.actor_user_id = Some(w.p_user);
             assert!(
                 kick(&mut c, G, &r).await.is_err(),
-                "a parked seat holds no live power"
+                "a member's seat holds no power, played or not"
             );
             assert_eq!(
                 build_roster(&mut c, G)
@@ -2398,9 +2419,27 @@ mod tests {
             .unwrap();
             assert_eq!(rows.len(), 2);
             for row in rows {
-                assert_eq!(row.s["parkedGuildMembers"], serde_json::json!([]));
+                // The alt brings its re-join cooldown back when it is played.
                 assert_eq!(row.s["parkedGuildRemovals"][0]["guild_id"], G);
             }
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_alt_seats").await,
+                0
+            );
+            // The game listed PA under its alt key, so the board says it went —
+            // an operator's removal is the member's own LEAVE.
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_messages WHERE guild_id = '{G}' \
+                          AND message_type = 'LEAVE' AND user_id = '{}' AND alt_key = '{}'",
+                        w.pa_member, w.pa_alt
+                    )
+                )
+                .await,
+                1
+            );
             assert!(
                 build_roster(&mut c, G)
                     .await
@@ -2411,6 +2450,89 @@ mod tests {
                     .all(|m| !m.parked)
             );
             assert!(seats_of_user(&mut c, w.p_user).await.unwrap().is_empty());
+        }
+
+        /// Owner decision 2026-11-23: "I can manage things on web for all alts
+        /// that are guild masters". P plays PB while its alt PA holds the guild:
+        /// P manages from the website, and the board names PA, the member the
+        /// game lists.
+        #[tokio::test]
+        async fn a_grand_master_alt_that_is_not_played_manages_on_the_web() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            sql_query(format!(
+                "UPDATE guild_members SET rank = 'MEMBER' WHERE user_id = '{}'",
+                w.gm_user
+            ))
+            .execute(&mut c)
+            .await
+            .unwrap();
+            sql_query(format!(
+                "UPDATE guild_alt_seats SET rank = 'GRANDMASTER' WHERE alt_key = '{}'",
+                w.pa_alt
+            ))
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            // Review F2: P's PLAYED alt is a plain member of the same guild; P
+            // still acts from its strongest seat there, PA's Grand Master seat.
+            sql_query(format!(
+                "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                 VALUES ('{G}', '{}', '{}', 'MEMBER', 40)",
+                w.p_user, w.p_char
+            ))
+            .execute(&mut c)
+            .await
+            .unwrap();
+
+            let seats = seats_of_user(&mut c, w.p_user).await.unwrap();
+            assert_eq!(seats.len(), 2);
+            let pa = seats.iter().find(|s| s.parked).unwrap();
+            assert!(pa.can_manage && pa.can_moderate);
+            assert_eq!(pa.alt_key, Some(w.pa_alt));
+
+            let mut r = req(w.a_char);
+            r.actor_user_id = Some(w.p_user);
+            let resp = kick(&mut c, G, &r).await.unwrap();
+            assert!(resp.applied);
+            assert_eq!(
+                count(
+                    &mut c,
+                    &format!(
+                        "SELECT COUNT(*) AS n FROM guild_messages WHERE message_type = 'KICK' \
+                          AND user_id = '{}' AND alt_key = '{}' \
+                          AND type_specific_data->>'kickedUserId' = '{}'",
+                        w.pa_member, w.pa_alt, w.a_user
+                    )
+                )
+                .await,
+                1,
+                "authored by PA, under the id the game lists PA by"
+            );
+        }
+
+        /// Review F5: the binary refuses to start without the 2026-11-23 schema.
+        #[tokio::test]
+        async fn the_startup_check_names_a_missing_table_or_column() {
+            let mut c = db!();
+            assert_eq!(crate::guild::required_schema_present(&mut c).await, Ok(()));
+            sql_query("ALTER TABLE guild_messages DROP COLUMN target_account")
+                .execute(&mut c)
+                .await
+                .unwrap();
+            assert_eq!(
+                crate::guild::required_schema_present(&mut c).await,
+                Err("guild_messages.target_account".to_string())
+            );
+            sql_query("DROP TABLE guild_alt_seats")
+                .execute(&mut c)
+                .await
+                .unwrap();
+            assert_eq!(
+                crate::guild::required_schema_present(&mut c).await,
+                Err("guild_alt_seats".to_string())
+            );
         }
 
         // ---- co-guild masters ------------------------------------------------
@@ -2428,10 +2550,37 @@ mod tests {
         fn co_req(character_id: Uuid, appoint: bool, actor: Option<Uuid>) -> CoMasterRequest {
             CoMasterRequest {
                 character_id,
+                alt_key: None,
                 appoint,
                 actor_user_id: actor,
                 operator: None,
             }
+        }
+
+        /// Re-review item 1: the role belongs to the account, so it is given to
+        /// and taken from a seat whose alt is not being played (P plays PB, its
+        /// alt PA holds the seat) — by the Grand Master and by an operator.
+        #[tokio::test]
+        async fn a_co_master_role_works_on_a_seat_whose_alt_is_not_played() {
+            let mut c = db!();
+            let w = seed(&mut c).await;
+            let r = set_co_master(&mut c, G, &co_req(w.p_char, true, Some(w.gm_user)))
+                .await
+                .unwrap();
+            assert!(r.changed && r.co_master);
+            let seats = seats_of_user(&mut c, w.p_user).await.unwrap();
+            assert!(seats[0].parked && seats[0].co_master && seats[0].can_moderate);
+            let r = set_co_master(&mut c, G, &co_req(w.p_char, false, None))
+                .await
+                .unwrap();
+            assert!(
+                r.changed && !r.co_master,
+                "an operator strips it without a switch back"
+            );
+            assert_eq!(
+                count(&mut c, "SELECT COUNT(*) AS n FROM guild_co_masters").await,
+                0
+            );
         }
 
         /// Appoint A co-guild master, as the Grand Master.
@@ -2561,14 +2710,15 @@ mod tests {
                     .await
                     .is_err()
             );
-            // The Grand Master is never a co-guild master; a non-member cannot be one.
+            // The Grand Master is never a co-guild master; a non-member cannot be
+            // one. (P's alt PA IS a member — its seat is just not played.)
             assert!(
                 set_co_master(&mut c, G, &co_req(w.gm_char, true, None))
                     .await
                     .is_err()
             );
             assert!(
-                set_co_master(&mut c, G, &co_req(w.p_char, true, None))
+                set_co_master(&mut c, G, &co_req(Uuid::new_v4(), true, None))
                     .await
                     .is_err()
             );
@@ -2833,7 +2983,8 @@ mod tests {
                 .await
                 .unwrap();
             assert!(r.approved);
-            assert_eq!(r.member_count, 4);
+            // Three played seats, P's other alt, and the newcomer.
+            assert_eq!(r.member_count, 5);
 
             #[derive(QueryableByName)]
             struct Seat {
@@ -2911,7 +3062,7 @@ mod tests {
                 .await
                 .unwrap();
             assert!(!r.approved);
-            assert_eq!(r.member_count, 3);
+            assert_eq!(r.member_count, 4);
             assert_eq!(
                 count(&mut c, "SELECT COUNT(*) AS n FROM guild_applications").await,
                 0
