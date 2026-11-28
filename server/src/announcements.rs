@@ -46,36 +46,19 @@ pub async fn get_announcements(
     };
     let owner = get_only_single_character_and_check_permission(owners, &session.session)?;
 
-    // One indexed existence probe per ended season. The award unique index
-    // starts `(season_id, character_id)`, so this remains cheap without adding
-    // a production index or running a migration for the feature.
-    //
-    // Only the alt playing now is told about a reward: a user's alts share this
-    // character id, and advertising another alt's placing would offer a gift the
-    // claim then refuses (owner decision 2026-10-10).
-    let pending: Vec<season_store::SeasonRow> = diesel::sql_query(format!(
-        "SELECT s.* FROM arena_seasons s \
-         WHERE s.status = 'ended' AND s.ended_at IS NOT NULL \
-           AND EXISTS ( \
-             SELECT 1 FROM arena_season_awards a \
-             WHERE a.season_id = s.id AND a.character_id = $1 \
-               AND a.granted_at IS NULL \
-               AND {} \
-           ) \
-         ORDER BY s.ended_at DESC",
-        season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
-    ))
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
-    .load(&mut conn)
-    .await?;
+    let pending = pending_reward_seasons(&mut conn, character_id).await?;
 
+    let now = now_secs();
     let mut announcements = app_state.static_data.announcements.clone();
-    announcements.extend(pending.iter().map(season_reward_announcement));
+    announcements.extend(
+        pending
+            .iter()
+            .map(|season| season_reward_announcement(season, now)),
+    );
 
     // A Free for All the client cannot see is a giveaway nobody collects: gift
     // ids are only discoverable through this feed. Derived from the open run
     // rather than stored alongside it, so the advert and the gift cannot drift.
-    let now = now_secs();
     if let Some(run) = crate::free_for_all::open_run(&mut conn, now).await {
         announcements.push(free_for_all_announcement(&run));
     }
@@ -331,13 +314,54 @@ fn deferred_gear_announcement(owed: u64, now: i64) -> Announcement {
     }
 }
 
-fn season_reward_announcement(season: &season_store::SeasonRow) -> Announcement {
+/// Ended seasons that still owe the alt playing now an unclaimed award.
+///
+/// The row filter (`granted_at IS NULL`) is what ends a season banner: once
+/// every award is claimed the season drops out here, so the banner's `ttl` no
+/// longer has to.
+///
+/// One indexed existence probe per ended season. The award unique index starts
+/// `(season_id, character_id)`, so this remains cheap without adding a
+/// production index or running a migration for the feature.
+///
+/// Only the alt playing now is told about a reward: a user's alts share this
+/// character id, and advertising another alt's placing would offer a gift the
+/// claim then refuses (owner decision 2026-10-10).
+async fn pending_reward_seasons(
+    conn: &mut diesel_async::AsyncPgConnection,
+    character_id: Uuid,
+) -> Result<Vec<season_store::SeasonRow>, diesel::result::Error> {
+    diesel::sql_query(format!(
+        "SELECT s.* FROM arena_seasons s \
+         WHERE s.status = 'ended' AND s.ended_at IS NOT NULL \
+           AND EXISTS ( \
+             SELECT 1 FROM arena_season_awards a \
+             WHERE a.season_id = s.id AND a.character_id = $1 \
+               AND a.granted_at IS NULL \
+               AND {} \
+           ) \
+         ORDER BY s.ended_at DESC",
+        season_store::AWARD_BELONGS_TO_LIVE_ALT_SQL
+    ))
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .load(conn)
+    .await
+}
+
+/// The banner for one ended season's unclaimed award.
+///
+/// `ttl` rolls a month ahead of `now`, like the other gift banners. It used to
+/// be `ended_at + 31 days`, which hid the banner — the ONLY way to claim a
+/// season award — from every player who had not claimed within a month: their
+/// awards stayed owed and unclaimable forever. The banner now lasts exactly as
+/// long as the award is unclaimed (see `pending_reward_seasons`).
+fn season_reward_announcement(season: &season_store::SeasonRow, now: i64) -> Announcement {
     let start = season.ended_at.unwrap_or(season.ends_at);
     Announcement {
         id: season.id.to_string(),
         r#type: "BASIC".into(),
-        start_time: start,
-        ttl: start + REWARD_ANNOUNCEMENT_LIFETIME,
+        start_time: start.min(now),
+        ttl: now + REWARD_ANNOUNCEMENT_LIFETIME,
         // Both the VPN addon and no-VPN nginx route this namespaced path to a
         // generic Arena Reset presentation while inserting this season id into
         // its manifest's GlobalGiftId.
@@ -516,11 +540,138 @@ mod tests {
             created_at: 50,
             ended_at: Some(210),
         };
-        let a = season_reward_announcement(&season);
+        let a = season_reward_announcement(&season, 300);
         assert_eq!(a.id, id.to_string());
         assert!(a.asset_url.ends_with(&format!("/arena-season/{id}")));
         assert_eq!(a.start_time, 210);
-        assert_eq!(a.ttl, 210 + REWARD_ANNOUNCEMENT_LIFETIME);
+        assert_eq!(a.ttl, 300 + REWARD_ANNOUNCEMENT_LIFETIME);
+    }
+
+    /// THE BUG (d130): Season 1 ended 2026-10-04; on 2026-11-28 a player with
+    /// two unclaimed awards got a banner whose ttl (ended_at + 31 days) had
+    /// passed, so the client never showed it and the awards could not be
+    /// claimed at all. An unclaimed award keeps its banner live.
+    #[test]
+    fn a_season_ended_long_ago_still_shows_its_unclaimed_banner() {
+        let ended = 1_791_130_204; // 2026-10-04 16:10:04 UTC
+        let now = 1_795_858_620; // 2026-11-28, 54 days later
+        let season = season_store::SeasonRow {
+            id: Uuid::from_u128(1),
+            number: 1,
+            name: "Season 1".into(),
+            starts_at: ended - 1000,
+            ends_at: ended,
+            status: "ended".into(),
+            scoring: "shipped".into(),
+            reset_rule: "hard_reset".into(),
+            created_at: ended - 2000,
+            ended_at: Some(ended),
+        };
+        let a = season_reward_announcement(&season, now);
+        assert!(
+            a.start_time <= now && now < a.ttl,
+            "banner must be live now"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pending_season_db_tests {
+    use super::*;
+    use diesel::sql_types::{BigInt, Nullable, Uuid as SqlUuid};
+    use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+
+    const SCHEMA: &str = "
+        CREATE TABLE characters (id UUID PRIMARY KEY, source_alt_uuid UUID);
+        CREATE TABLE arena_seasons (
+            id UUID PRIMARY KEY, number INTEGER NOT NULL, name TEXT NOT NULL,
+            starts_at BIGINT NOT NULL, ends_at BIGINT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'scheduled', scoring TEXT NOT NULL DEFAULT 'shipped',
+            reset_rule TEXT NOT NULL DEFAULT 'hard_reset', created_at BIGINT NOT NULL DEFAULT 0,
+            ended_at BIGINT);
+        CREATE TABLE arena_season_awards (
+            id UUID PRIMARY KEY, season_id UUID NOT NULL, character_id UUID NOT NULL,
+            source_alt_uuid UUID, granted_at BIGINT);
+    ";
+
+    async fn fixture() -> Option<AsyncPgConnection> {
+        let url = std::env::var("TEST_DATABASE_URL").ok()?;
+        let mut conn = AsyncPgConnection::establish(&url)
+            .await
+            .expect("TEST_DATABASE_URL is set but unreachable");
+        conn.begin_test_transaction().await.unwrap();
+        let schema = format!("t{}", Uuid::new_v4().simple());
+        conn.batch_execute(&format!(
+            "CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema};"
+        ))
+        .await
+        .unwrap();
+        conn.batch_execute(SCHEMA).await.unwrap();
+        Some(conn)
+    }
+
+    async fn seed(
+        conn: &mut AsyncPgConnection,
+        character: Uuid,
+        season: Uuid,
+        granted: Option<i64>,
+    ) {
+        diesel::sql_query("INSERT INTO characters (id) VALUES ($1) ON CONFLICT DO NOTHING")
+            .bind::<SqlUuid, _>(character)
+            .execute(conn)
+            .await
+            .unwrap();
+        // Ended 2026-10-04: more than 31 days before the bug was seen.
+        diesel::sql_query(
+            "INSERT INTO arena_seasons (id, number, name, starts_at, ends_at, status, ended_at) \
+             VALUES ($1, 1, 'Season 1', 1789000000, 1791130204, 'ended', 1791130204) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind::<SqlUuid, _>(season)
+        .execute(conn)
+        .await
+        .unwrap();
+        diesel::sql_query(
+            "INSERT INTO arena_season_awards (id, season_id, character_id, granted_at) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind::<SqlUuid, _>(Uuid::new_v4())
+        .bind::<SqlUuid, _>(season)
+        .bind::<SqlUuid, _>(character)
+        .bind::<Nullable<BigInt>, _>(granted)
+        .execute(conn)
+        .await
+        .unwrap();
+    }
+
+    /// The failing case end to end: a season that ended > 31 days ago with an
+    /// unclaimed legacy award is still served, with a banner that is live now;
+    /// once claimed it is not served at all.
+    #[actix_web::test]
+    async fn an_old_unclaimed_award_is_served_and_a_claimed_one_is_not() {
+        let Some(mut conn) = fixture().await else {
+            eprintln!("SKIP: TEST_DATABASE_URL unset — season banner NOT verified");
+            return;
+        };
+        let (owed, done, season) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+        seed(&mut conn, owed, season, None).await;
+        seed(&mut conn, done, season, Some(1_792_000_000)).await;
+        let now = 1_795_858_620; // 2026-11-28
+
+        let pending = pending_reward_seasons(&mut conn, owed).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        let a = season_reward_announcement(&pending[0], now);
+        assert!(
+            a.start_time <= now && now < a.ttl,
+            "unclaimed banner must be live"
+        );
+
+        assert!(
+            pending_reward_seasons(&mut conn, done)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }
 
