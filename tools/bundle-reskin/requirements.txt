@@ -5,7 +5,7 @@
 # EXACTLY: astc_real.py depends on its context/encode API, which has changed
 # between releases.
 UnityPy==1.25.0
-Pillow==12.1.1
+Pillow==13.0.0
 numpy==2.4.4
 lz4==4.4.5
 astc-encoder-py==0.1.12
