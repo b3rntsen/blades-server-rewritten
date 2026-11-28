@@ -70,10 +70,17 @@ permissions:
 # production only because an unrelated push happened to rebuild main minutes
 # later.
 #
-# The cull is fine; building the event's own commit was not. Both jobs below
-# check out `main` rather than the triggering SHA, so whichever run survives
-# publishes whatever main is at that moment. A dropped run then costs nothing:
-# the survivor already contains its commits.
+# The cull is fine; building the event's own commit was not. The test job
+# checks out `main` rather than the triggering SHA, so whichever run survives
+# tests whatever main is at that moment. A dropped run then costs nothing: the
+# survivor already contains its commits.
+#
+# The publish job must then build EXACTLY the commit the test job tested — not
+# `main` again. Checking out `main` a second time, minutes later, picks up
+# anything merged while the tests ran, and on 2026-11-27 that shipped commits
+# no test run had seen. So the test job resolves `main` once, records the SHA as
+# a job output, and publish checks out that SHA. A merge that lands during the
+# run gets its own run (queued behind this one), which tests and ships it.
 concurrency:
   group: arena-release
   cancel-in-progress: false
@@ -88,11 +95,21 @@ jobs:
     name: cargo test --workspace
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      # The one commit this run tests and publish builds. See the concurrency note.
+      sha: ${{ steps.tested.outputs.sha }}
     steps:
       # `ref: main`, not the event SHA — see the concurrency note above.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
+      - id: tested
+        name: record the commit under test
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "testing $sha (event was $GITHUB_SHA)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - run: sudo apt-get update && sudo apt-get install -y pkg-config
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -111,12 +128,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      # `ref: main`, not the event SHA — see the concurrency note above. The
-      # image is tagged from the checked-out HEAD below, so the sha- tag and the
-      # revision label describe what was actually built.
+      # The commit the test job tested — never `main` again, which may have
+      # moved since (see the concurrency note above). The image is tagged from
+      # the checked-out HEAD below, so the sha- tag and the revision label
+      # describe what was actually built.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: main
+          ref: ${{ needs.test.outputs.sha }}
+
+      - name: the checkout is the tested commit
+        env:
+          TESTED_SHA: ${{ needs.test.outputs.sha }}
+        run: |
+          set -euo pipefail
+          built="$(git rev-parse HEAD)"
+          if [ -z "$TESTED_SHA" ] || [ "$built" != "$TESTED_SHA" ]; then
+            echo "::error::refusing to publish $built: the test job tested '${TESTED_SHA}'"
+            exit 1
+          fi
 
       - name: log in to ghcr
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
