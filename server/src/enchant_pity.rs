@@ -26,11 +26,20 @@
 //! cleared), or misses: once a class has `tries` misses in a row, the next miss is
 //! replaced by primary + Ravage Magicka + Ravage Stamina and the counter is cleared.
 //! The counter lives in `server_state.enchantPityMisses`, which the client never sees.
+//!
+//! A class with a `pityAtRange` (tracker #645, HauDrauf 2026-11-28: Arcane II weapons,
+//! 45..=55) has no fixed threshold: the enchant number the pair is due on is drawn from
+//! the range per character, kept in `server_state.enchantPityDraws`, and re-drawn
+//! every time the class's counter restarts, i.e. after every "hit" (the pair, forced by
+//! the timer or rolled naturally). The draw is seeded from the character, the class and
+//! how many draws that class has made, so it is reproducible and changes every time.
 
 use std::collections::BTreeMap;
 
+use blades_lib::server_state::EnchantPityDraw;
 use blades_lib::static_data::EnchantingData;
 use blades_lib::user_data::{Item, ItemSingleProperty};
+use rand::RngExt;
 use uuid::Uuid;
 
 /// `Weapon Ravage Magicka` (`WeaponRavageMagickaPropertyLogic`).
@@ -78,13 +87,36 @@ pub enum PityOutcome {
     },
 }
 
+/// When a class's pair is forced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Threshold {
+    /// After `tries` misses (`doubleRavagePity.tries`).
+    Fixed(u32),
+    /// On enchant number N, N drawn from `lo..=hi` (`doubleRavagePity.pityAtRange`).
+    Drawn { lo: u32, hi: u32 },
+}
+
+/// The enchant number the pair is due on for a drawn class: draw number `nonce` of
+/// `class` for this character, uniform over `lo..=hi`.
+pub fn draw_pity_at(character_id: Uuid, class: &str, nonce: u32, lo: u32, hi: u32) -> u32 {
+    crate::jewelry_roll::seeded(
+        &[
+            character_id.as_bytes(),
+            class.as_bytes(),
+            b"enchant-pity-645",
+        ],
+        u64::from(nonce),
+    )
+    .random_range(lo..=hi)
+}
+
 /// The counter key, threshold and Ravage pair when this enchant counts toward the
 /// timer.
 fn counted_class(
     enchanting: &EnchantingData,
     before: &Item,
     recipe_id: Uuid,
-) -> Option<(String, u32, [Uuid; 2])> {
+) -> Option<(String, Threshold, [Uuid; 2])> {
     let pity = &enchanting.tuning.double_ravage_pity;
     if !pity.enabled {
         return None;
@@ -113,8 +145,13 @@ fn counted_class(
         return None;
     }
     let class = format!("{prefix}{}", enchanting.odds_class(before.arcane_tier));
+    if let Some(&[lo, hi]) = pity.pity_at_range.get(&class)
+        && (1..=hi).contains(&lo)
+    {
+        return Some((class, Threshold::Drawn { lo, hi }, [magicka, stamina]));
+    }
     let threshold = *pity.tries.get(&class)?;
-    (threshold > 0).then_some((class, threshold, [magicka, stamina]))
+    (threshold > 0).then_some((class, Threshold::Fixed(threshold), [magicka, stamina]))
 }
 
 /// Whether an enchant (primary first, then secondaries) carries both WEAPON Ravages.
@@ -129,21 +166,61 @@ fn has_pair(enchanting: &[ItemSingleProperty], pair: [Uuid; 2]) -> bool {
 }
 
 /// Run the timer on one enchant. `before` is the item as it went in, `rolled` the item
-/// [`crate::craft`]'s roll produced (rewritten in place when the pair is forced), and
-/// `misses` the character's `server_state.enchant_pity_misses`.
+/// [`crate::craft`]'s roll produced (rewritten in place when the pair is forced),
+/// `misses` the character's `server_state.enchant_pity_misses` and `draws` its
+/// `server_state.enchant_pity_draws` (only read and written for a drawn class).
 pub fn apply(
     enchanting: &EnchantingData,
+    character_id: Uuid,
     before: &Item,
     recipe_id: Uuid,
     rolled: &mut Item,
     misses: &mut BTreeMap<String, u32>,
+    draws: &mut BTreeMap<String, EnchantPityDraw>,
 ) -> PityOutcome {
     let Some((class, threshold, pair)) = counted_class(enchanting, before, recipe_id) else {
         return PityOutcome::NotCounted;
     };
+    // The pair is forced once `threshold` misses are on record: `tries` for a fixed
+    // class, the drawn enchant number minus one for a drawn class (drawn now if this
+    // character has none yet, or the stored one fell outside a changed range).
+    let threshold = match threshold {
+        Threshold::Fixed(t) => t,
+        Threshold::Drawn { lo, hi } => {
+            let d = match draws.get(&class).copied() {
+                Some(d) if (lo..=hi).contains(&d.at) => d,
+                old => {
+                    let nonce = old.map_or(0, |d| d.draws);
+                    let d = EnchantPityDraw {
+                        at: draw_pity_at(character_id, &class, nonce, lo, hi),
+                        draws: nonce + 1,
+                    };
+                    draws.insert(class.clone(), d);
+                    d
+                }
+            };
+            d.at - 1
+        }
+    };
+    // A hit (the pair, natural or forced) restarts the counter, and a drawn class
+    // draws its next point at the same time.
+    let restart = |misses: &mut BTreeMap<String, u32>,
+                   draws: &mut BTreeMap<String, EnchantPityDraw>| {
+        misses.remove(&class);
+        if let Some(&[lo, hi]) = enchanting
+            .tuning
+            .double_ravage_pity
+            .pity_at_range
+            .get(&class)
+            && let Some(d) = draws.get_mut(&class)
+        {
+            d.at = draw_pity_at(character_id, &class, d.draws, lo, hi);
+            d.draws += 1;
+        }
+    };
     let so_far = misses.get(&class).copied().unwrap_or(0);
     if has_pair(&rolled.properties.enchanting, pair) {
-        misses.remove(&class);
+        restart(misses, draws);
         return PityOutcome::NaturalHit { class };
     }
     if so_far >= threshold {
@@ -151,7 +228,7 @@ pub fn apply(
         let e = &mut rolled.properties.enchanting;
         e.truncate(1);
         e.extend(pair.map(|id| ItemSingleProperty { id, tier }));
-        misses.remove(&class);
+        restart(misses, draws);
         return PityOutcome::Forced {
             class,
             misses: so_far,
@@ -239,6 +316,302 @@ mod tests {
 
     fn misses(pairs: &[(&str, u32)]) -> BTreeMap<String, u32> {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    /// The fixed-threshold tests' entry point: no character, no drawn points kept.
+    fn apply(
+        e: &EnchantingData,
+        before: &Item,
+        recipe_id: Uuid,
+        rolled: &mut Item,
+        m: &mut BTreeMap<String, u32>,
+    ) -> PityOutcome {
+        super::apply(
+            e,
+            Uuid::nil(),
+            before,
+            recipe_id,
+            rolled,
+            m,
+            &mut BTreeMap::new(),
+        )
+    }
+
+    const CHARACTER: Uuid = Uuid::from_u128(0x645_0000_0000_0000_0000_0000_0000_0645);
+
+    /// The shipped tuning (`deploy/static/enchant_tuning.json`).
+    fn shipped() -> EnchantingData {
+        let mut e = enchanting();
+        let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../deploy/static/enchant_tuning.json");
+        e.tuning = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
+        e
+    }
+
+    fn drawn(at: u32, draws: u32) -> EnchantPityDraw {
+        EnchantPityDraw { at, draws }
+    }
+
+    /// HauDrauf's rule (tracker #645): on an Arcane II weapon the pair is forced on
+    /// exactly the drawn enchant number (here 47: after 46 misses), and the hit draws
+    /// the next number (draw #4 of this character's arcane2 sequence). Red before: the
+    /// threshold was the fixed 49 and nothing was drawn.
+    #[test]
+    fn an_arcane_two_weapon_is_forced_on_its_drawn_enchant_and_redraws() {
+        let e = shipped();
+        let before = item(MADNESS_BATTLEAXE, Some(2));
+        let mut d = BTreeMap::from([("arcane2".to_string(), drawn(47, 3))]);
+        // 45 misses: the 46th enchant is an ordinary miss.
+        let mut m = misses(&[("arcane2", 45)]);
+        let mut rolled = with_enchant(before.clone(), &[FORTIFY_A, RAVAGE_MAGICKA]);
+        let out = super::apply(
+            &e,
+            CHARACTER,
+            &before,
+            MAGICKA_DAMAGE_T10,
+            &mut rolled,
+            &mut m,
+            &mut d,
+        );
+        assert_eq!(
+            out,
+            PityOutcome::Miss {
+                class: "arcane2".into(),
+                misses: 46
+            }
+        );
+        assert_eq!(d["arcane2"], drawn(47, 3), "a miss keeps the drawn point");
+        // 46 misses: the 47th enchant gets the pair.
+        let mut rolled = with_enchant(before.clone(), &[FORTIFY_A, RAVAGE_MAGICKA]);
+        let out = super::apply(
+            &e,
+            CHARACTER,
+            &before,
+            MAGICKA_DAMAGE_T10,
+            &mut rolled,
+            &mut m,
+            &mut d,
+        );
+        assert_eq!(
+            out,
+            PityOutcome::Forced {
+                class: "arcane2".into(),
+                misses: 46,
+                threshold: 46
+            }
+        );
+        assert!(has_double_ravage(&rolled.properties.enchanting));
+        assert!(m.is_empty());
+        let next = d["arcane2"];
+        assert_eq!(next.draws, 4);
+        assert_eq!(next.at, draw_pity_at(CHARACTER, "arcane2", 3, 45, 55));
+        assert!((45..=55).contains(&next.at));
+    }
+
+    /// A natural pair is a hit too: the counter restarts AND a new point is drawn.
+    #[test]
+    fn a_natural_pair_on_arcane_two_also_draws_a_new_point() {
+        let e = shipped();
+        let before = item(MADNESS_BATTLEAXE, Some(2));
+        let mut d = BTreeMap::from([("arcane2".to_string(), drawn(52, 7))]);
+        let mut m = misses(&[("arcane2", 20)]);
+        let mut rolled = with_enchant(before.clone(), &[RAVAGE_STAMINA, RAVAGE_MAGICKA]);
+        let out = super::apply(
+            &e,
+            CHARACTER,
+            &before,
+            MAGICKA_DAMAGE_T10,
+            &mut rolled,
+            &mut m,
+            &mut d,
+        );
+        assert_eq!(
+            out,
+            PityOutcome::NaturalHit {
+                class: "arcane2".into()
+            }
+        );
+        assert!(m.is_empty());
+        assert_eq!(
+            d["arcane2"],
+            drawn(draw_pity_at(CHARACTER, "arcane2", 7, 45, 55), 8)
+        );
+    }
+
+    /// A character with no drawn point yet (every existing one at deploy) draws its
+    /// first on its next Arcane II weapon enchant; a stored point outside the range
+    /// (the range was edited) is replaced the same way.
+    #[test]
+    fn the_first_point_is_drawn_on_the_first_counted_enchant() {
+        let e = shipped();
+        let before = item(MADNESS_BATTLEAXE, Some(2));
+        for (start, want) in [
+            (
+                BTreeMap::new(),
+                drawn(draw_pity_at(CHARACTER, "arcane2", 0, 45, 55), 1),
+            ),
+            (
+                BTreeMap::from([("arcane2".to_string(), drawn(95, 2))]),
+                drawn(draw_pity_at(CHARACTER, "arcane2", 2, 45, 55), 3),
+            ),
+        ] {
+            let mut d = start;
+            let mut m = misses(&[("arcane2", 3)]);
+            let mut rolled = with_enchant(before.clone(), &[FORTIFY_A, RAVAGE_MAGICKA]);
+            super::apply(
+                &e,
+                CHARACTER,
+                &before,
+                MAGICKA_DAMAGE_T10,
+                &mut rolled,
+                &mut m,
+                &mut d,
+            );
+            assert_eq!(d["arcane2"], want);
+            assert_eq!(m, misses(&[("arcane2", 4)]));
+        }
+    }
+
+    /// The draw is uniform over 45..=55, never outside it, reproducible, and its own
+    /// sequence per character.
+    #[test]
+    fn draws_are_within_45_to_55_reproducible_and_per_character() {
+        let mut seen = BTreeMap::<u32, u32>::new();
+        for nonce in 0..11_000 {
+            let at = draw_pity_at(CHARACTER, "arcane2", nonce, 45, 55);
+            assert!((45..=55).contains(&at), "draw {nonce}: {at}");
+            assert_eq!(at, draw_pity_at(CHARACTER, "arcane2", nonce, 45, 55));
+            *seen.entry(at).or_default() += 1;
+        }
+        assert_eq!(seen.len(), 11, "every value 45..=55 is drawn: {seen:?}");
+        assert!(
+            seen.values().all(|n| (800..=1200).contains(n)),
+            "about 1,000 each: {seen:?}"
+        );
+        let seq = |c: Uuid| -> Vec<u32> {
+            (0..20)
+                .map(|n| draw_pity_at(c, "arcane2", n, 45, 55))
+                .collect()
+        };
+        assert_ne!(seq(CHARACTER), seq(Uuid::from_u128(0xBEEF)));
+    }
+
+    /// Real Arcane II weapon rolls with the shipped tuning and the state persisting
+    /// between enchants: every stored point stays within 45..=55, each pair forced by
+    /// the timer lands on exactly the stored point, every hit draws again, and no run
+    /// goes past 54 misses.
+    #[test]
+    fn real_arcane_two_weapon_rolls_follow_the_drawn_points() {
+        use rand::SeedableRng;
+        let e = shipped();
+        let before = item(MADNESS_BATTLEAXE, Some(2));
+        let mut rng = rand::rngs::StdRng::seed_from_u64(645);
+        let (mut m, mut d) = (BTreeMap::new(), BTreeMap::new());
+        let (mut streak, mut longest, mut forced, mut hits) = (0u32, 0u32, 0, 0);
+        let mut points = std::collections::BTreeSet::new();
+        for _ in 0..6_000 {
+            let mut rolled =
+                crate::craft::roll_item_for_test(&before, MAGICKA_DAMAGE_T10, &e, &mut rng);
+            let point = d.get("arcane2").copied();
+            let out = super::apply(
+                &e,
+                CHARACTER,
+                &before,
+                MAGICKA_DAMAGE_T10,
+                &mut rolled,
+                &mut m,
+                &mut d,
+            );
+            let now = d["arcane2"];
+            assert!((45..=55).contains(&now.at), "{now:?}");
+            points.insert(now.at);
+            match out {
+                PityOutcome::Forced { misses, .. } => {
+                    forced += 1;
+                    hits += 1;
+                    assert_eq!(misses + 1, point.unwrap().at, "forced on the drawn enchant");
+                    assert_eq!(now.draws, point.unwrap().draws + 1, "a hit redraws");
+                }
+                PityOutcome::NaturalHit { .. } => {
+                    hits += 1;
+                    assert_eq!(now.draws, point.map_or(1, |p| p.draws) + 1, "a hit redraws");
+                }
+                PityOutcome::Miss { .. } => {
+                    if let Some(p) = point {
+                        assert_eq!(now, p, "a miss keeps the point");
+                    }
+                }
+                PityOutcome::NotCounted => panic!("an arcane-2 weapon counts"),
+            }
+            if has_double_ravage(&rolled.properties.enchanting) {
+                streak = 0;
+            } else {
+                streak += 1;
+                longest = longest.max(streak);
+            }
+        }
+        assert!(longest <= 54, "longest run without the pair: {longest}");
+        assert!(forced > 30 && hits > forced, "forced {forced}, hits {hits}");
+        assert!(points.len() >= 8, "the point moves around: {points:?}");
+    }
+
+    /// Negative control (#645 is Arcane II WEAPONS only): Arcane I and plain weapons and
+    /// Arcane II shields keep their fixed thresholds and never draw a point.
+    #[test]
+    fn arcane_one_plain_weapons_and_shields_keep_their_fixed_thresholds() {
+        let e = shipped();
+        for (before, recipe, class, threshold, secondaries) in [
+            (
+                item(MADNESS_BATTLEAXE, Some(1)),
+                MAGICKA_DAMAGE_T10,
+                "arcane1",
+                190,
+                vec![FORTIFY_A],
+            ),
+            (
+                item(MADNESS_BATTLEAXE, None),
+                MAGICKA_DAMAGE_T10,
+                "normal",
+                380,
+                vec![FORTIFY_A],
+            ),
+            (
+                item(DIVINE_DAEDRIC_LIGHT_SHIELD, Some(2)),
+                SHIELD_FIRE_DAMAGE_T10,
+                "shield:arcane2",
+                49,
+                vec![FORTIFY_A, SHIELD_RAVAGE_MAGICKA],
+            ),
+        ] {
+            let mut d = BTreeMap::new();
+            let mut m = misses(&[(class, threshold - 1)]);
+            let mut rolled = before.clone();
+            let primary = e.recipes[&recipe].property;
+            rolled.properties.enchanting = std::iter::once(primary)
+                .chain(secondaries.iter().copied())
+                .map(|id| ItemSingleProperty { id, tier: 10 })
+                .collect();
+            let again = rolled.clone();
+            assert_eq!(
+                super::apply(&e, CHARACTER, &before, recipe, &mut rolled, &mut m, &mut d),
+                PityOutcome::Miss {
+                    class: class.into(),
+                    misses: threshold
+                },
+                "{class}"
+            );
+            let mut rolled = again;
+            assert_eq!(
+                super::apply(&e, CHARACTER, &before, recipe, &mut rolled, &mut m, &mut d),
+                PityOutcome::Forced {
+                    class: class.into(),
+                    misses: threshold,
+                    threshold
+                },
+                "{class}"
+            );
+            assert!(d.is_empty(), "{class}: no point drawn");
+        }
     }
 
     #[test]
@@ -508,7 +881,8 @@ mod tests {
     }
 
     /// Real Arcane II shield and weapon rolls with the shipped thresholds never go
-    /// past 50 enchants without their pair (#463).
+    /// past 50 enchants without their pair (#463). Weapons now draw their point from
+    /// 45..=55 (#645), so theirs is capped at 55.
     #[test]
     fn shipped_thresholds_cap_arcane_two_runs_at_fifty() {
         use rand::SeedableRng;
@@ -529,11 +903,11 @@ mod tests {
                 [SHIELD_RAVAGE_MAGICKA, SHIELD_RAVAGE_STAMINA],
             ),
         ] {
-            let mut m = BTreeMap::new();
+            let (mut m, mut d) = (BTreeMap::new(), BTreeMap::new());
             let (mut streak, mut longest, mut forced) = (0u32, 0u32, 0);
             for _ in 0..3_000 {
                 let mut rolled = crate::craft::roll_item_for_test(&before, recipe, &e, &mut rng);
-                match apply(&e, &before, recipe, &mut rolled, &mut m) {
+                match super::apply(&e, CHARACTER, &before, recipe, &mut rolled, &mut m, &mut d) {
                     PityOutcome::Forced { .. } => forced += 1,
                     PityOutcome::NotCounted => panic!("arcane II counts"),
                     _ => {}
@@ -545,7 +919,8 @@ mod tests {
                     longest = longest.max(streak);
                 }
             }
-            assert!(longest < 50, "longest run without the pair: {longest}");
+            let cap = if pair[0] == RAVAGE_MAGICKA { 55 } else { 50 };
+            assert!(longest < cap, "longest run without the pair: {longest}");
             if pair[0] == RAVAGE_MAGICKA {
                 assert!(forced > 0, "weapons at 1.05% hit the timer in 3,000 tries");
             }

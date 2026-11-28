@@ -79,6 +79,16 @@ pub struct AbyssRun {
     pub client_epl_reported: bool,
 }
 
+/// One drawn double-Ravage pity point (tracker #645): the pair is forced on enchant
+/// number `at` in a row without it, and `draws` is how many points this class has
+/// drawn so far (the seed's nonce, so each re-draw is a fresh, reproducible value).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnchantPityDraw {
+    pub at: u32,
+    pub draws: u32,
+}
+
 /// An in-progress craft job, persisted in `server_state.craft_jobs`. Created by
 /// `POST /crafts`, consumed (and results granted) by `POST /crafts/{id}/finish`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +102,11 @@ pub struct CraftJob {
     pub completed_at_ms: i64,
     /// Verbatim `results` from the recipe (items or stackableItems) — re-expanded on finish.
     pub results: Value,
+    /// The `batchSize` the client asked for, when it differs from what `results`
+    /// implies (tracker #645: a brew of 5 potions yields 20, and the client must still
+    /// be told the batch of 5 it started). Absent = derive it from `results`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u32>,
 }
 
 /// Reversible audit trail for support-initiated current-character renames.
@@ -257,6 +272,12 @@ pub struct ServerState {
     /// naturally or forced. Server-only, like the rest of this struct.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub enchant_pity_misses: BTreeMap<String, u32>,
+    /// Tracker #645 (HauDrauf, 2026-11-28): for an odds class with a
+    /// `doubleRavagePity.pityAtRange`, the enchant number the pair is due on, drawn
+    /// from that range and re-drawn every time the class's counter restarts. Absent
+    /// = not drawn yet (drawn on the class's next counted enchant).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub enchant_pity_draws: BTreeMap<String, EnchantPityDraw>,
     /// The player's own arena hide-helmet toggle, as their client last reported it in
     /// a match (c2s op61, tracker #568). The setting itself is a client-local
     /// PlayerPref; retail's client also sent it on connect in op20 `PlayerInfo`, but

@@ -412,6 +412,11 @@ pub struct DoubleRavagePity {
     /// is forced: bare class names for weapons, `shield:<class>` for shields. A class
     /// that is absent, or set to 0, is never forced.
     pub tries: BTreeMap<String, u32>,
+    /// Tracker #645 (HauDrauf, 2026-11-28): per odds class, `[lo, hi]` = the pair is
+    /// due on enchant number N in a row without it, N drawn uniformly from `lo..=hi`
+    /// per character and re-drawn every time the counter restarts (forced or natural
+    /// pair). Overrides `tries` for its class (N = `tries` + 1). Absent = `tries`.
+    pub pity_at_range: BTreeMap<String, [u32; 2]>,
 }
 
 impl Default for DoubleRavagePity {
@@ -419,6 +424,7 @@ impl Default for DoubleRavagePity {
         Self {
             enabled: true,
             tries: BTreeMap::from([("normal".to_string(), 630), ("arcane2".to_string(), 95)]),
+            pity_at_range: BTreeMap::new(),
         }
     }
 }

@@ -95,7 +95,9 @@ impl<'a> CraftJobWire<'a> {
         repair_data: &RepairData,
     ) -> Self {
         let (crafting_type_id, results) = repaired_craft_fields(job, static_data, repair_data);
-        let batch_size = batch_size_from_results(results.as_ref());
+        let batch_size = job
+            .batch_size
+            .unwrap_or_else(|| batch_size_from_results(results.as_ref()));
         CraftJobWire {
             id: job.id,
             user_id,
@@ -517,12 +519,16 @@ async fn start_craft(
         } else {
             // The double-Ravage pity timer (tracker #415, owner decision d17) runs on
             // the roll's result; the counter persists with the job in `write_back`.
+            // A drawn class (#645) keeps its drawn point there too.
+            let state = &mut entry.server_state.0;
             let pity = crate::enchant_pity::apply(
                 &static_data.enchanting,
+                character_id,
                 &existing,
                 recipe_id,
                 &mut mutated,
-                &mut entry.server_state.0.enchant_pity_misses,
+                &mut state.enchant_pity_misses,
+                &mut state.enchant_pity_draws,
             );
             // A forced pair gets its own line and NOT an `enchant rolled:` one: the
             // odds tally reads those, and a forced pair is not a draw from the tables.
@@ -653,6 +659,7 @@ async fn start_craft(
                                     crafting_type_id,
                                     completed_at_ms: 0,
                                     results: serde_json::json!({}),
+                                    batch_size: None,
                                 },
                                 out.output_item_template_id,
                                 crafting_type_id,
@@ -712,6 +719,13 @@ async fn start_craft(
             batch_size,
             duration_ms,
         ));
+    // Tracker #645: a brew yields POTION_BREW_YIELD_645 per full batch. The timer
+    // above keeps retail's `seconds x batchSize`; only the count changes.
+    let (results, advertised_batch) = if item_id.is_none() {
+        apply_potion_yield_645(results, crafting_type_id, batch_size)
+    } else {
+        (results, None)
+    };
     let job = CraftJob {
         id: job_id,
         recipe_id,
@@ -719,6 +733,7 @@ async fn start_craft(
         crafting_type_id,
         completed_at_ms,
         results,
+        batch_size: advertised_batch,
     };
     entry.server_state.0.craft_jobs.push(job.clone());
 
@@ -1590,6 +1605,52 @@ fn apply_batch_size_to_results(mut results: Value, batch_size: u32) -> Value {
         }
     }
     results
+}
+
+/// Tracker #645 (HauDrauf, 2026-11-28, a pre-approved common-good rule, NOT retail):
+/// a FULL alchemy brew yields this many potions or poisons instead of retail's 5, with
+/// the same brew time and the same cost. Every one of the APK's 140 Alchemy recipes is
+/// a potion or a poison. Revert: set it back to [`RETAIL_FULL_BREW`] (5).
+pub const POTION_BREW_YIELD_645: u32 = 20;
+/// Retail's full alchemy brew: `Recipe._maxBatchSize` 5, one potion per batch unit
+/// (`RecipeOutput.Quantity`), and the brew time is `seconds x batchSize`
+/// ([`blades_lib::features::recipe_durations`]; every captured brew was a batch of 4-5).
+const RETAIL_FULL_BREW: u32 = 5;
+
+/// How many potions a brew of `batch_size` yields: [`POTION_BREW_YIELD_645`] per full
+/// brew of 5, pro rata (rounded up) for a smaller batch. Retail: `batch_size`.
+fn potion_brew_yield(batch_size: u32) -> u32 {
+    (batch_size.max(1).saturating_mul(POTION_BREW_YIELD_645)).div_ceil(RETAIL_FULL_BREW)
+}
+
+/// For an ALCHEMY craft, set every stackable in `results` to [`potion_brew_yield`]
+/// (SET, not multiply: two captured `recipes.json` brews carry their batch of 5 baked
+/// into `results`). Returns the batch the client asked for when the count no longer
+/// says it, so [`CraftJobWire`] keeps telling the client the batch it started rather
+/// than 20 (retail's wire always had `batchSize` == the stackable count). Any other
+/// crafting type is returned untouched.
+fn apply_potion_yield_645(
+    mut results: Value,
+    crafting_type_id: Uuid,
+    batch_size: u32,
+) -> (Value, Option<u32>) {
+    let alchemy = Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).expect("valid alchemy craft type uuid");
+    if crafting_type_id != alchemy {
+        return (results, None);
+    }
+    let Some(stackables) = results
+        .get_mut("stackableItems")
+        .and_then(Value::as_object_mut)
+    else {
+        return (results, None);
+    };
+    let batch_size = batch_size.max(1);
+    let count = potion_brew_yield(batch_size);
+    for v in stackables.values_mut() {
+        *v = Value::from(count);
+    }
+    let advertised = (count != batch_size).then_some(batch_size);
+    (results, advertised)
 }
 
 fn grade_bare_jewelry_results<R: Rng + ?Sized>(
@@ -2816,6 +2877,12 @@ mod tests {
             shipped.tuning.double_ravage_pity.tries["shield:arcane2"],
             49
         );
+        // HauDrauf's rule (#645): Arcane II WEAPONS draw the enchant the pair is due on
+        // from 45..=55 instead (overriding the 49 above); shields keep the fixed 50th.
+        assert_eq!(
+            shipped.tuning.double_ravage_pity.pity_at_range,
+            [("arcane2".to_string(), [45, 55])].into()
+        );
         // Every table is covered by a rule, so editing the file reaches every type.
         for (i, t) in shipped.secondary_tables.iter().enumerate() {
             assert!(
@@ -3009,6 +3076,7 @@ mod tests {
             crafting_type_id: item_mod_crafting_type(0),
             completed_at_ms: 0,
             results,
+            batch_size: None,
         };
         let sd = static_data_from_deploy();
         let (_, repaired) = repaired_craft_fields(&job, &sd, repair_data_from_deploy());
@@ -3138,6 +3206,7 @@ mod tests {
             crafting_type_id: Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).unwrap(),
             completed_at_ms: 12_345,
             results,
+            batch_size: None,
         };
         let wire = CraftJobWire::from_job(
             &job,
@@ -3149,6 +3218,122 @@ mod tests {
         assert_eq!(
             wire.batch_size, 5,
             "wire reflects the stored multi-craft batch"
+        );
+    }
+
+    /// Tracker #645 (HauDrauf): EVERY APK Alchemy recipe (all potions and poisons) yields
+    /// 20 for a full brew of 5, and the brew time is still retail's `seconds x 5`, the
+    /// same as before the rule. Red before: the count was the batch, 5.
+    #[test]
+    fn every_potion_and_poison_recipe_brews_twenty_in_the_same_time() {
+        use blades_lib::features::recipe_durations;
+        let alchemy = Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).unwrap();
+        let raw: Value =
+            serde_json::from_str(include_str!("../../blades_lib/src/recipe_outputs.json")).unwrap();
+        let mut n = 0;
+        for (id, out) in raw["recipes"].as_object().unwrap() {
+            if out["craftingType"] != "Alchemy" {
+                continue;
+            }
+            n += 1;
+            let recipe = uuid(id);
+            let template = out["outputItemTemplateId"].as_str().unwrap();
+            let minted = apply_batch_size_to_results(
+                serde_json::json!({ "stackableItems": { template: 1 } }),
+                5,
+            );
+            let (results, advertised) = apply_potion_yield_645(minted, alchemy, 5);
+            assert_eq!(results["stackableItems"][template], 20, "{id}");
+            assert_eq!(
+                advertised,
+                Some(5),
+                "{id}: the client is told its batch of 5"
+            );
+            // The timer is the batch's, never the yield's.
+            let secs = recipe_durations::duration_ms(&recipe, 0, 1).unwrap() / 1000;
+            assert_eq!(
+                craft_duration_ms(recipe, 0, 5, 0),
+                secs * 5 * 1000,
+                "{id}: brew time unchanged"
+            );
+        }
+        assert_eq!(n, 140, "the APK ships 140 Alchemy recipes");
+        assert_eq!(POTION_BREW_YIELD_645, 20);
+        assert_eq!(potion_brew_yield(5), 20);
+        assert_eq!(potion_brew_yield(1), 4, "pro rata for a smaller batch");
+        assert_eq!(potion_brew_yield(4), 16);
+    }
+
+    /// A captured `recipes.json` brew carries its batch of 5 in `results` already:
+    /// the yield SETS the count (20), it does not multiply it again (100).
+    #[test]
+    fn a_captured_brew_yields_twenty_not_a_multiple() {
+        let alchemy = Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).unwrap();
+        let t = "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6";
+        let batched =
+            apply_batch_size_to_results(serde_json::json!({ "stackableItems": { t: 5 } }), 5);
+        let (results, _) = apply_potion_yield_645(batched, alchemy, 5);
+        assert_eq!(results["stackableItems"][t], 20);
+    }
+
+    /// Negative control: forge, decoration and enchant results are never touched.
+    #[test]
+    fn the_potion_yield_leaves_other_crafts_alone() {
+        let t = "8da5101c-2e7c-446b-b3bd-d1b9aa5c44f6";
+        let stack = serde_json::json!({ "stackableItems": { t: 5 } });
+        for ty in [
+            smithing_crafting_type(&blades_lib::static_data::StaticData::default()),
+            item_mod_crafting_type(0),
+            item_mod_crafting_type(3),
+            Uuid::from_u128(0xDEC0),
+        ] {
+            let (results, advertised) = apply_potion_yield_645(stack.clone(), ty, 5);
+            assert_eq!(results, stack, "{ty}");
+            assert_eq!(advertised, None, "{ty}");
+        }
+    }
+
+    /// The wire keeps the batch the client started (5) while `results` grants 20, so
+    /// the client's job record is the one it asked for; old rows still derive it.
+    #[test]
+    fn a_brew_of_twenty_is_advertised_as_the_batch_of_five() {
+        let alchemy = Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).unwrap();
+        let template = Uuid::from_u128(0xA1C0);
+        let (results, advertised) = apply_potion_yield_645(
+            serde_json::json!({ "stackableItems": { template.to_string(): 5 } }),
+            alchemy,
+            5,
+        );
+        let mut job = CraftJob {
+            id: Uuid::new_v4(),
+            recipe_id: Uuid::new_v4(),
+            building_id: Uuid::new_v4(),
+            crafting_type_id: alchemy,
+            completed_at_ms: 12_345,
+            results,
+            batch_size: advertised,
+        };
+        let wire = |job: &CraftJob| {
+            CraftJobWire::from_job(
+                job,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                &blades_lib::static_data::StaticData::default(),
+                repair_data_from_deploy(),
+            )
+            .batch_size
+        };
+        assert_eq!(wire(&job), 5);
+        assert_eq!(
+            reward_from_results(&job.results).stackable_items[&template],
+            20,
+            "the reward is the yield"
+        );
+        job.batch_size = None;
+        assert_eq!(
+            wire(&job),
+            20,
+            "a row without the field derives it from results"
         );
     }
 
@@ -3580,6 +3765,7 @@ mod tests {
             crafting_type_id: Uuid::parse_str("b5a2dbe9-d115-4bf2-99d9-558be1de3ef7").unwrap(),
             completed_at_ms: 1_783_175_604_008,
             results: serde_json::json!({}),
+            batch_size: None,
         }
     }
 
@@ -3591,6 +3777,7 @@ mod tests {
             crafting_type_id: Uuid::parse_str("fd13cfa0-0148-41c0-be70-b3d08852f673").unwrap(),
             completed_at_ms: 1_783_197_110_167,
             results: serde_json::json!({}),
+            batch_size: None,
         }
     }
 
@@ -3606,6 +3793,7 @@ mod tests {
             results: serde_json::json!({
                 "stackableItems": { "b5a2dbe9-d115-4bf2-99d9-558be1de3ef7": 1 }
             }),
+            batch_size: None,
         }
     }
 
@@ -3625,6 +3813,7 @@ mod tests {
                 "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc",
                 "temperingLevel": 10, "durability": 675.0
             }]}),
+            batch_size: None,
         }
     }
 
@@ -3707,6 +3896,7 @@ mod tests {
             crafting_type_id: Uuid::parse_str(ALCHEMY_CRAFTING_TYPE_ID).unwrap(),
             completed_at_ms: 1_785_999_240_168,
             results: serde_json::json!({"stackableItems": { recipe_str: 1 }}),
+            batch_size: None,
         }
     }
 
@@ -3731,6 +3921,7 @@ mod tests {
                 crafting_type_id: alchemy,
                 completed_at_ms: 1_785_038_215_000,
                 results: serde_json::json!({"stackableItems": { potion: 1 }}),
+                batch_size: None,
             },
         ));
         // RonnieRaider (report #34) — the two unmappable rows and the healthy third.
@@ -3751,6 +3942,7 @@ mod tests {
                     "itemTemplateId": "dc2c3bd9-fb5a-4203-ad29-30c9d1724b75",
                     "temperingLevel": 0, "durability": 100.0
                 }]}),
+                batch_size: None,
             },
         ));
         // WolfWalker: an UNMAPPABLE temper row that DOES carry its mutated item, so the
@@ -3768,6 +3960,7 @@ mod tests {
                     "itemTemplateId": "73c9bef2-2c2d-4a49-843c-a973fb7c3ee6",
                     "temperingLevel": 1, "durability": 100.0
                 }]}),
+                batch_size: None,
             },
         ));
         rows
@@ -4154,6 +4347,7 @@ mod tests {
                 "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc",
                 "temperingLevel": 0, "durability": 100.0
             }]}),
+            batch_size: None,
         };
         let wire = wire_of(&job, &sd);
         assert_eq!(
@@ -4180,6 +4374,7 @@ mod tests {
             crafting_type_id: recipe_id,
             completed_at_ms: 1_783_204_348_637,
             results: serde_json::json!({}),
+            batch_size: None,
         };
         let wire = wire_of(&job, &sd);
         let ctid = wire["craftingTypeId"].as_str().unwrap();
@@ -4584,6 +4779,7 @@ mod tests {
                 "temperingLevel": 0,
                 "durability": 162.5
             }]}),
+            batch_size: None,
         };
         jobs.push(real.clone());
 
@@ -4728,6 +4924,7 @@ mod tests {
                 crafting_type_id: alchemy,
                 completed_at_ms: 1_785_999_240_168 + n as i64,
                 results: serde_json::json!({"stackableItems": { *recipe: 1 }}),
+                batch_size: None,
             })
             .collect();
 
@@ -4851,6 +5048,7 @@ mod tests {
                     "itemTemplateId": "606c8bf6-9dc7-4c5f-b44b-36eb02306c96",
                     "temperingLevel": 0, "durability": 150.0
                 }]}),
+                batch_size: None,
             };
             let wire = wire_of(&job, &sd);
             assert_eq!(
@@ -4887,6 +5085,7 @@ mod tests {
                     "itemTemplateId": "616b64ef-4184-4efb-af55-1a3f122431dc",
                     "temperingLevel": level, "durability": 675.0
                 }]}),
+                batch_size: None,
             };
             let wire = wire_of(&job, &sd);
             assert_eq!(
@@ -4999,6 +5198,7 @@ mod tests {
             crafting_type_id: unknown,
             completed_at_ms: 1_783_204_348_637,
             results: serde_json::json!({}),
+            batch_size: None,
         };
         let wire = wire_of(&job, &sd);
         let ctid = wire["craftingTypeId"].as_str().unwrap();
@@ -5850,6 +6050,11 @@ mod tests {
                 [("normal".to_string(), 7)].into(),
                 "arcane2 cleared, the other class untouched"
             );
+            // #645: the Arcane II weapon class drew its point on this enchant and drew
+            // again on the hit; both persist in server_state, within 45..=55.
+            let d = row.server_state.0.enchant_pity_draws["arcane2"];
+            assert_eq!(d.draws, 2, "{d:?}");
+            assert!((45..=55).contains(&d.at), "{d:?}");
         }
 
         #[tokio::test]
@@ -5951,6 +6156,83 @@ mod tests {
                 counts(&row.inventory.0),
                 stacks(&[(MAT_99, 51), (MAT_2, 8), (BYSTANDER, 7)])
             );
+        }
+
+        /// Tracker #645 end to end: a brew of 5 "Malign Aversion to Frost" (an APK
+        /// Alchemy recipe, 600 s each) starts with retail's 50-minute timer (x the
+        /// timer scale), tells the client its batch of 5, and collecting it puts 20 in
+        /// the backpack.
+        #[tokio::test]
+        async fn a_full_brew_collects_twenty_potions_on_the_retail_timer() {
+            const MALIGN_AVERSION_TO_FROST: &str = "07e3d4ff-3565-4722-bfad-83d8fedd8480";
+            let mut conn = db!();
+            let sd = static_data_from_deploy();
+            let rd = repair_data_from_deploy();
+            let s = seed(&mut conn, 1_000).await;
+            let template =
+                blades_lib::features::recipe_outputs::output_for(&uuid(MALIGN_AVERSION_TO_FROST))
+                    .unwrap()
+                    .output_item_template_id;
+            let mut req = plain_request(MALIGN_AVERSION_TO_FROST);
+            req.batch_size = 5;
+            let before = now_ms();
+            let started = start_craft(
+                &mut conn,
+                &sd,
+                rd,
+                deploy_items(),
+                s.user_id,
+                s.character_id,
+                req,
+            )
+            .await
+            .expect("the brew starts");
+            let after = now_ms();
+            assert_eq!(started.craft["batchSize"], 5);
+            assert_eq!(
+                started.craft["results"]["stackableItems"][template.to_string()],
+                20
+            );
+            let timer = blades_lib::economy::timer_scale::scale_ms(600 * 5 * 1000);
+            let completed = started.craft["completedAt"].as_i64().unwrap();
+            assert!(
+                (before + timer..=after + timer).contains(&completed),
+                "brew time is 5 x 600 s, not 20 x: {} vs {timer}",
+                completed - before
+            );
+            let had = stored(&mut conn, &s)
+                .await
+                .inventory
+                .0
+                .backpack
+                .stackable_items
+                .counts()
+                .find(|(t, _)| *t == template)
+                .map_or(0, |(_, n)| n);
+            let craft_id: Uuid = started.craft["id"].as_str().unwrap().parse().unwrap();
+            let fin = collect_craft(
+                &mut conn,
+                &sd,
+                rd,
+                None,
+                s.user_id,
+                s.character_id,
+                craft_id,
+                false,
+            )
+            .await
+            .expect("collect");
+            assert_eq!(fin.reward.stackable_items[&template], 20);
+            let has = stored(&mut conn, &s)
+                .await
+                .inventory
+                .0
+                .backpack
+                .stackable_items
+                .counts()
+                .find(|(t, _)| *t == template)
+                .map_or(0, |(_, n)| n);
+            assert_eq!(has, had + 20);
         }
 
         /// A plain craft body for an APK-output recipe (no itemId).
@@ -6734,6 +7016,7 @@ mod tests {
                 crafting_type_id: id("craftingTypeId"),
                 completed_at_ms: w["completedAt"].as_i64().unwrap(),
                 results: w["results"].clone(),
+                batch_size: None,
             }
         }
 
@@ -6785,6 +7068,7 @@ mod tests {
                     "temperingLevel": 0, "durability": 162.5,
                     "properties": {"GRADING": [], "ENCHANTING": []}
                 }]}),
+                batch_size: None,
             };
             let served = crafts_for_client(
                 Uuid::from_u128(1),
@@ -6812,6 +7096,7 @@ mod tests {
                 crafting_type_id: uuid("a47707e6-59e9-43b0-a29f-6d703acd8171"),
                 completed_at_ms: 1_789_072_220_478,
                 results: json!({"stackableItems": {recipe: 1}}),
+                batch_size: None,
             };
             let served = crafts_for_client(
                 Uuid::from_u128(1),
@@ -6851,6 +7136,7 @@ mod tests {
                 crafting_type_id: ty,
                 completed_at_ms: 1_786_000_000_000 + id as i64,
                 results: json!({"stackableItems": {recipe: 1}}),
+                batch_size: None,
             };
             let jobs = [
                 row(1, "b949b05f-2e46-4a0c-80e4-171c4aecb9e5", alchemy),
@@ -6903,6 +7189,7 @@ mod tests {
                 crafting_type_id: uuid("c9d3b3aa-6f27-4869-9523-c10861f3e292"),
                 completed_at_ms: i64::MAX / 2,
                 results: json!({"stackableItems": {unknown_recipe.to_string(): 1}}),
+                batch_size: None,
             };
             let serve_once = || {
                 crafts_for_client(
