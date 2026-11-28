@@ -695,14 +695,16 @@ pub(crate) async fn apply_lock_alt(
     )
     .await
     .map_err(internal)?;
-    // The parent's version KEEPS its parked guild seat for the length of the
-    // lock: it is what the standings, the in-game board and the h2h board read
-    // the alt's guild from, and the child (which holds the live seat) is left
-    // out of all of them — so the guild's score cannot change. The website
-    // rosters skip the child's live row instead (`guild_manage`, `top100_boards`),
-    // so the alt is listed once, exactly as before the lock. (Once fork #703
-    // lands, parked seats live in `guild_alt_seats (user_id, alt_key)`, which
-    // stays the parent's in the same way.)
+    // The alt's guild seat STAYS the parent's for the length of the lock: a
+    // seat of an alt that is not on the parent's live row lives in
+    // `guild_alt_seats (user_id = parent, alt_key = alt)`, and the lock leaves
+    // it there. The child is a different account, so `unpark_alt_rows` below
+    // (which brings back seats keyed by the CHILD) finds none and the child
+    // plays without a live seat. That one row is what the standings, the
+    // in-game board and the h2h board read the alt's guild from, and what every
+    // roster lists — so the guild's score cannot change and the alt is listed
+    // exactly once, during the lock as before it. A seat the child takes while
+    // it plays is handed back to the parent on unlock (`apply_unlock_alt`).
 
     let child_row: Option<IdRow> =
         diesel::sql_query("SELECT id FROM characters WHERE user_id = $1 FOR UPDATE")
@@ -884,6 +886,9 @@ pub(crate) async fn apply_unlock_alt(
     .execute(conn)
     .await
     .map_err(internal)?;
+    return_child_seat_to_parent(conn, child, parent, alt)
+        .await
+        .map_err(internal)?;
     // Dormant: the row no longer claims to be the alt.
     diesel::sql_query("UPDATE characters SET source_alt_uuid = NULL WHERE id = $1")
         .bind::<SqlUuid, _>(character_id)
@@ -921,6 +926,65 @@ pub(crate) async fn apply_unlock_alt(
         saved_as,
         device_returned: returned == 1,
     })
+}
+
+/// A guild seat the child took while it played the alt — the snapshot above
+/// parked it as `guild_alt_seats (child, alt)` — becomes the parent's seat for
+/// the alt, where a `switch-alt` to it will find it. Only when the parent holds
+/// none for that alt: an alt sits in one guild, and the seat it kept through the
+/// lock is the real one, so a second seat taken on the test device is dropped.
+/// Either way the dormant child keeps no seat.
+async fn return_child_seat_to_parent(
+    conn: &mut AsyncPgConnection,
+    child: Uuid,
+    parent: Uuid,
+    alt: Uuid,
+) -> Result<(), diesel::result::Error> {
+    let child_seat: Flag = diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM guild_alt_seats \
+                         WHERE user_id = $1 AND alt_key = $2) AS flag",
+    )
+    .bind::<SqlUuid, _>(child)
+    .bind::<SqlUuid, _>(alt)
+    .get_result(conn)
+    .await?;
+    if child_seat.flag {
+        let parent_row = diesel::sql_query("SELECT id FROM characters WHERE user_id = $1")
+            .bind::<SqlUuid, _>(parent)
+            .get_result::<IdRow>(conn)
+            .await
+            .optional()?
+            .map(|r| r.id);
+        let member_id = crate::guild::alt_member_id(conn, parent, alt, parent_row).await?;
+        let moved = diesel::sql_query(
+            "UPDATE guild_alt_seats \
+                SET user_id = $3, member_id = $4, \
+                    character_id = COALESCE($5, character_id) \
+              WHERE user_id = $1 AND alt_key = $2 \
+                AND NOT EXISTS (SELECT 1 FROM guild_alt_seats p \
+                                 WHERE p.user_id = $3 AND p.alt_key = $2)",
+        )
+        .bind::<SqlUuid, _>(child)
+        .bind::<SqlUuid, _>(alt)
+        .bind::<SqlUuid, _>(parent)
+        .bind::<SqlUuid, _>(member_id)
+        .bind::<Nullable<SqlUuid>, _>(parent_row)
+        .execute(conn)
+        .await?;
+        log::info!(
+            "[dev-lock] child {child}: the guild seat alt {alt} took on the device {}",
+            if moved == 1 {
+                "is now the parent's"
+            } else {
+                "is dropped; the alt kept its seat through the lock"
+            }
+        );
+    }
+    diesel::sql_query("DELETE FROM guild_alt_seats WHERE user_id = $1")
+        .bind::<SqlUuid, _>(child)
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 /// One device of a user, for the alt picker: the parent's own devices plus the
@@ -1748,7 +1812,7 @@ mod tests {
             "INSERT INTO character_versions (id, character_id, user_id, source_alt_uuid, name, \
                  level, character, data, inventory, wallet, server_state, saved_at) \
              VALUES ($1, $2, $3, $4, 'Seated', 9, '{\"name\":\"Seated\",\"level\":9}', '{}', '{}', '{}', \
-                     '{\"parkedGuildMembers\":[{\"guild_id\":\"g1\",\"rank\":\"MEMBER\",\"join_date\":1}]}', 2000)",
+                     '{}', 2000)",
         )
         .bind::<SqlUuid, _>(Uuid::new_v4())
         .bind::<SqlUuid, _>(parent_char)
@@ -1757,6 +1821,8 @@ mod tests {
         .execute(&mut c)
         .await
         .unwrap();
+        // X is not on the parent's live row, so its seat is an alt seat (#703).
+        seat_alt(&mut c, parent, x, parent_char, "g1").await;
         // X's season: one win worth 30 cups, fought on the parent's row.
         diesel::sql_query(
             "INSERT INTO arena_match_results (id, character_id, win, rounds_won, rounds_lost, \
@@ -1821,17 +1887,144 @@ mod tests {
             1,
             "listed once during the lock"
         );
-        // The seat is physically the child's while it plays.
-        let live: IdRow =
-            diesel::sql_query("SELECT character_id AS id FROM guild_members WHERE guild_id = 'g1'")
-                .get_result(&mut c)
+        // The seat stays the parent's alt seat; the child holds no live seat.
+        assert_eq!(seat_holders(&mut c, x).await, vec![parent]);
+        assert_eq!(
+            crate::guild_manage::live_seats_of_guild(&mut c, "g1")
                 .await
-                .unwrap();
-        assert_eq!(live.id, locked.character_id);
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(locked.character_id != parent_char);
 
         unlock(&mut c, parent).await;
         assert_eq!(standing(&mut c, x).await, before, "after the unlock");
         assert_eq!(roster_entries(&mut c).await, 1);
+        assert_eq!(seat_holders(&mut c, x).await, vec![parent]);
+    }
+
+    /// `guild_alt_seats` for (`user`, `alt`) in `guild`, as a switch leaves it.
+    async fn seat_alt(c: &mut AsyncPgConnection, user: Uuid, alt: Uuid, row: Uuid, guild: &str) {
+        let member = crate::guild::alt_member_id(c, user, alt, Some(row))
+            .await
+            .unwrap();
+        diesel::sql_query(
+            "INSERT INTO guild_alt_seats (user_id, alt_key, member_id, guild_id, character_id, \
+                 rank, join_date) VALUES ($1, $2, $3, $4, $5, 'MEMBER', 1)",
+        )
+        .bind::<SqlUuid, _>(user)
+        .bind::<SqlUuid, _>(alt)
+        .bind::<SqlUuid, _>(member)
+        .bind::<Text, _>(guild)
+        .bind::<SqlUuid, _>(row)
+        .execute(c)
+        .await
+        .unwrap();
+    }
+
+    /// The accounts holding an alt seat for `alt`.
+    async fn seat_holders(c: &mut AsyncPgConnection, alt: Uuid) -> Vec<Uuid> {
+        #[derive(diesel::QueryableByName)]
+        struct Holder {
+            #[diesel(sql_type = SqlUuid)]
+            user_id: Uuid,
+        }
+        diesel::sql_query("SELECT user_id FROM guild_alt_seats WHERE alt_key = $1")
+            .bind::<SqlUuid, _>(alt)
+            .load::<Holder>(c)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|h| h.user_id)
+            .collect()
+    }
+
+    /// A guild the alt joins on the locked device is its guild afterwards: on
+    /// unlock the seat becomes the parent's alt seat, not the dormant child's.
+    /// A second seat, while the alt kept one through the lock, is dropped.
+    #[tokio::test]
+    async fn a_seat_taken_on_the_locked_device_returns_to_the_parent() {
+        let mut c = db!();
+        let (parent, parent_char, _, x) = owner(&mut c).await;
+        let y = Uuid::new_v4();
+        kept(&mut c, parent_char, parent, y, "Yonder", 7).await;
+        c.batch_execute(
+            "INSERT INTO guilds (id, name, tag_id) VALUES ('g1', 'One', '1111'), \
+                                                         ('g2', 'Two', '2222')",
+        )
+        .await
+        .unwrap();
+        let join = |child_row: Uuid, child: Uuid, guild: &'static str| {
+            diesel::sql_query(
+                "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date) \
+                 VALUES ($1, $2, $3, 'MEMBER', 5)",
+            )
+            .bind::<Text, _>(guild)
+            .bind::<SqlUuid, _>(child)
+            .bind::<SqlUuid, _>(child_row)
+        };
+
+        // X had no guild; it joins g1 on the device.
+        let locked = apply_lock_alt(&mut c, &lock(parent, x, "pixel"))
+            .await
+            .unwrap();
+        join(locked.character_id, locked.child_user_id, "g1")
+            .execute(&mut c)
+            .await
+            .unwrap();
+        unlock(&mut c, parent).await;
+        assert_eq!(seat_holders(&mut c, x).await, vec![parent]);
+        let member: IdRow = diesel::sql_query(
+            "SELECT member_id AS id FROM guild_alt_seats WHERE user_id = $1 AND alt_key = $2",
+        )
+        .bind::<SqlUuid, _>(parent)
+        .bind::<SqlUuid, _>(x)
+        .get_result(&mut c)
+        .await
+        .unwrap();
+        assert_eq!(
+            member.id,
+            crate::guild::alt_member_id(&mut c, parent, x, None)
+                .await
+                .unwrap(),
+            "the seat goes by the parent's member id for the alt"
+        );
+
+        // Y kept its g1 seat through the lock; a g2 seat taken on the device goes.
+        seat_alt(&mut c, parent, y, parent_char, "g1").await;
+        let locked = apply_lock_alt(&mut c, &lock(parent, y, "pixel"))
+            .await
+            .unwrap();
+        join(locked.character_id, locked.child_user_id, "g2")
+            .execute(&mut c)
+            .await
+            .unwrap();
+        unlock(&mut c, parent).await;
+        assert_eq!(seat_holders(&mut c, y).await, vec![parent]);
+        let guild: Vec<String> = {
+            #[derive(diesel::QueryableByName)]
+            struct G {
+                #[diesel(sql_type = Text)]
+                guild_id: String,
+            }
+            diesel::sql_query("SELECT guild_id FROM guild_alt_seats WHERE alt_key = $1")
+                .bind::<SqlUuid, _>(y)
+                .load::<G>(&mut c)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|g| g.guild_id)
+                .collect()
+        };
+        assert_eq!(guild, vec!["g1".to_string()]);
+        let child_seats: Vec<IdRow> =
+            diesel::sql_query("SELECT character_id AS id FROM guild_members WHERE user_id = $1")
+                .bind::<SqlUuid, _>(locked.child_user_id)
+                .load(&mut c)
+                .await
+                .unwrap();
+        assert!(child_seats.is_empty(), "the dormant child keeps no seat");
     }
 
     #[test]

@@ -160,6 +160,15 @@ struct LoadedGuildMemberRow {
     rank: String,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     join_date: i64,
+    /// A seat of an alt that is not being played (`guild_alt_seats`). Its
+    /// `user_id` is the alt key — the id the game knows that member by — and
+    /// `stored_user_id` the account.
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    alt_seat: bool,
+    /// The alt's label, for a seat whose alt is not played (unique only
+    /// together with the account, `stored_user_id`).
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    alt_key: Option<Uuid>,
 }
 
 impl LoadedGuildMemberRow {
@@ -171,6 +180,8 @@ impl LoadedGuildMemberRow {
             user_id: row.user_id,
             rank: row.rank,
             join_date: row.join_date,
+            alt_seat: false,
+            alt_key: None,
         }
     }
 
@@ -182,6 +193,8 @@ impl LoadedGuildMemberRow {
             user_id: current_user_id.unwrap_or(row.user_id),
             rank: row.rank,
             join_date: row.join_date,
+            alt_seat: false,
+            alt_key: None,
         }
     }
 
@@ -456,13 +469,34 @@ fn approval_refused(refusal: ApprovalRefusal) -> BladeApiError {
 
 // ---- DB helpers ----------------------------------------------------------------
 
+/// [`member_count`] over rows already loaded: what a guild's `memberCount`
+/// says (the client compares it with the cap to offer Join).
+fn cap_count(members: &[LoadedGuildMemberRow]) -> i64 {
+    members
+        .iter()
+        .filter(|m| !m.alt_seat || crate::guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP)
+        .count() as i64
+}
+
+/// Seats in `gid` that count towards the cap and the guild's `memberCount`:
+/// the played alts', plus the others' while
+/// [`crate::guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP`] says so.
 async fn member_count(conn: &mut AsyncPgConnection, gid: &str) -> Result<i64, BladeApiError> {
-    use crate::schema::guild_members::dsl::*;
-    Ok(guild_members
-        .filter(guild_id.eq(gid))
-        .count()
-        .get_result(conn)
-        .await?)
+    #[derive(QueryableByName)]
+    struct N {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
+    }
+    Ok(diesel::sql_query(
+        "SELECT (SELECT count(*) FROM guild_members WHERE guild_id = $1)
+              + CASE WHEN $2 THEN (SELECT count(*) FROM guild_alt_seats WHERE guild_id = $1)
+                     ELSE 0 END AS n",
+    )
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .bind::<diesel::sql_types::Bool, _>(crate::guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP)
+    .get_result::<N>(conn)
+    .await?
+    .n)
 }
 
 async fn application_count(conn: &mut AsyncPgConnection, gid: &str) -> Result<i64, BladeApiError> {
@@ -483,13 +517,24 @@ async fn application_count(conn: &mut AsyncPgConnection, gid: &str) -> Result<i6
 async fn member_counts_by_guild(
     conn: &mut AsyncPgConnection,
 ) -> Result<HashMap<String, i64>, BladeApiError> {
-    use crate::schema::guild_members::dsl::*;
-    let rows: Vec<(String, i64)> = guild_members
-        .group_by(guild_id)
-        .select((guild_id, diesel::dsl::count_star()))
-        .load(conn)
-        .await?;
-    Ok(rows.into_iter().collect())
+    #[derive(QueryableByName)]
+    struct Count {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        guild_id: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        n: i64,
+    }
+    let rows: Vec<Count> = diesel::sql_query(
+        "SELECT guild_id, count(*) AS n FROM (
+             SELECT guild_id FROM guild_members
+             UNION ALL
+             SELECT guild_id FROM guild_alt_seats WHERE $1) seats
+          GROUP BY guild_id",
+    )
+    .bind::<diesel::sql_types::Bool, _>(crate::guild_policy::ALT_SEATS_COUNT_TOWARDS_CAP)
+    .load(conn)
+    .await?;
+    Ok(rows.into_iter().map(|r| (r.guild_id, r.n)).collect())
 }
 
 /// Pending-application counts for every guild at once (see above).
@@ -510,9 +555,24 @@ const MEMBER_SELECT_SQL: &str = "
            gm.user_id AS stored_user_id,
            COALESCE(c.user_id, gm.user_id) AS user_id,
            gm.rank,
-           gm.join_date
+           gm.join_date,
+           false AS alt_seat,
+           NULL::uuid AS alt_key
       FROM guild_members gm
       LEFT JOIN characters c ON c.id = gm.character_id
+";
+
+/// The seats of alts that are not being played, in the shape of
+/// [`MEMBER_SELECT_SQL`]: the id the game lists is the seat's member id.
+const ALT_SEAT_SELECT_SQL: &str = "
+    SELECT s.guild_id,
+           s.user_id AS stored_user_id,
+           s.member_id AS user_id,
+           s.rank,
+           s.join_date,
+           true AS alt_seat,
+           s.alt_key
+      FROM guild_alt_seats s
 ";
 
 async fn find_membership(
@@ -546,10 +606,16 @@ async fn load_members(
 ) -> Result<Vec<LoadedGuildMemberRow>, BladeApiError> {
     // Rank ascending preserves the ordering this handler used before member ids
     // were resolved through the character row; oldest members break ties.
+    //
+    // Every alt's seat is listed, played or not (owner decision 2026-11-23:
+    // "If I play another alt, everything in guilds stay the same").
     Ok(diesel::sql_query(format!(
         "{MEMBER_SELECT_SQL}
          WHERE gm.guild_id = $1
-         ORDER BY gm.rank ASC, gm.join_date ASC"
+         UNION ALL
+         {ALT_SEAT_SELECT_SQL}
+         WHERE s.guild_id = $1
+         ORDER BY 4 ASC, 5 ASC"
     ))
     .bind::<diesel::sql_types::Text, _>(gid)
     .load(conn)
@@ -682,12 +748,61 @@ async fn append_message(
         type_specific_data: JsonDbWrapper(data),
         creation_time: ts,
     };
-    use crate::schema::guild_messages;
-    diesel::insert_into(guild_messages::table)
-        .values(&row)
-        .execute(conn)
-        .await?;
+    // Which alt wrote it and which alt it is about: the id an alt goes by in
+    // the game changes when it starts or stops being played, so the board is
+    // re-addressed from these on every read (`message_board`).
+    // Stored as (account, alt); each alt is given its member id now, so the
+    // board can name it by that id the moment it is no longer played.
+    let author = resolve_party(conn, uid).await?;
+    let target = match board_target(&row.type_specific_data.0) {
+        Some((_, t)) => resolve_party(conn, t).await?,
+        None => None,
+    };
+    for (account, alt) in [author, target].into_iter().flatten() {
+        alt_member_id(conn, account, alt, None).await?;
+    }
+    diesel::sql_query(
+        "INSERT INTO guild_messages (message_id, guild_id, user_id, character_id, message_type,
+                                     type_specific_data, creation_time, alt_account, alt_key,
+                                     target_account, target_alt_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+    )
+    .bind::<diesel::sql_types::Text, _>(&row.message_id)
+    .bind::<diesel::sql_types::Text, _>(&row.guild_id)
+    .bind::<diesel::sql_types::Uuid, _>(row.user_id)
+    .bind::<diesel::sql_types::Uuid, _>(row.character_id)
+    .bind::<diesel::sql_types::Text, _>(&row.message_type)
+    .bind::<diesel::sql_types::Jsonb, _>(&row.type_specific_data.0)
+    .bind::<diesel::sql_types::BigInt, _>(row.creation_time)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(author.map(|p| p.0))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(author.map(|p| p.1))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(target.map(|p| p.0))
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(target.map(|p| p.1))
+    .execute(conn)
+    .await?;
     Ok(MessageWire::from_row(row))
+}
+
+/// The `typeSpecificData` keys that name another member — every one the
+/// server writes (KICK, BAN, PROMOTE, APPROVE, DENY, DONATE). At most one is
+/// present on an entry.
+const BOARD_TARGET_KEYS: [&str; 6] = [
+    "kickedUserId",
+    "bannedUserId",
+    "promotedUserId",
+    "approvedUserId",
+    "deniedUserId",
+    "requesterUserId",
+];
+
+/// The member an entry is about, with the key that names them.
+fn board_target(data: &Value) -> Option<(&'static str, Uuid)> {
+    BOARD_TARGET_KEYS.iter().find_map(|k| {
+        data.get(*k)
+            .and_then(Value::as_str)
+            .and_then(|v| Uuid::parse_str(v).ok())
+            .map(|u| (*k, u))
+    })
 }
 
 // ---- Handlers ------------------------------------------------------------------
@@ -728,7 +843,7 @@ pub async fn get_current_guild(
         Some(m) => match load_guild(&mut conn, &m.guild_id).await? {
             Some(g) => {
                 let members = load_members(&mut conn, &g.id).await?;
-                let wire = GuildWire::from_row(&g, members.len() as i64);
+                let wire = GuildWire::from_row(&g, cap_count(&members));
                 (Some(wire), current_guild_members(&members))
             }
             None => (None, Vec::new()),
@@ -788,7 +903,7 @@ pub async fn get_guild(
     };
     let members = load_members(&mut conn, &g.id).await?;
     let applications = application_count(&mut conn, &g.id).await?;
-    let wire = GuildWire::from_row(&g, members.len() as i64);
+    let wire = GuildWire::from_row(&g, cap_count(&members));
 
     Ok(Json(GuildDetailResponse {
         application_status: ApplicationStatusWire {
@@ -1756,7 +1871,7 @@ async fn update_guild_impl(
 
     let members = load_members(&mut conn, &guild.id).await?;
     Ok(Json(CurrentGuildResponse {
-        guild: Some(GuildWire::from_row(&guild, members.len() as i64)),
+        guild: Some(GuildWire::from_row(&guild, cap_count(&members))),
         members: current_guild_members(&members),
         wallet: None,
     }))
@@ -2226,14 +2341,62 @@ async fn remove_member_and_succeed(
     departing_rank: GuildRank,
     ts: i64,
 ) -> Result<Option<Uuid>, BladeApiError> {
+    remove_seat_and_succeed(
+        conn,
+        gid,
+        departing_stored_user_id,
+        None,
+        departing_rank,
+        ts,
+    )
+    .await
+}
+
+/// [`remove_member_and_succeed`] for either kind of seat: `departing_alt` is
+/// the member id of a seat whose alt is not being played (`guild_alt_seats`),
+/// `None` the played alt's `guild_members` row of `departing_stored_user_id`.
+async fn remove_seat_and_succeed(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    departing_stored_user_id: Uuid,
+    departing_alt: Option<Uuid>,
+    departing_rank: GuildRank,
+    ts: i64,
+) -> Result<Option<Uuid>, BladeApiError> {
+    if let Some(alt) = departing_alt {
+        diesel::sql_query("DELETE FROM guild_alt_seats WHERE guild_id = $1 AND member_id = $2")
+            .bind::<diesel::sql_types::Text, _>(gid)
+            .bind::<diesel::sql_types::Uuid, _>(alt)
+            .execute(conn)
+            .await?;
+        // The account's website role ends with its LAST seat in the guild.
+        diesel::sql_query(
+            "DELETE FROM guild_co_masters cm
+              WHERE cm.guild_id = $1 AND cm.user_id = $2
+                AND NOT EXISTS (SELECT 1 FROM guild_alt_seats s
+                                 WHERE s.guild_id = $1 AND s.user_id = $2)
+                AND NOT EXISTS (SELECT 1 FROM guild_members gm
+                                  LEFT JOIN characters c ON c.id = gm.character_id
+                                 WHERE gm.guild_id = $1
+                                   AND $2 IN (gm.user_id, c.user_id))",
+        )
+        .bind::<diesel::sql_types::Text, _>(gid)
+        .bind::<diesel::sql_types::Uuid, _>(departing_stored_user_id)
+        .execute(conn)
+        .await?;
+        return succeed_after_departure(conn, gid, departing_rank, ts).await;
+    }
     // A co-guild master's website role (`guild_co_masters`) ends with the seat,
     // however the seat ended. Before the member row goes: the role is keyed by
-    // the character's CURRENT owner, which only that row can still name.
+    // the character's CURRENT owner, which only that row can still name. An
+    // account that keeps another alt's seat in the guild keeps the role.
     diesel::sql_query(
         "DELETE FROM guild_co_masters cm
           USING guild_members gm LEFT JOIN characters c ON c.id = gm.character_id
           WHERE gm.guild_id = $1 AND gm.user_id = $2
-            AND cm.guild_id = gm.guild_id AND cm.user_id IN (gm.user_id, c.user_id)",
+            AND cm.guild_id = gm.guild_id AND cm.user_id IN (gm.user_id, c.user_id)
+            AND NOT EXISTS (SELECT 1 FROM guild_alt_seats s
+                             WHERE s.guild_id = gm.guild_id AND s.user_id = cm.user_id)",
     )
     .bind::<diesel::sql_types::Text, _>(gid)
     .bind::<diesel::sql_types::Uuid, _>(departing_stored_user_id)
@@ -2249,7 +2412,17 @@ async fn remove_member_and_succeed(
         .execute(conn)
         .await?;
     }
+    succeed_after_departure(conn, gid, departing_rank, ts).await
+}
 
+/// After a seat left `gid`: hand a Grand Master's guild to its successor —
+/// any remaining seat, played alt or not — or tear down a guild nobody holds.
+async fn succeed_after_departure(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    departing_rank: GuildRank,
+    ts: i64,
+) -> Result<Option<Uuid>, BladeApiError> {
     if departing_rank != GuildRank::Grandmaster {
         return Ok(None);
     }
@@ -2262,12 +2435,18 @@ async fn remove_member_and_succeed(
 
     match successor(&handles) {
         Some(heir) => {
-            let heir_stored_user_id = remaining
-                .iter()
-                .find(|m| m.user_id == heir)
-                .map(|m| m.stored_user_id)
-                .unwrap_or(heir);
-            {
+            let heir_row = remaining.iter().find(|m| m.user_id == heir);
+            let heir_stored_user_id = heir_row.map(|m| m.stored_user_id).unwrap_or(heir);
+            if heir_row.is_some_and(|m| m.alt_seat) {
+                diesel::sql_query(
+                    "UPDATE guild_alt_seats SET rank = $3 WHERE guild_id = $1 AND member_id = $2",
+                )
+                .bind::<diesel::sql_types::Text, _>(gid)
+                .bind::<diesel::sql_types::Uuid, _>(heir)
+                .bind::<diesel::sql_types::Text, _>(GuildRank::Grandmaster.as_wire())
+                .execute(conn)
+                .await?;
+            } else {
                 use crate::schema::guild_members::dsl as gm;
                 diesel::update(
                     gm::guild_members
@@ -2288,14 +2467,23 @@ async fn remove_member_and_succeed(
             // A co-guild master who inherits is the Grand Master now.
             diesel::sql_query("DELETE FROM guild_co_masters WHERE guild_id = $1 AND user_id = $2")
                 .bind::<diesel::sql_types::Text, _>(gid)
-                .bind::<diesel::sql_types::Uuid, _>(heir)
+                .bind::<diesel::sql_types::Uuid, _>(if heir_row.is_some_and(|m| m.alt_seat) {
+                    heir_stored_user_id
+                } else {
+                    heir
+                })
                 .execute(conn)
                 .await?;
             Ok(Some(heir))
         }
         None => {
-            // Nobody left. Tear the guild down rather than leave a husk.
+            // Nobody left — no played alt and no other alt either. Tear the
+            // guild down rather than leave a husk.
             diesel::sql_query("DELETE FROM guild_co_masters WHERE guild_id = $1")
+                .bind::<diesel::sql_types::Text, _>(gid)
+                .execute(conn)
+                .await?;
+            diesel::sql_query("DELETE FROM guild_alt_seats WHERE guild_id = $1")
                 .bind::<diesel::sql_types::Text, _>(gid)
                 .execute(conn)
                 .await?;
@@ -2444,210 +2632,524 @@ async fn depart_guild(
 
 // ---- Alt switches ----------------------------------------------------------------
 //
-// An alt switch (or a new alt, or an import of another alt) parks the outgoing
-// alt's guild seat in its character version and deletes the `guild_members` row
-// (admin.rs `ALT_ROW_TABLES`). To everyone else in the guild that alt has LEFT,
-// and the board has to say so.
+// Owner decision 2026-11-23: "There should be no such things as being away. If I
+// play another alt, everything in guilds stay the same."
 //
-// Tracker #439: Sephoris (HauDrauf's second account) started the level-1 alt HD1.
-// The seat was parked and deleted with no LEAVE entry, so New Bladers' board kept
-// Sephoris's chat and donation entries for a user who was neither a member nor
-// recorded as gone. That is a board retail never produced: a member's LEAVE is
-// always newer than anything they posted, so it is always in the window with
-// it. The guild screen of every member stalled after the first load. The seat
-// is also handed on when the outgoing alt was the Grand Master (#410 found a
-// guild left with none), and a returning alt posts the JOIN a join would.
+// An account plays one alt at a time on one `characters` row. Its guild seat
+// lives in `guild_members` while the alt is played and in `guild_alt_seats`
+// while it is not; a switch moves the row between the two and changes nothing
+// else — no LEAVE, no JOIN, no PROMOTE, no succession. The seat keeps its rank
+// and join date, the guild keeps its member count and its Grand Master, and the
+// game keeps listing the alt (under its alt key, see `load_members`).
+//
+// History: until 2026-11-23 a switch parked the seat inside the version's
+// `server_state` (`parkedGuildMembers`), deleted it, and posted a LEAVE (tracker
+// #439) and a PROMOTE to a successor (#410). The device check of 2026-11-23 showed
+// what that cost: a guild with nobody listed as Grand Master offers no join
+// button, a returning Grand Master read "Member" in an open game, and other
+// alts got a "removed from the guild" popup. The migration
+// `2026-11-23-000000-0000_alts_stay_in_guilds` moves every seat parked that way
+// into `guild_alt_seats`.
 
-/// A guild seat held by the alt on the live row.
-#[derive(QueryableByName, Clone, Debug, PartialEq)]
-pub(crate) struct AltGuildSeat {
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    pub(crate) guild_id: String,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    pub(crate) rank: String,
-}
-
-/// The seats the live alt holds, matched the way the park and the delete match
-/// them (`character_id` or `user_id`, see `AltRowKey::CharacterOrUser`).
-pub(crate) async fn alt_guild_seats(
-    conn: &mut AsyncPgConnection,
-    character_id: Uuid,
-    user_id: Uuid,
-) -> Result<Vec<AltGuildSeat>, diesel::result::Error> {
-    diesel::sql_query(
-        "SELECT guild_id, rank FROM guild_members WHERE character_id = $1 OR user_id = $2",
+/// The tables and columns this module needs from the 2026-11-23 migration, or
+/// the first one missing. Checked once at startup (main.rs): running without
+/// them would fail every guild read.
+pub(crate) async fn required_schema_present(conn: &mut AsyncPgConnection) -> Result<(), String> {
+    #[derive(QueryableByName)]
+    struct Missing {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        name: String,
+    }
+    let missing: Vec<Missing> = diesel::sql_query(
+        "SELECT x.t || COALESCE('.' || x.c, '') AS name
+           FROM (VALUES (1, 'guild_alt_seats', NULL), (2, 'alt_member_ids', NULL),
+                        (3, 'guild_messages', 'alt_account'), (4, 'guild_messages', 'alt_key'),
+                        (5, 'guild_messages', 'target_account'),
+                        (6, 'guild_messages', 'target_alt_key')) AS x(o, t, c)
+          WHERE NOT EXISTS (
+                SELECT 1 FROM information_schema.columns ic
+                 WHERE ic.table_schema = current_schema()
+                   AND ic.table_name = x.t
+                   AND (x.c IS NULL OR ic.column_name = x.c))
+          ORDER BY x.o",
     )
-    .bind::<diesel::sql_types::Uuid, _>(character_id)
-    .bind::<diesel::sql_types::Uuid, _>(user_id)
     .load(conn)
     .await
+    .map_err(|e| format!("schema check failed ({e})"))?;
+    match missing.into_iter().next() {
+        Some(m) => Err(m.name),
+        None => Ok(()),
+    }
 }
 
-async fn insert_board_entry(
+/// The board of `gid` as the game reads it, and the member ids it lists — for
+/// tests that check the #439 invariant on what the client actually receives.
+#[cfg(test)]
+pub(crate) async fn board_and_members_for_tests(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+) -> (Vec<Value>, Vec<(Uuid, String)>) {
+    let board = message_board(
+        conn,
+        gid,
+        &MessageQuery {
+            oldest_creation_time: None,
+            newest_creation_time: None,
+        },
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|m| serde_json::to_value(m).unwrap())
+    .collect();
+    let members = load_members(conn, gid)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| (m.user_id, m.rank))
+        .collect();
+    (board, members)
+}
+
+/// Post a board entry as the route does, for tests.
+#[cfg(test)]
+pub(crate) async fn append_message_for_tests(
     conn: &mut AsyncPgConnection,
     gid: &str,
     uid: Uuid,
     cid: Uuid,
     message_type: &str,
-    data: Value,
-    ts: i64,
-) -> Result<(), diesel::result::Error> {
-    use crate::schema::guild_messages;
-    diesel::insert_into(guild_messages::table)
-        .values(&GuildMessageRow {
-            message_id: format!("{}::{}", ts, Uuid::new_v4()),
-            guild_id: gid.to_string(),
-            user_id: uid,
-            character_id: cid,
-            message_type: message_type.to_string(),
-            type_specific_data: JsonDbWrapper(data),
-            creation_time: ts,
-        })
-        .execute(conn)
-        .await?;
-    Ok(())
+) {
+    append_message(
+        conn,
+        gid,
+        uid,
+        cid,
+        message_type,
+        json!({ "type": message_type, "text": "hi" }),
+    )
+    .await
+    .unwrap();
 }
 
-#[derive(QueryableByName)]
-struct RemainingMember {
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    stored_user_id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Uuid)]
-    user_id: Uuid,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    rank: String,
-    #[diesel(sql_type = diesel::sql_types::BigInt)]
-    join_date: i64,
-}
-
-/// After the alt's seats were removed: post a LEAVE in each guild that still
-/// exists, and hand a Grand Master's guild to its successor exactly as a leave
-/// does (`remove_member_and_succeed`). A guild the alt was the last member of is
-/// NOT torn down, unlike a leave: the alt did not choose to go, and the guild is
-/// what it comes back to when the player switches to it again.
-pub(crate) async fn record_alt_departures(
+/// In-game kick or ban, for tests (the route minus the session).
+#[cfg(test)]
+pub(crate) async fn remove_other_member_for_tests(
     conn: &mut AsyncPgConnection,
-    seats: &[AltGuildSeat],
-    user_id: Uuid,
+    actor_user: Uuid,
+    actor_character: Uuid,
+    target_user: Uuid,
+    ban: bool,
+) -> Result<(), BladeApiError> {
+    remove_other_member(conn, actor_user, actor_character, target_user, ban).await
+}
+
+/// The member id of (account, alt), for tests.
+#[cfg(test)]
+pub(crate) async fn member_id_for_tests(
+    conn: &mut AsyncPgConnection,
+    account: Uuid,
+    alt: Uuid,
+) -> Uuid {
+    alt_member_id(conn, account, alt, None).await.unwrap()
+}
+
+/// The seat of an alt that is not being played, by the member id the game
+/// lists it under, in `gid`.
+async fn find_alt_seat(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    member_id: Uuid,
+) -> Result<Option<LoadedGuildMemberRow>, BladeApiError> {
+    let rows: Vec<LoadedGuildMemberRow> = diesel::sql_query(format!(
+        "{ALT_SEAT_SELECT_SQL} WHERE s.guild_id = $1 AND s.member_id = $2"
+    ))
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .bind::<diesel::sql_types::Uuid, _>(member_id)
+    .load(conn)
+    .await?;
+    Ok(rows.into_iter().next())
+}
+
+/// Lock the seat a removal is about, inside the removal's transaction, and say
+/// whether it is still there. A switch moves seats under the same row locks
+/// (`park_alt_seat` / `unpark_alt_seat`), so a kick racing a switch either
+/// finds the seat where it looked or finds nothing — and then posts nothing.
+async fn lock_seat(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    seat: &LoadedGuildMemberRow,
+) -> Result<bool, diesel::result::Error> {
+    #[derive(QueryableByName)]
+    struct One {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        _one: i32,
+    }
+    let sql = if seat.alt_seat {
+        "SELECT 1 AS _one FROM guild_alt_seats WHERE guild_id = $1 AND member_id = $2 FOR UPDATE"
+    } else {
+        "SELECT 1 AS _one FROM guild_members WHERE guild_id = $1 AND user_id = $2 FOR UPDATE"
+    };
+    let key = if seat.alt_seat {
+        seat.user_id
+    } else {
+        seat.stored_user_id
+    };
+    Ok(diesel::sql_query(sql)
+        .bind::<diesel::sql_types::Text, _>(gid)
+        .bind::<diesel::sql_types::Uuid, _>(key)
+        .get_result::<One>(conn)
+        .await
+        .optional()?
+        .is_some())
+}
+
+fn seat_gone() -> BladeApiError {
+    BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 31)
+}
+
+/// Start the re-join cooldown (or a ban) of an alt that is not being played.
+///
+/// `guild_removals` is keyed by account and holds the PLAYED alt's removals; an
+/// alt's own travel with it in its versions (`parkedGuildRemovals`, admin.rs
+/// `ALT_ROW_TABLES`) and come back when it is played again. Written into every
+/// version of the alt that parks removals AND into its newest version in any
+/// case (the one a switch back restores), so a ban is never dropped for want of
+/// the key. Returns how many versions carry it; 0 is logged — the alt has no
+/// version at all to carry it.
+pub(crate) async fn arm_alt_removal(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    account: Uuid,
+    alt_key: Uuid,
+    ts: i64,
+    banned: bool,
+) -> Result<usize, diesel::result::Error> {
+    let n = diesel::sql_query(
+        r#"
+UPDATE character_versions v
+   SET server_state = COALESCE(v.server_state, '{}'::jsonb) || jsonb_build_object('parkedGuildRemovals',
+         COALESCE((SELECT jsonb_agg(r) FROM jsonb_array_elements(
+                     CASE WHEN jsonb_typeof(v.server_state -> 'parkedGuildRemovals') = 'array'
+                          THEN v.server_state -> 'parkedGuildRemovals' ELSE '[]'::jsonb END) r
+                    WHERE r ->> 'guild_id' IS DISTINCT FROM $1), '[]'::jsonb)
+         || jsonb_build_array(jsonb_build_object('guild_id', $1::text, 'removed_at', $4::bigint,
+                                                 'banned', $5::boolean)))
+ WHERE v.user_id = $2 AND (v.source_alt_uuid = $3 OR v.id = $3)
+   AND (jsonb_typeof(v.server_state -> 'parkedGuildRemovals') = 'array'
+        OR v.id = (SELECT x.id FROM character_versions x
+                    WHERE x.user_id = $2 AND (x.source_alt_uuid = $3 OR x.id = $3)
+                    ORDER BY x.saved_at DESC, x.id DESC LIMIT 1))"#,
+    )
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .bind::<diesel::sql_types::Uuid, _>(account)
+    .bind::<diesel::sql_types::Uuid, _>(alt_key)
+    .bind::<diesel::sql_types::BigInt, _>(ts)
+    .bind::<diesel::sql_types::Bool, _>(banned)
+    .execute(conn)
+    .await?;
+    if n == 0 {
+        log::warn!(
+            "[guilds] alt {alt_key} of user {account} has no version to carry its removal from \
+             {gid} (banned {banned})"
+        );
+    }
+    Ok(n)
+}
+
+/// Who an id on the board stands for, as (account, alt): an account's id means
+/// the alt it is playing (`characters.source_alt_uuid`, or the character id for
+/// a row that never had a label); a member id means the alt it was minted for.
+/// `None` for an id that is neither (an entry about somebody this server never
+/// knew): such entries keep their stored id and the "before alt keys" reading.
+pub(crate) async fn resolve_party(
+    conn: &mut AsyncPgConnection,
+    id: Uuid,
+) -> Result<Option<(Uuid, Uuid)>, diesel::result::Error> {
+    #[derive(QueryableByName)]
+    struct P {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        account: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        alt: Uuid,
+    }
+    Ok(diesel::sql_query(
+        "SELECT user_id AS account, COALESCE(source_alt_uuid, id) AS alt
+           FROM characters WHERE user_id = $1
+         UNION ALL
+         SELECT user_id, alt_key FROM alt_member_ids WHERE member_id = $1
+         LIMIT 1",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(id)
+    .get_result::<P>(conn)
+    .await
+    .optional()?
+    .map(|p| (p.account, p.alt)))
+}
+
+/// The id the game lists (account, alt) under while the alt is not played:
+/// minted once, random, never an account id, never reused, the same across any
+/// number of switches (`alt_member_ids`).
+pub(crate) async fn alt_member_id(
+    conn: &mut AsyncPgConnection,
+    account: Uuid,
+    alt_key: Uuid,
+    character_id: Option<Uuid>,
+) -> Result<Uuid, diesel::result::Error> {
+    #[derive(QueryableByName)]
+    struct M {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        member_id: Uuid,
+    }
+    let existing = || {
+        diesel::sql_query(
+            "SELECT member_id FROM alt_member_ids WHERE user_id = $1 AND alt_key = $2",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(account)
+        .bind::<diesel::sql_types::Uuid, _>(alt_key)
+    };
+    if let Some(m) = existing().get_result::<M>(conn).await.optional()? {
+        return Ok(m.member_id);
+    }
+    // An account id would make the client take this member for that account;
+    // collide-check anyway rather than rely on the odds.
+    let minted = loop {
+        let candidate = Uuid::new_v4();
+        #[derive(QueryableByName)]
+        struct Taken {
+            #[diesel(sql_type = diesel::sql_types::Bool)]
+            taken: bool,
+        }
+        let t: Taken = diesel::sql_query(
+            "SELECT EXISTS (SELECT 1 FROM characters WHERE user_id = $1)
+                 OR EXISTS (SELECT 1 FROM alt_member_ids WHERE member_id = $1) AS taken",
+        )
+        .bind::<diesel::sql_types::Uuid, _>(candidate)
+        .get_result(conn)
+        .await?;
+        if !t.taken {
+            break candidate;
+        }
+    };
+    diesel::sql_query(
+        "INSERT INTO alt_member_ids (member_id, user_id, alt_key, character_id)
+         VALUES ($1, $2, $3, COALESCE($4, (SELECT id FROM characters WHERE user_id = $2)))
+         ON CONFLICT (user_id, alt_key) DO NOTHING",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(minted)
+    .bind::<diesel::sql_types::Uuid, _>(account)
+    .bind::<diesel::sql_types::Uuid, _>(alt_key)
+    .bind::<diesel::sql_types::Nullable<diesel::sql_types::Uuid>, _>(character_id)
+    .execute(conn)
+    .await?;
+    Ok(existing().get_result::<M>(conn).await?.member_id)
+}
+
+/// The played alt is leaving the live row (a switch, a new alt, an import or a
+/// restore of another alt): its seat stays in its guild, as an alt seat keyed
+/// by (account, the label the version just taken was filed under). Runs before
+/// the row is overwritten, inside the caller's transaction, under row locks:
+/// exactly one seat moves, and a seat that cannot move stays where it is.
+pub(crate) async fn park_alt_seat(
+    conn: &mut AsyncPgConnection,
     character_id: Uuid,
+    user_id: Uuid,
+    version_id: Uuid,
 ) -> Result<(), diesel::result::Error> {
-    let ts = now_secs();
-    for seat in seats {
-        if load_guild_row(conn, &seat.guild_id).await?.is_none() {
-            continue;
-        }
-        insert_board_entry(
-            conn,
-            &seat.guild_id,
-            user_id,
-            character_id,
-            "LEAVE",
-            json!({}),
-            ts,
-        )
-        .await?;
-        if GuildRank::from_wire(&seat.rank) != Some(GuildRank::Grandmaster) {
-            continue;
-        }
-        let remaining: Vec<RemainingMember> = diesel::sql_query(
-            "SELECT gm.user_id AS stored_user_id,
-                    COALESCE(c.user_id, gm.user_id) AS user_id,
-                    gm.rank, gm.join_date
-               FROM guild_members gm
-               LEFT JOIN characters c ON c.id = gm.character_id
-              WHERE gm.guild_id = $1",
-        )
-        .bind::<diesel::sql_types::Text, _>(&seat.guild_id)
-        .load(conn)
-        .await?;
-        if remaining
-            .iter()
-            .any(|m| m.rank == GuildRank::Grandmaster.as_wire())
-        {
-            continue;
-        }
-        let handles: Vec<(Uuid, GuildRank, i64)> = remaining
-            .iter()
-            .filter_map(|m| GuildRank::from_wire(&m.rank).map(|r| (m.user_id, r, m.join_date)))
-            .collect();
-        let Some(heir) = successor(&handles) else {
-            continue;
-        };
-        let heir_stored = remaining
-            .iter()
-            .find(|m| m.user_id == heir)
-            .map(|m| m.stored_user_id)
-            .unwrap_or(heir);
-        {
-            use crate::schema::guild_members::dsl as gm;
-            diesel::update(
-                gm::guild_members
-                    .filter(gm::guild_id.eq(&seat.guild_id))
-                    .filter(gm::user_id.eq(heir_stored)),
-            )
-            .set(gm::rank.eq(GuildRank::Grandmaster.as_wire()))
-            .execute(conn)
-            .await?;
-        }
-        {
-            use crate::schema::guilds::dsl as g;
-            diesel::update(g::guilds.filter(g::id.eq(&seat.guild_id)))
-                .set(g::grandmaster_since.eq(ts))
+    #[derive(QueryableByName)]
+    struct Keys {
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        label: Option<Uuid>,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+        live_key: Option<Uuid>,
+    }
+    let keys: Keys = diesel::sql_query(
+        "SELECT (SELECT source_alt_uuid FROM character_versions WHERE id = $1) AS label,
+                (SELECT COALESCE(source_alt_uuid, id) FROM characters WHERE id = $2) AS live_key",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(version_id)
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .get_result(conn)
+    .await?;
+    // A row that never had a label is known by its version id from now on.
+    let alt_key = keys.label.unwrap_or(version_id);
+
+    // The board and the id registry knew the played alt by its live key; when
+    // that was the bare character id, re-file it under the alt's lasting key.
+    if let Some(live_key) = keys.live_key.filter(|k| *k != alt_key) {
+        for sql in [
+            "UPDATE guild_messages SET alt_key = $3 WHERE alt_account = $1 AND alt_key = $2",
+            "UPDATE guild_messages SET target_alt_key = $3
+              WHERE target_account = $1 AND target_alt_key = $2",
+            "UPDATE alt_member_ids SET alt_key = $3
+              WHERE user_id = $1 AND alt_key = $2
+                AND NOT EXISTS (SELECT 1 FROM alt_member_ids o
+                                 WHERE o.user_id = $1 AND o.alt_key = $3)",
+        ] {
+            diesel::sql_query(sql)
+                .bind::<diesel::sql_types::Uuid, _>(user_id)
+                .bind::<diesel::sql_types::Uuid, _>(live_key)
+                .bind::<diesel::sql_types::Uuid, _>(alt_key)
                 .execute(conn)
                 .await?;
         }
-        insert_board_entry(
-            conn,
-            &seat.guild_id,
-            user_id,
-            character_id,
-            "PROMOTE",
-            promote_type_specific_data(heir),
-            ts,
-        )
-        .await?;
     }
+
+    #[derive(QueryableByName)]
+    struct Live {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        guild_id: String,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        user_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        character_id: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        rank: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        join_date: i64,
+    }
+    // The played alt's seat: the account's row, else one still carrying this
+    // character from before a re-link. One row, locked.
+    let Some(live) = diesel::sql_query(
+        "SELECT guild_id, user_id, character_id, rank, join_date FROM guild_members
+          WHERE character_id = $1 OR user_id = $2
+          ORDER BY (user_id = $2) DESC, join_date ASC
+          LIMIT 1
+          FOR UPDATE",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .get_result::<Live>(conn)
+    .await
+    .optional()?
+    else {
+        return Ok(());
+    };
+    #[derive(QueryableByName)]
+    struct Held {
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        guild_id: String,
+    }
+    if let Some(held) = diesel::sql_query(
+        "SELECT guild_id FROM guild_alt_seats WHERE user_id = $1 AND alt_key = $2 FOR UPDATE",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .bind::<diesel::sql_types::Uuid, _>(alt_key)
+    .get_result::<Held>(conn)
+    .await
+    .optional()?
+    {
+        // Cannot happen through the switches (a played alt has no alt seat);
+        // if it does, losing neither seat beats tidiness.
+        log::error!(
+            "[guilds] user {user_id}: alt {alt_key} already holds an alt seat in {}; its played \
+             seat in {} stays live",
+            held.guild_id,
+            live.guild_id
+        );
+        return Ok(());
+    }
+    let member_id = alt_member_id(conn, user_id, alt_key, Some(character_id)).await?;
+    diesel::sql_query("DELETE FROM guild_members WHERE guild_id = $1 AND user_id = $2")
+        .bind::<diesel::sql_types::Text, _>(&live.guild_id)
+        .bind::<diesel::sql_types::Uuid, _>(live.user_id)
+        .execute(conn)
+        .await?;
+    diesel::sql_query(
+        "INSERT INTO guild_alt_seats (user_id, alt_key, member_id, guild_id, character_id, rank,
+                                      join_date, parked_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, EXTRACT(EPOCH FROM now())::bigint)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .bind::<diesel::sql_types::Uuid, _>(alt_key)
+    .bind::<diesel::sql_types::Uuid, _>(member_id)
+    .bind::<diesel::sql_types::Text, _>(&live.guild_id)
+    .bind::<diesel::sql_types::Uuid, _>(live.character_id)
+    .bind::<diesel::sql_types::Text, _>(&live.rank)
+    .bind::<diesel::sql_types::BigInt, _>(live.join_date)
+    .execute(conn)
+    .await?;
+    log::info!(
+        "[guilds] user {user_id}: alt {alt_key} is not played now; its seat in {} stays as \
+         member {member_id}",
+        live.guild_id
+    );
     Ok(())
 }
 
-/// After an alt's parked seats were written back: post the JOIN a join posts in
-/// every guild it holds now and did not hold before.
-pub(crate) async fn record_alt_returns(
+/// The alt now on the live row (`characters.source_alt_uuid`, already written)
+/// takes its seat back, exactly as it was. Nothing is posted: to the guild it
+/// never went anywhere. Insert first, delete only what was inserted: a seat
+/// that cannot move (the account somehow holds a played seat already) stays an
+/// alt seat rather than vanish.
+pub(crate) async fn unpark_alt_seat(
     conn: &mut AsyncPgConnection,
-    before: &[AltGuildSeat],
-    user_id: Uuid,
     character_id: Uuid,
+    user_id: Uuid,
 ) -> Result<(), diesel::result::Error> {
-    let ts = now_secs();
-    for seat in alt_guild_seats(conn, character_id, user_id).await? {
-        if before.iter().any(|b| b.guild_id == seat.guild_id) {
-            continue;
-        }
-        insert_board_entry(
-            conn,
-            &seat.guild_id,
-            user_id,
-            character_id,
-            "JOIN",
-            json!({}),
-            ts,
-        )
-        .await?;
+    // A seat in a guild that no longer exists goes nowhere.
+    diesel::sql_query(
+        "DELETE FROM guild_alt_seats s
+          WHERE s.user_id = $1
+            AND NOT EXISTS (SELECT 1 FROM guilds g WHERE g.id = s.guild_id)",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .execute(conn)
+    .await?;
+    #[derive(QueryableByName)]
+    struct Seat {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        alt_key: Uuid,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        guild_id: String,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        rank: String,
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        join_date: i64,
+    }
+    let Some(seat) = diesel::sql_query(
+        "SELECT s.alt_key, s.guild_id, s.rank, s.join_date
+           FROM guild_alt_seats s
+           JOIN characters c ON c.id = $1
+          WHERE s.user_id = $2 AND s.alt_key = c.source_alt_uuid
+          FOR UPDATE OF s",
+    )
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .get_result::<Seat>(conn)
+    .await
+    .optional()?
+    else {
+        return Ok(());
+    };
+    let inserted = diesel::sql_query(
+        "INSERT INTO guild_members (guild_id, user_id, character_id, rank, join_date)
+         SELECT $1, $2, $3, $4, $5
+          WHERE NOT EXISTS (SELECT 1 FROM guild_members WHERE user_id = $2 OR character_id = $3)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind::<diesel::sql_types::Text, _>(&seat.guild_id)
+    .bind::<diesel::sql_types::Uuid, _>(user_id)
+    .bind::<diesel::sql_types::Uuid, _>(character_id)
+    .bind::<diesel::sql_types::Text, _>(&seat.rank)
+    .bind::<diesel::sql_types::BigInt, _>(seat.join_date)
+    .execute(conn)
+    .await?;
+    if inserted == 1 {
+        diesel::sql_query("DELETE FROM guild_alt_seats WHERE user_id = $1 AND alt_key = $2")
+            .bind::<diesel::sql_types::Uuid, _>(user_id)
+            .bind::<diesel::sql_types::Uuid, _>(seat.alt_key)
+            .execute(conn)
+            .await?;
+    } else {
+        log::error!(
+            "[guilds] user {user_id}: alt {} came back but the account already holds a played \
+             seat; its seat in {} stays an alt seat",
+            seat.alt_key,
+            seat.guild_id
+        );
     }
     Ok(())
-}
-
-async fn load_guild_row(
-    conn: &mut AsyncPgConnection,
-    gid: &str,
-) -> Result<Option<String>, diesel::result::Error> {
-    use crate::schema::guilds::dsl as g;
-    g::guilds
-        .filter(g::id.eq(gid))
-        .select(g::id)
-        .first::<String>(conn)
-        .await
-        .optional()
 }
 
 /// Shared body of kick and ban: authorise the actor against the target's rank,
@@ -2663,11 +3165,17 @@ async fn remove_other_member(
     let my_rank = me.parsed_rank()?;
 
     // The target must be in the ACTOR's guild — otherwise a Grand Master could
-    // remove members of guilds they have nothing to do with.
-    let target = find_membership(conn, target_user)
+    // remove members of guilds they have nothing to do with. The id is the one
+    // the game lists: an account's played alt, or the alt key of a seat whose
+    // alt is not being played.
+    let target = match find_membership(conn, target_user)
         .await?
         .filter(|t| t.guild_id == me.guild_id)
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 31))?;
+    {
+        Some(t) => Some(t),
+        None => find_alt_seat(conn, &me.guild_id, target_user).await?,
+    }
+    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, GUILD_SERVICE_ID, 31))?;
     let target_rank = target.parsed_rank()?;
 
     let permitted = if ban {
@@ -2693,6 +3201,12 @@ async fn remove_other_member(
 
     conn.transaction(move |conn| {
         async move {
+            // A switch may have moved the seat since it was read: nothing is
+            // posted unless the seat is still there, and it stays put until
+            // this commits.
+            if !lock_seat(conn, &gid, &target).await? {
+                return Err(seat_gone());
+            }
             append_message(
                 conn,
                 &gid,
@@ -2706,8 +3220,26 @@ async fn remove_other_member(
             // rank), so no succession can be triggered here — but route through
             // the same helper so that stays true by construction rather than by
             // assumption.
-            remove_member_and_succeed(conn, &gid, target.stored_user_id, target_rank, ts).await?;
-            record_removal(conn, &gid, target.user_id, ts, ban).await?;
+            if target.alt_seat {
+                remove_seat_and_succeed(
+                    conn,
+                    &gid,
+                    target.stored_user_id,
+                    Some(target.user_id),
+                    target_rank,
+                    ts,
+                )
+                .await?;
+                // The alt's own re-join cooldown, which it brings back when it
+                // is played again — not the account's played alt's.
+                if let Some(alt) = target.alt_key {
+                    arm_alt_removal(conn, &gid, target.stored_user_id, alt, ts, ban).await?;
+                }
+            } else {
+                remove_member_and_succeed(conn, &gid, target.stored_user_id, target_rank, ts)
+                    .await?;
+                record_removal(conn, &gid, target.user_id, ts, ban).await?;
+            }
             Ok::<_, BladeApiError>(())
         }
         .scope_boxed()
@@ -2749,6 +3281,23 @@ pub(crate) async fn remove_seat_for_website(
     remover: SeatRemover,
     ts: i64,
 ) -> Result<Option<Uuid>, BladeApiError> {
+    // Still there, and locked until this commits (a switch may have moved it).
+    #[derive(QueryableByName)]
+    struct One {
+        #[diesel(sql_type = diesel::sql_types::Integer)]
+        _one: i32,
+    }
+    let held = diesel::sql_query(
+        "SELECT 1 AS _one FROM guild_members WHERE guild_id = $1 AND user_id = $2 FOR UPDATE",
+    )
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .bind::<diesel::sql_types::Uuid, _>(target_stored_user_id)
+    .get_result::<One>(conn)
+    .await
+    .optional()?;
+    if held.is_none() {
+        return Err(seat_gone());
+    }
     match remover {
         SeatRemover::Manager {
             user_id,
@@ -2781,6 +3330,65 @@ pub(crate) async fn remove_seat_for_website(
         append_promote_message(conn, gid, target_user_id, target_character_id, heir).await?;
     }
     record_removal(conn, gid, target_user_id, ts, false).await?;
+    Ok(heir)
+}
+
+/// [`remove_seat_for_website`] for the seat of an alt that is not being played.
+/// The game lists that member under its member id, so the board entry names
+/// it; the re-join cooldown goes with the alt (`arm_alt_removal`).
+pub(crate) async fn remove_alt_seat_for_website(
+    conn: &mut AsyncPgConnection,
+    gid: &str,
+    account: Uuid,
+    alt_key: Uuid,
+    target_rank: GuildRank,
+    remover: SeatRemover,
+    ts: i64,
+) -> Result<Option<Uuid>, BladeApiError> {
+    #[derive(QueryableByName)]
+    struct Seat {
+        #[diesel(sql_type = diesel::sql_types::Uuid)]
+        member_id: Uuid,
+    }
+    // Still there, and locked until this commits (a switch may have moved it).
+    let Some(seat) = diesel::sql_query(
+        "SELECT member_id FROM guild_alt_seats
+          WHERE guild_id = $1 AND user_id = $2 AND alt_key = $3 FOR UPDATE",
+    )
+    .bind::<diesel::sql_types::Text, _>(gid)
+    .bind::<diesel::sql_types::Uuid, _>(account)
+    .bind::<diesel::sql_types::Uuid, _>(alt_key)
+    .get_result::<Seat>(conn)
+    .await
+    .optional()?
+    else {
+        return Err(seat_gone());
+    };
+    let member = seat.member_id;
+    match remover {
+        SeatRemover::Manager {
+            user_id,
+            character_id,
+        } => {
+            append_message(
+                conn,
+                gid,
+                user_id,
+                character_id,
+                "KICK",
+                kick_type_specific_data(member),
+            )
+            .await?;
+        }
+        SeatRemover::Operator => {
+            append_message(conn, gid, member, member, "LEAVE", json!({})).await?;
+        }
+    }
+    let heir = remove_seat_and_succeed(conn, gid, account, Some(member), target_rank, ts).await?;
+    if let Some(heir) = heir {
+        append_promote_message(conn, gid, member, member, heir).await?;
+    }
+    arm_alt_removal(conn, gid, account, alt_key, ts, false).await?;
     Ok(heir)
 }
 
@@ -2885,27 +3493,156 @@ struct MessageQuery {
     newest_creation_time: Option<i64>,
 }
 
+/// The id the game knows a board party by NOW, in SQL: the account's id while
+/// the alt is played, the alt's member id otherwise. `{acct}`/`{alt}` are the
+/// stored (account, alt), `{raw}` the stored id. Every lookup is scoped by
+/// account — an alt label is shared by an original and its numbered copies.
+/// An entry from before parties were stored (`{alt}` NULL) stands for the
+/// account's seat in this guild — its played alt's if that is here, else its
+/// earliest-joined other alt's — and otherwise for the account.
+fn board_wire_sql(acct: &str, alt: &str, raw: &str) -> String {
+    format!(
+        "CASE WHEN {alt} IS NOT NULL AND {acct} IS NOT NULL THEN
+              CASE WHEN EXISTS (SELECT 1 FROM characters c
+                                 WHERE c.user_id = {acct}
+                                   AND COALESCE(c.source_alt_uuid, c.id) = {alt}) THEN {acct}
+                   ELSE COALESCE((SELECT r.member_id FROM alt_member_ids r
+                                   WHERE r.user_id = {acct} AND r.alt_key = {alt}), {raw})
+              END
+              WHEN {raw} IS NULL THEN NULL
+              WHEN EXISTS (SELECT 1 FROM guild_members gm
+                             LEFT JOIN characters c ON c.id = gm.character_id
+                            WHERE gm.guild_id = p.guild_id
+                              AND COALESCE(c.user_id, gm.user_id) = {raw}) THEN {raw}
+              ELSE COALESCE((SELECT s.member_id FROM guild_alt_seats s
+                              WHERE s.guild_id = p.guild_id AND s.user_id = {raw}
+                              ORDER BY s.join_date, s.alt_key LIMIT 1), {raw})
+         END"
+    )
+}
+
+#[derive(QueryableByName)]
+struct BoardRow {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    message_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    guild_id: String,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    character_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    message_type: String,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
+    type_specific_data: Value,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    creation_time: i64,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Uuid)]
+    wire_user_id: Uuid,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    raw_target: Option<Uuid>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Uuid>)]
+    wire_target: Option<Uuid>,
+}
+
+/// One page of the board, every member named by the id the game knows them by
+/// now (owner decision 2026-11-23: an alt that is not played stays a member,
+/// listed under its alt key). The invariant #439 taught — every id on the board
+/// is a member or has a LEAVE/KICK/BAN there — holds because an alt's entries
+/// are all re-addressed together.
 async fn message_board(
     conn: &mut AsyncPgConnection,
     gid: &str,
     window: &MessageQuery,
 ) -> Result<Vec<MessageWire>, BladeApiError> {
-    use crate::schema::guild_messages::dsl::*;
-    let mut sql = guild_messages.filter(guild_id.eq(gid)).into_boxed();
-    if let Some(lo) = window.oldest_creation_time {
-        sql = sql.filter(creation_time.gt(lo));
-    }
-    if let Some(hi) = window.newest_creation_time {
-        sql = sql.filter(creation_time.lt(hi));
-    }
-    let rows: Vec<GuildMessageRow> = sql
-        // Newest first, as in every captured board.
-        .order(creation_time.desc())
-        .limit(MESSAGE_PAGE_LIMIT)
-        .select(GuildMessageRow::as_select())
+    let target_text = BOARD_TARGET_KEYS
+        .iter()
+        .map(|k| format!("m.type_specific_data ->> '{k}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "WITH page AS (
+             SELECT m.*,
+                    CASE WHEN COALESCE({target_text}) ~* '^[0-9a-f]{{8}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{4}}-[0-9a-f]{{12}}$'
+                         THEN COALESCE({target_text})::uuid END AS raw_target
+               FROM guild_messages m
+              WHERE m.guild_id = $1
+                AND ($2::bigint IS NULL OR m.creation_time > $2)
+                AND ($3::bigint IS NULL OR m.creation_time < $3)
+              -- Newest first, as in every captured board.
+              ORDER BY m.creation_time DESC
+              LIMIT $4)
+         SELECT p.message_id, p.guild_id, p.character_id, p.message_type,
+                p.type_specific_data, p.creation_time, p.user_id,
+                {author} AS wire_user_id, p.raw_target, {target} AS wire_target
+           FROM page p
+          ORDER BY p.creation_time DESC",
+        author = board_wire_sql("p.alt_account", "p.alt_key", "p.user_id"),
+        target = board_wire_sql("p.target_account", "p.target_alt_key", "p.raw_target"),
+    );
+    let rows: Vec<BoardRow> = diesel::sql_query(sql)
+        .bind::<diesel::sql_types::Text, _>(gid)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(
+            window.oldest_creation_time,
+        )
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(
+            window.newest_creation_time,
+        )
+        .bind::<diesel::sql_types::BigInt, _>(MESSAGE_PAGE_LIMIT)
         .load(conn)
         .await?;
-    Ok(rows.into_iter().map(MessageWire::from_row).collect())
+
+    // A re-addressed member's character id follows its user id: the account's
+    // live character for an account, the alt key itself for an alt (the id
+    // `/social/characters` hands out for it).
+    let mut ids: Vec<Uuid> = rows
+        .iter()
+        .flat_map(|r| [Some(r.wire_user_id), r.wire_target])
+        .flatten()
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let live: HashMap<Uuid, Uuid> = {
+        use crate::schema::characters::dsl as ch;
+        ch::characters
+            .filter(ch::user_id.eq_any(&ids))
+            .select((ch::user_id, ch::id))
+            .load::<(Uuid, Uuid)>(conn)
+            .await?
+            .into_iter()
+            .collect()
+    };
+    let character_of = |id: Uuid| live.get(&id).copied().unwrap_or(id);
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let mut data = r.type_specific_data;
+            if let (Some(raw), Some(wire)) = (r.raw_target, r.wire_target)
+                && raw != wire
+                && let Some((key, _)) = board_target(&data)
+                && let Some(obj) = data.as_object_mut()
+            {
+                obj.insert(key.to_string(), json!(wire));
+                if key == "requesterUserId" && obj.contains_key("requesterCharacterId") {
+                    obj.insert("requesterCharacterId".into(), json!(character_of(wire)));
+                }
+            }
+            MessageWire {
+                message_id: r.message_id,
+                guild_id: r.guild_id,
+                user_id: r.wire_user_id,
+                character_id: if r.wire_user_id == r.user_id {
+                    r.character_id
+                } else {
+                    character_of(r.wire_user_id)
+                },
+                type_specific_data: data,
+                creation_time: r.creation_time,
+                message_type: r.message_type,
+            }
+        })
+        .collect())
 }
 
 #[get("/blades.bgs.services/api/game/v1/public/characters/{character_id}/guilds/current/messages")]
@@ -4774,8 +5511,9 @@ mod create_wire {
         assert_eq!(obj["promotedToRank"], "GRANDMASTER");
     }
 
-    /// Both succession paths (a leave, and an alt switch) build the entry
-    /// through the one helper, so they cannot drift apart again.
+    /// Every succession builds the entry through the one helper, so no path
+    /// can drift from it again. (An alt switch no longer posts one at all:
+    /// seats stay in their guild, owner decision 2026-11-23.)
     #[test]
     fn every_promote_entry_is_built_by_the_one_helper() {
         let src = include_str!("guild.rs");
@@ -4789,7 +5527,7 @@ mod create_wire {
             .filter(|w| w[0] == concat!("\"PRO", "MOTE\","))
             .map(|w| w[1])
             .collect();
-        assert_eq!(sites.len(), 2, "a leave and an alt switch each post one");
+        assert_eq!(sites.len(), 1, "only `append_promote_message` posts one");
         for next in sites {
             assert!(
                 next.starts_with("promote_type_specific_data("),
@@ -4853,6 +5591,21 @@ mod create_wire {
 }
 
 #[cfg(test)]
+/// `guild_alt_seats` as the 2026-11-23 migration creates it (its backfill
+/// needs tables these fixtures do not build).
+pub(crate) const ALT_SEATS_TEST_DDL: &str = "CREATE TABLE guild_alt_seats (
+    user_id UUID NOT NULL, alt_key UUID NOT NULL, member_id UUID NOT NULL UNIQUE,
+    guild_id TEXT NOT NULL, character_id UUID NOT NULL, rank TEXT NOT NULL DEFAULT 'MEMBER',
+    join_date BIGINT NOT NULL DEFAULT 0, parked_at BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, alt_key))";
+
+#[cfg(test)]
+/// `alt_member_ids` as the 2026-11-23 migration creates it.
+pub(crate) const ALT_IDS_TEST_DDL: &str = "CREATE TABLE alt_member_ids (
+    member_id UUID PRIMARY KEY, user_id UUID NOT NULL, alt_key UUID NOT NULL,
+    character_id UUID, UNIQUE (user_id, alt_key))";
+
+#[cfg(test)]
 mod stale_member_db_tests {
     use super::*;
     use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -4881,6 +5634,7 @@ mod stale_member_db_tests {
             "CREATE TABLE characters (
                  id UUID PRIMARY KEY,
                  user_id UUID NOT NULL,
+                 source_alt_uuid UUID,
                  character JSONB NOT NULL DEFAULT '{}')",
         )
         .execute(&mut conn)
@@ -4898,6 +5652,9 @@ mod stale_member_db_tests {
         .execute(&mut conn)
         .await
         .unwrap();
+        for ddl in [super::ALT_SEATS_TEST_DDL, super::ALT_IDS_TEST_DDL] {
+            diesel::sql_query(ddl).execute(&mut conn).await.unwrap();
+        }
         Some(conn)
     }
 
@@ -5337,7 +6094,7 @@ mod rejoin_after_leaving {
             format!("CREATE SCHEMA {schema}"),
             format!("SET LOCAL search_path TO {schema}"),
             "CREATE TABLE characters (id UUID PRIMARY KEY, user_id UUID NOT NULL,
-                 character JSONB NOT NULL DEFAULT '{}')"
+                 source_alt_uuid UUID, character JSONB NOT NULL DEFAULT '{}')"
                 .into(),
             "CREATE TABLE guild_members (guild_id TEXT NOT NULL, user_id UUID NOT NULL,
                  character_id UUID NOT NULL, rank TEXT NOT NULL, join_date BIGINT NOT NULL,
@@ -5345,7 +6102,17 @@ mod rejoin_after_leaving {
                 .into(),
             "CREATE TABLE guild_messages (message_id TEXT PRIMARY KEY, guild_id TEXT NOT NULL,
                  user_id UUID NOT NULL, character_id UUID NOT NULL, message_type TEXT NOT NULL,
-                 type_specific_data JSONB NOT NULL, creation_time BIGINT NOT NULL)"
+                 type_specific_data JSONB NOT NULL, creation_time BIGINT NOT NULL,
+                 alt_account UUID, alt_key UUID, target_account UUID, target_alt_key UUID)"
+                .into(),
+            super::ALT_SEATS_TEST_DDL.into(),
+            super::ALT_IDS_TEST_DDL.into(),
+            "CREATE TABLE character_versions (id UUID PRIMARY KEY, character_id UUID NOT NULL,
+                 user_id UUID NOT NULL, source_alt_uuid UUID, name TEXT NOT NULL DEFAULT '',
+                 level INTEGER NOT NULL DEFAULT 0, \"character\" JSONB NOT NULL DEFAULT '{}',
+                 data JSONB NOT NULL DEFAULT '{}', inventory JSONB NOT NULL DEFAULT '{}',
+                 town JSONB, server_state JSONB NOT NULL DEFAULT '{}',
+                 saved_at BIGINT NOT NULL DEFAULT 0)"
                 .into(),
             "CREATE TABLE guild_removals (guild_id TEXT NOT NULL, user_id UUID NOT NULL,
                  removed_at BIGINT NOT NULL, banned BOOLEAN NOT NULL DEFAULT FALSE,

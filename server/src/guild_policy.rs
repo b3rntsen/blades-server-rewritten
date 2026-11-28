@@ -513,6 +513,16 @@ pub fn guild_text_ok(name: &str, short_description: &str, long_description: &str
         && long_len <= LONG_DESCRIPTION_MAX_LEN
 }
 
+/// Does the seat of an alt that is not being played count towards
+/// [`MAX_MEMBERS`] (joins, approvals, the `memberCount` the client compares with
+/// the cap, search filters)? THE one switch for it.
+///
+/// `true` follows the owner's 2026-11-23 decision literally — every alt keeps
+/// its place — and puts New Bladers at 24 of 20 seats after the migration
+/// (nobody can join until it is back under 20). Pending decision d134; `false`
+/// lets alts stay listed without taking a place.
+pub const ALT_SEATS_COUNT_TOWARDS_CAP: bool = true;
+
 // ---------------------------------------------------------------------------
 // Succession
 // ---------------------------------------------------------------------------
