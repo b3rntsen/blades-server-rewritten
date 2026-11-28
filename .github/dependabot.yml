@@ -1,17 +1,20 @@
 # Dependency update PRs (security review 2026-11-24, M11). Weekly, small
 # batches; every PR goes through the normal checks and the owner's merge.
 # PRs touching .github/workflows trip the workflow-change guard by design.
+# Supply-chain rule: a release is not proposed until it is 14 days old.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
     groups:
       actions: { patterns: ["*"] }
 
   - package-ecosystem: cargo
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
     open-pull-requests-limit: 5
     groups:
       cargo-minor-patch:
@@ -20,7 +23,15 @@ updates:
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
 
   - package-ecosystem: docker-compose
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    ignore:
+      # A major Postgres upgrade cannot be a tag bump: the new server refuses
+      # the old data directory. It needs a planned pg_upgrade or dump/restore
+      # of the production volume (see the closed #720).
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
