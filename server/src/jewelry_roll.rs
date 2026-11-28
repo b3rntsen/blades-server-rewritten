@@ -20,7 +20,7 @@ use std::collections::HashMap;
 
 use blades_lib::{
     game_data::GameDataItem,
-    static_data::{EnchantingData, SecondaryEnchantTable},
+    static_data::{EnchantingData, SecondaryEnchantTable, TopTierJewellery},
     user_data::{Item, ItemSingleProperty},
 };
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
@@ -112,6 +112,17 @@ pub fn roll_generated_jewelry<R: Rng + ?Sized>(
     items: &HashMap<Uuid, GameDataItem>,
     rng: &mut R,
 ) -> bool {
+    roll_generated_jewelry_tuned(item, items, &TopTierJewellery::default(), rng)
+}
+
+/// [`roll_generated_jewelry`] with HauDrauf's top-tier rule (#581): a covered
+/// template is graded by the crafted split (#560), like a forged one.
+pub fn roll_generated_jewelry_tuned<R: Rng + ?Sized>(
+    item: &mut Item,
+    items: &HashMap<Uuid, GameDataItem>,
+    top_tier: &TopTierJewellery,
+    rng: &mut R,
+) -> bool {
     let Some(item_type) = items.get(&item.item_template_id).map(|i| i.r#type) else {
         return false;
     };
@@ -122,7 +133,7 @@ pub fn roll_generated_jewelry<R: Rng + ?Sized>(
     if crate::fixed_templates::has_mandatory_properties(item.item_template_id) {
         return false;
     }
-    if let Some((grade, grading)) = jewelry_grade::roll(item_type, rng) {
+    if let Some((grade, grading)) = shop_grade(item_type, item.item_template_id, top_tier, rng) {
         item.grade = Some(grade);
         item.properties.grading = grading;
         item.tempering_level = 0;
@@ -130,6 +141,22 @@ pub fn roll_generated_jewelry<R: Rng + ?Sized>(
     }
     item.properties.enchanting.clear();
     true
+}
+
+/// The grade a shop sells a ring or necklace at: the crafted split (#560) for a
+/// top-tier template under HauDrauf's #581 rule, the every-source split (#393)
+/// otherwise.
+pub fn shop_grade<R: Rng + ?Sized>(
+    item_type: u64,
+    item_template_id: Uuid,
+    top_tier: &TopTierJewellery,
+    rng: &mut R,
+) -> Option<(u64, Vec<ItemSingleProperty>)> {
+    if top_tier.shop_grades_as_crafted(&item_template_id) {
+        jewelry_grade::roll_crafted(item_type, rng)
+    } else {
+        jewelry_grade::roll(item_type, rng)
+    }
 }
 
 pub fn reroll_sigil_jewelry<R: Rng + ?Sized>(
@@ -152,7 +179,10 @@ pub fn reroll_sigil_jewelry<R: Rng + ?Sized>(
     }
     if reroll_grading {
         if let Some(item_type) = items.get(&item.item_template_id).map(|i| i.r#type) {
-            if let Some((grade, grading)) = jewelry_grade::roll(item_type, rng) {
+            let top_tier = &enchanting.tuning.top_tier_jewellery;
+            if let Some((grade, grading)) =
+                shop_grade(item_type, item.item_template_id, top_tier, rng)
+            {
                 item.grade = Some(grade);
                 item.properties.grading = grading;
                 item.tempering_level = 0;
@@ -175,6 +205,142 @@ pub fn reroll_sigil_jewelry<R: Rng + ?Sized>(
 mod tests {
     use super::*;
     use blades_lib::static_data::WeightedProperty;
+
+    fn deploy_items() -> &'static HashMap<Uuid, GameDataItem> {
+        static T: std::sync::OnceLock<HashMap<Uuid, GameDataItem>> = std::sync::OnceLock::new();
+        T.get_or_init(|| {
+            let p = concat!(env!("CARGO_MANIFEST_DIR"), "/../deploy/static/parsed.json");
+            let gd: blades_lib::game_data::GameData =
+                serde_json::from_str(&std::fs::read_to_string(p).expect("parsed.json"))
+                    .expect("game data");
+            gd.items_template
+        })
+    }
+
+    /// The shipped `enchant_tuning.json` (#581 lives in `topTierJewellery`).
+    pub(crate) fn shipped_tuning() -> blades_lib::static_data::EnchantTuning {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/enchant_tuning.json"
+        );
+        serde_json::from_str(&std::fs::read_to_string(p).expect("enchant_tuning.json"))
+            .expect("the shipped tuning parses (an unparsable file silently reverts ALL tuning)")
+    }
+
+    const EBONY_FAERITE_RING: &str = "240eb001-fe3e-4899-b0cc-dd87cb8a72b6";
+    const EBONY_FAERITE_NECKLACE: &str = "54a7fc91-93e7-4908-a29a-0667d0b07179";
+    const GOLD_EMERALD_RING: &str = "d408a912-3a4f-4b2a-bf4d-a55b78910f08";
+
+    fn bare(template: &str) -> Item {
+        serde_json::from_value(serde_json::json!({ "itemTemplateId": template }))
+            .expect("a bare item")
+    }
+
+    /// Grade histogram (index = grade) of `n` town-merchant rolls.
+    fn merchant_grades(template: &str, top: &TopTierJewellery, seed: u64, n: u32) -> [u32; 7] {
+        let mut rng = seeded(&[b"581-merchant"], seed);
+        let mut h = [0u32; 7];
+        for _ in 0..n {
+            let mut item = bare(template);
+            assert!(roll_generated_jewelry_tuned(
+                &mut item,
+                deploy_items(),
+                top,
+                &mut rng
+            ));
+            assert!(
+                item.properties.enchanting.is_empty(),
+                "merchants sell blanks (#321)"
+            );
+            h[item.grade.unwrap() as usize] += 1;
+        }
+        h
+    }
+
+    /// Grade histogram of `n` forged ones (#560's crafted split).
+    fn crafted_grades(template: &str, seed: u64, n: u32) -> [u32; 7] {
+        let mut rng = seeded(&[b"581-forge"], seed);
+        let mut h = [0u32; 7];
+        for _ in 0..n {
+            let mut item = bare(template);
+            jewelry_grade::regrade_crafted(&mut item, deploy_items(), &mut rng);
+            h[item.grade.unwrap() as usize] += 1;
+        }
+        h
+    }
+
+    fn assert_same_split(shop: [u32; 7], forge: [u32; 7], what: &str) {
+        let n_s: u32 = shop.iter().sum();
+        let n_f: u32 = forge.iter().sum();
+        assert_eq!(
+            shop[1], 0,
+            "{what}: never grade 1 (crafted split): {shop:?}"
+        );
+        for g in 2..=6 {
+            let a = f64::from(shop[g]) * 100.0 / f64::from(n_s);
+            let b = f64::from(forge[g]) * 100.0 / f64::from(n_f);
+            assert!(
+                (a - b).abs() < 2.0,
+                "{what}: grade {g} shop {a:.1}% forge {b:.1}%"
+            );
+        }
+    }
+
+    /// #581 (HauDrauf, 2026-11-28): a town merchant's top-tier ring or necklace is
+    /// graded exactly like a forged one (#560: 2/3/4/5/6 at 5/15/20/25/35%).
+    #[test]
+    fn top_tier_shop_jewellery_is_graded_like_crafted() {
+        let tuning = shipped_tuning();
+        let top = &tuning.top_tier_jewellery;
+        for template in [EBONY_FAERITE_RING, EBONY_FAERITE_NECKLACE] {
+            assert_same_split(
+                merchant_grades(template, top, 1, 20_000),
+                crafted_grades(template, 2, 20_000),
+                template,
+            );
+        }
+    }
+
+    /// #581: everything else a merchant sells rolls draw for draw as before (#393),
+    /// and switching the rule off puts the top tier back on #393 (grade 1 occurs).
+    #[test]
+    fn top_tier_rule_leaves_other_shop_jewellery_and_reverts() {
+        let tuning = shipped_tuning();
+        let off = TopTierJewellery::default();
+        assert_eq!(
+            merchant_grades(GOLD_EMERALD_RING, &tuning.top_tier_jewellery, 9, 5_000),
+            merchant_grades(GOLD_EMERALD_RING, &off, 9, 5_000),
+        );
+        let mut disabled = tuning.top_tier_jewellery.clone();
+        disabled.enabled = false;
+        let h = merchant_grades(EBONY_FAERITE_RING, &disabled, 9, 5_000);
+        assert_eq!(h, merchant_grades(EBONY_FAERITE_RING, &off, 9, 5_000));
+        assert!(h[1] > 0, "#393 rolls grade 1 sometimes: {h:?}");
+    }
+
+    /// #581: the Sigil shop's non-arcane reroll grades a top-tier piece like a forged
+    /// one too.
+    #[test]
+    fn top_tier_sigil_reroll_is_graded_like_crafted() {
+        let mut enchanting = EnchantingData::default();
+        enchanting.tuning = shipped_tuning();
+        let mut rng = seeded(&[b"581-sigil"], 0);
+        let mut h = [0u32; 7];
+        for _ in 0..20_000 {
+            let mut item = bare(EBONY_FAERITE_RING);
+            assert!(reroll_sigil_jewelry(
+                &mut item,
+                0,
+                1,
+                true,
+                deploy_items(),
+                &enchanting,
+                &mut rng
+            ));
+            h[item.grade.unwrap() as usize] += 1;
+        }
+        assert_same_split(h, crafted_grades(EBONY_FAERITE_RING, 3, 20_000), "sigil");
+    }
 
     #[test]
     fn exact_enchanting_rolls_distinct_properties() {
