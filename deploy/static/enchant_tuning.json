@@ -27,5 +27,14 @@
   "arcaneCountOdds": [
     { "label": "Arcane I weapons (HauDrauf #493, 2026-11-12; was 0/0.75/0.25 via arcaneTierCountOdds; APK 0/1/0)", "arcaneTier": 1, "itemType": 2, "odds": [0.0, 0.5, 0.5] },
     { "label": "Arcane I shields like weapons (HauDrauf #493, 2026-11-12; was 0/0.75/0.25; APK 0/1/0)", "arcaneTier": 1, "itemType": 9, "odds": [0.0, 0.5, 0.5] }
-  ]
+  ],
+  "_topTierJewellery": "HauDrauf's rule (tracker #581, 2026-11-28, clarified on #646: 'I only mean top-tier jewellery'), not retail. Top tier = the outputs of the tier-10 Smithing recipes, the highest jewellery tier (Forge level 10): Ebony Faerite Ring 240eb001 and Ebony Faerite Necklace 54a7fc91. Two parts. (1) countOdds: enchanting one rolls 1 secondary 20% and 2 secondaries 80% (never 0), replacing the ring/necklace secondaryCountOdds 15/35/50 (#560) for these two templates, for a plain one and for Arcane I (arcaneTiers [1]; was 0.75/0.25); Arcane II keeps its fixed two. Primary, tiers and the property pool are unchanged. Applies to every Ebony Faerite piece, wherever it came from. (2) shopGradeAsCrafted: a Sigil-shop or town-merchant Ebony Faerite piece is graded by the crafted split (#560: grade 2/3/4/5/6 at 5/15/20/25/35%) instead of the every-source split (#393), so bought and forged ones follow the same rule. Chests and enemy loot keep #393. Revert: enabled false (or delete this key).",
+  "topTierJewellery": {
+    "label": "top-tier jewellery, crafted and bought alike (HauDrauf #581/#646, 2026-11-28)",
+    "enabled": true,
+    "templates": ["240eb001-fe3e-4899-b0cc-dd87cb8a72b6", "54a7fc91-93e7-4908-a29a-0667d0b07179"],
+    "countOdds": [0.0, 0.2, 0.8],
+    "arcaneTiers": [1],
+    "shopGradeAsCrafted": true
+  }
 }

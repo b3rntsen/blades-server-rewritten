@@ -1789,6 +1789,7 @@ fn apply_item_mod<R: Rng + ?Sized>(
             rng,
             recipe,
             enchanting.table_for(&item.item_template_id),
+            Some(&item.item_template_id),
             item.arcane_tier,
             enchanting,
         );
@@ -1807,7 +1808,9 @@ fn apply_item_mod<R: Rng + ?Sized>(
 ///    (tier 1 → exactly 1, tier 2 → exactly 2; 34/34 captured arcane-2 enchants had 2,
 ///    which the non-arcane odds would produce with probability 0.15^34), else from the
 ///    item type's `SecondaryEnchantmentEffectData` odds (weapons: 0.60 / 0.25 / 0.15),
-///    unless `enchant_tuning.json`'s `secondaryCountOdds` overrides that type;
+///    unless `enchant_tuning.json`'s `secondaryCountOdds` overrides that type, or
+///    `topTierJewellery` covers the item's template (#581: top-tier rings and
+///    necklaces, 20% one / 80% two);
 /// 3. that many secondaries, each a weighted draw WITHOUT replacement from the table's
 ///    pool (no captured item ever repeats one: 0 of 34, where drawing with replacement
 ///    repeats one about 15% of the time), each at the primary's tier (every captured
@@ -1818,6 +1821,7 @@ fn roll_enchant<R: Rng + ?Sized>(
     rng: &mut R,
     recipe: &EnchantRecipe,
     table: Option<&SecondaryEnchantTable>,
+    item_template_id: Option<&Uuid>,
     arcane_tier: Option<u64>,
     enchanting: &EnchantingData,
 ) -> Vec<ItemSingleProperty> {
@@ -1826,7 +1830,11 @@ fn roll_enchant<R: Rng + ?Sized>(
         tier: recipe.tier,
     }];
     let Some(table) = table else { return out };
-    let count = weighted_index(rng, enchanting.roll_count_odds(table, arcane_tier)).unwrap_or(0);
+    let count = weighted_index(
+        rng,
+        enchanting.item_count_odds(table, item_template_id, arcane_tier),
+    )
+    .unwrap_or(0);
     let mut pool: Vec<(Uuid, f64)> = table
         .properties
         .iter()
@@ -2140,7 +2148,7 @@ mod tests {
         ];
         for (arcane, seed, want, want_next) in cases {
             let mut rng = seeded(seed);
-            let out = roll_enchant(&mut rng, recipe, table, arcane, e);
+            let out = roll_enchant(&mut rng, recipe, table, None, arcane, e);
             let ids: Vec<String> = out.iter().map(|p| p.id.to_string()).collect();
             assert_eq!(ids, want, "arcane {arcane:?} seed {seed}");
             assert!(out.iter().all(|p| p.tier == 10));
@@ -2157,7 +2165,7 @@ mod tests {
         let mut digest = 0u64;
         for seed in 0..1000u64 {
             let mut rng = seeded(seed);
-            let out = roll_enchant(&mut rng, recipe, table, None, e);
+            let out = roll_enchant(&mut rng, recipe, table, None, None, e);
             hist[out.len() - 1] += 1;
             let next: u64 = rng.random();
             digest ^= next.rotate_left((seed % 64) as u32);
@@ -2178,6 +2186,7 @@ mod tests {
             &mut seeded(1),
             &e.recipes[&uuid(MAGICKA_DAMAGE_T10)],
             e.table_for(&uuid(MADNESS_BATTLEAXE)),
+            None,
             None,
             e,
         );
@@ -2747,7 +2756,7 @@ mod tests {
         let n = 20_000;
         let mut seen: HashMap<(Uuid, Uuid), u32> = HashMap::new();
         for _ in 0..n {
-            let out = roll_enchant(&mut rng, &recipe, Some(body), None, &forced);
+            let out = roll_enchant(&mut rng, &recipe, Some(body), None, None, &forced);
             assert_eq!(out.len(), 3);
             let (a, b) = (out[1].id.min(out[2].id), out[1].id.max(out[2].id));
             *seen.entry((a, b)).or_default() += 1;
@@ -2760,6 +2769,106 @@ mod tests {
                 "{pair:?}: {got} vs {want:.0}"
             );
         }
+    }
+
+    /// `Ebony Faerite Ring` / `Ebony Faerite Necklace`: the tier-10 Smithing recipes'
+    /// outputs, the top jewellery tier (#581/#646).
+    const EBONY_FAERITE_RING: &str = "240eb001-fe3e-4899-b0cc-dd87cb8a72b6";
+    const EBONY_FAERITE_NECKLACE: &str = "54a7fc91-93e7-4908-a29a-0667d0b07179";
+    /// `Enchant.Recipe` for a ring: any jewellery recipe the APK offers works.
+    fn a_ring_recipe(e: &EnchantingData, template: &str) -> EnchantRecipe {
+        let table = e.table_for(&uuid(template)).unwrap();
+        let mut ids: Vec<&Uuid> = e
+            .recipes
+            .iter()
+            .filter(|(_, r)| table.properties.iter().any(|p| p.id == r.property))
+            .map(|(id, _)| id)
+            .collect();
+        if ids.is_empty() {
+            ids = e.recipes.keys().collect();
+        }
+        ids.sort();
+        e.recipes[ids[0]].clone()
+    }
+
+    /// Secondary-count histogram of `n` enchants of `template` at `arcane`.
+    fn secondary_hist(
+        e: &EnchantingData,
+        template: &str,
+        arcane: Option<u64>,
+        seed: u64,
+        n: u32,
+    ) -> [u32; 3] {
+        let recipe = a_ring_recipe(e, template);
+        let table = e.table_for(&uuid(template));
+        let id = uuid(template);
+        let mut rng = seeded(seed);
+        let mut hist = [0u32; 3];
+        for _ in 0..n {
+            hist[roll_enchant(&mut rng, &recipe, table, Some(&id), arcane, e).len() - 1] += 1;
+        }
+        hist
+    }
+
+    /// #581/#646 (HauDrauf, 2026-11-28): enchanting a top-tier ring or necklace rolls
+    /// one secondary 20% and two 80% of the time, never none, plain or Arcane I;
+    /// Arcane II keeps its fixed two.
+    #[test]
+    fn top_tier_jewellery_enchants_with_one_or_two_secondaries_80_20() {
+        let shipped = static_data_from_deploy().enchanting;
+        let top = &shipped.tuning.top_tier_jewellery;
+        assert!(top.enabled, "the shipped file turns the rule on");
+        assert_eq!(top.count_odds, [0.0, 0.2, 0.8]);
+        for template in [EBONY_FAERITE_RING, EBONY_FAERITE_NECKLACE] {
+            for arcane in [None, Some(1)] {
+                let n = 20_000;
+                let h = secondary_hist(&shipped, template, arcane, 581, n);
+                assert_eq!(h[0], 0, "{template} {arcane:?}: never zero secondaries");
+                let two = f64::from(h[2]) * 100.0 / f64::from(n);
+                assert!(
+                    (two - 80.0).abs() < 1.5,
+                    "{template} {arcane:?}: {two:.1}% two"
+                );
+            }
+            let h = secondary_hist(&shipped, template, Some(2), 581, 2_000);
+            assert_eq!(h, [0, 0, 2_000], "{template}: Arcane II stays two");
+        }
+    }
+
+    /// #581: every other ring and necklace rolls exactly as before, draw for draw,
+    /// and turning the rule off restores the top tier's old odds (15/35/50, #560).
+    #[test]
+    fn top_tier_jewellery_rule_leaves_other_jewellery_and_reverts() {
+        let shipped = static_data_from_deploy().enchanting;
+        let mut off = shipped.clone();
+        off.tuning.top_tier_jewellery.enabled = false;
+        for arcane in [None, Some(1), Some(2)] {
+            assert_eq!(
+                secondary_hist(&shipped, GOLD_EMERALD_RING, arcane, 7, 5_000),
+                secondary_hist(&off, GOLD_EMERALD_RING, arcane, 7, 5_000),
+                "Gold Emerald Ring {arcane:?}"
+            );
+        }
+        let ring = uuid(GOLD_EMERALD_RING);
+        let table = shipped.table_for(&ring).unwrap();
+        assert_eq!(
+            shipped.item_count_odds(table, Some(&ring), None),
+            [0.15, 0.35, 0.5]
+        );
+        let faerite = uuid(EBONY_FAERITE_RING);
+        let table = off.table_for(&faerite).unwrap();
+        assert_eq!(
+            off.item_count_odds(table, Some(&faerite), None),
+            [0.15, 0.35, 0.5]
+        );
+        assert_eq!(
+            off.item_count_odds(table, Some(&faerite), Some(1)),
+            [0.0, 0.75, 0.25]
+        );
+        // And the code default (no tuning file) never applies it.
+        let code_default = deploy_enchanting();
+        let h = secondary_hist(code_default, EBONY_FAERITE_RING, None, 3, 2_000);
+        assert!(h[0] > 0, "retail rings can roll zero secondaries: {h:?}");
     }
 
     /// Owner decision d22 (tracker #415): the secondary-count odds are one config

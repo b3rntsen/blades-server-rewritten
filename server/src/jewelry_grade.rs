@@ -112,6 +112,21 @@ pub fn roll<R: Rng + ?Sized>(
     Some((grade, grading))
 }
 
+/// [`roll`] by the CRAFTED split (#560) instead of [`roll_tiers`]: a shop-sold
+/// top-tier ring or necklace graded like a forged one (#581,
+/// `enchant_tuning.json` `topTierJewellery.shopGradeAsCrafted`).
+pub fn roll_crafted<R: Rng + ?Sized>(
+    item_type: u64,
+    rng: &mut R,
+) -> Option<(u64, Vec<ItemSingleProperty>)> {
+    if !matches!(item_type, RING | NECKLACE) {
+        return None;
+    }
+    let grading = fill(item_type, roll_crafted_tiers(rng), rng)?;
+    let grade = grading.iter().map(|p| p.tier).sum();
+    Some((grade, grading))
+}
+
 /// GRADING for known `tiers` on a ring or necklace: one property per tier,
 /// drawn uniformly and without repeats (retail never repeats one on the same
 /// item) from the slot's whole APK list.

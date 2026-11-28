@@ -314,9 +314,10 @@ fn roll_generated_jewelry_for_window(
             window.start_ms as u64 ^ idx as u64,
         );
         for item in &mut grant.items {
-            changed |= crate::jewelry_roll::roll_generated_jewelry(
+            changed |= crate::jewelry_roll::roll_generated_jewelry_tuned(
                 &mut item.item,
                 &app_state.game_data.items_template,
+                &app_state.static_data.enchanting.tuning.top_tier_jewellery,
                 &mut rng,
             );
         }

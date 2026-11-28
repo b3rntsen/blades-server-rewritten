@@ -1464,6 +1464,7 @@ fn grant_from_offer_contents_with_enchanting(
                         entry.arcane_tier,
                         roll_nonce,
                         items,
+                        &enchanting.tuning.top_tier_jewellery,
                     )?)
                 } else {
                     None
@@ -1616,6 +1617,7 @@ fn roll_arcane_grading(
     arcane_tier: u64,
     roll_nonce: u64,
     items: &std::collections::HashMap<Uuid, blades_lib::game_data::GameDataItem>,
+    top_tier: &blades_lib::static_data::TopTierJewellery,
 ) -> Option<Vec<blades_lib::user_data::ItemSingleProperty>> {
     use crate::jewelry_grade::{NECKLACE, RING};
     let item_type = items.get(&template).map(|i| i.r#type);
@@ -1626,7 +1628,12 @@ fn roll_arcane_grading(
         return None;
     }
     let mut rng = crate::jewelry_roll::seeded(&[template.as_bytes(), b"arcane-grade"], roll_nonce);
-    let tiers = crate::jewelry_grade::roll_tiers(&mut rng);
+    // HauDrauf's #581: a top-tier one is graded like a forged one (#560).
+    let tiers = if top_tier.shop_grades_as_crafted(&template) {
+        crate::jewelry_grade::roll_crafted_tiers(&mut rng)
+    } else {
+        crate::jewelry_grade::roll_tiers(&mut rng)
+    };
     crate::jewelry_grade::fill(slot, tiers, &mut rng)
 }
 
@@ -5348,9 +5355,11 @@ mod report_392_arcane_ring_variety {
             assert_eq!(item.arcane_tier, Some(2));
             by_grade[grade as usize] += 1;
         }
+        // The Ebony Faerite ring is top tier, so HauDrauf's #581 grades it by the
+        // crafted split (#560): every grade 2-6 occurs, grade 1 never.
         assert!(
-            by_grade[1..=6].iter().all(|c| *c > 0),
-            "every grade 1-6 must be reachable: {by_grade:?}"
+            by_grade[2..=6].iter().all(|c| *c > 0) && by_grade[1] == 0,
+            "every grade 2-6 reachable, never 1 (#581): {by_grade:?}"
         );
     }
 
@@ -5661,12 +5670,34 @@ mod report_393_sigil_jewelry_property_count {
         })
     }
 
+    /// [`sd`] with HauDrauf's top-tier jewellery rule (#581) switched off: the
+    /// Ebony Faerite offers below are top tier, so #393's split is only theirs
+    /// without it.
+    fn sd_without_581() -> &'static blades_lib::static_data::StaticData {
+        static SD: std::sync::OnceLock<blades_lib::static_data::StaticData> =
+            std::sync::OnceLock::new();
+        SD.get_or_init(|| {
+            let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../deploy/static");
+            let mut sd = crate::static_loader::load(&dir);
+            sd.enchanting.tuning.top_tier_jewellery.enabled = false;
+            sd
+        })
+    }
+
     /// Purchase `i` across 40 buyers, 100 purchases each - how a population of
     /// players walks the per-character nonce.
     fn buy(product: Uuid, i: u64) -> blades_lib::user_data::Item {
+        buy_from(sd(), product, i)
+    }
+
+    fn buy_from(
+        sd: &blades_lib::static_data::StaticData,
+        product: Uuid,
+        i: u64,
+    ) -> blades_lib::user_data::Item {
         let buyer = Uuid::from_u128(0x3930_0000_0000_4000_8000_0000_0000_0000 + u128::from(i % 40));
         let r = purchase_reward(
-            sd(),
+            sd,
             &repair_data(),
             item_table(),
             product,
@@ -5713,7 +5744,7 @@ mod report_393_sigil_jewelry_property_count {
             let mut count = [0u64; 4];
             let mut by_grade = [0u64; 7];
             for i in 0..PURCHASES {
-                let item = buy(product, i);
+                let item = buy_from(sd_without_581(), product, i);
                 count[check(&item, slot)] += 1;
                 by_grade[item.grade.unwrap() as usize] += 1;
             }
@@ -5739,6 +5770,34 @@ mod report_393_sigil_jewelry_property_count {
                 assert!(
                     (got - want).abs() <= 0.04,
                     "{name}: grade {grade} is {got:.3} of three-property items (want {want:.3})"
+                );
+            }
+        }
+    }
+
+    /// #581 (HauDrauf, 2026-11-28), end to end through `purchase_reward` with the
+    /// shipped files: the Sigil shop's Arcane II Ebony Faerite ring and necklace
+    /// (top tier) are graded by the crafted split (#560: 2/3/4/5/6 at
+    /// 5/15/20/25/35%), like a forged one.
+    #[test]
+    fn top_tier_offers_follow_the_crafted_split() {
+        for (product, slot, name) in [
+            (RING_OFFER, RING, "ring"),
+            (NECKLACE_OFFER, NECKLACE, "necklace"),
+        ] {
+            let mut by_grade = [0u64; 7];
+            for i in 0..PURCHASES {
+                let item = buy(product, i);
+                check(&item, slot);
+                by_grade[item.grade.unwrap() as usize] += 1;
+            }
+            assert_eq!(by_grade[1], 0, "{name}: {by_grade:?}");
+            for (grade, pct) in blades_lib::features::jewelry_grades::CRAFTED_JEWELRY_GRADE_PERCENT
+            {
+                let got = by_grade[grade as usize] as f64 * 100.0 / PURCHASES as f64;
+                assert!(
+                    (got - f64::from(pct)).abs() <= 2.5,
+                    "{name}: grade {grade} {got:.1}% (want {pct}%)"
                 );
             }
         }
@@ -5784,6 +5843,47 @@ mod report_393_sigil_jewelry_property_count {
             share < 10.5,
             "{share:.1}% single-property arcane jewels (want ~8%)"
         );
+    }
+
+    /// #581 (HauDrauf, 2026-11-28): an ARCANE Sigil-shop top-tier ring or necklace
+    /// (Ebony Faerite, Arcane I / II) is graded by the crafted split (#560), never
+    /// grade 1; a non-top-tier arcane ring rolls draw for draw as before.
+    #[test]
+    fn top_tier_arcane_sigil_jewellery_is_graded_like_crafted() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deploy/static/enchant_tuning.json"
+        );
+        let tuning: blades_lib::static_data::EnchantTuning =
+            serde_json::from_str(&std::fs::read_to_string(p).unwrap()).unwrap();
+        let top = &tuning.top_tier_jewellery;
+        let off = blades_lib::static_data::TopTierJewellery::default();
+        let items = super::item_table();
+        let faerite = Uuid::parse_str("240eb001-fe3e-4899-b0cc-dd87cb8a72b6").unwrap();
+        let gold = Uuid::parse_str("d408a912-3a4f-4b2a-bf4d-a55b78910f08").unwrap();
+        for arcane in [1u64, 2] {
+            let n = 20_000u64;
+            let mut h = [0u64; 7];
+            for nonce in 0..n {
+                let g = roll_arcane_grading(faerite, arcane, nonce, items, top).unwrap();
+                h[g.iter().map(|p| p.tier).sum::<u64>() as usize] += 1;
+            }
+            assert_eq!(h[1], 0, "arcane {arcane}: {h:?}");
+            for (grade, pct) in blades_lib::features::jewelry_grades::CRAFTED_JEWELRY_GRADE_PERCENT
+            {
+                let got = h[grade as usize] as f64 * 100.0 / n as f64;
+                assert!(
+                    (got - f64::from(pct)).abs() < 1.5,
+                    "arcane {arcane} grade {grade}: {got:.1}% (want {pct}%)"
+                );
+            }
+            for nonce in 0..500 {
+                assert_eq!(
+                    roll_arcane_grading(gold, arcane, nonce, items, top),
+                    roll_arcane_grading(gold, arcane, nonce, items, &off),
+                );
+            }
+        }
     }
 
     /// #393, 2026-10-15 ("überall, keine Unterschiede"): the merchant / crafted

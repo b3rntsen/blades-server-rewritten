@@ -273,6 +273,28 @@ impl EnchantingData {
             .map_or_else(|| self.count_odds_for(table), Vec::as_slice)
     }
 
+    /// [`Self::roll_count_odds`] for one item: a top-tier ring or necklace
+    /// ([`TopTierJewellery`], tracker #581/#646) takes the rule's odds when it is not
+    /// arcane or its arcane tier is listed; everything else is unchanged.
+    pub fn item_count_odds<'a>(
+        &'a self,
+        table: &'a SecondaryEnchantTable,
+        item_template_id: Option<&Uuid>,
+        arcane_tier: Option<u64>,
+    ) -> &'a [f64] {
+        let top = &self.tuning.top_tier_jewellery;
+        let tier_covered = match arcane_tier {
+            None | Some(0) => true,
+            Some(t) => top.arcane_tiers.contains(&t),
+        };
+        match item_template_id {
+            Some(id) if top.covers(id) && !top.count_odds.is_empty() && tier_covered => {
+                &top.count_odds
+            }
+            _ => self.roll_count_odds(table, arcane_tier),
+        }
+    }
+
     /// The draw weight of a secondary property with APK weight `apk_weight` in
     /// `table`: 1 for every rollable property when a `uniformSecondaryPools` rule
     /// matches the table (#560), else the APK weight. A property the APK never
@@ -329,6 +351,44 @@ pub struct EnchantTuning {
     /// APK's per-property weights (tracker #560: every armour combination equally
     /// likely). Empty = the APK's weights for every table.
     pub uniform_secondary_pools: Vec<TableMatch>,
+    /// Tracker #581/#646 (HauDrauf, 2026-11-28): one rule for top-tier jewellery,
+    /// crafted or bought. Default (absent) = off.
+    pub top_tier_jewellery: TopTierJewellery,
+}
+
+/// HauDrauf's top-tier jewellery rule (tracker #581, clarified on #646: "only
+/// top-tier jewellery"). NOT retail. `templates` are the rings and necklaces it
+/// covers (the tier-10 Smithing recipes' outputs: Ebony Faerite Ring and Necklace).
+/// For those, enchanting rolls the secondary count from `count_odds` (0 / 1 / 2:
+/// 0 / 0.2 / 0.8), and the shops (Sigil shop and town merchants) grade them by the
+/// CRAFTED split (#560) instead of the every-source split (#393), so a bought one and
+/// a forged one follow the same rule. Revert: `enabled: false` (or delete the entry).
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct TopTierJewellery {
+    /// Free text for the reader of the file; never read.
+    pub label: String,
+    pub enabled: bool,
+    pub templates: Vec<Uuid>,
+    /// P(0), P(1), P(2) secondaries when one is enchanted. Empty = unchanged odds.
+    pub count_odds: Vec<f64>,
+    /// Arcane tiers `count_odds` also covers (a non-arcane item always is). Arcane II
+    /// keeps its fixed two when absent here.
+    pub arcane_tiers: Vec<u64>,
+    /// Shop-sold ones (Sigil shop, town merchants) graded like crafted ones (#560).
+    pub shop_grade_as_crafted: bool,
+}
+
+impl TopTierJewellery {
+    /// Whether the rule is on and covers this template.
+    pub fn covers(&self, item_template_id: &Uuid) -> bool {
+        self.enabled && self.templates.contains(item_template_id)
+    }
+
+    /// Whether a shop-sold instance of this template is graded by the crafted split.
+    pub fn shop_grades_as_crafted(&self, item_template_id: &Uuid) -> bool {
+        self.shop_grade_as_crafted && self.covers(item_template_id)
+    }
 }
 
 /// Which secondary tables a tuning rule covers, by the table's own keys.
