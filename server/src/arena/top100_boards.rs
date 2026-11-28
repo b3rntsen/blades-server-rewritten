@@ -489,6 +489,11 @@ pub struct GuildMembersResponse {
     pub season: Option<H2hSeasonSummary>,
     pub guild_id: String,
     pub name: String,
+    /// The guild's in-game motto and description, as its members wrote them.
+    /// Public in game (any player can open the guild page); the website shows
+    /// them so a Discord invite in the text can be clicked (#626).
+    pub short_description: String,
+    pub long_description: String,
     /// The guild score the breakdown adds up to.
     pub score: i64,
     /// `game` only: the stored `guilds.trophies` the in-game board shows. Equal to
@@ -515,6 +520,10 @@ struct GuildHead {
     name: String,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     trophies: i64,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    short_description: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    long_description: String,
 }
 
 #[derive(diesel::QueryableByName)]
@@ -587,12 +596,14 @@ pub async fn get_arena_guild_members(
         .get()
         .await
         .map_err(BladeApiError::generic_internal_error)?;
-    let head: GuildHead = diesel::sql_query("SELECT name, trophies FROM guilds WHERE id = $1")
-        .bind::<diesel::sql_types::Text, _>(&guild_id)
-        .get_result(&mut conn)
-        .await
-        .optional()?
-        .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 85))?;
+    let head: GuildHead = diesel::sql_query(
+        "SELECT name, trophies, short_description, long_description FROM guilds WHERE id = $1",
+    )
+    .bind::<diesel::sql_types::Text, _>(&guild_id)
+    .get_result(&mut conn)
+    .await
+    .optional()?
+    .ok_or_else(|| BladeApiError::new(StatusCode::NOT_FOUND, IMPORT_SERVICE_ID, 85))?;
     let roster: Vec<RosterRow> = diesel::sql_query(GUILD_ROSTER_SQL)
         .bind::<diesel::sql_types::Text, _>(&guild_id)
         .get_results(&mut conn)
@@ -631,6 +642,8 @@ pub async fn get_arena_guild_members(
             season,
             guild_id,
             name: head.name,
+            short_description: head.short_description,
+            long_description: head.long_description,
             score,
             board_score: None,
             min_games: Some(min_games),
@@ -716,6 +729,8 @@ pub async fn get_arena_guild_members(
             season,
             guild_id,
             name: head.name,
+            short_description: head.short_description,
+            long_description: head.long_description,
             score,
             board_score: Some(head.trophies),
             min_games: None,
@@ -1117,6 +1132,35 @@ mod tests {
         // The member breakdown reads the same members.
         let breakdown = &src[src.find("pub async fn get_arena_guild_members(").unwrap()..];
         assert!(breakdown[..breakdown.find("\n}\n").unwrap()].contains("h2h_board_entries("));
+    }
+
+    /// #626: the guild breakdown carries the guild's motto and description, read
+    /// from the guild row, so the website can show a Discord invite in it.
+    #[test]
+    fn guild_breakdown_carries_the_descriptions() {
+        let r = GuildMembersResponse {
+            board: "game",
+            season: None,
+            guild_id: "g1".into(),
+            name: "Søvngård".into(),
+            short_description: "Honour".into(),
+            long_description: "DISCORD:\nhttps://discord.gg/abc".into(),
+            score: 0,
+            board_score: Some(0),
+            min_games: None,
+            members: Vec::new(),
+            unranked: Vec::new(),
+        };
+        let v = serde_json::to_value(r).unwrap();
+        assert_eq!(v["short_description"], "Honour");
+        assert_eq!(v["long_description"], "DISCORD:\nhttps://discord.gg/abc");
+        let src = include_str!("top100_boards.rs");
+        let handler = &src[src.find("pub async fn get_arena_guild_members(").unwrap()..];
+        assert!(
+            handler[..handler.find("\n}\n").unwrap()]
+                .contains("short_description, long_description FROM guilds WHERE id = $1"),
+            "the head query must read both descriptions"
+        );
     }
 
     /// The website's "All matches" player rows are the in-game entries, field for

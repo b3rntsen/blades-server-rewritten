@@ -1,0 +1,20 @@
+# Stock inputs and build output. All of it is reproducible from the mirror with
+# ./fetch_pack_inputs.py, and none of it is small — committing a 4 MB bundle per
+# pack would put the asset CDN in the git history. It is also game data, which
+# this repository does not distribute: never commit bundles, textures, meshes,
+# audio or screenshots of them.
+manifest_stock.bin
+android_extradata.bin
+bundle_sizes.json
+bisect/
+pack-*/
+*.orig
+*.patched
+*.invcap
+out-bh/
+bundle_hashes.json
+out*/
+*.bundle
+*.resS
+*_preview.png
+pumpkin_src.png
